@@ -120,3 +120,4 @@ class RelaySwitchCard extends StatelessWidget {
     );
   }
 }
+

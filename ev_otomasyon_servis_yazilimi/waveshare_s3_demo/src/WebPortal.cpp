@@ -1,6 +1,7 @@
 #include "WebPortal.h"
 #include "ConfigManager.h"
 #include "SmartAutomation.h"
+#include "WiFiManager.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 
@@ -11,6 +12,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AHBU Akıllı Ev & Bina Kontrol</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,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">
 <style>
 :root {
   --bg: #0f172a; --card-bg: #1e293b; --card-border: #334155;
@@ -86,7 +88,7 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus { outline: 
 
 <header>
   <div class="logo-title">
-    <div class="logo-badge">AHBU</div>
+    <img src="data:image/png;base64,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" style="width:38px;height:38px;border-radius:9px;box-shadow:0 2px 10px rgba(0,0,0,0.4);vertical-align:middle;">
     <div>
       <h1 style="font-size: 18px; font-weight: 700;" id="hdrDevName">Akıllı Ev & Bina Kontrol</h1>
       <span style="font-size: 12px; color: var(--text-muted);">Waveshare ESP32-S3 Endüstriyel Pano Modülü</span>
@@ -674,6 +676,8 @@ function setDIPairShutterWiring(p, wiringType) {
     currentConfig.dis[di2].name = baseName + ' (Aşağı)';
   }
   renderConfigTables();
+  // Tesisat tipi değişikliğini anında NVS'e kaydet (kaydet butonuna gerek yok)
+  postConfig();
 }
 
 function onPairNameInput(p, val) {
@@ -839,7 +843,7 @@ function renderDIPairCard(p, totalRelays) {
   const isExt = (p >= 4);
 
   if (isShut) {
-    const isSingle = (currentConfig.dis[di1].mode === 2 || currentConfig.dis[di2].mode !== 4);
+    const isSingle = (currentConfig.dis[di1].mode === 2); // DI_MODE_SHUTTER_STEP=2: tek buton (2 kablo)
     
     let freeRelayOptions = '';
     for (let r = 1; r <= totalRelays; r++) {
@@ -1183,13 +1187,22 @@ async function saveDIConfig() {
 }
 
 async function postConfig() {
-  await fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(currentConfig)
-  });
-  showToast('Ayarlar NVS hafızasına kaydedildi!');
-  fetchStatus();
+  try {
+    const res = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentConfig)
+    });
+    if (res.ok) {
+      showToast('Ayarlar NVS hafızasına kaydedildi!');
+      fetchStatus();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast('HATA: ' + (err.error || 'Ayarlar kaydedilemedi!'), 'error');
+    }
+  } catch (e) {
+    showToast('Bağlantı hatası: ' + e.message, 'error');
+  }
 }
 
 async function scanWifi(forceRefresh = false) {
@@ -1386,24 +1399,105 @@ void WebPortal::loop() {
   _server.handleClient();
 }
 
+void WebPortal::sendCors() {
+  _server.sendHeader("Access-Control-Allow-Origin", "*");
+  _server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+  _server.sendHeader("Access-Control-Allow-Headers", "*");
+  _server.sendHeader("Access-Control-Max-Age", "86400");
+}
+
 void WebPortal::setupRoutes() {
+  auto optionsHandler = [this]() {
+    sendCors();
+    _server.send(204);
+  };
+
   _server.on("/", HTTP_GET, std::bind(&WebPortal::handleRoot, this));
+
+  _server.on("/api/status", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/status", HTTP_GET, std::bind(&WebPortal::handleApiStatus, this));
+
+  _server.on("/api/relay", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/relay", HTTP_POST, std::bind(&WebPortal::handleApiRelay, this));
+
+  _server.on("/api/all", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/all", HTTP_POST, std::bind(&WebPortal::handleApiAll, this));
+
+  _server.on("/api/config", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/config", HTTP_GET, std::bind(&WebPortal::handleApiConfigGet, this));
   _server.on("/api/config", HTTP_POST, std::bind(&WebPortal::handleApiConfigSave, this));
+
+  _server.on("/api/wifi/scan", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/wifi/scan", HTTP_GET, std::bind(&WebPortal::handleApiWifiScan, this));
+
+  _server.on("/api/wifi/connect", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/wifi/connect", HTTP_POST, std::bind(&WebPortal::handleApiWifiConnect, this));
+
+  _server.on("/api/wifi/disconnect", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/wifi/disconnect", HTTP_POST, std::bind(&WebPortal::handleApiWifiDisconnect, this));
+
+  _server.on("/api/rs485/send", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/rs485/send", HTTP_POST, std::bind(&WebPortal::handleApiRs485Send, this));
+
+  _server.on("/api/rs485/logs", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/rs485/logs", HTTP_GET, std::bind(&WebPortal::handleApiRs485Logs, this));
+
+  _server.on("/api/rs485/clear", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/rs485/clear", HTTP_POST, std::bind(&WebPortal::handleApiRs485Clear, this));
+
+  _server.on("/api/rs485/baud", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/rs485/baud", HTTP_POST, std::bind(&WebPortal::handleApiRs485Baud, this));
+
+  _server.on("/api/rs485/scan", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/rs485/scan", HTTP_POST, std::bind(&WebPortal::handleApiRs485Scan, this));
+
+  _server.on("/api/rs485/relay", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/rs485/relay", HTTP_POST, std::bind(&WebPortal::handleApiRs485Relay, this));
+
+  _server.on("/api/system/reboot", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/system/reboot", HTTP_POST, std::bind(&WebPortal::handleApiReboot, this));
+
+  _server.on("/api/system/reset", HTTP_OPTIONS, optionsHandler);
   _server.on("/api/system/reset", HTTP_POST, std::bind(&WebPortal::handleApiReset, this));
+
+  // ADIM 17: Çocuk Kilidi REST API (Duvardaki Anahtarları Kilitle/Aç)
+  _server.on("/api/child-lock", HTTP_OPTIONS, optionsHandler);
+  _server.on("/api/child-lock", HTTP_GET, [this]() {
+    sendCors();
+    DynamicJsonDocument doc(256);
+    doc["success"] = true;
+    doc["child_lock"] = SmartAutomation::instance().isChildLockEnabled();
+    String resp;
+    serializeJson(doc, resp);
+    _server.send(200, "application/json", resp);
+  });
+  _server.on("/api/child-lock", HTTP_POST, [this]() {
+    sendCors();
+    if (!_server.hasArg("plain")) {
+      _server.send(400, "application/json", "{\"error\":\"Body empty\"}");
+      return;
+    }
+    DynamicJsonDocument doc(512);
+    deserializeJson(doc, _server.arg("plain"));
+    bool enabled = doc["enabled"] | doc["child_lock"] | false;
+    SmartAutomation::instance().setChildLock(enabled);
+    DynamicJsonDocument out(256);
+    out["success"] = true;
+    out["child_lock"] = enabled;
+    out["message"] = enabled ? "Cocuk kilidi aktif edildi" : "Cocuk kilidi kapatildi";
+    String resp;
+    serializeJson(out, resp);
+    _server.send(200, "application/json", resp);
+  });
+
+  _server.onNotFound([this]() {
+    sendCors();
+    if (_server.method() == HTTP_OPTIONS) {
+      _server.send(204);
+      return;
+    }
+    _server.send(404, "text/plain", "Not Found");
+  });
 }
 
 void WebPortal::storeScanResults(int n) {
@@ -1428,6 +1522,7 @@ void WebPortal::handleRoot() {
 }
 
 void WebPortal::handleApiStatus() {
+  sendCors();
   DynamicJsonDocument doc(4096);
   auto& cfg = ConfigManager::instance().config;
   auto& autoMgr = SmartAutomation::instance();
@@ -1453,6 +1548,7 @@ void WebPortal::handleApiStatus() {
   doc["ext_module_address"] = cfg.ext_module_address;
   doc["total_relays"] = totalR;
   doc["total_dis"] = totalD;
+  doc["child_lock"] = autoMgr.isChildLockEnabled();
 
   JsonArray rArr = doc.createNestedArray("relays");
   for (int i = 0; i < totalR; i++) {
@@ -1470,6 +1566,8 @@ void WebPortal::handleApiStatus() {
     s["pair"] = p;
     s["is_moving"] = st.is_moving;
     s["dir"] = st.direction;
+    s["pos"] = st.current_position;
+    s["target"] = st.target_position;
   }
 
   JsonArray dArr = doc.createNestedArray("dis");
@@ -1486,6 +1584,7 @@ void WebPortal::handleApiStatus() {
 }
 
 void WebPortal::handleApiRelay() {
+  sendCors();
   auto& autoMgr = SmartAutomation::instance();
   uint8_t totalR = ConfigManager::instance().config.totalRelays();
   uint8_t totalPairs = totalR / 2;
@@ -1497,6 +1596,10 @@ void WebPortal::handleApiRelay() {
       if (cmd == "up") autoMgr.shutterUp(pairIdx);
       else if (cmd == "down") autoMgr.shutterDown(pairIdx);
       else if (cmd == "stop") autoMgr.shutterStop(pairIdx);
+      else if (cmd == "pos" && _server.hasArg("val")) {
+        int pos = _server.arg("val").toInt();
+        autoMgr.setShutterPosition(pairIdx, (uint8_t)pos);
+      }
       _server.send(200, "application/json", "{\"status\":\"ok\"}");
       return;
     }
@@ -1521,6 +1624,7 @@ void WebPortal::handleApiRelay() {
 }
 
 void WebPortal::handleApiAll() {
+  sendCors();
   if (_server.hasArg("cmd")) {
     String cmd = _server.arg("cmd");
     auto& autoMgr = SmartAutomation::instance();
@@ -1535,6 +1639,7 @@ void WebPortal::handleApiAll() {
 }
 
 void WebPortal::handleApiConfigGet() {
+  sendCors();
   DynamicJsonDocument doc(8192);
   auto& cfg = ConfigManager::instance().config;
 
@@ -1576,17 +1681,24 @@ void WebPortal::handleApiConfigGet() {
 }
 
 void WebPortal::handleApiConfigSave() {
+  sendCors();
   if (!_server.hasArg("plain")) {
     _server.send(400, "application/json", "{\"error\":\"Gövde bos\"}");
     return;
   }
 
-  DynamicJsonDocument doc(4096);
+  // 40 Röle + 40 DI JSON belgesi yaklaşık 6.5KB string ve DOM ağacı için ~12KB alan gerektirir.
+  DynamicJsonDocument doc(16384);
   DeserializationError err = deserializeJson(doc, _server.arg("plain"));
   if (err) {
-    _server.send(400, "application/json", "{\"error\":\"JSON ayrıştırma hatası\"}");
+    printf("[CONFIG SAVE HATA] deserializeJson basarisiz: %s (Gelen JSON: %d bayt)\r\n",
+           err.c_str(), _server.arg("plain").length());
+    _server.send(400, "application/json", String("{\"error\":\"JSON hatasi: ") + err.c_str() + "\"}");
     return;
   }
+
+  printf("[CONFIG SAVE] %d bayt JSON basariyla alindi ve ayristirildi. NVS'ye yaziliyor...\r\n",
+         _server.arg("plain").length());
 
   auto& cfg = ConfigManager::instance().config;
 
@@ -1632,6 +1744,7 @@ static bool _scanInProgress = false;
 static uint32_t _scanStartTime = 0;
 
 void WebPortal::handleApiWifiScan() {
+  sendCors();
   if (!(WiFi.getMode() & WIFI_MODE_STA)) {
     WiFi.mode(WIFI_AP_STA);
     delay(50);
@@ -1701,6 +1814,7 @@ void WebPortal::handleApiWifiScan() {
 }
 
 void WebPortal::handleApiWifiConnect() {
+  sendCors();
   if (!_server.hasArg("plain")) {
     _server.send(400, "application/json", "{\"error\":\"Gövde bos\"}");
     return;
@@ -1724,11 +1838,13 @@ void WebPortal::handleApiWifiConnect() {
   cfg.wifi_sta_enabled = true;
   ConfigManager::instance().save();
 
+  WiFiManager::instance().setCredentials(cfg.wifi_ssid, cfg.wifi_pass);
   WiFi.begin(cfg.wifi_ssid, cfg.wifi_pass);
   _server.send(200, "application/json", "{\"status\":\"connecting\"}");
 }
 
 void WebPortal::handleApiWifiDisconnect() {
+  sendCors();
   auto& cfg = ConfigManager::instance().config;
   cfg.wifi_sta_enabled = false;
   cfg.wifi_ssid[0] = '\0';
@@ -1739,6 +1855,7 @@ void WebPortal::handleApiWifiDisconnect() {
 }
 
 void WebPortal::handleApiRs485Send() {
+  sendCors();
   if (!_server.hasArg("plain")) {
     _server.send(400, "application/json", "{\"error\":\"Gövde bos\"}");
     return;
@@ -1755,15 +1872,18 @@ void WebPortal::handleApiRs485Send() {
 }
 
 void WebPortal::handleApiRs485Logs() {
+  sendCors();
   _server.send(200, "text/plain; charset=utf-8", SmartAutomation::instance().rs485GetLogs());
 }
 
 void WebPortal::handleApiRs485Clear() {
+  sendCors();
   SmartAutomation::instance().rs485ClearLogs();
   _server.send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
 void WebPortal::handleApiRs485Baud() {
+  sendCors();
   if (!_server.hasArg("plain")) return;
   DynamicJsonDocument doc(256);
   deserializeJson(doc, _server.arg("plain"));
@@ -1776,6 +1896,7 @@ void WebPortal::handleApiRs485Baud() {
 }
 
 void WebPortal::handleApiRs485Scan() {
+  sendCors();
   auto res = SmartAutomation::instance().rs485ScanModule();
   DynamicJsonDocument doc(512);
   doc["found"] = res.found;
@@ -1790,6 +1911,7 @@ void WebPortal::handleApiRs485Scan() {
 }
 
 void WebPortal::handleApiRs485Relay() {
+  sendCors();
   if (!_server.hasArg("plain")) {
     _server.send(400, "application/json", "{\"error\":\"Missing body\"}");
     return;
@@ -1810,12 +1932,14 @@ void WebPortal::handleApiRs485Relay() {
 }
 
 void WebPortal::handleApiReboot() {
+  sendCors();
   _server.send(200, "application/json", "{\"status\":\"rebooting\"}");
   delay(500);
   ESP.restart();
 }
 
 void WebPortal::handleApiReset() {
+  sendCors();
   ConfigManager::instance().resetToDefaults();
   ConfigManager::instance().save();
   _server.send(200, "application/json", "{\"status\":\"reset_ok\"}");

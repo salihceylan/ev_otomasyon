@@ -97,6 +97,7 @@ class DeviceStatus {
   final List<RelayItem> relays;
   final List<DIItem> dis;
   final List<ShutterItem> shutters;
+  final bool childLock;
 
   DeviceStatus({
     required this.deviceName,
@@ -110,6 +111,7 @@ class DeviceStatus {
     required this.relays,
     required this.dis,
     required this.shutters,
+    this.childLock = false,
   });
 
   factory DeviceStatus.fromJson(Map<String, dynamic> json) {
@@ -144,6 +146,8 @@ class DeviceStatus {
       relays: parsedRelays,
       dis: parsedDis,
       shutters: parsedShutters,
+      childLock: json['child_lock'] == true,
     );
   }
 }
+

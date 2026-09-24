@@ -23,6 +23,16 @@ void ConfigManager::resetToDefaults() {
   config.ext_module_channels = 0;
   config.ext_module_address = 1;
 
+  // Güvenli MQTTS (Port 8884) Varsayılanları
+  config.mqtt_enabled = true;
+  strncpy(config.mqtt_server, "evotomasyon.gudeteknoloji.com.tr", sizeof(config.mqtt_server) - 1);
+  config.mqtt_server[sizeof(config.mqtt_server) - 1] = '\0';
+  config.mqtt_port = 8884;
+  strncpy(config.mqtt_user, "home_101", sizeof(config.mqtt_user) - 1);
+  config.mqtt_user[sizeof(config.mqtt_user) - 1] = '\0';
+  strncpy(config.mqtt_pass, "PassHome101!Sec", sizeof(config.mqtt_pass) - 1);
+  config.mqtt_pass[sizeof(config.mqtt_pass) - 1] = '\0';
+
   // Varsayılan Röle Tanımları:
   // 1-2: Salon Panjuru (Yukarı & Aşağı)
   // 3-4: Yatak Odası Panjuru (Yukarı & Aşağı)
@@ -60,15 +70,35 @@ void ConfigManager::resetToDefaults() {
   }
 
   // Varsayılan Dijital Giriş (DI) Tanımları:
+  // 1-2: Salon Panjuru (DI 1: Tek Buton Panjur Kontrolü, DI 2: Boşta/Serbest)
+  // 3-4: Oda Panjuru (DI 3: Tek Buton Panjur Kontrolü, DI 4: Boşta/Serbest)
+  // 5-8: Aydınlatmalar (Normal Toggle)
   for (int i = 0; i < MAX_TOTAL_DIS; i++) {
     if (i < 8) {
       snprintf(config.dis[i].name, sizeof(config.dis[i].name), "Anahtar / Buton %d", i + 1);
     } else {
       snprintf(config.dis[i].name, sizeof(config.dis[i].name), "Ek Giriş / Buton %d", i - 7);
     }
-    config.dis[i].target_relay = i + 1; // DI1 -> Röle 1, DI2 -> Röle 2...
+    config.dis[i].target_relay = i + 1;
     config.dis[i].mode = DI_MODE_TOGGLE;
   }
+
+  // Panjur çiftleri için akıllı varsayılanlar:
+  strncpy(config.dis[0].name, "Salon Panjur Butonu", sizeof(config.dis[0].name) - 1);
+  config.dis[0].target_relay = 1;
+  config.dis[0].mode = DI_MODE_SHUTTER_STEP; // Tek buton 2-kablolu panjur
+
+  strncpy(config.dis[1].name, "Giriş 2 (Boşta / Serbest)", sizeof(config.dis[1].name) - 1);
+  config.dis[1].target_relay = 0;             // Boşta / serbest
+  config.dis[1].mode = DI_MODE_TOGGLE;
+
+  strncpy(config.dis[2].name, "Oda Panjur Butonu", sizeof(config.dis[2].name) - 1);
+  config.dis[2].target_relay = 3;
+  config.dis[2].mode = DI_MODE_SHUTTER_STEP; // Tek buton 2-kablolu panjur
+
+  strncpy(config.dis[3].name, "Giriş 4 (Boşta / Serbest)", sizeof(config.dis[3].name) - 1);
+  config.dis[3].target_relay = 0;             // Boşta / serbest
+  config.dis[3].mode = DI_MODE_TOGGLE;
 }
 
 void ConfigManager::begin() {
@@ -92,6 +122,22 @@ void ConfigManager::load() {
   config.ext_module_enabled = prefs.getBool("ext_en", false);
   config.ext_module_channels = prefs.getUChar("ext_ch", 0);
   config.ext_module_address = prefs.getUChar("ext_addr", 1);
+
+  // Güvenli MQTTS Ayarları
+  config.mqtt_enabled = prefs.getBool("mq_en", true);
+  prefs.getString("mq_srv", config.mqtt_server, sizeof(config.mqtt_server));
+  if (config.mqtt_server[0] == '\0') {
+    strncpy(config.mqtt_server, "evotomasyon.gudeteknoloji.com.tr", sizeof(config.mqtt_server) - 1);
+  }
+  config.mqtt_port = prefs.getUShort("mq_port", 8884);
+  prefs.getString("mq_usr", config.mqtt_user, sizeof(config.mqtt_user));
+  if (config.mqtt_user[0] == '\0') {
+    strncpy(config.mqtt_user, "home_101", sizeof(config.mqtt_user) - 1);
+  }
+  prefs.getString("mq_pwd", config.mqtt_pass, sizeof(config.mqtt_pass));
+  if (config.mqtt_pass[0] == '\0') {
+    strncpy(config.mqtt_pass, "PassHome101!Sec", sizeof(config.mqtt_pass) - 1);
+  }
 
   for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
     char key[16];
@@ -137,6 +183,13 @@ void ConfigManager::save() {
   prefs.putBool("ext_en", config.ext_module_enabled);
   prefs.putUChar("ext_ch", config.ext_module_channels);
   prefs.putUChar("ext_addr", config.ext_module_address);
+
+  // Güvenli MQTTS Kaydet
+  prefs.putBool("mq_en", config.mqtt_enabled);
+  prefs.putString("mq_srv", config.mqtt_server);
+  prefs.putUShort("mq_port", config.mqtt_port);
+  prefs.putString("mq_usr", config.mqtt_user);
+  prefs.putString("mq_pwd", config.mqtt_pass);
 
   uint8_t totalR = config.totalRelays();
   uint8_t totalD = config.totalDIs();

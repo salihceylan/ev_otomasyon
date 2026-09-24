@@ -60,3 +60,4 @@ class DIStatusPill extends StatelessWidget {
     );
   }
 }
+

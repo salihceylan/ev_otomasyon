@@ -1,0 +1,82 @@
+services:
+  emqx:
+    image: emqx/emqx:5.8.0
+    container_name: ev_otomasyon_emqx
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "8884:8883"                   # MQTTS (TLS 1.3 / SSL encrypted on port 8884)
+      - "127.0.0.1:1884:1883"         # Local MQTT (TCP bridge for internal backend)
+      - "127.0.0.1:18084:18083"       # EMQX Web Dashboard (admin panel)
+    environment:
+      - EMQX_NODE__NAME=emqx@127.0.0.1
+      - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
+      - EMQX_DASHBOARD__DEFAULT_PASSWORD=GudeEvOtomasyon2026!Sec
+      - EMQX_LISTENERS__SSL__DEFAULT__BIND=8883
+      - EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CERTFILE=/etc/letsencrypt/live/evotomasyon.gudeteknoloji.com.tr/fullchain.pem
+      - EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__KEYFILE=/etc/letsencrypt/live/evotomasyon.gudeteknoloji.com.tr/privkey.pem
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+      - ./acl.conf:/opt/emqx/etc/acl.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - ev_network
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: ev_otomasyon_postgres
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5434:5432"         # Isolated Postgres (no conflict with 5432/5433)
+    environment:
+      POSTGRES_DB: ev_otomasyon
+      POSTGRES_USER: ev_admin
+      POSTGRES_PASSWORD: GudeEvPg2026!SecurePass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ev_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ev_admin -d ev_otomasyon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: ev_otomasyon_redis
+    restart: unless-stopped
+    command: redis-server --requirepass GudeEvRedis2026!SecureKey --appendonly yes
+    ports:
+      - "127.0.0.1:6380:6379"         # Isolated Redis (no conflict with 6379)
+    volumes:
+      - redis_data:/data
+    networks:
+      - ev_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "GudeEvRedis2026!SecureKey", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  ev_network:
+    name: ev_otomasyon_net
+    driver: bridge
+
+volumes:
+  emqx_data:
+    name: ev_otomasyon_emqx_data
+  emqx_log:
+    name: ev_otomasyon_emqx_log
+  postgres_data:
+    name: ev_otomasyon_postgres_data
+  redis_data:
+    name: ev_otomasyon_redis_data
+

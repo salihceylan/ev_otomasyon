@@ -44,6 +44,13 @@ struct SystemConfig {
   uint8_t ext_module_channels;   // Kaç kanallı? (0, 2, 4, 8, 12, 16, 24, 32)
   uint8_t ext_module_address;    // Modbus Slave Adresi (1..247, varsayılan 1)
 
+  // Güvenli MQTTS Yapılandırması (Port 8884)
+  bool mqtt_enabled;
+  char mqtt_server[64];
+  uint16_t mqtt_port;
+  char mqtt_user[32];
+  char mqtt_pass[32];
+
   RelayConfig relays[MAX_TOTAL_RELAYS];
   DIConfig dis[MAX_TOTAL_DIS];
 

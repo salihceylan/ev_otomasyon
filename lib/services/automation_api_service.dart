@@ -69,4 +69,49 @@ class AutomationApiService {
     ).timeout(const Duration(seconds: 5));
     return res.statusCode == 200;
   }
+
+  /// ADIM 14: Akıllı Kurtarma Modunda çevredeki Wi-Fi ağlarını tarama
+  Future<List<Map<String, dynamic>>> scanWifiNetworks() async {
+    final uri = Uri.parse('$baseUrl/api/wifi/scan');
+    final res = await http.get(uri).timeout(const Duration(seconds: 8));
+    if (res.statusCode == 200) {
+      final json = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final list = (json['networks'] as List<dynamic>?) ?? [];
+      return list.map((n) => n as Map<String, dynamic>).toList();
+    }
+    return [];
+  }
+
+  /// ADIM 14: Akıllı Kurtarma Modunda panoya yeni Wi-Fi bilgilerini gönderme
+  Future<bool> connectWifi(String ssid, String pass) async {
+    final uri = Uri.parse('$baseUrl/api/wifi/connect');
+    final res = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'ssid': ssid.trim(), 'pass': pass.trim()}),
+    ).timeout(const Duration(seconds: 8));
+    return res.statusCode == 200;
+  }
+
+  /// ADIM 17: Direkt Mod Çocuk Kilidi
+  Future<bool> setChildLock(bool enabled) async {
+    final uri = Uri.parse('$baseUrl/api/child-lock');
+    final res = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'enabled': enabled}),
+    ).timeout(const Duration(seconds: 4));
+    return res.statusCode == 200;
+  }
+
+  Future<bool> fetchChildLock() async {
+    final uri = Uri.parse('$baseUrl/api/child-lock');
+    final res = await http.get(uri).timeout(const Duration(seconds: 4));
+    if (res.statusCode == 200) {
+      final json = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      return json['child_lock'] == true;
+    }
+    return false;
+  }
 }
+

@@ -3,6 +3,7 @@
 #include "WS_DIN.h"
 #include "WS_GPIO.h"
 #include <HardwareSerial.h>
+#include "MqttManager.h"
 
 SmartAutomation& SmartAutomation::instance() {
   static SmartAutomation instance;
@@ -21,9 +22,51 @@ SmartAutomation::SmartAutomation() : _rs485LogCount(0), _lastExtModulePoll(0), _
   for (int i = 0; i < MAX_TOTAL_RELAYS / 2; i++) {
     _shutters[i].is_moving = false;
     _shutters[i].direction = 0;
+    _shutters[i].last_direction = 0;
     _shutters[i].start_time = 0;
     _shutters[i].duration_ms = 20000;
+    _shutters[i].pending_direction = 0;
+    _shutters[i].dead_time_start = 0;
+    _shutters[i].current_position = 0;
+    _shutters[i].target_position = 255;
+    _shutters[i].start_position = 0;
   }
+  _childLockEnabled = false;
+}
+
+void SmartAutomation::setChildLock(bool enabled) {
+  _childLockEnabled = enabled;
+  Preferences prefs;
+  if (prefs.begin("ahbu_auto", false)) {
+    prefs.putBool("child_lock", enabled);
+    prefs.end();
+  }
+  printf("[ÇOCUK KİLİDİ] Durum güncellendi: %s\r\n", enabled ? "AKTİF (Duvardaki Anahtarlar Kilitli)" : "PASİF (Normal)");
+  Buzzer_Open_Time(enabled ? 200 : 100, 0);
+}
+
+void SmartAutomation::loadShutterPositions() {
+  Preferences prefs;
+  prefs.begin("ahbu_pos", true);
+  for (int i = 0; i < MAX_TOTAL_RELAYS / 2; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "sh_pos_%d", i);
+    _shutters[i].current_position = prefs.getUChar(key, 0);
+    _shutters[i].start_position = _shutters[i].current_position;
+    _shutters[i].target_position = 255;
+  }
+  prefs.end();
+  printf("SmartAutomation: Panjur pozisyonlari NVS'den yuklendi.\r\n");
+}
+
+void SmartAutomation::saveShutterPosition(uint8_t pairIndex) {
+  if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
+  Preferences prefs;
+  prefs.begin("ahbu_pos", false);
+  char key[16];
+  snprintf(key, sizeof(key), "sh_pos_%d", pairIndex);
+  prefs.putUChar(key, _shutters[pairIndex].current_position);
+  prefs.end();
 }
 
 void SmartAutomation::begin() {
@@ -40,17 +83,59 @@ void SmartAutomation::begin() {
   // RS485 Seri Portunu Başlat
   rs485Begin(ConfigManager::instance().config.rs485_baud);
 
-  // Başlangıçta tüm aktif röleleri kapat
+  // Panjur pozisyonlarını NVS'den yükle (Panjurlar KESİNLİKLE hareket ettirilmez)
+  loadShutterPositions();
+
+  // ADIM 15: Power-On State (Elektrik Kesintisi Güvenliği):
+  // Gece elektrik kesilip geri geldiğinde (Power Restore), lambaların varsayılan durumu KESİNLİKLE KAPALI (OFF) kalır.
+  // Panjurlar hareket etmez (is_moving = false, direction = 0).
   uint8_t totalR = ConfigManager::instance().config.totalRelays();
   for (int i = 0; i < totalR; i++) {
     applyPhysicalRelay(i, false);
   }
-  printf("SmartAutomation: Baslatildi ve hazir (Toplam Röle: %d, DI: %d).\r\n",
+  for (int p = 0; p < MAX_TOTAL_RELAYS / 2; p++) {
+    _shutters[p].is_moving = false;
+    _shutters[p].direction = 0;
+    _shutters[p].pending_direction = 0;
+  }
+
+  // ADIM 17: Çocuk Kilidi NVS'den yükle
+  Preferences childPrefs;
+  if (childPrefs.begin("ahbu_auto", true)) {
+    _childLockEnabled = childPrefs.getBool("child_lock", false);
+    childPrefs.end();
+  }
+  if (_childLockEnabled) {
+    printf("SmartAutomation: [ÇOCUK KİLİDİ AKTİF] Duvardaki anahtarlar kilitli baslatildi.\r\n");
+  }
+
+  printf("SmartAutomation: [POWER-ON RESTORE] Tum lambalar KESINLIKLE KAPALI (OFF), panjurlar hareketsiz baslatildi (Toplam Röle: %d, DI: %d).\r\n",
          totalR, ConfigManager::instance().config.totalDIs());
 }
 
 void SmartAutomation::applyPhysicalRelay(uint8_t relayIndex, bool state) {
   if (relayIndex >= MAX_TOTAL_RELAYS) return;
+
+  if (state) {
+    // HARD INTERLOCK KORUMASI:
+    // Eğer bu röle bir panjur çiftine aitse, eşinin (diğer yön) KESİNLİKLE kapalı olduğunu garanti et.
+    uint8_t peerIndex = (relayIndex % 2 == 0) ? (relayIndex + 1) : (relayIndex - 1);
+    if (peerIndex < MAX_TOTAL_RELAYS) {
+      auto& cfgThis = ConfigManager::instance().config.relays[relayIndex];
+      auto& cfgPeer = ConfigManager::instance().config.relays[peerIndex];
+      bool isShutterPair = (cfgThis.type == RELAY_TYPE_SHUTTER_UP && cfgPeer.type == RELAY_TYPE_SHUTTER_DOWN) ||
+                           (cfgThis.type == RELAY_TYPE_SHUTTER_DOWN && cfgPeer.type == RELAY_TYPE_SHUTTER_UP);
+      if (isShutterPair && _relayStates[peerIndex]) {
+        printf("[HARD INTERLOCK] HATA: Role %d acilirken zit yon Role %d acikti! Diger yon aninda kapatildi.\r\n",
+               relayIndex + 1, peerIndex + 1);
+        _relayStates[peerIndex] = false;
+        if (peerIndex < 8) {
+          Relay_CHx(peerIndex + 1, false);
+        }
+      }
+    }
+  }
+
   _relayStates[relayIndex] = state;
 
   if (relayIndex < 8) {
@@ -64,6 +149,9 @@ void SmartAutomation::applyPhysicalRelay(uint8_t relayIndex, bool state) {
       rs485ControlExtRelay(cfg.ext_module_address, extCh, state ? 1 : 0);
     }
   }
+
+  // MQTT durum raporu güncellemesini tetikle
+  MqttManager::instance().triggerPublish();
 }
 
 bool SmartAutomation::getRelayState(uint8_t relayIndex) {
@@ -129,16 +217,72 @@ void SmartAutomation::toggleRelay(uint8_t relayIndex) {
   setRelayState(relayIndex, !_relayStates[relayIndex]);
 }
 
+void SmartAutomation::updateShutterPosition(uint8_t pairIndex) {
+  if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
+  if (!_shutters[pairIndex].is_moving) return;
+
+  uint8_t rUp = pairIndex * 2;
+  uint8_t rDown = rUp + 1;
+  uint32_t now = millis();
+  uint32_t elapsed = now - _shutters[pairIndex].start_time;
+
+  if (_shutters[pairIndex].direction == 1) {
+    // YUKARI (Açılıyor: 0 -> 100)
+    uint32_t tUp = ConfigManager::instance().config.relays[rUp].runtime_sec * 1000UL;
+    if (tUp == 0) tUp = 20000;
+
+    uint32_t deltaPct = (elapsed * 100UL) / tUp;
+    int newPos = (int)_shutters[pairIndex].start_position + (int)deltaPct;
+    if (newPos > 100) newPos = 100;
+    _shutters[pairIndex].current_position = (uint8_t)newPos;
+  } else if (_shutters[pairIndex].direction == 2) {
+    // AŞAĞI (Kapanıyor: 100 -> 0)
+    uint32_t tDown = ConfigManager::instance().config.relays[rDown].runtime_sec * 1000UL;
+    if (tDown == 0) tDown = 20000;
+
+    uint32_t deltaPct = (elapsed * 100UL) / tDown;
+    int newPos = (int)_shutters[pairIndex].start_position - (int)deltaPct;
+    if (newPos < 0) newPos = 0;
+    _shutters[pairIndex].current_position = (uint8_t)newPos;
+  }
+}
+
+uint8_t SmartAutomation::getShutterPosition(uint8_t pairIndex) {
+  if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return 0;
+  updateShutterPosition(pairIndex);
+  return _shutters[pairIndex].current_position;
+}
+
 void SmartAutomation::shutterUp(uint8_t pairIndex) {
   if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
   uint8_t rUp = pairIndex * 2;
   uint8_t rDown = rUp + 1;
+  uint32_t now = millis();
 
-  // 1. HAYATİ KURAL: Önce Aşağı rölesini kesinlikle kapat!
+  // 1. ZIT YÖN KONTROLÜ (Panjur şu anda AŞAĞI hareket ediyorsa):
+  if (_shutters[pairIndex].direction == 2) {
+    applyPhysicalRelay(rDown, false);
+    updateShutterPosition(pairIndex);
+    _shutters[pairIndex].is_moving = false;
+    _shutters[pairIndex].direction = 0;
+    _shutters[pairIndex].pending_direction = 1; // 1: YUKARI beklemede
+    _shutters[pairIndex].dead_time_start = now;
+    printf("[PANJUR %d INTERLOCK] ASAGI kesildi! 500ms OLU ZAMAN (Dead-Time) baslatildi -> YUKARI kuyrukta.\r\n", pairIndex + 1);
+    Buzzer_Open_Time(50, 0);
+    return;
+  }
+
+  // 2. ÖLÜ ZAMAN KONTROLÜ (Motor durmuş fakat son hareketten bu yana 500 ms geçmediyse):
+  if (_shutters[pairIndex].dead_time_start > 0 && (now - _shutters[pairIndex].dead_time_start < SHUTTER_DEAD_TIME_MS)) {
+    applyPhysicalRelay(rDown, false);
+    _shutters[pairIndex].pending_direction = 1;
+    printf("[PANJUR %d DEAD-TIME] Son hareketten sonra %u ms gecti (<500ms), YUKARI bekletiliyor.\r\n", 
+           pairIndex + 1, (unsigned int)(now - _shutters[pairIndex].dead_time_start));
+    return;
+  }
+
+  // 3. Emniyetli durum: Ölü zaman doldu veya motor hareketsizdi.
   applyPhysicalRelay(rDown, false);
-  vTaskDelay(pdMS_TO_TICKS(150)); // Motor duruş / geçiş payı
-
-  // 2. Yukarı rölesini çek
   applyPhysicalRelay(rUp, true);
 
   uint16_t runtimeSec = ConfigManager::instance().config.relays[rUp].runtime_sec;
@@ -147,23 +291,51 @@ void SmartAutomation::shutterUp(uint8_t pairIndex) {
   _shutters[pairIndex].is_moving = true;
   _shutters[pairIndex].direction = 1;
   _shutters[pairIndex].last_direction = 1;
+  _shutters[pairIndex].pending_direction = 0;
   _shutters[pairIndex].start_time = millis();
-  _shutters[pairIndex].duration_ms = runtimeSec * 1000UL;
+
+  if (_shutters[pairIndex].target_position == 255) {
+    _shutters[pairIndex].target_position = 100;
+    _shutters[pairIndex].start_position = _shutters[pairIndex].current_position;
+    // ADIM 15: Tam açılmada mekanik limit switch oturması ve self-healing için +2 sn (2000 ms) ilave süre
+    _shutters[pairIndex].duration_ms = runtimeSec * 1000UL + SHUTTER_OVERRUN_MS;
+  }
 
   Buzzer_Open_Time(150, 0);
-  printf("Panjur %d: YUKARI baslatildi (%d sn)\r\n", pairIndex + 1, runtimeSec);
+  printf("[PANJUR %d] YUKARI baslatildi (Role %d ON, Sure: %u ms [Overrun +2s], Hedef: %%%d)\r\n", 
+         pairIndex + 1, rUp + 1, (unsigned int)_shutters[pairIndex].duration_ms, _shutters[pairIndex].target_position);
 }
 
 void SmartAutomation::shutterDown(uint8_t pairIndex) {
   if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
   uint8_t rUp = pairIndex * 2;
   uint8_t rDown = rUp + 1;
+  uint32_t now = millis();
 
-  // 1. HAYATİ KURAL: Önce Yukarı rölesini kesinlikle kapat!
+  // 1. ZIT YÖN KONTROLÜ (Panjur şu anda YUKARI hareket ediyorsa):
+  if (_shutters[pairIndex].direction == 1) {
+    applyPhysicalRelay(rUp, false);
+    updateShutterPosition(pairIndex);
+    _shutters[pairIndex].is_moving = false;
+    _shutters[pairIndex].direction = 0;
+    _shutters[pairIndex].pending_direction = 2; // 2: ASAGI beklemede
+    _shutters[pairIndex].dead_time_start = now;
+    printf("[PANJUR %d INTERLOCK] YUKARI kesildi! 500ms OLU ZAMAN (Dead-Time) baslatildi -> ASAGI kuyrukta.\r\n", pairIndex + 1);
+    Buzzer_Open_Time(50, 0);
+    return;
+  }
+
+  // 2. ÖLÜ ZAMAN KONTROLÜ (Motor durmuş fakat son hareketten bu yana 500 ms geçmediyse):
+  if (_shutters[pairIndex].dead_time_start > 0 && (now - _shutters[pairIndex].dead_time_start < SHUTTER_DEAD_TIME_MS)) {
+    applyPhysicalRelay(rUp, false);
+    _shutters[pairIndex].pending_direction = 2;
+    printf("[PANJUR %d DEAD-TIME] Son hareketten sonra %u ms gecti (<500ms), ASAGI bekletiliyor.\r\n", 
+           pairIndex + 1, (unsigned int)(now - _shutters[pairIndex].dead_time_start));
+    return;
+  }
+
+  // 3. Emniyetli durum: Ölü zaman doldu veya motor hareketsizdi.
   applyPhysicalRelay(rUp, false);
-  vTaskDelay(pdMS_TO_TICKS(150)); // Motor duruş / geçiş payı
-
-  // 2. Aşağı rölesini çek
   applyPhysicalRelay(rDown, true);
 
   uint16_t runtimeSec = ConfigManager::instance().config.relays[rDown].runtime_sec;
@@ -172,48 +344,158 @@ void SmartAutomation::shutterDown(uint8_t pairIndex) {
   _shutters[pairIndex].is_moving = true;
   _shutters[pairIndex].direction = 2;
   _shutters[pairIndex].last_direction = 2;
+  _shutters[pairIndex].pending_direction = 0;
   _shutters[pairIndex].start_time = millis();
-  _shutters[pairIndex].duration_ms = runtimeSec * 1000UL;
+
+  if (_shutters[pairIndex].target_position == 255) {
+    _shutters[pairIndex].target_position = 0;
+    _shutters[pairIndex].start_position = _shutters[pairIndex].current_position;
+    // ADIM 15: Tam kapanmada mekanik taban oturması ve self-healing için +2 sn (2000 ms) ilave süre
+    _shutters[pairIndex].duration_ms = runtimeSec * 1000UL + SHUTTER_OVERRUN_MS;
+  }
 
   Buzzer_Open_Time(150, 0);
-  printf("Panjur %d: ASAGI baslatildi (%d sn)\r\n", pairIndex + 1, runtimeSec);
+  printf("[PANJUR %d] ASAGI baslatildi (Role %d ON, Sure: %u ms [Overrun +2s], Hedef: %%%d)\r\n", 
+         pairIndex + 1, rDown + 1, (unsigned int)_shutters[pairIndex].duration_ms, _shutters[pairIndex].target_position);
 }
 
 void SmartAutomation::shutterStop(uint8_t pairIndex) {
   if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
   uint8_t rUp = pairIndex * 2;
   uint8_t rDown = rUp + 1;
+  uint32_t now = millis();
 
-  // İki röleyi de kapat
+  bool wasMoving = _shutters[pairIndex].is_moving || (_shutters[pairIndex].direction != 0) || (_shutters[pairIndex].pending_direction != 0);
+
+  // İki röleyi de hemen kapat
   applyPhysicalRelay(rUp, false);
   applyPhysicalRelay(rDown, false);
 
+  if (wasMoving) {
+    _shutters[pairIndex].dead_time_start = now;
+    updateShutterPosition(pairIndex);
+    if (_shutters[pairIndex].target_position != 255) {
+      uint32_t elapsed = now - _shutters[pairIndex].start_time;
+      // ADIM 15 Self-Healing: Eğer tam açılma/kapanma süresine ulaşıldıysa veya süre dolduysa hedef pozisyonu kesin eşitle
+      if (elapsed >= _shutters[pairIndex].duration_ms ||
+          (elapsed >= (_shutters[pairIndex].duration_ms > SHUTTER_OVERRUN_MS ? (_shutters[pairIndex].duration_ms - SHUTTER_OVERRUN_MS) : _shutters[pairIndex].duration_ms) &&
+           (_shutters[pairIndex].target_position == 100 || _shutters[pairIndex].target_position == 0))) {
+        _shutters[pairIndex].current_position = _shutters[pairIndex].target_position;
+      }
+    }
+    saveShutterPosition(pairIndex);
+  }
+
   _shutters[pairIndex].is_moving = false;
   _shutters[pairIndex].direction = 0;
+  _shutters[pairIndex].pending_direction = 0;
+  _shutters[pairIndex].target_position = 255;
   _shutters[pairIndex].start_time = 0;
 
   Buzzer_Open_Time(80, 0);
-  printf("Panjur %d: DURDURULDU\r\n", pairIndex + 1);
+  printf("[PANJUR %d] DURDURULDU (Role %d & %d OFF, Son Pozisyon: %%%d)\r\n", 
+         pairIndex + 1, rUp + 1, rDown + 1, _shutters[pairIndex].current_position);
+}
+
+void SmartAutomation::setShutterPosition(uint8_t pairIndex, uint8_t targetPercent) {
+  if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
+  if (targetPercent > 100) targetPercent = 100;
+
+  updateShutterPosition(pairIndex);
+  uint8_t curPos = _shutters[pairIndex].current_position;
+
+  if (curPos == targetPercent) {
+    if (_shutters[pairIndex].is_moving) {
+      shutterStop(pairIndex);
+    }
+    printf("[PANJUR %d] Zaten hedef pozisyonda (%%%d).\r\n", pairIndex + 1, targetPercent);
+    return;
+  }
+
+  uint8_t rUp = pairIndex * 2;
+  uint8_t rDown = rUp + 1;
+  uint32_t tUp = ConfigManager::instance().config.relays[rUp].runtime_sec * 1000UL;
+  if (tUp == 0) tUp = 20000;
+  uint32_t tDown = ConfigManager::instance().config.relays[rDown].runtime_sec * 1000UL;
+  if (tDown == 0) tDown = 20000;
+
+  if (targetPercent > curPos) {
+    // YUKARI HAREKET GEREKLİ (Açılma)
+    uint8_t diff = targetPercent - curPos;
+    uint32_t duration = (diff * tUp) / 100UL;
+
+    if (targetPercent == 100) {
+      // ADIM 15: Tam açılmada mekanik limit switch oturması ve self-healing için +2 sn ilave süre
+      duration = tUp + SHUTTER_OVERRUN_MS;
+    }
+
+    _shutters[pairIndex].target_position = targetPercent;
+    _shutters[pairIndex].start_position = curPos;
+
+    printf("[PANJUR %d] Pozisyon Komutu: %%%d -> Hedef: %%%d (Yon: YUKARI, Sure: %u ms%s)\r\n",
+           pairIndex + 1, curPos, targetPercent, (unsigned int)duration,
+           (targetPercent == 100) ? " [+2s Overrun]" : "");
+
+    _shutters[pairIndex].duration_ms = duration;
+    shutterUp(pairIndex);
+    _shutters[pairIndex].duration_ms = duration;
+    _shutters[pairIndex].target_position = targetPercent;
+    _shutters[pairIndex].start_position = curPos;
+  } else {
+    // AŞAĞI HAREKET GEREKLİ (Kapanma)
+    uint8_t diff = curPos - targetPercent;
+    uint32_t duration = (diff * tDown) / 100UL;
+
+    if (targetPercent == 0) {
+      // ADIM 15: Tam kapanmada mekanik taban oturması ve self-healing için +2 sn ilave süre
+      duration = tDown + SHUTTER_OVERRUN_MS;
+    }
+
+    _shutters[pairIndex].target_position = targetPercent;
+    _shutters[pairIndex].start_position = curPos;
+
+    printf("[PANJUR %d] Pozisyon Komutu: %%%d -> Hedef: %%%d (Yon: ASAGI, Sure: %u ms%s)\r\n",
+           pairIndex + 1, curPos, targetPercent, (unsigned int)duration,
+           (targetPercent == 0) ? " [+2s Overrun]" : "");
+
+    _shutters[pairIndex].duration_ms = duration;
+    shutterDown(pairIndex);
+    _shutters[pairIndex].duration_ms = duration;
+    _shutters[pairIndex].target_position = targetPercent;
+    _shutters[pairIndex].start_position = curPos;
+  }
 }
 
 void SmartAutomation::shutterStep(uint8_t pairIndex) {
   if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return;
 
-  if (_shutters[pairIndex].is_moving) {
-    // 1. Panjur zaten hareket halindeyse (yukarı veya aşağı fark etmez) -> DURDUR (STOP)
+  // Eğer panjur hareket ediyorsa veya dead-time beklemesinde ise: DURDUR
+  if (_shutters[pairIndex].is_moving || _shutters[pairIndex].pending_direction != 0) {
+    printf("[PANJUR %d] SHUTTER_STEP: Hareket/Bekleme var -> DURDURULDU\r\n", pairIndex + 1);
+    _shutters[pairIndex].pending_direction = 0; // Kuyruklanmış hareketi de iptal et
     shutterStop(pairIndex);
+    return;
+  }
+
+  // Panjur duruyorsa: son harekete göre TERSİNDE hareket başlat (Döngüsel: Aç→Dur→Kapat→Dur→Aç...)
+  // last_direction: 0=Hiç hareket etmedi (başlangıç), 1=Son hareket YUKARI, 2=Son hareket ASAGI
+  if (_shutters[pairIndex].last_direction == 1) {
+    // Son hareket YUKARI (Açılma) idi → Şimdi ASAGI (Kapatma) başlat
+    printf("[PANJUR %d] SHUTTER_STEP: Son yon YUKARI -> ASAGI baslatiliyor\r\n", pairIndex + 1);
+    shutterDown(pairIndex);
   } else {
-    // 2. Panjur durmuş vaziyette ise -> Son hareketin tersi yöne çalıştır (Yukarı -> Dur -> Aşağı -> Dur -> Yukarı...)
-    if (_shutters[pairIndex].last_direction == 1) {
-      shutterDown(pairIndex);
-    } else {
-      shutterUp(pairIndex);
-    }
+    // Son hareket ASAGI (Kapatma) idi veya hiç hareket etmedi → YUKARI (Açılma) başlat
+    printf("[PANJUR %d] SHUTTER_STEP: Son yon ASAGI/Baslangic -> YUKARI baslatiliyor\r\n", pairIndex + 1);
+    shutterUp(pairIndex);
   }
 }
 
 ShutterState SmartAutomation::getShutterState(uint8_t pairIndex) {
-  if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) return {false, 0, 0, 0, 0};
+  if (pairIndex >= (MAX_TOTAL_RELAYS / 2)) {
+    ShutterState empty = {false, 0, 0, 0, 0, 0, 0, 0, 255, 0};
+    return empty;
+  }
+  updateShutterPosition(pairIndex);
   return _shutters[pairIndex];
 }
 
@@ -274,10 +556,30 @@ void SmartAutomation::loop() {
 void SmartAutomation::checkShutterTimers() {
   uint32_t now = millis();
   uint8_t totalPairs = ConfigManager::instance().config.totalRelays() / 2;
+
   for (int p = 0; p < totalPairs; p++) {
+    // 1. Ölü Zaman (Dead-Time) Süresi Dolan Bekleyen Yön Aktivasyonu
+    if (_shutters[p].pending_direction != 0) {
+      if (now - _shutters[p].dead_time_start >= SHUTTER_DEAD_TIME_MS) {
+        uint8_t targetDir = _shutters[p].pending_direction;
+        _shutters[p].pending_direction = 0; // Kuyruktan çıkar
+        printf("[PANJUR %d DEAD-TIME DOLDU] %u ms beklendi -> Yon %s simdi devreye aliniyor.\r\n",
+               p + 1, (unsigned int)(now - _shutters[p].dead_time_start),
+               (targetDir == 1) ? "YUKARI" : "ASAGI");
+        if (targetDir == 1) {
+          shutterUp(p);
+        } else if (targetDir == 2) {
+          shutterDown(p);
+        }
+      }
+    }
+
+    // 2. Çalışma Süresi (Runtime Duration) Kontrolü
     if (_shutters[p].is_moving) {
+      updateShutterPosition(p);
       if (now - _shutters[p].start_time >= _shutters[p].duration_ms) {
-        printf("Panjur %d: Sure doldu, otomatik durduruluyor.\r\n", p + 1);
+        printf("[PANJUR %d SURE DOLDU] Calisma suresi (%u ms) tamamlandi -> Hedef pozisyona ulasildi.\r\n",
+               p + 1, (unsigned int)_shutters[p].duration_ms);
         shutterStop(p);
       }
     }
@@ -307,8 +609,8 @@ void SmartAutomation::checkDigitalInputs() {
   for (int i = 0; i < 8; i++) {
     bool isClosed = (digitalRead(diPins[i]) == LOW); // LOW = Kuru kontak DGND ile birleşti
     if (isClosed != _diStates[i]) {
-      // 50ms Debounce filtresi
-      if (now - _diLastPressTime[i] > 60) {
+      // 150ms Debounce filtresi (yaylı mekanik butonlar için spurious trigger önlemi)
+      if (now - _diLastPressTime[i] > 150) {
         _diStates[i] = isClosed;
         _diLastPressTime[i] = now;
 
@@ -318,7 +620,15 @@ void SmartAutomation::checkDigitalInputs() {
         if (targetRelay >= 1 && targetRelay <= totalR) {
           uint8_t rIdx = targetRelay - 1;
 
+          // ADIM 17: Çocuk Kilidi Koruması (Duvardaki butonlar kilitliyse eylemi engelle)
+          if (_childLockEnabled) {
+            printf("[ÇOCUK KİLİDİ AKTİF] DI-%d kontak verdi ancak fiziksel anahtarlar kilitli! Röle tetiklenmedi.\r\n", i + 1);
+            continue;
+          }
+
           if (isClosed) { // Butona basılma anı (Falling edge)
+            printf("[DI-%d] Kuru Kontak Tetiklendi (DGND) -> Hedef Role-%d (Mod: %d)\r\n",
+                   i + 1, targetRelay, diCfg.mode);
             if (diCfg.mode == DI_MODE_TOGGLE) {
               toggleRelay(rIdx);
             } else if (diCfg.mode == DI_MODE_MOMENTARY) {
@@ -328,14 +638,14 @@ void SmartAutomation::checkDigitalInputs() {
               shutterStep(pairIdx);
             } else if (diCfg.mode == DI_MODE_SHUTTER_UP) {
               uint8_t pairIdx = rIdx / 2;
-              if (_shutters[pairIdx].is_moving) {
+              if (_shutters[pairIdx].is_moving || _shutters[pairIdx].pending_direction != 0) {
                 shutterStop(pairIdx);
               } else {
                 shutterUp(pairIdx);
               }
             } else if (diCfg.mode == DI_MODE_SHUTTER_DOWN) {
               uint8_t pairIdx = rIdx / 2;
-              if (_shutters[pairIdx].is_moving) {
+              if (_shutters[pairIdx].is_moving || _shutters[pairIdx].pending_direction != 0) {
                 shutterStop(pairIdx);
               } else {
                 shutterDown(pairIdx);
@@ -343,6 +653,7 @@ void SmartAutomation::checkDigitalInputs() {
             }
           } else { // Butonun bırakılma anı (Rising edge)
             if (diCfg.mode == DI_MODE_MOMENTARY) {
+              printf("[DI-%d] Buton Birakildi -> Hedef Role-%d KAPATILDI\r\n", i + 1, targetRelay);
               setRelayState(rIdx, false);
             }
           }
@@ -649,7 +960,7 @@ void SmartAutomation::pollExtModule() {
 
       uint8_t diIndex = 8 + k;
       if (diIndex < MAX_TOTAL_DIS && isClosed != _diStates[diIndex]) {
-        if (now - _diLastPressTime[diIndex] > 60) {
+        if (now - _diLastPressTime[diIndex] > 150) {
           _diStates[diIndex] = isClosed;
           _diLastPressTime[diIndex] = now;
 
@@ -667,11 +978,11 @@ void SmartAutomation::pollExtModule() {
                 shutterStep(rIdx / 2);
               } else if (diCfg.mode == DI_MODE_SHUTTER_UP) {
                 uint8_t p = rIdx / 2;
-                if (_shutters[p].is_moving) shutterStop(p);
+                if (_shutters[p].is_moving || _shutters[p].pending_direction != 0) shutterStop(p);
                 else shutterUp(p);
               } else if (diCfg.mode == DI_MODE_SHUTTER_DOWN) {
                 uint8_t p = rIdx / 2;
-                if (_shutters[p].is_moving) shutterStop(p);
+                if (_shutters[p].is_moving || _shutters[p].pending_direction != 0) shutterStop(p);
                 else shutterDown(p);
               }
             } else {

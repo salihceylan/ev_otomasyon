@@ -13,57 +13,93 @@ class QuickScenarioBar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          '⚡ Hızlı Senaryolar & Genel Komutlar',
-          style: TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-            color: AppTheme.textMuted,
-          ),
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
+        const Row(
           children: [
-            _buildBtn(
-              context: context,
-              icon: Icons.lightbulb_outline,
-              label: 'Tüm Lambaları Kapat',
-              color: AppTheme.accentAmber,
-              onTap: () => state.cmdAll('lightsoff'),
-            ),
-            _buildBtn(
-              context: context,
-              icon: Icons.keyboard_double_arrow_down,
-              label: 'Tüm Panjurları İndir',
-              color: AppTheme.primaryBlue,
-              onTap: () => state.cmdAll('shuttersdown'),
-            ),
-            _buildBtn(
-              context: context,
-              icon: Icons.keyboard_double_arrow_up,
-              label: 'Tüm Panjurları Aç',
-              color: AppTheme.accentGreen,
-              onTap: () => state.cmdAll('shuttersup'),
-            ),
-            _buildBtn(
-              context: context,
-              icon: Icons.stop_circle_outlined,
-              label: 'Panjurları Durdur',
-              color: AppTheme.accentRed,
-              onTap: () => state.cmdAll('shuttersstop'),
+            Icon(Icons.bolt, size: 16, color: AppTheme.accentAmber),
+            SizedBox(width: 6),
+            Text(
+              'Hızlı Senaryolar & Akıllı Rutinler',
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textMuted,
+              ),
             ),
           ],
+        ),
+        const SizedBox(height: 10),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: Row(
+            children: [
+              _buildScenarioCard(
+                icon: Icons.exit_to_app,
+                title: 'Evden Çıkıyorum',
+                subtitle: 'Işıkları kapat, panjurları indir',
+                color: AppTheme.accentRed,
+                onTap: () {
+                  state.cmdAll('lightsoff');
+                  state.cmdAll('shuttersdown');
+                  _showSnack(context, '🏠 Evden çıkış senaryosu devrede: Tüm ışıklar ve panjurlar kapatılıyor');
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildScenarioCard(
+                icon: Icons.wb_sunny_outlined,
+                title: 'Günaydın',
+                subtitle: 'Panjurları aç',
+                color: AppTheme.accentAmber,
+                onTap: () {
+                  state.cmdAll('shuttersup');
+                  _showSnack(context, '🌅 Günaydın senaryosu devrede: Panjurlar açılıyor');
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildScenarioCard(
+                icon: Icons.bedtime_outlined,
+                title: 'İyi Geceler',
+                subtitle: 'Işıkları söndür, panjuru kapat',
+                color: AppTheme.accentPurple,
+                onTap: () {
+                  state.cmdAll('lightsoff');
+                  state.cmdAll('shuttersdown');
+                  _showSnack(context, '🌙 İyi geceler senaryosu devrede');
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildScenarioCard(
+                icon: Icons.lightbulb_outline,
+                title: 'Tüm Lambalar',
+                subtitle: 'Hepsini söndür',
+                color: AppTheme.primaryBlueLight,
+                onTap: () {
+                  state.cmdAll('lightsoff');
+                  _showSnack(context, '💡 Tüm lambalar kapatıldı');
+                },
+              ),
+              const SizedBox(width: 8),
+              _buildScenarioCard(
+                icon: Icons.stop_circle_outlined,
+                title: 'Panjurları Durdur',
+                subtitle: 'Anlık acil durdurma',
+                color: AppTheme.textMuted,
+                onTap: () {
+                  state.cmdAll('shuttersstop');
+                  _showSnack(context, '⏹ Tüm panjurlar durduruldu');
+                },
+              ),
+            ],
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildBtn({
-    required BuildContext context,
+  Widget _buildScenarioCard({
     required IconData icon,
-    required String label,
+    required String title,
+    required String subtitle,
     required Color color,
     required VoidCallback onTap,
   }) {
@@ -71,36 +107,65 @@ class QuickScenarioBar extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          width: 148,
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(12),
+            color: color.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(
               color: color.withValues(alpha: 0.35),
               width: 1.2,
             ),
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: color,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
                 ),
+                child: Icon(icon, size: 18, color: color),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: AppTheme.textMuted,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _showSnack(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: const TextStyle(fontSize: 12.5)),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
       ),
     );
   }

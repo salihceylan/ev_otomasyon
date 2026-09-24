@@ -21,6 +21,7 @@ private:
   std::vector<ScannedAp> _cachedNetworks;
 
   void setupRoutes();
+  void sendCors();
   void handleRoot();
   void handleApiStatus();
   void handleApiRelay();
