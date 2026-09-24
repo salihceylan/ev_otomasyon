@@ -3,16 +3,23 @@ import 'package:http/http.dart' as http;
 import '../models/cloud_models.dart';
 
 class EvCloudApiService {
-  String baseUrl;
+  static final EvCloudApiService _instance = EvCloudApiService._internal();
+
+  factory EvCloudApiService({String? baseUrl}) {
+    if (baseUrl != null) {
+      _instance.baseUrl = baseUrl;
+    }
+    return _instance;
+  }
+
+  EvCloudApiService._internal();
+
+  String baseUrl = 'https://evotomasyon.gudeteknoloji.com.tr/api';
   String? _authToken;
   String? _refreshToken;
 
   /// Token yenilendiğinde dinleyicileri (SecureStorage) bilgilendirmek için geri çağrı
   void Function(String newAccessToken, String? newRefreshToken)? onTokenRefreshed;
-
-  EvCloudApiService({
-    this.baseUrl = 'https://evotomasyon.gudeteknoloji.com.tr/api',
-  });
 
   void setAuthToken(String? token) {
     _authToken = token;
@@ -35,10 +42,10 @@ class EvCloudApiService {
     return map;
   }
 
-  /// 401 Unauthorized durumunda sessizce token tazeleyip isteği tekrarlayan koruma
+  /// 401 Unauthorized veya 403 Durumunda sessizce token tazeleyip isteği tekrarlayan koruma
   Future<http.Response> _authenticatedRequest(Future<http.Response> Function() requestFn) async {
     var res = await requestFn();
-    if (res.statusCode == 401 && _refreshToken != null && _refreshToken!.isNotEmpty) {
+    if ((res.statusCode == 401 || res.statusCode == 403) && _refreshToken != null && _refreshToken!.isNotEmpty) {
       try {
         final refreshData = await refreshToken();
         final newAccess = refreshData['access_token'] as String?;
@@ -834,5 +841,109 @@ class EvCloudApiService {
       final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       throw Exception(data['error'] ?? 'Kural silinemedi (Kod: ${res.statusCode})');
     }
+  }
+
+  // ===========================================================================
+  // SÜPER YÖNETİCİ & SERVİS SORUMLUSU YÖNETİMİ (ADIM 19)
+  // ===========================================================================
+
+  /// Kullanıcı listesini getir (rol, arama, aktiflik)
+  Future<Map<String, dynamic>> listAdminUsers({
+    String? role,
+    String? search,
+    bool? isActive,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (role != null && role.isNotEmpty) queryParams['role'] = role;
+    if (search != null && search.isNotEmpty) queryParams['search'] = search;
+    if (isActive != null) queryParams['is_active'] = isActive.toString();
+
+    final uri = Uri.parse('$baseUrl/admin/users').replace(queryParameters: queryParams);
+    final res = await _authenticatedRequest(
+      () => http.get(uri, headers: _headers).timeout(const Duration(seconds: 10)),
+    );
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200) return data['data'] ?? data;
+    throw Exception(data['message'] ?? data['error'] ?? 'Kullanıcı listesi alınamadı (${res.statusCode})');
+  }
+
+  /// Yeni kullanıcı oluştur (super_user, service_user, installer, user)
+  Future<Map<String, dynamic>> createAdminUser({
+    required String fullName,
+    required String email,
+    required String password,
+    String? phone,
+    required String role,
+    String? adminNotes,
+  }) async {
+    final uri = Uri.parse('$baseUrl/admin/users');
+    final body = {
+      'full_name': fullName,
+      'email': email,
+      'password': password,
+      'phone': phone,
+      'role': role,
+      'admin_notes': adminNotes,
+    };
+    final res = await _authenticatedRequest(
+      () => http.post(uri, headers: _headers, body: jsonEncode(body)).timeout(const Duration(seconds: 10)),
+    );
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 201 || res.statusCode == 200) return data['data'] ?? data;
+    throw Exception(data['message'] ?? data['error'] ?? 'Kullanıcı oluşturulamadı (${res.statusCode})');
+  }
+
+  /// Kullanıcı bilgilerini güncelle
+  Future<Map<String, dynamic>> updateAdminUser(
+    String userId, {
+    String? fullName,
+    String? phone,
+    String? role,
+    String? password,
+    bool? isActive,
+    String? adminNotes,
+  }) async {
+    final uri = Uri.parse('$baseUrl/admin/users/$userId');
+    final body = <String, dynamic>{};
+    if (fullName != null) body['full_name'] = fullName;
+    if (phone != null) body['phone'] = phone;
+    if (role != null) body['role'] = role;
+    if (password != null && password.isNotEmpty) body['password'] = password;
+    if (isActive != null) body['is_active'] = isActive;
+    if (adminNotes != null) body['admin_notes'] = adminNotes;
+
+    final res = await _authenticatedRequest(
+      () => http.patch(uri, headers: _headers, body: jsonEncode(body)).timeout(const Duration(seconds: 10)),
+    );
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200) return data['data'] ?? data;
+    throw Exception(data['message'] ?? data['error'] ?? 'Kullanıcı güncellenemedi (${res.statusCode})');
+  }
+
+  /// Kullanıcıyı sil veya pasife al
+  Future<Map<String, dynamic>> deleteAdminUser(String userId, {bool hard = false}) async {
+    final uri = Uri.parse('$baseUrl/admin/users/$userId?hard=$hard');
+    final res = await _authenticatedRequest(
+      () => http.delete(uri, headers: _headers).timeout(const Duration(seconds: 10)),
+    );
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200) return data;
+    throw Exception(data['message'] ?? data['error'] ?? 'Kullanıcı silinemedi (${res.statusCode})');
+  }
+
+  /// Servis özet istatistiklerini getir
+  Future<Map<String, dynamic>> getServiceSummary() async {
+    final uri = Uri.parse('$baseUrl/admin/service-summary');
+    final res = await _authenticatedRequest(
+      () => http.get(uri, headers: _headers).timeout(const Duration(seconds: 10)),
+    );
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200) return data['data'] ?? data;
+    throw Exception(data['message'] ?? data['error'] ?? 'Servis özeti alınamadı (${res.statusCode})');
   }
 }

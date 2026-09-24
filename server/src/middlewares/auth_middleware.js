@@ -80,8 +80,24 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'instal
   };
 }
 
+function requireSuperUser(req, res, next) {
+  if (!req.user || req.user.role !== 'super_user') {
+    return errorResponse(res, 'Bu işlem için Süper Yönetici (super_user) yetkisi gereklidir.', 403);
+  }
+  next();
+}
+
+function requireServiceManager(req, res, next) {
+  if (!req.user || (req.user.role !== 'super_user' && req.user.role !== 'service_user')) {
+    return errorResponse(res, 'Bu işlem için Servis Sorumlusu (service_user) veya Süper Yönetici yetkisi gereklidir.', 403);
+  }
+  next();
+}
+
 module.exports = {
   authenticateToken,
   requireHomeAccess,
+  requireSuperUser,
+  requireServiceManager,
 };
 

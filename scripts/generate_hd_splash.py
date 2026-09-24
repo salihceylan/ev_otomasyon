@@ -105,3 +105,4 @@ draw_canvas.text(((W - c_w) // 2 + 15, card_y + (card_h - (bbox_card[3] - bbox_c
 # Kaydet
 canvas.convert("RGB").save(out_path, "PNG", quality=95)
 print(f"Yüksek çözünürlüklü Android native splash başarıyla üretildi: {out_path} ({W}x{H})")
+

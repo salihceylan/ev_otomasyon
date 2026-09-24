@@ -25,6 +25,7 @@ class AuthService {
         email: user.email,
         full_name: user.full_name,
         phone: user.phone || null,
+        role: user.role || 'user',
       },
       jwtSecret,
       { expiresIn: '15m' }
@@ -103,6 +104,7 @@ class AuthService {
         email: user.email,
         full_name: user.full_name,
         phone: user.phone,
+        role: user.role || 'user',
       },
       homes: homes,
     };
@@ -182,7 +184,7 @@ class AuthService {
 
     // Token veritabanında aktif mi?
     const dbRes = await db.query(
-      `SELECT rt.*, u.email, u.full_name, u.phone, u.is_active
+      `SELECT rt.*, u.email, u.full_name, u.phone, u.role, u.is_active
        FROM refresh_tokens rt
        JOIN users u ON rt.user_id = u.id
        WHERE rt.token_hash = $1 
@@ -205,6 +207,7 @@ class AuthService {
         email: user.email,
         full_name: user.full_name,
         phone: user.phone || null,
+        role: user.role || 'user',
       },
       jwtSecret,
       { expiresIn: '15m' }
@@ -348,7 +351,7 @@ class AuthService {
    * Profil ve Kullanıcının Dairelerini Getir
    */
   async getProfile(userId) {
-    const res = await db.query('SELECT id, email, full_name, phone, created_at FROM users WHERE id = $1', [userId]);
+    const res = await db.query('SELECT id, email, full_name, phone, role, created_at FROM users WHERE id = $1', [userId]);
     if (res.rows.length === 0) {
       throw new Error('Kullanici bulunamadi');
     }
@@ -400,6 +403,7 @@ class AuthService {
         email: user.email,
         full_name: user.full_name,
         phone: user.phone,
+        role: user.role || 'user',
       },
       homes: homes,
     };

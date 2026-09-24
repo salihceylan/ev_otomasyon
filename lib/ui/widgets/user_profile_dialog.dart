@@ -5,6 +5,7 @@ import '../theme/app_theme.dart';
 import '../pages/family/invite_family_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
 import '../pages/family/family_members_page.dart';
+import '../pages/service_management_page.dart';
 
 class UserProfileDialog extends StatelessWidget {
   const UserProfileDialog({super.key});
@@ -26,6 +27,8 @@ class UserProfileDialog extends StatelessWidget {
     final user = state.currentUser;
 
     final roleLabel = switch (user?.role) {
+      'super_user' => '👑 Süper Yönetici',
+      'service_user' => '🛠️ Servis Sorumlusu',
       'owner' => 'Ev Sahibi',
       'installer' => 'Teknisyen / Kurulumcu',
       'member' => 'Aile Bireyi',
@@ -34,6 +37,8 @@ class UserProfileDialog extends StatelessWidget {
     };
 
     final roleColor = switch (user?.role) {
+      'super_user' => AppTheme.accentPurple,
+      'service_user' => AppTheme.accentCyan,
       'installer' => AppTheme.accentAmber,
       'owner' => AppTheme.primaryBlueLight,
       'guest' => AppTheme.accentPurple,
@@ -149,6 +154,31 @@ class UserProfileDialog extends StatelessWidget {
                 title: 'Kayıtlı Ev Sayısı',
                 value: '${state.homes.length} Ev Tanımlı',
               ),
+
+              // Süper Yönetici & Servis Paneli (ADIM 19)
+              if (state.isServiceManagerOrSuper) ...[
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
+                      );
+                    },
+                    icon: const Icon(Icons.admin_panel_settings_rounded, size: 18),
+                    label: const Text('Servis & Yönetici Panelini Aç'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentCyan,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
 
               // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi)
               if (state.isOwner && state.activeHome != null) ...[

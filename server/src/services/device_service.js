@@ -54,9 +54,14 @@ class DeviceService {
 
     // 2. Envanter tablosunda varsa Sıfır-Güven kontrollerini uygula
     if (invRecord) {
-      // 2.1. İptal / İade edilmiş cihaz kontrolü
+      // 2.1. İptal / Askıya alınmış cihaz kontrolü
       if (invRecord.status === 'REVOKED') {
-        const err = new Error('Bu cihaz arıza veya iade gerekçesiyle iptal edilmiştir. Lütfen müşteri hizmetleriyle iletişime geçin.');
+        const err = new Error('Bu cihaz arıza veya iade gerekçesiyle iptal edilmiştir. Lütfen yetkili servis ile iletişime geçin.');
+        err.statusCode = 403;
+        throw err;
+      }
+      if (invRecord.status === 'SUSPENDED') {
+        const err = new Error('Bu cihaz süper yönetici tarafından askıya alınmıştır. Kurulum ve sahiplenme yapılamaz.');
         err.statusCode = 403;
         throw err;
       }

@@ -76,5 +76,43 @@ router.get('/:uuid', async (req, res, next) => {
   }
 });
 
+/**
+ * @route   PATCH /api/v1/admin/inventory/:uuid/status
+ * @desc    Cihaz durumunu günceller (SUSPENDED / IN_STOCK / REVOKED)
+ */
+router.patch('/:uuid/status', async (req, res, next) => {
+  try {
+    const { uuid } = req.params;
+    const { status } = req.body;
+    const result = await inventoryService.updateStatus(uuid, status);
+
+    res.json({
+      success: true,
+      message: `Cihaz durumu '${status}' olarak güncellendi.`,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * @route   DELETE /api/v1/admin/inventory/:uuid
+ * @desc    Cihazı envanterden siler (Süper Yönetici)
+ */
+router.delete('/:uuid', async (req, res, next) => {
+  try {
+    const { uuid } = req.params;
+    const result = await inventoryService.deleteDevice(uuid);
+
+    res.json({
+      success: true,
+      message: result.message,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
 

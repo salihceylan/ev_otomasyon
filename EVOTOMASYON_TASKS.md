@@ -519,3 +519,21 @@ Ticari bir IoT ürünü geliştiren Kıdemli Sistem Mimarı ve Flutter Uzmanı r
   - **Android Sistem Splash (Launch Screen) Düzeltmesi:** Android OS başlatma aşamasındaki beyaz zemin sorunu giderildi; `values-v31/styles.xml`, `colors.xml` ve `launch_background.xml` üzerinden `#0B1120` koyu zemin ve dairesel splash ikonu tanımlandı. Tüm mipmap launcher ikonları güncellendi.
   - **Doğrulama & Testler:** `test/splash_and_logo_design_test.dart` eklendi; 78/78 test %100 başarıyla geçti; `dart analyze lib test` 0 issue.
 - [x] Durum: Tamamlandı (23.09.2026 - Uçtan Uca Doğrulandı)
+
+---
+
+### ADIM 22: Süper Yönetici & Servis Yönetim Sistemi (Super User & Service Management)
+- **Kapsam (Veritabanı, Backend & Flutter):**
+  - **Sistem Rolleri:** `users` tablosuna `role` alanı (`super_user`, `service_user`, `installer`, `user`), `created_by_user_id` ve `admin_notes` eklendi (`014_super_user_and_service_management.sql`).
+  - **İlk Süper Kullanıcı:** `salihceylan@gmail.com` / `Fingon08.` kullanıcısı oluşturuldu; başka süper yöneticiler ve servis sorumluları (`service_user`) oluşturma yetkisine sahip kılındı.
+  - **Yetki Hiyerarşisi (RBAC):**
+    - Yalnızca `super_user` yeni `super_user` veya `service_user` oluşturabilir/yönetebilir.
+    - `service_user` kendi altındaki saha montaj teknisyenlerini (`installer`) oluşturabilir ve yönetebilir; süper kullanıcılara müdahale edemez.
+  - **Tanımlı Servis Görevleri:** Servis sorumlularının görevleri (Cihaz Envanteri & Fabrika Kaydı, Devreye Alma/Commissioning Onayı, Acil Devir & Pano Sıfırlama, Buluttan Pano Değişimi/Disaster Recovery, 2 Saatlik Servis Modu) tek merkezden organize edildi.
+  - **Arayüz (Flutter):**
+    - `ServiceManagementPage`: Sorumlular, Teknisyenler, Görevler & Araçlar sekmeleri, canlı sistem özet kartları, kullanıcı ekleme/düzenleme diyalogları.
+    - `DashboardPage` AppBar ve `UserProfileDialog` içerisine rol bazlı yönetim butonu entegre edildi.
+  - **Doğrulama & Testler:**
+    - Canlı VPS PostgreSQL ve PM2 `ev-api` servisi güncellendi; `test_admin_service.js` ile tüm yetki senaryoları doğrulandı.
+    - `test/super_user_and_service_management_test.dart` dahil 81/81 test %100 başarıyla geçti; `flutter analyze` 0 hata/0 uyarı ile tamamlandı.
+- [x] Durum: Tamamlandı (24.09.2026 - Canlı VPS ve Mobil Uygulamada Uçtan Uca Doğrulandı)

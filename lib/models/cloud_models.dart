@@ -1,39 +1,56 @@
 class UserModel {
   final int id;
+  final String idStr;
   final String email;
   final String fullName;
   final String phone;
-  final String role; // owner, resident, guest, installer
+  final String role; // super_user, service_user, installer, owner, resident, guest
   final String? token;
+  final String? adminNotes;
 
   UserModel({
     required this.id,
+    this.idStr = '',
     required this.email,
     required this.fullName,
     required this.phone,
     required this.role,
     this.token,
+    this.adminNotes,
   });
 
+  String get effectiveId => idStr.isNotEmpty ? idStr : id.toString();
+  bool get isSuperUser => role == 'super_user';
+  bool get isServiceUser => role == 'service_user';
+  bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;
+  bool get isInstaller => role == 'installer';
+  bool get isOwner => role == 'owner';
+  bool get isResident => role == 'resident';
+  bool get isGuest => role == 'guest';
+
   factory UserModel.fromJson(Map<String, dynamic> json, {String? token}) {
+    final rawId = json['id']?.toString() ?? '';
     return UserModel(
-      id: json['id'] is int ? json['id'] : int.tryParse(json['id'].toString()) ?? 0,
+      id: json['id'] is int ? json['id'] : int.tryParse(rawId) ?? 0,
+      idStr: rawId,
       email: json['email'] ?? '',
       fullName: json['full_name'] ?? '',
       phone: json['phone'] ?? '',
       role: json['role'] ?? 'resident',
       token: token ?? json['token'],
+      adminNotes: json['admin_notes']?.toString(),
     );
   }
 
   Map<String, dynamic> toJson() {
     return {
-      'id': id,
+      'id': idStr.isNotEmpty ? idStr : id,
       'email': email,
       'full_name': fullName,
       'phone': phone,
       'role': role,
       'token': token,
+      'admin_notes': adminNotes,
     };
   }
 }

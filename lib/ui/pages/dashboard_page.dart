@@ -8,6 +8,7 @@ import '../widgets/shutter_card.dart';
 import '../widgets/relay_switch_card.dart';
 import '../widgets/di_status_pill.dart';
 import '../widgets/user_profile_dialog.dart';
+import '../widgets/super_user_drawer.dart';
 import '../../utils/qr_claim_parser.dart';
 import 'claim/claim_manual_dialog.dart';
 import 'claim/qr_scanner_page.dart';
@@ -16,6 +17,9 @@ import 'service_mode_page.dart';
 import 'family/family_members_page.dart';
 import 'wifi_recovery_dialog.dart';
 import 'system_doctor_dialog.dart';
+import 'service_management_page.dart';
+import 'replace_board_dialog.dart';
+import 'family/transfer_ownership_dialog.dart';
 import '../widgets/biometric_prompt_dialog.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -26,7 +30,10 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   String _selectedRoom = 'Tümü';
+  Map<String, dynamic>? _superUserSummary;
+  bool _loadingSuperUserSummary = false;
 
   @override
   void initState() {
@@ -37,7 +44,31 @@ class _DashboardPageState extends State<DashboardPage> {
       if (state.shouldPromptBiometrics) {
         BiometricPromptDialog.show(context, label: state.biometricLabel);
       }
+      if (state.isSuperUser) {
+        _loadSuperUserSummary();
+      }
     });
+  }
+
+  Future<void> _loadSuperUserSummary() async {
+    final state = context.read<AutomationState>();
+    if (!state.isSuperUser) return;
+    if (_loadingSuperUserSummary) return;
+
+    setState(() => _loadingSuperUserSummary = true);
+    try {
+      final summary = await state.cloudApi.getServiceSummary();
+      if (mounted) {
+        setState(() {
+          _superUserSummary = summary;
+          _loadingSuperUserSummary = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loadingSuperUserSummary = false);
+      }
+    }
   }
 
   Future<void> _openQrClaimFlow(BuildContext context) async {
@@ -112,6 +143,9 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AutomationState>();
+    final isSuper = state.isSuperUser;
+    final isService = state.isServiceUser;
+    final isServiceManagerOrSuper = state.isServiceManagerOrSuper;
     final status = state.status;
     final isConnected = state.isConnected;
     final isCloud = state.mode == AppMode.cloud;
@@ -129,205 +163,1199 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     return Scaffold(
+      key: _scaffoldKey,
+      drawer: isServiceManagerOrSuper ? const SuperUserDrawer() : null,
       appBar: AppBar(
-        title: Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFF38BDF8), width: 0.6),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF38BDF8).withValues(alpha: 0.4),
-                    blurRadius: 8,
-                  ),
-                ],
-              ),
-              child: ClipOval(
-                child: Image.asset(
-                  'assets/images/round_app_logo.png',
-                  width: 32,
-                  height: 32,
-                  fit: BoxFit.cover,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+        leading: isServiceManagerOrSuper
+            ? IconButton(
+                icon: const Icon(Icons.menu, color: AppTheme.accentCyan),
+                tooltip: 'Sandviç Menü',
+                onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              )
+            : null,
+        title: isServiceManagerOrSuper
+            ? Row(
                 children: [
-                  Text(
-                    isCloud ? (state.activeHome?.name ?? 'Evim') : (status?.deviceName ?? 'AHBU Akıllı Ev'),
-                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Row(
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isConnected ? AppTheme.accentGreen : AppTheme.accentRed,
-                        ),
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: isSuper ? const Color(0xFF38BDF8) : AppTheme.accentCyan,
+                        width: 0.6,
                       ),
-                      const SizedBox(width: 5),
-                      Flexible(
-                        child: Text(
-                          isConnected
-                              ? (isCloud ? 'MQTTS TLS 1.3 (Bulut)' : 'Yerel Ağ (${state.host})')
-                              : 'Bağlantı Bekleniyor...',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isConnected ? AppTheme.accentGreen : AppTheme.accentRed,
-                          ),
-                          overflow: TextOverflow.ellipsis,
+                      boxShadow: [
+                        BoxShadow(
+                          color: (isSuper ? const Color(0xFF38BDF8) : AppTheme.accentCyan).withValues(alpha: 0.4),
+                          blurRadius: 8,
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          // Mod Değiştirici (Bulut / Yerel)
-          IconButton(
-            icon: Icon(
-              isCloud ? Icons.cloud_outlined : Icons.wifi_outlined,
-              color: isCloud ? AppTheme.primaryBlueLight : AppTheme.accentAmber,
-            ),
-            tooltip: isCloud ? 'Bulut Modu (MQTTS)' : 'Yerel Ağ Modu (LAN)',
-            onPressed: () {
-              state.setMode(isCloud ? AppMode.direct : AppMode.cloud);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(isCloud ? 'Direct LAN Moduna geçildi' : 'Cloud MQTTS Moduna geçildi'),
-                  duration: const Duration(seconds: 1),
-                ),
-              );
-            },
-          ),
-          // Kurulumcu / Servis Menüsü (Yalnızca Yetkili Kurulumcu / Teknisyen görebilir - ADIM 11 RBAC)
-          if (state.isInstaller)
-            IconButton(
-              icon: const Icon(Icons.build_outlined, color: AppTheme.accentPurple),
-              tooltip: 'Kurulumcu & Servis Menüsü',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                );
-              },
-            ),
-          // Cihaz Ayarları (Owner veya Installer görebilir)
-          if (!state.isMember)
-            IconButton(
-              icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
-              tooltip: 'Cihaz Ayarları',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
-                );
-              },
-            ),
-          // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
-          if (state.isOwner)
-            IconButton(
-              icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
-              tooltip: 'Aile & Misafir Yönetimi',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
-                );
-              },
-            ),
-          // Karekod ile Cihaz Eşle / Eve Katıl
-          IconButton(
-            icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
-            tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
-            onPressed: () => _openQrClaimFlow(context),
-          ),
-          // Sistem Doktoru (Hızlı Teşhis)
-          IconButton(
-            icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
-            tooltip: 'Sistem Doktoru (Teşhis)',
-            onPressed: () => SystemDoctorDialog.show(context),
-          ),
-          // Yenile
-          IconButton(
-            icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
-            tooltip: 'Yenile',
-            onPressed: () => state.refresh(),
-          ),
-          // Kullanıcı Profili & Çıkış
-          IconButton(
-            icon: state.currentUser != null
-                ? CircleAvatar(
-                    radius: 13,
-                    backgroundColor: AppTheme.primaryBlue.withValues(alpha: 0.2),
-                    child: Text(
-                      state.currentUser!.fullName.isNotEmpty
-                          ? state.currentUser!.fullName.substring(0, 1).toUpperCase()
-                          : 'U',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.primaryBlueLight,
+                      ],
+                    ),
+                    child: ClipOval(
+                      child: Image.asset(
+                        'assets/images/round_app_logo.png',
+                        width: 32,
+                        height: 32,
+                        fit: BoxFit.cover,
                       ),
                     ),
-                  )
-                : const Icon(Icons.account_circle_outlined, color: AppTheme.textMuted),
-            tooltip: 'Kullanıcı Profili & Oturum',
-            onPressed: () => UserProfileDialog.show(context),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          isSuper ? 'Süper Yönetici Konsolu' : 'Yetkili Servis Konsolu',
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          isSuper ? 'AHBU Altyapı & Servis Denetimi' : 'Saha Operasyon & Montaj Yönetimi',
+                          style: const TextStyle(fontSize: 11, color: AppTheme.accentCyan),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: const Color(0xFF38BDF8), width: 0.6),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF38BDF8).withValues(alpha: 0.4),
+                          blurRadius: 8,
+                        ),
+                      ],
+                    ),
+                    child: ClipOval(
+                      child: Image.asset(
+                        'assets/images/round_app_logo.png',
+                        width: 32,
+                        height: 32,
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          isCloud ? (state.activeHome?.name ?? 'Evim') : (status?.deviceName ?? 'AHBU Akıllı Ev'),
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Row(
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: isConnected ? AppTheme.accentGreen : AppTheme.accentRed,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                isConnected
+                                    ? (isCloud ? 'MQTTS TLS 1.3 (Bulut)' : 'Yerel Ağ (${state.host})')
+                                    : 'Bağlantı Bekleniyor...',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isConnected ? AppTheme.accentGreen : AppTheme.accentRed,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+        actions: isServiceManagerOrSuper
+            ? [
+                IconButton(
+                  icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
+                  tooltip: 'Sistem Doktoru (Teşhis)',
+                  onPressed: () => SystemDoctorDialog.show(context),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
+                  tooltip: 'Yenile',
+                  onPressed: () {
+                    state.refresh();
+                    _loadSuperUserSummary();
+                  },
+                ),
+                IconButton(
+                  icon: _buildUserAvatar(state),
+                  tooltip: 'Kullanıcı Profili & Oturum',
+                  onPressed: () => UserProfileDialog.show(context),
+                ),
+              ]
+            : [
+                // Mod Değiştirici (Bulut / Yerel)
+                IconButton(
+                  icon: Icon(
+                    isCloud ? Icons.cloud_outlined : Icons.wifi_outlined,
+                    color: isCloud ? AppTheme.primaryBlueLight : AppTheme.accentAmber,
+                  ),
+                  tooltip: isCloud ? 'Bulut Modu (MQTTS)' : 'Yerel Ağ Modu (LAN)',
+                  onPressed: () {
+                    state.setMode(isCloud ? AppMode.direct : AppMode.cloud);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(isCloud ? 'Direct LAN Moduna geçildi' : 'Cloud MQTTS Moduna geçildi'),
+                        duration: const Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                ),
+                // Süper Yönetici & Servis Sorumlusu Yönetim Paneli (ADIM 19)
+                if (state.isServiceManagerOrSuper)
+                  IconButton(
+                    icon: const Icon(Icons.admin_panel_settings_rounded, color: AppTheme.accentCyan),
+                    tooltip: 'Süper Yönetici & Servis Paneli',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
+                      );
+                    },
+                  ),
+                // Kurulumcu / Servis Menüsü (Yalnızca Yetkili Kurulumcu / Teknisyen görebilir - ADIM 11 RBAC)
+                if (state.isInstaller)
+                  IconButton(
+                    icon: const Icon(Icons.build_outlined, color: AppTheme.accentPurple),
+                    tooltip: 'Kurulumcu & Servis Menüsü',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ServiceModePage()),
+                      );
+                    },
+                  ),
+                // Cihaz Ayarları (Owner veya Installer görebilir)
+                if (!state.isMember)
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
+                    tooltip: 'Cihaz Ayarları',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
+                      );
+                    },
+                  ),
+                // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
+                if (state.isOwner)
+                  IconButton(
+                    icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
+                    tooltip: 'Aile & Misafir Yönetimi',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
+                      );
+                    },
+                  ),
+                // Karekod ile Cihaz Eşle / Eve Katıl
+                IconButton(
+                  icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
+                  tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
+                  onPressed: () => _openQrClaimFlow(context),
+                ),
+                // Sistem Doktoru (Hızlı Teşhis)
+                IconButton(
+                  icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
+                  tooltip: 'Sistem Doktoru (Teşhis)',
+                  onPressed: () => SystemDoctorDialog.show(context),
+                ),
+                // Yenile
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
+                  tooltip: 'Yenile',
+                  onPressed: () => state.refresh(),
+                ),
+                // Kullanıcı Profili & Çıkış
+                IconButton(
+                  icon: _buildUserAvatar(state),
+                  tooltip: 'Kullanıcı Profili & Oturum',
+                  onPressed: () => UserProfileDialog.show(context),
+                ),
+              ],
+      ),
+      body: isSuper
+          ? _buildSuperUserDashboard(context, state)
+          : isService
+              ? _buildServiceUserDashboard(context, state)
+              : _buildApartmentDashboard(
+                  context: context,
+                  state: state,
+                  activeLightCount: activeLightCount,
+                  activeShutterCount: activeShutterCount,
+                  isConnected: isConnected,
+                  isCloud: isCloud,
+                  status: status,
+                ),
+    );
+  }
+
+  /// Süper Yönetici Konsol Arayüzü (Daire Kontrollerinden Tamamen Arındırılmış)
+  Widget _buildSuperUserDashboard(BuildContext context, AutomationState state) {
+    final user = state.currentUser;
+    final summary = _superUserSummary;
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await state.refresh();
+        await _loadSuperUserSummary();
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 1. Yönetici Hoş Geldiniz & Sistem Statü Kartı
+            _buildSuperUserHeaderCard(user),
+            const SizedBox(height: 16),
+
+            // 2. Canlı Altyapı & Sağlık Çubuğu (API, DB, MQTT)
+            _buildInfrastructureStatusRow(),
+            const SizedBox(height: 20),
+
+            // 3. Operasyonel Sayaçlar (Servis Sorumluları, Teknisyenler, Devreye Alınan)
+            _buildSuperUserMetricCards(summary),
+            const SizedBox(height: 24),
+
+            // 4. Hızlı Yönetici İşlemleri
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Expanded(
+                  child: Text(
+                    '⚡ Hızlı Yönetici İşlemleri',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
+                    );
+                  },
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentCyan),
+                  label: const Text(
+                    'Tüm Paneli Aç',
+                    style: TextStyle(fontSize: 12.5, color: AppTheme.accentCyan, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _buildSuperUserActionGrid(context),
+            const SizedBox(height: 20),
+
+            // 5. Sandviç Menü Hatırlatma İpucu
+            _buildDrawerTipBox(context),
+            const SizedBox(height: 30),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Yetkili Servis Sorumlusu Konsolu (Daire Kontrollerinden Arındırılmış, Saha & Teknisyen Odaklı)
+  Widget _buildServiceUserDashboard(BuildContext context, AutomationState state) {
+    final user = state.currentUser;
+    final summary = _superUserSummary;
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await state.refresh();
+        await _loadSuperUserSummary();
+      },
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 1. Servis Sorumlusu Hoş Geldiniz & Yetki Kartı
+            _buildServiceUserHeaderCard(user),
+            const SizedBox(height: 16),
+
+            // 2. Canlı Altyapı & Sağlık Çubuğu (API, DB, MQTT)
+            _buildInfrastructureStatusRow(),
+            const SizedBox(height: 20),
+
+            // 3. Saha Operasyon Sayaçları (Teknisyenler, Daireler)
+            _buildServiceUserMetricCards(summary),
+            const SizedBox(height: 24),
+
+            // 4. Yetkili Servis Saha İş Akışı & Eylemleri
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Expanded(
+                  child: Text(
+                    '🛠️ Saha Servis & Devreye Alma Görevleri',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 1)),
+                    );
+                  },
+                  icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentCyan),
+                  label: const Text(
+                    'Teknisyenler',
+                    style: TextStyle(fontSize: 12.5, color: AppTheme.accentCyan, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _buildServiceUserActionGrid(context),
+            const SizedBox(height: 20),
+
+            // 5. Sandviç Menü Hatırlatma İpucu
+            _buildDrawerTipBox(context),
+            const SizedBox(height: 30),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildServiceUserHeaderCard(dynamic user) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppTheme.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.35)),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.accentCyan.withValues(alpha: 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: () => state.refresh(),
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              // 1. ÜST DURUM HAPLARI (GLANCEABLE STATUS PILLS)
-              _buildGlanceableStatusBar(activeLightCount, activeShutterCount, isConnected, childLock: state.childLock),
-              const SizedBox(height: 16),
-
-              // ADIM 17: Gece Huzur Bildirimi Bannerı (Açık Lamba Uyarısı & Hepsini Kapat)
-              _buildPeaceBanner(state, activeLightCount),
-
-              // 2. HIZLI SENARYO ÇUBUĞU
-              const QuickScenarioBar(),
-              const SizedBox(height: 20),
-
-              // 3. ODA FİLTRELEME ÇİPLERİ (ROOM FILTER CHIPS)
-              _buildRoomFilterChips(),
-              const SizedBox(height: 20),
-
-              // 4. İÇERİK: BULUT VEYA DİREKT MOD
-              if (isCloud) ...[
-                _buildCloudEndpointsSection(state),
-              ] else ...[
-                _buildDirectStatusSection(status, state),
-              ],
-
-              // 5. BAĞLANTI UYARISI
-              if (!isConnected) ...[
-                const SizedBox(height: 20),
-                _buildOfflineNotice(state, isCloud),
-              ],
-              const SizedBox(height: 30),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.accentCyan.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.engineering_rounded, color: AppTheme.accentCyan, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            user?.fullName?.isNotEmpty == true ? user!.fullName : 'Yetkili Servis Sorumlusu',
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textPrimary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accentCyan.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'YETKİLİ SERVİS',
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.accentCyan,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      user?.email?.isNotEmpty == true ? user!.email : 'servis@gudeteknoloji.com.tr',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
+          const SizedBox(height: 12),
+          const Text(
+            'Saha montaj teknisyenlerini yönetebilir, dairelere takılan panoları devreye alabilir, afet durumunda pano klonlama ve daire devir işlemlerini yürütebilirsiniz.',
+            style: TextStyle(
+              fontSize: 12.5,
+              color: AppTheme.textMuted,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServiceUserMetricCards(Map<String, dynamic>? summary) {
+    final installerCount = summary?['total_installers'] ?? 0;
+    final homeCount = summary?['commissioned_homes_count'] ?? 0;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth = (constraints.maxWidth - 10) / 2;
+
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SizedBox(
+              width: cardWidth,
+              child: _buildMetricCard(
+                title: 'Saha Teknisyenleri',
+                value: '$installerCount',
+                icon: Icons.engineering,
+                color: AppTheme.accentAmber,
+                badgeText: 'MONTAJ',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: _buildMetricCard(
+                title: 'Devreye Alınan',
+                value: '$homeCount',
+                icon: Icons.task_alt,
+                color: AppTheme.accentGreen,
+                badgeText: 'AKTİF DAİRE',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 2),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildServiceUserActionGrid(BuildContext context) {
+    final actions = [
+      {
+        'title': 'Saha Teknisyen Yönetimi',
+        'subtitle': 'Montaj teknisyeni ekle, bölgelerini ve durumlarını yönet',
+        'icon': Icons.engineering_outlined,
+        'color': AppTheme.accentAmber,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 1)),
+            ),
+      },
+      {
+        'title': 'Devreye Alma (Commissioning)',
+        'subtitle': 'Daire içi röle, panjur ve buton girişlerini sahada test et',
+        'icon': Icons.verified_outlined,
+        'color': AppTheme.accentCyan,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ServiceModePage()),
+            ),
+      },
+      {
+        'title': 'Pano Değişimi (Afet & Hasar)',
+        'subtitle': 'Arızalı panoyu buluttan tek tıkla yeni panoya klonla',
+        'icon': Icons.published_with_changes_outlined,
+        'color': Colors.tealAccent,
+        'onTap': () => ReplaceBoardDialog.show(context),
+      },
+      {
+        'title': 'Acil Sıfırlama & Mülk Devri',
+        'subtitle': 'Eski sahibine ulaşılamayan panoyu sıfırlayıp daireye devret',
+        'icon': Icons.sync_problem_rounded,
+        'color': Colors.redAccent,
+        'onTap': () => showDialog(
+              context: context,
+              builder: (_) => const TransferOwnershipDialog(),
+            ),
+      },
+      {
+        'title': 'Sistem Doktoru (Teşhis)',
+        'subtitle': 'Bulut API, MQTT kuyrukları ve canlı gecikme teşhisi',
+        'icon': Icons.health_and_safety_outlined,
+        'color': Colors.cyanAccent,
+        'onTap': () => SystemDoctorDialog.show(context),
+      },
+      {
+        'title': 'Yetkili Servis Ağı (Salt Okunur)',
+        'subtitle': 'Kayıtlı servis sorumlularını ve bölgeleri görüntüle',
+        'icon': Icons.shield_outlined,
+        'color': AppTheme.accentPurple,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 0)),
+            ),
+      },
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 550;
+        final itemWidth = isWide ? (constraints.maxWidth - 10) / 2 : constraints.maxWidth;
+
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: actions.map((item) {
+            final color = item['color'] as Color;
+            return SizedBox(
+              width: itemWidth,
+              child: InkWell(
+                onTap: item['onTap'] as VoidCallback,
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardDark,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppTheme.cardBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(item['icon'] as IconData, color: color, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              item['title'] as String,
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              item['subtitle'] as String,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.textMuted,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted, size: 20),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildSuperUserHeaderCard(dynamic user) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppTheme.cardDark,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.35)),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.accentCyan.withValues(alpha: 0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.accentCyan.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.admin_panel_settings_rounded, color: AppTheme.accentCyan, size: 24),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            user?.fullName?.isNotEmpty == true ? user!.fullName : 'Salih Ceylan',
+                            style: const TextStyle(
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textPrimary,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accentCyan.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'SÜPER',
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.accentCyan,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      user?.email?.isNotEmpty == true ? user!.email : 'salihceylan@gmail.com',
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Sistem genelindeki yetkili servis yöneticilerini tanımlayabilir, montaj ekiplerini denetleyebilir ve altyapı bileşenlerini izleyebilirsiniz.',
+            style: TextStyle(
+              fontSize: 12.5,
+              color: AppTheme.textMuted,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfrastructureStatusRow() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _buildStatusChip(
+              icon: Icons.cloud_done_rounded,
+              title: 'API Sunucusu',
+              subtitle: 'Online (Port 5000)',
+              color: AppTheme.accentGreen,
+            ),
+            _buildStatusChip(
+              icon: Icons.storage_rounded,
+              title: 'Veritabanı',
+              subtitle: 'PostgreSQL 5434',
+              color: AppTheme.accentGreen,
+            ),
+            _buildStatusChip(
+              icon: Icons.hub_rounded,
+              title: 'MQTT Köprüsü',
+              subtitle: 'EMQX Aktif',
+              color: AppTheme.accentGreen,
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildStatusChip({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 6),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+              ),
+              Text(
+                subtitle,
+                style: const TextStyle(fontSize: 9.5, color: AppTheme.textMuted),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSuperUserMetricCards(Map<String, dynamic>? summary) {
+    final serviceCount = summary?['total_service_managers'] ?? 1;
+    final installerCount = summary?['total_installers'] ?? 0;
+    final homeCount = summary?['commissioned_homes_count'] ?? 0;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 550;
+        final cardWidth = isWide ? (constraints.maxWidth - 20) / 3 : (constraints.maxWidth - 10) / 2;
+
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SizedBox(
+              width: cardWidth,
+              child: _buildMetricCard(
+                title: 'Servis Sorumluları',
+                value: '$serviceCount',
+                icon: Icons.admin_panel_settings,
+                color: AppTheme.accentCyan,
+                badgeText: 'YÖNETİCİ',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(
+              width: cardWidth,
+              child: _buildMetricCard(
+                title: 'Saha Teknisyenleri',
+                value: '$installerCount',
+                icon: Icons.engineering,
+                color: AppTheme.accentAmber,
+                badgeText: 'MONTAJ',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(
+              width: isWide ? cardWidth : constraints.maxWidth,
+              child: _buildMetricCard(
+                title: 'Devreye Alınan',
+                value: '$homeCount',
+                icon: Icons.task_alt,
+                color: AppTheme.accentGreen,
+                badgeText: 'AKTİF DAİRE',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 2),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildMetricCard({
+    required String title,
+    required String value,
+    required IconData icon,
+    required Color color,
+    required String badgeText,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppTheme.cardDark,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Icon(icon, color: color, size: 22),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    badgeText,
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: color,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              title,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppTheme.textMuted,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSuperUserActionGrid(BuildContext context) {
+    final actions = [
+      {
+        'title': 'Servis Sorumluları Paneli',
+        'subtitle': 'Yeni servis sorumlusu veya teknisyen ekle & düzenle',
+        'icon': Icons.people_outline,
+        'color': AppTheme.accentCyan,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 0)),
+            ),
+      },
+      {
+        'title': 'Sistem Doktoru (Teşhis)',
+        'subtitle': 'PostgreSQL latency, MQTT köprüsü ve servis testi',
+        'icon': Icons.health_and_safety_outlined,
+        'color': Colors.cyanAccent,
+        'onTap': () => SystemDoctorDialog.show(context),
+      },
+      {
+        'title': 'Servis Modu & Kalibrasyon',
+        'subtitle': 'Pano röle ve panjur çıkış ayarlarını yapılandır',
+        'icon': Icons.handyman_outlined,
+        'color': AppTheme.accentPurple,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ServiceModePage()),
+            ),
+      },
+      {
+        'title': 'Pano Değişimi (Afet Modu)',
+        'subtitle': 'Arızalı donanımı buluttan tek tıkla yenisine aktar',
+        'icon': Icons.published_with_changes_outlined,
+        'color': Colors.tealAccent,
+        'onTap': () => ReplaceBoardDialog.show(context),
+      },
+    ];
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 550;
+        final itemWidth = isWide ? (constraints.maxWidth - 10) / 2 : constraints.maxWidth;
+
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: actions.map((item) {
+            final color = item['color'] as Color;
+            return SizedBox(
+              width: itemWidth,
+              child: InkWell(
+                onTap: item['onTap'] as VoidCallback,
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: AppTheme.cardDark,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: AppTheme.cardBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Icon(item['icon'] as IconData, color: color, size: 22),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item['title'] as String,
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              item['subtitle'] as String,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppTheme.textMuted,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildDrawerTipBox(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.cardBorder),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.accentCyan.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.menu_open_rounded, color: AppTheme.accentCyan, size: 18),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Tüm yönetim araçlarına ve personel listelerine sol üstteki sandviç menüden (☰) de hızlıca ulaşabilirsiniz.',
+              style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            ),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              side: const BorderSide(color: AppTheme.accentCyan),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Menüyü Aç', style: TextStyle(fontSize: 11.5, color: AppTheme.accentCyan)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUserAvatar(AutomationState state) {
+    if (state.currentUser != null) {
+      return CircleAvatar(
+        radius: 13,
+        backgroundColor: AppTheme.primaryBlue.withValues(alpha: 0.2),
+        child: Text(
+          state.currentUser!.fullName.isNotEmpty
+              ? state.currentUser!.fullName.substring(0, 1).toUpperCase()
+              : 'U',
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.primaryBlueLight,
+          ),
+        ),
+      );
+    }
+    return const Icon(Icons.account_circle_outlined, color: AppTheme.textMuted);
+  }
+
+  /// Daire Sakini & Müşteri Arayüzü (Mevcut Çalışan Daire Yönetimi)
+  Widget _buildApartmentDashboard({
+    required BuildContext context,
+    required AutomationState state,
+    required int activeLightCount,
+    required int activeShutterCount,
+    required bool isConnected,
+    required bool isCloud,
+    required dynamic status,
+  }) {
+    return RefreshIndicator(
+      onRefresh: () => state.refresh(),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 1. ÜST DURUM HAPLARI (GLANCEABLE STATUS PILLS)
+            _buildGlanceableStatusBar(activeLightCount, activeShutterCount, isConnected, childLock: state.childLock),
+            const SizedBox(height: 16),
+
+            // ADIM 17: Gece Huzur Bildirimi Bannerı (Açık Lamba Uyarısı & Hepsini Kapat)
+            _buildPeaceBanner(state, activeLightCount),
+
+            // 2. HIZLI SENARYO ÇUBUĞU
+            const QuickScenarioBar(),
+            const SizedBox(height: 20),
+
+            // 3. ODA FİLTRELEME ÇİPLERİ (ROOM FILTER CHIPS)
+            _buildRoomFilterChips(),
+            const SizedBox(height: 20),
+
+            // 4. İÇERİK: BULUT VEYA DİREKT MOD
+            if (isCloud) ...[
+              _buildCloudEndpointsSection(state),
+            ] else ...[
+              _buildDirectStatusSection(status, state),
+            ],
+
+            // 5. BAĞLANTI UYARISI
+            if (!isConnected) ...[
+              const SizedBox(height: 20),
+              _buildOfflineNotice(state, isCloud),
+            ],
+            const SizedBox(height: 30),
+          ],
         ),
       ),
     );
@@ -615,6 +1643,9 @@ class _DashboardPageState extends State<DashboardPage> {
 
   /// Karşılama ve Cihaz Sahiplenme Kartı (Empty State)
   Widget _buildWelcomeClaimCard(BuildContext context) {
+    final state = Provider.of<AutomationState>(context);
+    final isServiceOrSuper = state.isServiceManagerOrSuper;
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
@@ -702,6 +1733,63 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
           ),
+          if (isServiceOrSuper) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.accentCyan.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        state.isSuperUser ? Icons.verified_user : Icons.engineering,
+                        color: AppTheme.accentCyan,
+                        size: 16,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        state.isSuperUser ? 'Süper Yönetici Oturumu' : 'Servis Sorumlusu Oturumu',
+                        style: const TextStyle(
+                          color: AppTheme.accentCyan,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
+                        );
+                      },
+                      icon: const Icon(Icons.admin_panel_settings_rounded, size: 18),
+                      label: const Text(
+                        'Süper Yönetici & Servis Paneline Git',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.accentCyan,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );

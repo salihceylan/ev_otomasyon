@@ -27,6 +27,8 @@ class AutomationState extends ChangeNotifier {
   ConnectionStateEnum _connState = ConnectionStateEnum.connecting;
   String _host = '192.168.1.30';
   Timer? _pollTimer;
+  StreamSubscription? _mqttStatusSub;
+  StreamSubscription? _mqttStateSub;
   bool _isDisposed = false;
 
   // Cloud & Multi-Tenant State
@@ -63,8 +65,11 @@ class AutomationState extends ChangeNotifier {
   bool get isMqttConnected => _isMqttConnected;
   String? get servicePin => _servicePin;
   DateTime? get servicePinExpiry => _servicePinExpiry;
-  bool get isServiceMode => _currentUser?.role == 'installer';
+  bool get isServiceMode => _currentUser?.role == 'installer' || _currentUser?.role == 'service_user';
   bool get isInstaller => _currentUser?.role == 'installer';
+  bool get isServiceUser => _currentUser?.role == 'service_user';
+  bool get isSuperUser => _currentUser?.role == 'super_user';
+  bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;
   bool get isOwner => _currentUser?.role == 'owner';
   bool get isMember => _currentUser?.role == 'member';
   bool get isGuest => _currentUser?.role == 'guest';
@@ -146,6 +151,12 @@ class AutomationState extends ChangeNotifier {
   @visibleForTesting
   void setScheduledRulesForTesting(List<ScheduledRule> rules) {
     _scheduledRules = List.from(rules);
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  void setCurrentUserForTesting(UserModel? user) {
+    _currentUser = user;
     notifyListeners();
   }
 
@@ -371,6 +382,7 @@ class AutomationState extends ChangeNotifier {
     _currentUser = user;
 
     await secureStorage.saveAuthToken(token);
+    cloudApi.setAuthToken(token);
     if (refreshToken != null && refreshToken.isNotEmpty) {
       await secureStorage.saveRefreshToken(refreshToken);
       cloudApi.setRefreshToken(refreshToken);
@@ -580,6 +592,7 @@ class AutomationState extends ChangeNotifier {
       _currentUser = user;
 
       await secureStorage.saveAuthToken(token);
+      cloudApi.setAuthToken(token);
       await secureStorage.saveUser(user);
       await secureStorage.saveAppMode('cloud');
 
@@ -1014,9 +1027,15 @@ class AutomationState extends ChangeNotifier {
     }
     notifyListeners();
 
+    // Eski dinleyicileri temizle
+    await _mqttStatusSub?.cancel();
+    _mqttStatusSub = null;
+    await _mqttStateSub?.cancel();
+    _mqttStateSub = null;
+
     if (connected) {
       // Gelen MQTTS Cihaz Çevrimiçi/Çevrimdışı Durumunu dinle
-      mqttService.statusStream.listen((statusData) {
+      _mqttStatusSub = mqttService.statusStream.listen((statusData) {
         final st = statusData['status']?.toString().toLowerCase();
         if (st == 'online') {
           _connState = ConnectionStateEnum.connected;
@@ -1027,7 +1046,7 @@ class AutomationState extends ChangeNotifier {
       });
 
       // Gelen MQTTS State mesajlarını dinle
-      mqttService.stateStream.listen((data) {
+      _mqttStateSub = mqttService.stateStream.listen((data) {
         _handleMqttStateUpdate(data);
       });
     }
@@ -1406,6 +1425,8 @@ class AutomationState extends ChangeNotifier {
   void dispose() {
     _isDisposed = true;
     _pollTimer?.cancel();
+    _mqttStatusSub?.cancel();
+    _mqttStateSub?.cancel();
     mqttService.dispose();
     super.dispose();
   }

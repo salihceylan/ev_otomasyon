@@ -13,6 +13,7 @@ const inventoryRoutes = require('./routes/inventory_routes');
 const invitationRoutes = require('./routes/invitation_routes');
 const transferRoutes = require('./routes/transfer_routes');
 const scheduledRulesRoutes = require('./routes/scheduled_rules_routes');
+const adminRoutes = require('./routes/admin_routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -73,6 +74,8 @@ app.use('/api/homes/:home_id/endpoints', endpointRoutes);
 app.use('/api/v1/homes/:home_id/endpoints', endpointRoutes);
 app.use('/api/v1/admin/inventory', inventoryRoutes);
 app.use('/api/admin/inventory', inventoryRoutes);
+app.use('/api/v1/admin', adminRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/v1', invitationRoutes);
 app.use('/api', invitationRoutes);
 app.use('/api/v1', transferRoutes);
