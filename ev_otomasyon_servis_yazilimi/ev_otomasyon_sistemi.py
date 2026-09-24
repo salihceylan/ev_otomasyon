@@ -91,6 +91,153 @@ def increment_version_str(ver_str):
     return f"{ver_str}.1"
 
 
+def format_serial_badge(serial_val):
+    """Sıra numarasını güvenli şekilde 4 haneli badge formatına (#0001) dönüştürür."""
+    if serial_val is None or str(serial_val).strip() == "":
+        return "#0001"
+    try:
+        clean = str(serial_val).replace("#", "").strip()
+        return f"#{int(clean):04d}"
+    except Exception:
+        clean_str = str(serial_val).strip()
+        return f"#{clean_str}" if not clean_str.startswith("#") else clean_str
+
+
+class ServerPasswordDialog(tk.Toplevel):
+    """Cihaz kaydı ve hassas envanter işlemleri için sunucu şifresi soran modal diyalog."""
+    def __init__(self, parent, title="🔐 Sunucu Yönetici Doğrulaması", prompt="Cihazı sunucu envanterine kaydetmek için lütfen Sunucu Şifresini giriniz:"):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.resizable(False, False)
+        self.configure(bg="#ffffff", padx=20, pady=16)
+
+        self.result = None
+        self.remember_session = tk.BooleanVar(value=True)
+
+        # Başlık ve Açıklama
+        hdr_frame = tk.Frame(self, bg="#ffffff")
+        hdr_frame.pack(fill=tk.X, pady=(0, 10))
+
+        tk.Label(
+            hdr_frame,
+            text="🔐 Sunucu Güvenlik Doğrulaması",
+            font=("Segoe UI", 12, "bold"),
+            fg="#0f172a",
+            bg="#ffffff"
+        ).pack(anchor="w")
+
+        tk.Label(
+            hdr_frame,
+            text=prompt,
+            font=("Segoe UI", 9),
+            fg="#475569",
+            bg="#ffffff",
+            wraplength=380,
+            justify="left"
+        ).pack(anchor="w", pady=(4, 0))
+
+        # Şifre Giriş Alanı
+        entry_frame = tk.Frame(self, bg="#ffffff")
+        entry_frame.pack(fill=tk.X, pady=8)
+
+        self.pwd_entry = tk.Entry(entry_frame, show="•", font=("Segoe UI", 11), width=28)
+        self.pwd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        # Şifreyi Göster / Gizle Butonu
+        self.show_pwd = False
+        self.toggle_btn = tk.Button(
+            entry_frame,
+            text="👁️",
+            width=3,
+            command=self._toggle_pwd,
+            font=("Segoe UI", 9),
+            relief="groove",
+            cursor="hand2"
+        )
+        self.toggle_btn.pack(side=tk.RIGHT)
+
+        # Bu oturum boyunca hatırla seçeneği
+        chk = tk.Checkbutton(
+            self,
+            text="Bu oturum boyunca hatırla (Her cihazda tekrar sorma)",
+            variable=self.remember_session,
+            font=("Segoe UI", 8),
+            bg="#ffffff",
+            activebackground="#ffffff",
+            fg="#1e293b"
+        )
+        chk.pack(anchor="w", pady=(2, 12))
+
+        # Butonlar
+        btn_box = tk.Frame(self, bg="#ffffff")
+        btn_box.pack(fill=tk.X)
+
+        btn_cancel = tk.Button(
+            btn_box,
+            text="İptal",
+            width=10,
+            command=self._on_cancel,
+            font=("Segoe UI", 9),
+            bg="#f1f5f9",
+            relief="groove",
+            cursor="hand2"
+        )
+        btn_cancel.pack(side=tk.RIGHT, padx=(6, 0))
+
+        btn_ok = tk.Button(
+            btn_box,
+            text="✓ Doğrula ve Kaydet",
+            command=self._on_ok,
+            font=("Segoe UI", 9, "bold"),
+            bg="#1565c0",
+            fg="#ffffff",
+            activebackground="#0d47a1",
+            activeforeground="#ffffff",
+            relief="groove",
+            cursor="hand2",
+            padx=10,
+            pady=4
+        )
+        btn_ok.pack(side=tk.RIGHT)
+
+        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Escape>", lambda e: self._on_cancel())
+
+        # Ortala ve odaklan
+        self.update_idletasks()
+        try:
+            pw = parent.winfo_width()
+            ph = parent.winfo_height()
+            px = parent.winfo_rootx()
+            py = parent.winfo_rooty()
+            w = self.winfo_reqwidth()
+            h = self.winfo_reqheight()
+            self.geometry(f"+{px + max(0, (pw - w)//2)}+{py + max(0, (ph - h)//2)}")
+        except Exception:
+            pass
+
+        self.pwd_entry.focus_set()
+        self.grab_set()
+        parent.wait_window(self)
+
+    def _toggle_pwd(self):
+        self.show_pwd = not self.show_pwd
+        self.pwd_entry.config(show="" if self.show_pwd else "•")
+
+    def _on_ok(self):
+        val = self.pwd_entry.get().strip()
+        if not val:
+            messagebox.showwarning("Eksik Şifre", "Lütfen sunucu şifresini giriniz.", parent=self)
+            return
+        self.result = (val, self.remember_session.get())
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.destroy()
+
+
 class EvOtomasyonServisApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -116,6 +263,7 @@ class EvOtomasyonServisApp(tk.Tk):
 
         self.mode_var = tk.StringVar(value="custom")
         self.version_data = load_version_info()
+        self.session_server_password = None
 
         # Dizinleri hazırla
         os.makedirs(LABELS_DIR, exist_ok=True)
@@ -126,6 +274,25 @@ class EvOtomasyonServisApp(tk.Tk):
 
         # İlk açılışta envanteri listele
         self.after(500, self.refresh_inventory_list)
+
+    def get_server_password(self, force_prompt=False, prompt="Cihazı sunucu envanterine kaydetmek için lütfen Sunucu Yönetici Şifresini giriniz:"):
+        """Sunucu şifresini oturumdan alır veya kullanıcıya sorar."""
+        if self.session_server_password and not force_prompt:
+            return self.session_server_password
+
+        dlg = ServerPasswordDialog(self, title="🔐 Sunucu Kimlik Doğrulama", prompt=prompt)
+        if not dlg.result:
+            return None
+
+        pwd, remember = dlg.result
+        if remember:
+            self.session_server_password = pwd
+        return pwd
+
+    def clear_server_password(self):
+        """Kayıtlı oturum şifresini sıfırlar."""
+        self.session_server_password = None
+        messagebox.showinfo("Şifre Sıfırlandı", "Oturum sunucu şifresi sıfırlandı. Yeni işlemde tekrar sorulacaktır.")
 
     def _create_main_layout(self):
         # 1. Üst Başlık Kartı
@@ -562,6 +729,14 @@ class EvOtomasyonServisApp(tk.Tk):
             bg="#e2e8f0"
         ).pack(side=tk.LEFT, padx=(0, 6))
 
+        tk.Button(
+            table_action_row,
+            text="🔑 Şifreyi Sıfırla",
+            command=self.clear_server_password,
+            font=("Segoe UI", 8),
+            bg="#f1f5f9"
+        ).pack(side=tk.LEFT, padx=(0, 6))
+
         self.btn_suspend = tk.Button(
             table_action_row,
             text="⏸️ Askıya Al (Kilit)",
@@ -718,6 +893,13 @@ class EvOtomasyonServisApp(tk.Tk):
             messagebox.showwarning("Geçersiz PIN", "Kurulum PIN kodu tam olarak 6 haneli rakamlardan oluşmalıdır.")
             return
 
+        # Sunucu şifresini sor (oturumda varsa kullanır, yoksa modal açar)
+        server_pwd = self.get_server_password(
+            prompt="Cihazı resmi sunucu envanterine kaydetmek ve karekod üretmek için lütfen Sunucu Yönetici Şifresini giriniz:"
+        )
+        if not server_pwd:
+            return
+
         payload = {
             "device_uuid": uuid,
             "mac_address": mac,
@@ -735,7 +917,7 @@ class EvOtomasyonServisApp(tk.Tk):
                     data=json.dumps(payload).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-Admin-Api-Key": ADMIN_API_KEY
+                        "X-Admin-Api-Key": server_pwd
                     },
                     method="POST"
                 )
@@ -754,15 +936,23 @@ class EvOtomasyonServisApp(tk.Tk):
                     msg = err_text
 
                 if e.code == 409:
-                    self.after(0, lambda: messagebox.showerror(
+                    self.after(0, lambda m=msg: messagebox.showerror(
                         "Mükerrer Cihaz Uyarısı (409)",
-                        f"⚠️ AYNI CİHAZ İKİNCİ KEZ EKLENEMEZ!\n\n{msg}"
+                        f"⚠️ AYNI CİHAZ İKİNCİ KEZ EKLENEMEZ!\n\n{m}"
+                    ))
+                elif e.code == 401:
+                    # Şifre geçersiz - oturum şifresini temizle
+                    self.session_server_password = None
+                    self.after(0, lambda m=msg: messagebox.showerror(
+                        "Yetkisiz İşlem (401)",
+                        f"🔒 Hatalı Sunucu Şifresi!\n\n{m}\n\nLütfen şifrenizi kontrol edip tekrar deneyin."
                     ))
                 else:
-                    self.after(0, lambda: messagebox.showerror("Kayıt Başarısız", f"Sunucu Hatası ({e.code}):\n{msg}"))
+                    self.after(0, lambda c=e.code, m=msg: messagebox.showerror("Kayıt Başarısız", f"Sunucu Hatası ({c}):\n{m}"))
 
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("Bağlantı Hatası", f"API Sunucusuna ulaşılamadı:\n{str(e)}"))
+                err_str = str(e)
+                self.after(0, lambda es=err_str: messagebox.showerror("Bağlantı Hatası", f"API Sunucusuna ulaşılamadı:\n{es}"))
             finally:
                 self.after(0, lambda: self.btn_register_device.config(
                     state=tk.NORMAL, text="☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET"
@@ -807,7 +997,7 @@ class EvOtomasyonServisApp(tk.Tk):
         messagebox.showinfo(
             "Cihaz Envantere Eklendi!",
             f"✅ Başarılı!\n\n"
-            f"Sıra No: #{serial_no}\n"
+            f"Sıra No: {format_serial_badge(serial_no)}\n"
             f"Cihaz UUID: {uuid}\n"
             f"Kurulum PIN: {plain_pin}\n"
             f"MAC: {mac}\n\n"
@@ -838,7 +1028,7 @@ class EvOtomasyonServisApp(tk.Tk):
             small_font = title_font
 
         draw.text((15, 12), "AHBU AKILLI EV & BİNA OTOMASYONU", fill="#38bdf8", font=title_font)
-        draw.text((width - 95, 14), f"#{serial_no:04d}", fill="#ffffff", font=bold_font)
+        draw.text((width - 95, 14), format_serial_badge(serial_no), fill="#ffffff", font=bold_font)
 
         # Karekod Oluşturma
         qr = qrcode.QRCode(box_size=5, border=1)
@@ -876,10 +1066,13 @@ class EvOtomasyonServisApp(tk.Tk):
         date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
         if created_at:
             try:
-                dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                date_str = dt.strftime("%d.%m.%Y %H:%M")
+                if isinstance(created_at, datetime):
+                    date_str = created_at.strftime("%d.%m.%Y %H:%M")
+                else:
+                    dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                    date_str = dt.strftime("%d.%m.%Y %H:%M")
             except Exception:
-                pass
+                date_str = str(created_at)[:16]
 
         draw.line([(10, height - 32), (width - 10, height - 32)], fill="#cbd5e1", width=1)
         draw.text((15, height - 24), f"Model: {model}", fill="#64748b", font=small_font)
@@ -930,17 +1123,18 @@ class EvOtomasyonServisApp(tk.Tk):
 
     def refresh_inventory_list(self):
         """Sunucudan envanter listesini çeker ve Treeview'a doldurur."""
+        auth_key = self.session_server_password or ADMIN_API_KEY
         def _worker():
             try:
                 req = urllib.request.Request(
                     f"{API_INVENTORY_URL}?limit=100",
-                    headers={"X-Admin-Api-Key": ADMIN_API_KEY}
+                    headers={"X-Admin-Api-Key": auth_key}
                 )
                 with urllib.request.urlopen(req, timeout=8) as response:
                     data = json.loads(response.read().decode("utf-8"))
                     items = data.get("data", {}).get("items", [])
-                    self.after(0, lambda: self._populate_inventory_tree(items))
-            except Exception as e:
+                    self.after(0, lambda it=items: self._populate_inventory_tree(it))
+            except Exception:
                 # Arka plan hatasında sessiz kal veya logla
                 pass
 
@@ -951,7 +1145,7 @@ class EvOtomasyonServisApp(tk.Tk):
             self.inv_tree.delete(row)
 
         for item in items:
-            serial_no = f"#{item.get('serial_no', 0):04d}"
+            serial_no = format_serial_badge(item.get('serial_no', 1))
             uuid = item.get("device_uuid", "")
             mac = item.get("mac_address", "")
             model = item.get("model", "")
@@ -1010,7 +1204,7 @@ class EvOtomasyonServisApp(tk.Tk):
 
         item = self.inv_tree.item(selected[0])
         vals = item.get("values", [])
-        serial_no = int(str(vals[0]).replace("#", ""))
+        serial_no = format_serial_badge(vals[0])
         uuid = vals[1]
         mac = vals[2]
         model = vals[3]
@@ -1056,6 +1250,12 @@ class EvOtomasyonServisApp(tk.Tk):
         self._update_device_status(uuid, "IN_STOCK")
 
     def _update_device_status(self, uuid, new_status):
+        auth_key = self.get_server_password(
+            prompt=f"Cihaz durumunu ({new_status}) güncellemek için lütfen Sunucu Şifresini giriniz:"
+        )
+        if not auth_key:
+            return
+
         def _worker():
             try:
                 req = urllib.request.Request(
@@ -1063,16 +1263,23 @@ class EvOtomasyonServisApp(tk.Tk):
                     data=json.dumps({"status": new_status}).encode("utf-8"),
                     headers={
                         "Content-Type": "application/json",
-                        "X-Admin-Api-Key": ADMIN_API_KEY
+                        "X-Admin-Api-Key": auth_key
                     },
                     method="PATCH"
                 )
                 with urllib.request.urlopen(req, timeout=8) as response:
                     res = json.loads(response.read().decode("utf-8"))
-                    self.after(0, lambda: messagebox.showinfo("Başarılı", res.get("message", "Durum güncellendi.")))
+                    self.after(0, lambda msg=res.get("message", "Durum güncellendi."): messagebox.showinfo("Başarılı", msg))
                     self.after(0, self.refresh_inventory_list)
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    self.session_server_password = None
+                    self.after(0, lambda: messagebox.showerror("Yetkisiz Erişim (401)", "🔒 Hatalı sunucu şifresi! İşlem yetkisi reddedildi."))
+                else:
+                    self.after(0, lambda c=e.code: messagebox.showerror("Hata", f"Sunucu hatası ({c})"))
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("Hata", f"Durum güncellenemedi: {str(e)}"))
+                err_str = str(e)
+                self.after(0, lambda es=err_str: messagebox.showerror("Hata", f"Durum güncellenemedi: {es}"))
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -1087,19 +1294,32 @@ class EvOtomasyonServisApp(tk.Tk):
         if not messagebox.askyesno("Kritik Onay", f"DİKKAT!\n\nCihaz ({uuid}) envanterden tamamen silinecektir.\nBu işlem geri alınamaz.\n\nEmin misiniz?"):
             return
 
+        auth_key = self.get_server_password(
+            prompt=f"Cihazı ({uuid}) envanterden silmek için lütfen Sunucu Şifresini giriniz:"
+        )
+        if not auth_key:
+            return
+
         def _worker():
             try:
                 req = urllib.request.Request(
                     f"{API_INVENTORY_URL}/{uuid}",
-                    headers={"X-Admin-Api-Key": ADMIN_API_KEY},
+                    headers={"X-Admin-Api-Key": auth_key},
                     method="DELETE"
                 )
                 with urllib.request.urlopen(req, timeout=8) as response:
                     res = json.loads(response.read().decode("utf-8"))
-                    self.after(0, lambda: messagebox.showinfo("Silindi", res.get("message", "Cihaz silindi.")))
+                    self.after(0, lambda msg=res.get("message", "Cihaz silindi."): messagebox.showinfo("Silindi", msg))
                     self.after(0, self.refresh_inventory_list)
+            except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    self.session_server_password = None
+                    self.after(0, lambda: messagebox.showerror("Yetkisiz Erişim (401)", "🔒 Hatalı sunucu şifresi! Silme yetkisi reddedildi."))
+                else:
+                    self.after(0, lambda c=e.code: messagebox.showerror("Hata", f"Sunucu hatası ({c})"))
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("Hata", f"Silme işlemi başarısız: {str(e)}"))
+                err_str = str(e)
+                self.after(0, lambda es=err_str: messagebox.showerror("Hata", f"Silme işlemi başarısız: {es}"))
 
         threading.Thread(target=_worker, daemon=True).start()
 

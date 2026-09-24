@@ -68,6 +68,9 @@ class InventoryService {
     );
 
     const record = insertRes.rows[0];
+    if (record && record.serial_no !== undefined) {
+      record.serial_no = parseInt(record.serial_no, 10) || record.serial_no;
+    }
 
     // Pano kapağı ve kutu etiketi için QR Claim URL üretimi
     const qrClaimUrl = `https://evotomasyon.gudeteknoloji.com.tr/claim?uid=${encodeURIComponent(cleanUuid)}&pin=${cleanPin}`;
@@ -134,6 +137,7 @@ class InventoryService {
 
     const items = res.rows.map(row => ({
       ...row,
+      serial_no: row.serial_no !== undefined ? (parseInt(row.serial_no, 10) || row.serial_no) : row.serial_no,
       qr_claim_url: `https://evotomasyon.gudeteknoloji.com.tr/claim?uid=${encodeURIComponent(row.device_uuid)}`,
     }));
 
@@ -170,7 +174,11 @@ class InventoryService {
       throw err;
     }
 
-    return res.rows[0];
+    const row = res.rows[0];
+    if (row && row.serial_no !== undefined) {
+      row.serial_no = parseInt(row.serial_no, 10) || row.serial_no;
+    }
+    return row;
   }
 
   /**
