@@ -18,6 +18,7 @@ import 'family/family_members_page.dart';
 import 'wifi_recovery_dialog.dart';
 import 'system_doctor_dialog.dart';
 import 'service_management_page.dart';
+import 'device_inventory_page.dart';
 import 'replace_board_dialog.dart';
 import 'family/transfer_ownership_dialog.dart';
 import '../widgets/biometric_prompt_dialog.dart';
@@ -1140,6 +1141,16 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Widget _buildSuperUserActionGrid(BuildContext context) {
     final actions = [
+      {
+        'title': 'Cihaz Envanteri & Karekodlar',
+        'subtitle': 'Fabrika kayıtları, seri no ve QR yaşam döngüsü',
+        'icon': Icons.inventory_2_outlined,
+        'color': AppTheme.accentAmber,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
+            ),
+      },
       {
         'title': 'Servis Sorumluları Paneli',
         'subtitle': 'Yeni servis sorumlusu veya teknisyen ekle & düzenle',

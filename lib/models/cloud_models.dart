@@ -203,4 +203,86 @@ class InvitationModel {
   }
 }
 
+/// Cihaz Envanteri ve QR Yaşam Döngüsü Modeli (Faz 6 & Süper Yönetici)
+class InventoryDeviceModel {
+  final String id;
+  final int? serialNo;
+  final String deviceUuid;
+  final String macAddress;
+  final String model;
+  final String batchNo;
+  final String status;
+  final int failedAttempts;
+  final DateTime? lockedUntil;
+  final DateTime? claimedAt;
+  final DateTime createdAt;
+  final DateTime? updatedAt;
+  final String? claimedHomeName;
+  final String? claimedUserEmail;
+  final String qrClaimUrl;
+
+  const InventoryDeviceModel({
+    required this.id,
+    this.serialNo,
+    required this.deviceUuid,
+    required this.macAddress,
+    required this.model,
+    required this.batchNo,
+    required this.status,
+    this.failedAttempts = 0,
+    this.lockedUntil,
+    this.claimedAt,
+    required this.createdAt,
+    this.updatedAt,
+    this.claimedHomeName,
+    this.claimedUserEmail,
+    required this.qrClaimUrl,
+  });
+
+  String get formattedSerial => serialNo != null ? '#${serialNo.toString().padLeft(4, '0')}' : '#----';
+  bool get isInStock => status.toUpperCase() == 'IN_STOCK';
+  bool get isClaimed => status.toUpperCase() == 'CLAIMED' || status.toUpperCase() == 'INSTALLED';
+  bool get isSuspended => status.toUpperCase() == 'SUSPENDED';
+  bool get isRevoked => status.toUpperCase() == 'REVOKED';
+
+  String get statusLabel {
+    switch (status.toUpperCase()) {
+      case 'IN_STOCK':
+        return 'STOKTA';
+      case 'CLAIMED':
+        return 'DEVREDE';
+      case 'INSTALLED':
+        return 'MONTAJLANDI';
+      case 'SUSPENDED':
+        return 'ASKIDA';
+      case 'REVOKED':
+        return 'İPTAL';
+      default:
+        return status.toUpperCase();
+    }
+  }
+
+  factory InventoryDeviceModel.fromJson(Map<String, dynamic> json) {
+    return InventoryDeviceModel(
+      id: json['id']?.toString() ?? '',
+      serialNo: json['serial_no'] != null ? int.tryParse(json['serial_no'].toString()) : null,
+      deviceUuid: json['device_uuid']?.toString() ?? '',
+      macAddress: json['mac_address']?.toString() ?? '',
+      model: json['model']?.toString() ?? 'ESP32-S3-POE-ETH-8DI-8RO',
+      batchNo: json['batch_no']?.toString() ?? 'BATCH-2026-01',
+      status: json['status']?.toString() ?? 'IN_STOCK',
+      failedAttempts: (json['failed_attempts'] as num?)?.toInt() ?? 0,
+      lockedUntil: json['locked_until'] != null ? DateTime.tryParse(json['locked_until']) : null,
+      claimedAt: json['claimed_at'] != null ? DateTime.tryParse(json['claimed_at']) : null,
+      createdAt: DateTime.tryParse(json['created_at']?.toString() ?? '') ?? DateTime.now(),
+      updatedAt: json['updated_at'] != null ? DateTime.tryParse(json['updated_at']) : null,
+      claimedHomeName: json['claimed_home_name']?.toString(),
+      claimedUserEmail: json['claimed_user_email']?.toString(),
+      qrClaimUrl: json['qr_claim_url']?.toString() ??
+          'https://evotomasyon.gudeteknoloji.com.tr/claim?uid=${json['device_uuid']}',
+    );
+  }
+}
+
+
 

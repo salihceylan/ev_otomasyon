@@ -100,6 +100,16 @@ class AutomationState extends ChangeNotifier {
   bool _biometricFailed = false;
   bool get biometricFailed => _biometricFailed;
 
+  // Cihaz Envanteri & Karekod Yaşam Döngüsü State
+  List<InventoryDeviceModel> _inventoryDevices = [];
+  List<InventoryDeviceModel> get inventoryDevices => List.unmodifiable(_inventoryDevices);
+  Map<String, int> _inventoryStats = {'total': 0, 'in_stock': 0, 'claimed': 0, 'suspended': 0};
+  Map<String, int> get inventoryStats => Map.unmodifiable(_inventoryStats);
+  bool _inventoryLoading = false;
+  bool get inventoryLoading => _inventoryLoading;
+  String? _inventoryError;
+  String? get inventoryError => _inventoryError;
+
   int get openLightsCount {
     if (_mode == AppMode.cloud) {
       return _cloudEndpoints.where((e) => e.isLight && e.currentState).length;
@@ -1419,6 +1429,89 @@ class AutomationState extends ChangeNotifier {
     await cloudApi.deleteScheduledRule(_activeHome!.id, ruleId);
     _scheduledRules = _scheduledRules.where((r) => r.id != ruleId).toList();
     if (!_isDisposed) notifyListeners();
+  }
+
+  // ===========================================================================
+  // CİHAZ ENVANTERİ & KAREKOD YÖNETİMİ (SÜPER YÖNETİCİ & YETKİLİ SERVİS)
+  // ===========================================================================
+  Future<void> fetchInventory({String? status, String? search}) async {
+    _inventoryLoading = true;
+    _inventoryError = null;
+    notifyListeners();
+
+    try {
+      final res = await cloudApi.fetchDeviceInventory(status: status, search: search);
+      debugPrint('[AutomationState] fetchInventory response: $res');
+      final rawItems = (res['items'] as List<dynamic>?) ?? [];
+      _inventoryDevices = rawItems.map((e) => InventoryDeviceModel.fromJson(e as Map<String, dynamic>)).toList();
+      if (res['stats'] != null && res['stats'] is Map<String, dynamic>) {
+        final st = res['stats'] as Map<String, dynamic>;
+        _inventoryStats = {
+          'total': (st['total'] as num?)?.toInt() ?? _inventoryDevices.length,
+          'in_stock': (st['in_stock'] as num?)?.toInt() ?? 0,
+          'claimed': (st['claimed'] as num?)?.toInt() ?? 0,
+          'suspended': (st['suspended'] as num?)?.toInt() ?? 0,
+          'revoked': (st['revoked'] as num?)?.toInt() ?? 0,
+        };
+      }
+    } catch (e) {
+      _inventoryError = e.toString().replaceFirst('Exception: ', '');
+      debugPrint('[AutomationState] Cihaz envanteri hatası: $e');
+    } finally {
+      _inventoryLoading = false;
+      if (!_isDisposed) notifyListeners();
+    }
+  }
+
+  Future<bool> updateInventoryStatus(String uuid, String newStatus) async {
+    try {
+      await cloudApi.updateInventoryDeviceStatus(uuid, newStatus);
+      final idx = _inventoryDevices.indexWhere((d) => d.deviceUuid == uuid);
+      if (idx != -1) {
+        final old = _inventoryDevices[idx];
+        _inventoryDevices[idx] = InventoryDeviceModel(
+          id: old.id,
+          serialNo: old.serialNo,
+          deviceUuid: old.deviceUuid,
+          macAddress: old.macAddress,
+          model: old.model,
+          batchNo: old.batchNo,
+          status: newStatus,
+          failedAttempts: old.failedAttempts,
+          lockedUntil: old.lockedUntil,
+          claimedAt: old.claimedAt,
+          createdAt: old.createdAt,
+          updatedAt: DateTime.now(),
+          claimedHomeName: old.claimedHomeName,
+          claimedUserEmail: old.claimedUserEmail,
+          qrClaimUrl: old.qrClaimUrl,
+        );
+        if (!_isDisposed) notifyListeners();
+      }
+      return true;
+    } catch (e) {
+      debugPrint('[AutomationState] Cihaz durum güncelleme hatası: $e');
+      rethrow;
+    }
+  }
+
+  Future<bool> deleteDeviceFromInventory(String uuid) async {
+    try {
+      await cloudApi.deleteInventoryDevice(uuid);
+      _inventoryDevices.removeWhere((d) => d.deviceUuid == uuid);
+      if (!_isDisposed) notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('[AutomationState] Cihaz envanterden silme hatası: $e');
+      rethrow;
+    }
+  }
+
+  @visibleForTesting
+  void setInventoryDevicesForTesting(List<InventoryDeviceModel> devices, {Map<String, int>? stats}) {
+    _inventoryDevices = List.from(devices);
+    if (stats != null) _inventoryStats = Map.from(stats);
+    notifyListeners();
   }
 
   @override

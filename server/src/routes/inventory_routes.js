@@ -41,10 +41,11 @@ router.post('/register', async (req, res, next) => {
  */
 router.get('/', async (req, res, next) => {
   try {
-    const { status, batch_no, limit, offset } = req.query;
+    const { status, batch_no, search, limit, offset } = req.query;
     const result = await inventoryService.listInventory({
       status,
       batch_no,
+      search,
       limit: limit ? parseInt(limit, 10) : undefined,
       offset: offset ? parseInt(offset, 10) : undefined,
     });

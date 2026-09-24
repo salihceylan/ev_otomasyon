@@ -82,35 +82,72 @@ class InventoryService {
   /**
    * Envanterdeki cihazları filtreleme ve listeleme
    */
-  async listInventory({ status, batch_no, limit = 50, offset = 0 } = {}) {
+  async listInventory({ status, batch_no, search, limit = 50, offset = 0 } = {}) {
     let query = `
-      SELECT id, serial_no, device_uuid, mac_address, model, batch_no, status, 
-             failed_attempts, locked_until, claimed_at, created_at
-      FROM device_inventory
+      SELECT di.id, di.serial_no, di.device_uuid, di.mac_address, di.model, di.batch_no, di.status, 
+             di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at,
+             h.name AS claimed_home_name, u.email AS claimed_user_email
+      FROM device_inventory di
+      LEFT JOIN homes h ON di.claimed_home_id = h.id
+      LEFT JOIN users u ON di.claimed_by_user_id = u.id
       WHERE 1=1
     `;
     const params = [];
 
-    if (status) {
+    if (status && status.toUpperCase() !== 'ALL') {
       params.push(status.toUpperCase());
-      query += ` AND status = $${params.length}`;
+      query += ` AND di.status = $${params.length}`;
     }
 
     if (batch_no) {
       params.push(batch_no);
-      query += ` AND batch_no = $${params.length}`;
+      query += ` AND di.batch_no = $${params.length}`;
     }
 
-    query += ` ORDER BY serial_no DESC, created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    if (search && search.trim().length > 0) {
+      params.push(`%${search.trim().toLowerCase()}%`);
+      query += ` AND (
+        LOWER(di.device_uuid) LIKE $${params.length} OR 
+        LOWER(di.mac_address) LIKE $${params.length} OR 
+        LOWER(di.model) LIKE $${params.length} OR 
+        CAST(di.serial_no AS TEXT) LIKE $${params.length} OR
+        LOWER(COALESCE(h.name, '')) LIKE $${params.length}
+      )`;
+    }
+
+    query += ` ORDER BY di.serial_no DESC NULLS LAST, di.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(Math.min(limit, 100), offset);
 
     const res = await db.query(query, params);
-    const countRes = await db.query('SELECT COUNT(*) as total FROM device_inventory');
+
+    // İstatistik sayaçları (Toplam, Stokta, Devrede, Askıda)
+    const statsRes = await db.query(`
+      SELECT 
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE status = 'IN_STOCK') AS in_stock,
+        COUNT(*) FILTER (WHERE status IN ('CLAIMED', 'INSTALLED')) AS claimed,
+        COUNT(*) FILTER (WHERE status = 'SUSPENDED') AS suspended,
+        COUNT(*) FILTER (WHERE status = 'REVOKED') AS revoked
+      FROM device_inventory
+    `);
+    const statsRow = statsRes.rows[0] || {};
+
+    const items = res.rows.map(row => ({
+      ...row,
+      qr_claim_url: `https://evotomasyon.gudeteknoloji.com.tr/claim?uid=${encodeURIComponent(row.device_uuid)}`,
+    }));
 
     return {
-      total: parseInt(countRes.rows[0].total, 10),
-      count: res.rows.length,
-      items: res.rows,
+      total: parseInt(statsRow.total || 0, 10),
+      count: items.length,
+      stats: {
+        total: parseInt(statsRow.total || 0, 10),
+        in_stock: parseInt(statsRow.in_stock || 0, 10),
+        claimed: parseInt(statsRow.claimed || 0, 10),
+        suspended: parseInt(statsRow.suspended || 0, 10),
+        revoked: parseInt(statsRow.revoked || 0, 10),
+      },
+      items,
     };
   }
 

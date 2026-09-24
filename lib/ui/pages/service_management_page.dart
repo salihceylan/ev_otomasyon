@@ -4,6 +4,7 @@ import '../../services/automation_state.dart';
 import '../../services/ev_cloud_api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circuit_background.dart';
+import 'device_inventory_page.dart';
 import 'replace_board_dialog.dart';
 import 'service_mode_page.dart';
 import 'system_doctor_dialog.dart';
@@ -398,8 +399,9 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
               'Üretimden çıkan ESP32-S3 panolarının UUID, Setup PIN ve model bilgilerini sistem envanterine işleyin.',
           buttonLabel: 'Envanter İşlemleri',
           onTap: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Envanter API /api/v1/admin/inventory uç noktaları aktif ve hazır.')),
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
             );
           },
         ),

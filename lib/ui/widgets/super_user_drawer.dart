@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
+import '../pages/device_inventory_page.dart';
 import '../pages/replace_board_dialog.dart';
 import '../pages/service_management_page.dart';
 import '../pages/service_mode_page.dart';
@@ -144,6 +145,21 @@ class SuperUserDrawer extends StatelessWidget {
                     subtitle: isSuper ? 'Sistem durumu & ana kontroller' : 'Saha operasyonları & ana kontroller',
                     onTap: () {
                       Navigator.pop(context); // Menüyü kapat, zaten konsoldayız
+                    },
+                  ),
+                  _buildDrawerItem(
+                    context: context,
+                    icon: Icons.inventory_2_outlined,
+                    activeIcon: Icons.inventory_2,
+                    title: 'Cihaz Envanteri',
+                    subtitle: 'Karekodlar, seri no & durum takibi',
+                    color: AppTheme.accentAmber,
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
+                      );
                     },
                   ),
                   _buildDrawerItem(

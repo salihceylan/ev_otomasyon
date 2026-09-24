@@ -946,4 +946,72 @@ class EvCloudApiService {
     if (res.statusCode == 200) return data['data'] ?? data;
     throw Exception(data['message'] ?? data['error'] ?? 'Servis özeti alınamadı (${res.statusCode})');
   }
+
+  Map<String, String> get _adminHeaders {
+    final map = Map<String, String>.from(_headers);
+    map['x-admin-api-key'] = 'GudeAdminInventoryKey2026_SecretProvisioning';
+    return map;
+  }
+
+  /// Cihaz Envanterini Listeleme (Süper & Servis Yöneticisi)
+  Future<Map<String, dynamic>> fetchDeviceInventory({
+    String? status,
+    String? search,
+    int limit = 100,
+    int offset = 0,
+  }) async {
+    final params = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (status != null && status.isNotEmpty && status.toUpperCase() != 'ALL') {
+      params['status'] = status.toUpperCase();
+    }
+    if (search != null && search.trim().isNotEmpty) {
+      params['search'] = search.trim();
+    }
+
+    final uri = Uri.parse('$baseUrl/v1/admin/inventory').replace(queryParameters: params);
+    final res = await _authenticatedRequest(
+      () => http.get(uri, headers: _adminHeaders).timeout(const Duration(seconds: 10)),
+    );
+
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200 && data['success'] == true) {
+      return (data['data'] as Map<String, dynamic>?) ?? data;
+    }
+    throw Exception(data['message'] ?? 'Cihaz envanteri alınamadı (${res.statusCode})');
+  }
+
+  /// Cihaz Durumunu Güncelleme (Askıya Al / Aktif Et / İptal)
+  Future<Map<String, dynamic>> updateInventoryDeviceStatus(String uuid, String status) async {
+    final uri = Uri.parse('$baseUrl/v1/admin/inventory/$uuid/status');
+    final res = await _authenticatedRequest(
+      () => http.patch(
+        uri,
+        headers: _adminHeaders,
+        body: jsonEncode({'status': status}),
+      ).timeout(const Duration(seconds: 10)),
+    );
+
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200 && data['success'] == true) {
+      return (data['data'] as Map<String, dynamic>?) ?? data;
+    }
+    throw Exception(data['message'] ?? 'Cihaz durumu güncellenemedi (${res.statusCode})');
+  }
+
+  /// Cihazı Envanterden Silme (Süper Yönetici)
+  Future<bool> deleteInventoryDevice(String uuid) async {
+    final uri = Uri.parse('$baseUrl/v1/admin/inventory/$uuid');
+    final res = await _authenticatedRequest(
+      () => http.delete(uri, headers: _adminHeaders).timeout(const Duration(seconds: 10)),
+    );
+
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200 && data['success'] == true) {
+      return true;
+    }
+    throw Exception(data['message'] ?? 'Cihaz silinemedi (${res.statusCode})');
+  }
 }
