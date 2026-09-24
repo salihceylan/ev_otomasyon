@@ -36,7 +36,7 @@ class EvOtomasyonApp extends StatelessWidget {
         );
       },
       home: const AuthGate(
-        minSplashDuration: Duration(milliseconds: 1400),
+        minSplashDuration: Duration(milliseconds: 2600),
       ),
     );
   }

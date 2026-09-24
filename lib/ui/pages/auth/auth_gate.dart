@@ -48,32 +48,41 @@ class _AuthGateState extends State<AuthGate> {
   Widget build(BuildContext context) {
     return Consumer<AutomationState>(
       builder: (context, state, _) {
-        // Kullanıcının açılış ekranındaki zengin elektronik devreleri ve logoyu görmesi için
+        debugPrint('>>> [AUTH_GATE_DEBUG] _minSplashPassed=$_minSplashPassed, authStatus=${state.authStatus}, mode=${state.mode}');
+        Widget currentScreen;
+
+        // Kullanıcının açılış ekranındaki zengin elektronik devreleri ve logoyu doyasıya görmesi için
         if (!_minSplashPassed || state.authStatus == AuthStatus.checking) {
-          return const _AuthSplashScreen();
+          currentScreen = const _AuthSplashScreen(key: ValueKey('splash_screen'));
+        } else if (state.mode == AppMode.direct) {
+          currentScreen = const DashboardPage(key: ValueKey('dashboard_screen'));
+        } else {
+          switch (state.authStatus) {
+            case AuthStatus.checking:
+              currentScreen = const _AuthSplashScreen(key: ValueKey('splash_screen'));
+              break;
+            case AuthStatus.authenticated:
+              currentScreen = const DashboardPage(key: ValueKey('dashboard_screen'));
+              break;
+            case AuthStatus.unauthenticated:
+              currentScreen = const LoginPage(key: ValueKey('login_screen'));
+              break;
+          }
         }
 
-        // Doğrudan ESP32 yerel modundaysa doğrudan Dashboard'a yönlendir
-        if (state.mode == AppMode.direct) {
-          return const DashboardPage();
-        }
-
-        // Bulut Modu Oturum Durumu Kontrolü
-        switch (state.authStatus) {
-          case AuthStatus.checking:
-            return const _AuthSplashScreen();
-          case AuthStatus.authenticated:
-            return const DashboardPage();
-          case AuthStatus.unauthenticated:
-            return const LoginPage();
-        }
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 500),
+          switchInCurve: Curves.easeInOut,
+          switchOutCurve: Curves.easeInOut,
+          child: currentScreen,
+        );
       },
     );
   }
 }
 
 class _AuthSplashScreen extends StatelessWidget {
-  const _AuthSplashScreen();
+  const _AuthSplashScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
