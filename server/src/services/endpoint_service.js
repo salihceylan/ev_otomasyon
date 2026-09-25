@@ -3,13 +3,17 @@ const deviceService = require('./device_service');
 
 class EndpointService {
   async getEndpointsByHome(homeId) {
+    const numericHomeId = parseInt(homeId, 10);
+    if (isNaN(numericHomeId)) {
+      return [];
+    }
     const res = await db.query(
-      `SELECT e.*, d.mac_address, d.device_uuid, d.is_online as device_online
+      `SELECT e.*, d.mac_address, d.device_uuid, COALESCE(d.is_online, false) as device_online
        FROM endpoints e
-       JOIN devices d ON e.device_id = d.id
+       LEFT JOIN devices d ON e.device_id = d.id
        WHERE e.home_id = $1
        ORDER BY e.channel_index ASC`,
-      [homeId]
+      [numericHomeId]
     );
     return res.rows;
   }

@@ -1031,40 +1031,46 @@ class AutomationState extends ChangeNotifier {
   }
 
   Future<void> _connectMqttForHome(HomeModel home) async {
-    mqttService.disconnect();
-    final connected = await mqttService.connect(
-      username: home.mqttUsername,
-      password: 'PassHome101!Sec', // PostgreSQL mqtt_users tablosundaki doğrulanmış şifre
-      homeId: home.mqttUsername,
-    );
-    _isMqttConnected = connected;
-    if (connected && _mode == AppMode.cloud) {
-      _connState = ConnectionStateEnum.connected;
-    }
-    notifyListeners();
+    try {
+      mqttService.disconnect();
+      final connected = await mqttService.connect(
+        username: home.mqttUsername,
+        password: 'PassHome101!Sec', // PostgreSQL mqtt_users tablosundaki doğrulanmış şifre
+        homeId: home.mqttUsername,
+      );
+      _isMqttConnected = connected;
+      if (connected && _mode == AppMode.cloud) {
+        _connState = ConnectionStateEnum.connected;
+      }
+      notifyListeners();
 
-    // Eski dinleyicileri temizle
-    await _mqttStatusSub?.cancel();
-    _mqttStatusSub = null;
-    await _mqttStateSub?.cancel();
-    _mqttStateSub = null;
+      // Eski dinleyicileri temizle
+      await _mqttStatusSub?.cancel();
+      _mqttStatusSub = null;
+      await _mqttStateSub?.cancel();
+      _mqttStateSub = null;
 
-    if (connected) {
-      // Gelen MQTTS Cihaz Çevrimiçi/Çevrimdışı Durumunu dinle
-      _mqttStatusSub = mqttService.statusStream.listen((statusData) {
-        final st = statusData['status']?.toString().toLowerCase();
-        if (st == 'online') {
-          _connState = ConnectionStateEnum.connected;
-        } else if (st == 'offline') {
-          _connState = ConnectionStateEnum.offline;
-        }
-        notifyListeners();
-      });
+      if (connected) {
+        // Gelen MQTTS Cihaz Çevrimiçi/Çevrimdışı Durumunu dinle
+        _mqttStatusSub = mqttService.statusStream.listen((statusData) {
+          final st = statusData['status']?.toString().toLowerCase();
+          if (st == 'online') {
+            _connState = ConnectionStateEnum.connected;
+          } else if (st == 'offline') {
+            _connState = ConnectionStateEnum.offline;
+          }
+          notifyListeners();
+        });
 
-      // Gelen MQTTS State mesajlarını dinle
-      _mqttStateSub = mqttService.stateStream.listen((data) {
-        _handleMqttStateUpdate(data);
-      });
+        // Gelen MQTTS State mesajlarını dinle
+        _mqttStateSub = mqttService.stateStream.listen((data) {
+          _handleMqttStateUpdate(data);
+        });
+      }
+    } catch (e) {
+      debugPrint('[AutomationState] _connectMqttForHome hatası: $e');
+      _isMqttConnected = false;
+      notifyListeners();
     }
   }
 

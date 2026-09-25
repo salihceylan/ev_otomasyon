@@ -28,38 +28,42 @@ class EvMqttService {
     required String password,
     required String homeId,
   }) async {
-    final clientIdentifier = 'flutter_app_${DateTime.now().millisecondsSinceEpoch % 100000}';
-    _client = MqttServerClient.withPort(brokerHost, clientIdentifier, brokerPort);
-
-    _client!.secure = true;
-    _client!.securityContext = SecurityContext.defaultContext;
-    _client!.keepAlivePeriod = 20;
-    _client!.autoReconnect = true;
-    _client!.logging(on: false);
-
-    _client!.onConnected = () {
-      _isConnected = true;
-      debugPrint('[MQTTS] EMQX Broker bağlantısı başarılı (TLS 1.3 / Port 8884)');
-    };
-
-    _client!.onDisconnected = () {
-      _isConnected = false;
-      debugPrint('[MQTTS] EMQX Broker bağlantısı koptu');
-    };
-
-    _client!.onAutoReconnect = () {
-      debugPrint('[MQTTS] Otomatik yeniden bağlanılıyor...');
-    };
-
-    final connMsg = MqttConnectMessage()
-        .withClientIdentifier(clientIdentifier)
-        .authenticateAs(username, password)
-        .startClean()
-        .withWillQos(MqttQos.atLeastOnce);
-
-    _client!.connectionMessage = connMsg;
-
     try {
+      final clientIdentifier = 'flutter_app_${DateTime.now().millisecondsSinceEpoch % 100000}';
+      _client = MqttServerClient.withPort(brokerHost, clientIdentifier, brokerPort);
+
+      _client!.secure = true;
+      if (!kIsWeb) {
+        _client!.securityContext = SecurityContext.defaultContext;
+      } else {
+        _client!.useWebSocket = true;
+      }
+      _client!.keepAlivePeriod = 20;
+      _client!.autoReconnect = true;
+      _client!.logging(on: false);
+
+      _client!.onConnected = () {
+        _isConnected = true;
+        debugPrint('[MQTTS] EMQX Broker bağlantısı başarılı (TLS 1.3 / Port 8884)');
+      };
+
+      _client!.onDisconnected = () {
+        _isConnected = false;
+        debugPrint('[MQTTS] EMQX Broker bağlantısı koptu');
+      };
+
+      _client!.onAutoReconnect = () {
+        debugPrint('[MQTTS] Otomatik yeniden bağlanılıyor...');
+      };
+
+      final connMsg = MqttConnectMessage()
+          .withClientIdentifier(clientIdentifier)
+          .authenticateAs(username, password)
+          .startClean()
+          .withWillQos(MqttQos.atLeastOnce);
+
+      _client!.connectionMessage = connMsg;
+
       debugPrint('[MQTTS] Bağlanılıyor: $brokerHost:$brokerPort (Kullanıcı: $username)...');
       final status = await _client!.connect();
       if (status?.state == MqttConnectionState.connected) {

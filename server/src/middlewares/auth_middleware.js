@@ -27,13 +27,18 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'servic
     try {
       const homeId = req.params.home_id || req.body.home_id || req.query.home_id;
 
-      if (!homeId) {
-        return errorResponse(res, 'Daire (home_id) parametresi belirtilmelidir.', 400);
+      const numericHomeId = parseInt(homeId, 10);
+      if (isNaN(numericHomeId)) {
+        return errorResponse(res, 'Gecersiz daire (home_id) parametresi.', 400);
       }
 
-      // Süper yönetici doğrudan erişebilir
-      if (req.user && req.user.role === 'super_user') {
-        req.homeAccess = { role: 'service_user', is_super: true };
+      // Süper yönetici ve Genel Yetkili Servis Sorumlusu doğrudan erişebilir
+      if (req.user && (req.user.role === 'super_user' || req.user.role === 'service_user')) {
+        req.homeAccess = {
+          home_id: numericHomeId,
+          role: 'service_user',
+          is_super: req.user.role === 'super_user',
+        };
         return next();
       }
 
@@ -42,15 +47,10 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'servic
         `SELECT role, installer_expires_at, valid_from, valid_until 
          FROM home_users 
          WHERE home_id = $1 AND user_id = $2`,
-        [homeId, req.user.id]
+        [numericHomeId, req.user.id]
       );
 
       if (result.rows.length === 0) {
-        // Genel yetkili servis sorumlusu ise erişebilir
-        if (req.user && req.user.role === 'service_user') {
-          req.homeAccess = { role: 'service_user' };
-          return next();
-        }
         return errorResponse(res, 'Bu daireye erisim yetkiniz bulunmamaktadir.', 403);
       }
 
