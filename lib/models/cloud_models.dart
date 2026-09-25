@@ -23,7 +23,7 @@ class UserModel {
   bool get isSuperUser => role == 'super_user';
   bool get isServiceUser => role == 'service_user';
   bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;
-  bool get isInstaller => role == 'installer';
+  bool get isInstaller => false; // Teknisyen rolü kaldırıldı, tüm yetkiler service_user'a devredildi
   bool get isOwner => role == 'owner';
   bool get isResident => role == 'resident';
   bool get isGuest => role == 'guest';

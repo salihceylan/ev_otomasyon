@@ -65,8 +65,8 @@ class AutomationState extends ChangeNotifier {
   bool get isMqttConnected => _isMqttConnected;
   String? get servicePin => _servicePin;
   DateTime? get servicePinExpiry => _servicePinExpiry;
-  bool get isServiceMode => _currentUser?.role == 'installer' || _currentUser?.role == 'service_user';
-  bool get isInstaller => _currentUser?.role == 'installer';
+  bool get isServiceMode => isServiceManagerOrSuper;
+  bool get isInstaller => false; // Teknisyen rolü kaldırıldı, tüm saha yetkileri service_user'a devredildi
   bool get isServiceUser => _currentUser?.role == 'service_user';
   bool get isSuperUser => _currentUser?.role == 'super_user';
   bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;

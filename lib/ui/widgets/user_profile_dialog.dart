@@ -6,7 +6,6 @@ import '../pages/family/invite_family_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
 import '../pages/family/family_members_page.dart';
 import '../pages/service_management_page.dart';
-import '../pages/service_mode_page.dart';
 
 class UserProfileDialog extends StatelessWidget {
   const UserProfileDialog({super.key});
@@ -31,7 +30,6 @@ class UserProfileDialog extends StatelessWidget {
       'super_user' => '👑 Süper Yönetici',
       'service_user' => '🛠️ Servis Sorumlusu',
       'owner' => 'Ev Sahibi',
-      'installer' => 'Teknisyen / Kurulumcu',
       'member' => 'Aile Bireyi',
       'guest' => 'Süreli Misafir',
       _ => 'Kullanıcı',
@@ -40,7 +38,6 @@ class UserProfileDialog extends StatelessWidget {
     final roleColor = switch (user?.role) {
       'super_user' => AppTheme.accentPurple,
       'service_user' => AppTheme.accentCyan,
-      'installer' => AppTheme.accentAmber,
       'owner' => AppTheme.primaryBlueLight,
       'guest' => AppTheme.accentPurple,
       _ => AppTheme.accentGreen,
@@ -181,31 +178,6 @@ class UserProfileDialog extends StatelessWidget {
                 ),
               ],
 
-              // Saha Teknisyeni Konsol Butonu
-              if (state.isInstaller) ...[
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                      );
-                    },
-                    icon: const Icon(Icons.handyman_rounded, size: 18),
-                    label: const Text('Devreye Alma & Donanım Testi'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.accentPurple,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                ),
-              ],
-
               // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi)
               if (state.isOwner && state.activeHome != null) ...[
                 const SizedBox(height: 14),
@@ -249,7 +221,7 @@ class UserProfileDialog extends StatelessWidget {
               ],
 
               // Başka Bir Eve Katıl (Yalnızca sakin, misafir ve aile bireyleri için)
-              if (!state.isServiceManagerOrSuper && !state.isInstaller) ...[
+              if (!state.isServiceManagerOrSuper) ...[
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,

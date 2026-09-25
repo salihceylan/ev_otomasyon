@@ -64,8 +64,7 @@ void main() {
 
       // Sayfa başlığı ve tablar görünmeli
       expect(find.text('Servis & Yönetici Paneli'), findsOneWidget);
-      expect(find.text('Sorumlular'), findsOneWidget);
-      expect(find.text('Teknisyenler'), findsOneWidget);
+      expect(find.text('Servis Sorumluları'), findsOneWidget);
       expect(find.text('Görevler & Araçlar'), findsOneWidget);
 
       // Görevler sekmesine geçiş
@@ -114,14 +113,15 @@ void main() {
       expect(find.text('salihceylan@gmail.com'), findsOneWidget);
       expect(find.text('SÜPER YÖNETİCİ KONSOLU'), findsOneWidget);
       expect(find.text('Yönetici Konsolu'), findsOneWidget);
-      expect(find.text('Servis Sorumluları'), findsOneWidget);
-      expect(find.text('Saha Teknisyenleri'), findsOneWidget);
+      expect(find.text('Cihaz Envanteri'), findsOneWidget);
+      expect(find.text('Servis Yönetim Konsolu'), findsOneWidget);
+      expect(find.text('Saha Teknisyenleri'), findsNothing);
 
       // Scroll ListView to view remaining items
       await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pumpAndSettle();
 
-      expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
+      expect(find.text('Devreye Alma & Donanım Testi'), findsOneWidget);
       expect(find.text('Sistem Doktoru'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
       expect(find.text('Güvenli Çıkış Yap'), findsOneWidget);
@@ -195,7 +195,7 @@ void main() {
       expect(find.text('🛠️ Saha Servis & Devreye Alma Görevleri'), findsOneWidget);
 
       // Görev Listesi
-      expect(find.text('Saha Teknisyen Yönetimi'), findsOneWidget);
+      expect(find.text('Karekod ile Pano Eşle (Claim)'), findsOneWidget);
       expect(find.text('Devreye Alma (Commissioning)'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet & Hasar)'), findsOneWidget);
 
@@ -233,11 +233,11 @@ void main() {
         findsOneWidget,
       );
 
-      // Teknisyenler tabına geçince "Teknisyen Ekle" butonu GÖRÜNMELİ
-      await tester.tap(find.text('Teknisyenler'));
+      // Görevler tabına geçince servis araçları GÖRÜNMELİ
+      await tester.tap(find.text('Görevler & Araçlar'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Teknisyen Ekle'), findsOneWidget);
+      expect(find.text('Tanımlı Servis Görevleri & Eylemleri'), findsOneWidget);
     });
 
     testWidgets('ServiceManagementPage shows Sorumlu Ekle button for super_user on Tab 0', (tester) async {

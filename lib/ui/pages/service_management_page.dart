@@ -35,15 +35,14 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   Map<String, dynamic>? _summary;
 
   List<dynamic> _superAndServiceUsers = [];
-  List<dynamic> _installers = [];
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: 3,
+      length: 2,
       vsync: this,
-      initialIndex: widget.initialTabIndex.clamp(0, 2),
+      initialIndex: widget.initialTabIndex.clamp(0, 1),
     );
     _tabController.addListener(() {
       if (mounted) setState(() {});
@@ -80,19 +79,16 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
           ? api.listAdminUsers(role: 'super_user').catchError((_) => <String, dynamic>{'users': []})
           : Future.value(<String, dynamic>{'users': []});
       final serviceUsersFuture = api.listAdminUsers(role: 'service_user').catchError((_) => <String, dynamic>{'users': []});
-      final installersFuture = api.listAdminUsers(role: 'installer').catchError((_) => <String, dynamic>{'users': []});
 
       final results = await Future.wait([
         summaryFuture,
         superUsersFuture,
         serviceUsersFuture,
-        installersFuture,
       ]);
 
       final summaryData = results[0];
       final superUsersRes = results[1];
       final serviceUsersRes = results[2];
-      final installersRes = results[3];
 
       final List<dynamic> combinedManagers = [
         ...(superUsersRes['users'] as List? ?? []),
@@ -103,7 +99,6 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
         setState(() {
           _summary = summaryData;
           _superAndServiceUsers = combinedManagers;
-          _installers = installersRes['users'] as List? ?? [];
           _isLoading = false;
         });
       }
@@ -166,11 +161,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
           tabs: const [
             Tab(
               icon: Icon(Icons.shield_outlined, size: 18),
-              text: 'Sorumlular',
-            ),
-            Tab(
-              icon: Icon(Icons.handyman_outlined, size: 18),
-              text: 'Teknisyenler',
+              text: 'Servis Sorumluları',
             ),
             Tab(
               icon: Icon(Icons.task_alt_rounded, size: 18),
@@ -190,19 +181,17 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
                   : TabBarView(
                       controller: _tabController,
                       children: [
-                        _buildManagersTab(isSuper, isInstaller: state.isInstaller),
-                        _buildInstallersTab(isSuper, isInstaller: state.isInstaller),
+                        _buildManagersTab(isSuper),
                         _buildTasksAndToolsTab(context),
                       ],
                     ),
         ),
       ),
-      floatingActionButton: _buildFloatingActionButton(isSuper, isInstaller: state.isInstaller),
+      floatingActionButton: _buildFloatingActionButton(isSuper),
     );
   }
 
-  Widget? _buildFloatingActionButton(bool isSuper, {bool isInstaller = false}) {
-    if (isInstaller) return null; // Saha teknisyeni kullanıcı ekleyemez
+  Widget? _buildFloatingActionButton(bool isSuper) {
     if (_tabController.index == 0) {
       if (!isSuper) return null; // Servis sorumlusu sorumlu ekleyemez!
       return FloatingActionButton.extended(
@@ -211,16 +200,6 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
         icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.black),
         label: const Text(
           'Sorumlu Ekle',
-          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-      );
-    } else if (_tabController.index == 1) {
-      return FloatingActionButton.extended(
-        onPressed: () => _openCreateUserDialog(context, isSuper, defaultRole: 'installer'),
-        backgroundColor: Colors.amberAccent,
-        icon: const Icon(Icons.engineering_rounded, color: Colors.black),
-        label: const Text(
-          'Teknisyen Ekle',
           style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
         ),
       );
@@ -258,40 +237,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   // ===========================================================================
   // TAB 1: SÜPER VE SERVİS SORUMLULARI
   // ===========================================================================
-  Widget _buildManagersTab(bool isSuper, {bool isInstaller = false}) {
-    if (isInstaller) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: AppTheme.cardDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.cardBorder),
-            ),
-            child: const Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.shield_outlined, color: AppTheme.accentCyan, size: 40),
-                SizedBox(height: 12),
-                Text(
-                  'Yetkili Servis Sorumluları Yönetimi',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                  textAlign: TextAlign.center,
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Sorumlu listeleri ve yönetici hesapları yalnızca Süper Yönetici tarafından görüntülenebilir ve yönetilebilir. Bir saha teknisyeni olarak doğrudan "Görevler & Araçlar" sekmesindeki araçları kullanabilirsiniz.',
-                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
+  Widget _buildManagersTab(bool isSuper) {
     return RefreshIndicator(
       onRefresh: _loadAllData,
       color: AppTheme.accentCyan,
@@ -353,84 +299,6 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
             _buildEmptyState('Kayıtlı servis sorumlusu veya süper kullanıcı bulunamadı.')
           else
             ..._superAndServiceUsers.map((u) => _buildUserCard(u, isSuper)),
-        ],
-      ),
-    );
-  }
-
-  // ===========================================================================
-  // TAB 2: SAHA TEKNİSYENLERİ
-  // ===========================================================================
-  Widget _buildInstallersTab(bool isSuper, {bool isInstaller = false}) {
-    if (isInstaller) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Container(
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: AppTheme.cardDark,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppTheme.cardBorder),
-            ),
-            child: const Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.engineering_outlined, color: AppTheme.accentAmber, size: 40),
-                SizedBox(height: 12),
-                Text(
-                  'Saha Teknisyenleri Yönetimi',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                  textAlign: TextAlign.center,
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Teknisyen ekleme, silme ve yetkilendirme işlemleri yalnızca Süper Yönetici ve Yetkili Servis Sorumluları tarafından yürütülebilir.',
-                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: _loadAllData,
-      color: AppTheme.accentCyan,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Saha Montaj & Servis Teknisyenleri',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceDark,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: Text(
-                  '${_installers.length} Teknisyen',
-                  style: const TextStyle(color: AppTheme.accentPurple, fontSize: 12, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (_installers.isEmpty)
-            _buildEmptyState('Henüz saha teknisyeni kaydı yapılmamış.')
-          else
-            ..._installers.map((u) => _buildUserCard(u, isSuper)),
         ],
       ),
     );
@@ -580,10 +448,10 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
               ),
               const SizedBox(width: 8),
               _buildMiniStat(
-                label: 'Teknisyen',
-                value: '${users?['installers'] ?? 0}',
+                label: 'Daire',
+                value: '${_summary?['homes']?['total_homes'] ?? 0}',
                 color: Colors.amberAccent,
-                icon: Icons.engineering_rounded,
+                icon: Icons.home_work_rounded,
               ),
               const SizedBox(width: 8),
               _buildMiniStat(
@@ -931,11 +799,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
     final notesCtrl = TextEditingController();
 
     // Sorumlu ekleme yetkisi sadece Süper Kullanıcıya aittir.
-    // Servis sorumlusu sadece saha teknisyeni veya daire kullanıcısı ekleyebilir.
-    String selectedRole = defaultRole ?? (isSuper ? 'service_user' : 'installer');
-    if (!isSuper && (selectedRole == 'super_user' || selectedRole == 'service_user')) {
-      selectedRole = 'installer';
-    }
+    String selectedRole = defaultRole ?? (isSuper ? 'service_user' : 'user');
 
     showDialog(
       context: context,
@@ -948,11 +812,9 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
               side: const BorderSide(color: AppTheme.accentCyan, width: 1.5),
             ),
             title: Text(
-              isSuper
-                  ? (selectedRole == 'service_user' || selectedRole == 'super_user'
-                      ? 'Yeni Servis Sorumlusu / Yönetici Ekle'
-                      : 'Yeni Saha Teknisyeni / Müşteri Ekle')
-                  : 'Yeni Saha Teknisyeni / Müşteri Ekle',
+              selectedRole == 'service_user' || selectedRole == 'super_user'
+                  ? 'Yeni Servis Sorumlusu / Yönetici Ekle'
+                  : 'Yeni Daire Sakini / Kullanıcı Ekle',
               style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
             ),
             content: SingleChildScrollView(
@@ -982,13 +844,9 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
                             ),
                             const DropdownMenuItem(
                               value: 'service_user',
-                              child: Text('🛠️ Servis Sorumlusu (service_user)', style: TextStyle(color: AppTheme.accentCyan)),
+                              child: Text('🛠️ Servis Sorumlusu & Saha Devreye Alma', style: TextStyle(color: AppTheme.accentCyan)),
                             ),
                           ],
-                          const DropdownMenuItem(
-                            value: 'installer',
-                            child: Text('👷 Saha Teknisyeni (installer)', style: TextStyle(color: Colors.amberAccent)),
-                          ),
                           const DropdownMenuItem(
                             value: 'user',
                             child: Text('👤 Daire Sakini / Müşteri (user)', style: TextStyle(color: Colors.white70)),

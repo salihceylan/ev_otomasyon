@@ -135,9 +135,9 @@ router.delete('/users/:id', async (req, res, next) => {
 
 /**
  * @route   GET /api/admin/service-summary
- * @desc    Sistem ve servis özet istatistiklerini getirir (Sadece Süper Kullanıcı)
+ * @desc    Sistem ve servis özet istatistiklerini getirir (Süper Kullanıcı & Servis Sorumlusu)
  */
-router.get('/service-summary', requireSuperUser, async (req, res, next) => {
+router.get('/service-summary', async (req, res, next) => {
   try {
     const summary = await adminUserService.getServiceSummary();
     res.json({

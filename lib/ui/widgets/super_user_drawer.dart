@@ -22,23 +22,16 @@ class SuperUserDrawer extends StatelessWidget {
 
     final isSuper = state.isSuperUser;
     final isService = state.isServiceUser;
-    final isInstaller = state.isInstaller;
 
     final badgeColor = isSuper
         ? AppTheme.accentPurple
-        : isService
-            ? AppTheme.accentCyan
-            : const Color(0xFFF59E0B);
+        : AppTheme.accentCyan;
     final badgeText = isSuper
         ? 'SÜPER YÖNETİCİ KONSOLU'
-        : isService
-            ? 'YETKİLİ SERVİS KONSOLU'
-            : 'SAHA TEKNİSYENİ KONSOLU';
+        : 'YETKİLİ SERVİS KONSOLU';
     final badgeIcon = isSuper
         ? Icons.verified_user
-        : isService
-            ? Icons.engineering_rounded
-            : Icons.handyman_rounded;
+        : Icons.engineering_rounded;
 
     return Drawer(
       backgroundColor: AppTheme.bgDark,
@@ -163,14 +156,10 @@ class SuperUserDrawer extends StatelessWidget {
                     activeIcon: Icons.dashboard,
                     title: isSuper
                         ? 'Yönetici Konsolu'
-                        : isService
-                            ? 'Servis Konsolu'
-                            : 'Teknisyen Konsolu',
+                        : 'Yetkili Servis Konsolu',
                     subtitle: isSuper
                         ? 'Sistem durumu & ana kontroller'
-                        : isService
-                            ? 'Saha operasyonları & ana kontroller'
-                            : 'Montaj görevleri & test araçları',
+                        : 'Saha operasyonları & ana kontroller',
                     onTap: () {
                       Navigator.pop(context); // Menüyü kapat, zaten konsoldayız
                     },
@@ -190,48 +179,29 @@ class SuperUserDrawer extends StatelessWidget {
                       );
                     },
                   ),
-                  if (isSuper || isService) ...[
-                    _buildDrawerItem(
-                      context: context,
-                      icon: Icons.admin_panel_settings_outlined,
-                      activeIcon: Icons.admin_panel_settings,
-                      title: 'Servis Sorumluları',
-                      subtitle: isSuper ? 'Yetkili servis ve personeller' : 'Yetkili servis ağı (Salt Okunur)',
-                      color: AppTheme.accentCyan,
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
-                          ),
-                        );
-                      },
-                    ),
-                    _buildDrawerItem(
-                      context: context,
-                      icon: Icons.engineering_outlined,
-                      activeIcon: Icons.engineering,
-                      title: 'Saha Teknisyenleri',
-                      subtitle: 'Montaj personeli ve ustalar',
-                      color: AppTheme.accentAmber,
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
+                  _buildDrawerItem(
+                    context: context,
+                    icon: Icons.admin_panel_settings_outlined,
+                    activeIcon: Icons.admin_panel_settings,
+                    title: 'Servis Yönetim Konsolu',
+                    subtitle: isSuper ? 'Yetkili servis sorumluları ve görevler' : 'Servis sorumluları ve saha görevleri',
+                    color: AppTheme.accentCyan,
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
+                        ),
+                      );
+                    },
+                  ),
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.handyman_outlined,
                     activeIcon: Icons.handyman,
-                    title: 'Servis Modu & Kalibrasyon',
-                    subtitle: 'Pano yapılandırması & testler',
+                    title: 'Devreye Alma & Donanım Testi',
+                    subtitle: '8 Röle, 8 Giriş klemens & motor kalibrasyonu',
                     color: AppTheme.accentPurple,
                     onTap: () {
                       Navigator.pop(context);
@@ -241,19 +211,18 @@ class SuperUserDrawer extends StatelessWidget {
                       );
                     },
                   ),
-                  if (isInstaller)
-                    _buildDrawerItem(
-                      context: context,
-                      icon: Icons.qr_code_scanner_outlined,
-                      activeIcon: Icons.qr_code_scanner,
-                      title: 'Karekod ile Pano Eşle',
-                      subtitle: 'Yeni panoyu daireye eşleştir',
-                      color: AppTheme.primaryBlueLight,
-                      onTap: () {
-                        Navigator.pop(context);
-                        ClaimManualDialog.show(context);
-                      },
-                    ),
+                  _buildDrawerItem(
+                    context: context,
+                    icon: Icons.qr_code_scanner_outlined,
+                    activeIcon: Icons.qr_code_scanner,
+                    title: 'Karekod ile Pano Eşle',
+                    subtitle: 'Yeni panoyu daireye eşleştir (Claim)',
+                    color: AppTheme.primaryBlueLight,
+                    onTap: () {
+                      Navigator.pop(context);
+                      ClaimManualDialog.show(context);
+                    },
+                  ),
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.health_and_safety_outlined,
@@ -278,19 +247,18 @@ class SuperUserDrawer extends StatelessWidget {
                       ReplaceBoardDialog.show(context);
                     },
                   ),
-                  if (isInstaller)
-                    _buildDrawerItem(
-                      context: context,
-                      icon: Icons.wifi_find_outlined,
-                      activeIcon: Icons.wifi_find,
-                      title: 'Wi-Fi Yapılandırma & Kurtarma',
-                      subtitle: 'Modem değişimi & Pano Smart AP',
-                      color: AppTheme.accentAmber,
-                      onTap: () {
-                        Navigator.pop(context);
-                        WifiRecoveryDialog.show(context);
-                      },
-                    ),
+                  _buildDrawerItem(
+                    context: context,
+                    icon: Icons.wifi_find_outlined,
+                    activeIcon: Icons.wifi_find,
+                    title: 'Wi-Fi Yapılandırma & Kurtarma',
+                    subtitle: 'Modem değişimi & Pano Smart AP',
+                    color: AppTheme.accentAmber,
+                    onTap: () {
+                      Navigator.pop(context);
+                      WifiRecoveryDialog.show(context);
+                    },
+                  ),
                   const Divider(color: AppTheme.cardBorder, height: 24, indent: 8, endIndent: 8),
                   // Tema Geçişi
                   ListTile(

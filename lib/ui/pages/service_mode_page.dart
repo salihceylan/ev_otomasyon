@@ -172,7 +172,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
                 ),
                 SizedBox(height: 4),
                 Text(
-                  'Pano klemens eşlemeleri ve panjur motor çalışma süreleri donanım güvenliği gereği kilitlidir. Bu ayarlara yalnızca yetkili servis teknisyeni erişebilir.',
+                  'Pano klemens eşlemeleri ve panjur motor çalışma süreleri donanım güvenliği gereği kilitlidir. Bu ayarlara yalnızca yetkili servis sorumlusu erişebilir.',
                   style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.3),
                 ),
               ],
@@ -282,7 +282,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Ev Sahibi: Teknisyene Servis PIN\'i Üret',
+                  'Ev Sahibi: Servis Sorumlusuna Servis PIN\'i Üret',
                   style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -291,7 +291,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Teknisyenin panoyu ayarlayabilmesi için 2 saat süreli tek kullanımlık servis PIN kodu üretir.',
+            'Servis sorumlusunun panoyu ayarlayabilmesi için 2 saat süreli tek kullanımlık servis PIN kodu üretir.',
             style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
           ),
           const SizedBox(height: 12),
@@ -396,7 +396,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  'Yetkili Teknisyen: ${state.currentUser?.fullName ?? "Kurulumcu"}',
+                  'Yetkili Servis: ${state.currentUser?.fullName ?? "Servis Sorumlusu"}',
                   style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

@@ -831,7 +831,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       ),
     );
 
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
     final state = Provider.of<AutomationState>(context, listen: false);
     try {
@@ -883,7 +883,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       ),
     );
 
-    if (confirm != true) return;
+    if (confirm != true || !mounted) return;
 
     final state = Provider.of<AutomationState>(context, listen: false);
     try {

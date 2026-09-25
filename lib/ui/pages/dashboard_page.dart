@@ -146,9 +146,8 @@ class _DashboardPageState extends State<DashboardPage> {
     final state = context.watch<AutomationState>();
     final isSuper = state.isSuperUser;
     final isService = state.isServiceUser;
-    final isInstaller = state.isInstaller;
     final isServiceManagerOrSuper = state.isServiceManagerOrSuper;
-    final isStaff = isServiceManagerOrSuper || isInstaller;
+    final isStaff = isServiceManagerOrSuper;
     final status = state.status;
     final isConnected = state.isConnected;
     final isCloud = state.mode == AppMode.cloud;
@@ -173,7 +172,7 @@ class _DashboardPageState extends State<DashboardPage> {
             ? IconButton(
                 icon: Icon(
                   Icons.menu,
-                  color: isInstaller ? AppTheme.accentPurple : AppTheme.accentCyan,
+                  color: isSuper ? AppTheme.accentPurple : AppTheme.accentCyan,
                 ),
                 tooltip: 'Sandviç Menü',
                 onPressed: () => _scaffoldKey.currentState?.openDrawer(),
@@ -190,18 +189,14 @@ class _DashboardPageState extends State<DashboardPage> {
                       border: Border.all(
                         color: isSuper
                             ? const Color(0xFF38BDF8)
-                            : isService
-                                ? AppTheme.accentCyan
-                                : AppTheme.accentPurple,
+                            : AppTheme.accentCyan,
                         width: 0.6,
                       ),
                       boxShadow: [
                         BoxShadow(
                           color: (isSuper
                                   ? const Color(0xFF38BDF8)
-                                  : isService
-                                      ? AppTheme.accentCyan
-                                      : AppTheme.accentPurple)
+                                  : AppTheme.accentCyan)
                               .withValues(alpha: 0.4),
                           blurRadius: 8,
                         ),
@@ -225,21 +220,17 @@ class _DashboardPageState extends State<DashboardPage> {
                         Text(
                           isSuper
                               ? 'Süper Yönetici Konsolu'
-                              : isService
-                                  ? 'Yetkili Servis Konsolu'
-                                  : 'Saha Teknisyeni Konsolu',
+                              : 'Yetkili Servis Konsolu',
                           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
                           isSuper
                               ? 'AHBU Altyapı & Servis Denetimi'
-                              : isService
-                                  ? 'Saha Operasyon & Montaj Yönetimi'
-                                  : 'AHBU Montaj & Servis Altyapısı',
+                              : 'Saha Operasyon & Montaj Yönetimi',
                           style: TextStyle(
                             fontSize: 11,
-                            color: isInstaller ? AppTheme.accentPurple : AppTheme.accentCyan,
+                            color: isSuper ? AppTheme.accentPurple : AppTheme.accentCyan,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -316,6 +307,11 @@ class _DashboardPageState extends State<DashboardPage> {
         actions: isServiceManagerOrSuper
             ? [
                 IconButton(
+                  icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
+                  tooltip: 'Karekod Tara (Pano Eşle)',
+                  onPressed: () => _openQrClaimFlow(context),
+                ),
+                IconButton(
                   icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
                   tooltip: 'Sistem Doktoru (Teşhis)',
                   onPressed: () => SystemDoctorDialog.show(context),
@@ -334,128 +330,79 @@ class _DashboardPageState extends State<DashboardPage> {
                   onPressed: () => UserProfileDialog.show(context),
                 ),
               ]
-            : isInstaller
-                ? [
-                    IconButton(
-                      icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
-                      tooltip: 'Karekod Tara (Pano Eşle)',
-                      onPressed: () => _openQrClaimFlow(context),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
-                      tooltip: 'Sistem Doktoru (Teşhis)',
-                      onPressed: () => SystemDoctorDialog.show(context),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
-                      tooltip: 'Yenile',
-                      onPressed: () => state.refresh(),
-                    ),
-                    IconButton(
-                      icon: _buildUserAvatar(state),
-                      tooltip: 'Kullanıcı Profili & Oturum',
-                      onPressed: () => UserProfileDialog.show(context),
-                    ),
-                  ]
-                : [
-                    // Mod Değiştirici (Bulut / Yerel)
-                    IconButton(
-                      icon: Icon(
-                        isCloud ? Icons.cloud_outlined : Icons.wifi_outlined,
-                        color: isCloud ? AppTheme.primaryBlueLight : AppTheme.accentAmber,
+            : [
+                // Mod Değiştirici (Bulut / Yerel)
+                IconButton(
+                  icon: Icon(
+                    isCloud ? Icons.cloud_outlined : Icons.wifi_outlined,
+                    color: isCloud ? AppTheme.primaryBlueLight : AppTheme.accentAmber,
+                  ),
+                  tooltip: isCloud ? 'Bulut Modu (MQTTS)' : 'Yerel Ağ Modu (LAN)',
+                  onPressed: () {
+                    state.setMode(isCloud ? AppMode.direct : AppMode.cloud);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(isCloud ? 'Direct LAN Moduna geçildi' : 'Cloud MQTTS Moduna geçildi'),
+                        duration: const Duration(seconds: 1),
                       ),
-                      tooltip: isCloud ? 'Bulut Modu (MQTTS)' : 'Yerel Ağ Modu (LAN)',
-                      onPressed: () {
-                        state.setMode(isCloud ? AppMode.direct : AppMode.cloud);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(isCloud ? 'Direct LAN Moduna geçildi' : 'Cloud MQTTS Moduna geçildi'),
-                            duration: const Duration(seconds: 1),
-                          ),
-                        );
-                      },
-                    ),
-                    // Süper Yönetici & Servis Sorumlusu Yönetim Paneli (ADIM 19)
-                    if (state.isServiceManagerOrSuper)
-                      IconButton(
-                        icon: const Icon(Icons.admin_panel_settings_rounded, color: AppTheme.accentCyan),
-                        tooltip: 'Süper Yönetici & Servis Paneli',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
-                          );
-                        },
-                      ),
-                    // Kurulumcu / Servis Menüsü (Yalnızca Yetkili Kurulumcu / Teknisyen görebilir - ADIM 11 RBAC)
-                    if (state.isInstaller)
-                      IconButton(
-                        icon: const Icon(Icons.build_outlined, color: AppTheme.accentPurple),
-                        tooltip: 'Kurulumcu & Servis Menüsü',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                          );
-                        },
-                      ),
-                    // Cihaz Ayarları (Owner veya Installer görebilir)
-                    if (!state.isMember)
-                      IconButton(
-                        icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
-                        tooltip: 'Cihaz Ayarları',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
-                          );
-                        },
-                      ),
-                    // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
-                    if (state.isOwner)
-                      IconButton(
-                        icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
-                        tooltip: 'Aile & Misafir Yönetimi',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
-                          );
-                        },
-                      ),
-                    // Karekod ile Cihaz Eşle / Eve Katıl
-                    IconButton(
-                      icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
-                      tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
-                      onPressed: () => _openQrClaimFlow(context),
-                    ),
-                    // Sistem Doktoru (Hızlı Teşhis)
-                    IconButton(
-                      icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
-                      tooltip: 'Sistem Doktoru (Teşhis)',
-                      onPressed: () => SystemDoctorDialog.show(context),
-                    ),
-                    // Yenile
-                    IconButton(
-                      icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
-                      tooltip: 'Yenile',
-                      onPressed: () => state.refresh(),
-                    ),
-                    // Kullanıcı Profili & Çıkış
-                    IconButton(
-                      icon: _buildUserAvatar(state),
-                      tooltip: 'Kullanıcı Profili & Oturum',
-                      onPressed: () => UserProfileDialog.show(context),
-                    ),
-                  ],
+                    );
+                  },
+                ),
+                // Cihaz Ayarları (Owner veya Standart Kullanıcı görebilir)
+                if (!state.isMember)
+                  IconButton(
+                    icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
+                    tooltip: 'Cihaz Ayarları',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
+                      );
+                    },
+                  ),
+                // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
+                if (state.isOwner)
+                  IconButton(
+                    icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
+                    tooltip: 'Aile & Misafir Yönetimi',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
+                      );
+                    },
+                  ),
+                // Karekod ile Cihaz Eşle / Eve Katıl
+                IconButton(
+                  icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
+                  tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
+                  onPressed: () => _openQrClaimFlow(context),
+                ),
+                // Sistem Doktoru (Hızlı Teşhis)
+                IconButton(
+                  icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
+                  tooltip: 'Sistem Doktoru (Teşhis)',
+                  onPressed: () => SystemDoctorDialog.show(context),
+                ),
+                // Yenile
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
+                  tooltip: 'Yenile',
+                  onPressed: () => state.refresh(),
+                ),
+                // Kullanıcı Profili & Çıkış
+                IconButton(
+                  icon: _buildUserAvatar(state),
+                  tooltip: 'Kullanıcı Profili & Oturum',
+                  onPressed: () => UserProfileDialog.show(context),
+                ),
+              ],
       ),
       body: isSuper
           ? _buildSuperUserDashboard(context, state)
           : isService
               ? _buildServiceUserDashboard(context, state)
-              : isInstaller
-                  ? _buildInstallerDashboard(context, state)
-                  : _buildApartmentDashboard(
+              : _buildApartmentDashboard(
                       context: context,
                       state: state,
                       activeLightCount: activeLightCount,
@@ -587,12 +534,12 @@ class _DashboardPageState extends State<DashboardPage> {
                   onPressed: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 1)),
+                      MaterialPageRoute(builder: (_) => const ServiceModePage()),
                     );
                   },
                   icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentCyan),
                   label: const Text(
-                    'Teknisyenler',
+                    'Servis Modu',
                     style: TextStyle(fontSize: 12.5, color: AppTheme.accentCyan, fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -691,7 +638,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Saha montaj teknisyenlerini yönetebilir, dairelere takılan panoları devreye alabilir, afet durumunda pano klonlama ve daire devir işlemlerini yürütebilirsiniz.',
+            'Dairelere takılan panoları devreye alabilir, 8 röle ve 8 dijital giriş donanım testlerini yapabilir, afet durumunda pano klonlama ve daire devir işlemlerini yürütebilirsiniz.',
             style: TextStyle(
               fontSize: 12.5,
               color: AppTheme.textMuted,
@@ -704,7 +651,6 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildServiceUserMetricCards(Map<String, dynamic>? summary) {
-    final installerCount = summary?['total_installers'] ?? 0;
     final homeCount = summary?['commissioned_homes_count'] ?? 0;
 
     return LayoutBuilder(
@@ -718,16 +664,16 @@ class _DashboardPageState extends State<DashboardPage> {
             SizedBox(
               width: cardWidth,
               child: _buildMetricCard(
-                title: 'Saha Teknisyenleri',
-                value: '$installerCount',
-                icon: Icons.engineering,
-                color: AppTheme.accentAmber,
-                badgeText: 'MONTAJ',
+                title: 'Cihaz Envanteri',
+                value: 'Envanter',
+                icon: Icons.inventory_2,
+                color: AppTheme.accentGreen,
+                badgeText: 'STOK & SERİ NO',
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                      builder: (_) => const DeviceInventoryPage(),
                     ),
                   );
                 },
@@ -737,15 +683,15 @@ class _DashboardPageState extends State<DashboardPage> {
               width: cardWidth,
               child: _buildMetricCard(
                 title: 'Devreye Alınan',
-                value: '$homeCount',
+                value: '$homeCount Daire',
                 icon: Icons.task_alt,
-                color: AppTheme.accentGreen,
+                color: AppTheme.accentCyan,
                 badgeText: 'AKTİF DAİRE',
                 onTap: () {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ServiceManagementPage(initialTabIndex: 2),
+                      builder: (_) => const ServiceModePage(),
                     ),
                   );
                 },
@@ -760,18 +706,8 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _buildServiceUserActionGrid(BuildContext context) {
     final actions = [
       {
-        'title': 'Saha Teknisyen Yönetimi',
-        'subtitle': 'Montaj teknisyeni ekle, bölgelerini ve durumlarını yönet',
-        'icon': Icons.engineering_outlined,
-        'color': AppTheme.accentAmber,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 1)),
-            ),
-      },
-      {
         'title': 'Devreye Alma (Commissioning)',
-        'subtitle': 'Daire içi röle, panjur ve buton girişlerini sahada test et',
+        'subtitle': '8 Röle & 8 Giriş anlık canlı test, darbe/kalıcı röle tetikleme ve onaylama',
         'icon': Icons.verified_outlined,
         'color': AppTheme.accentCyan,
         'onTap': () => Navigator.push(
@@ -780,28 +716,52 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
       },
       {
+        'title': 'Karekod ile Pano Eşle (Claim)',
+        'subtitle': 'Sıfır panoyu kamerayla okutarak daireye tanımlayın veya Kurulum PIN girin',
+        'icon': Icons.qr_code_scanner_rounded,
+        'color': AppTheme.primaryBlueLight,
+        'onTap': () => _openQrClaimFlow(context),
+      },
+      {
         'title': 'Pano Değişimi (Afet & Hasar)',
-        'subtitle': 'Arızalı panoyu buluttan tek tıkla yeni panoya klonla',
+        'subtitle': 'Arızalı panonun UUID\'sini yenisiyle değiştirip daire verilerini aktarın',
         'icon': Icons.published_with_changes_outlined,
         'color': Colors.tealAccent,
         'onTap': () => ReplaceBoardDialog.show(context),
       },
       {
-        'title': 'Acil Sıfırlama & Mülk Devri',
-        'subtitle': 'Eski sahibine ulaşılamayan panoyu sıfırlayıp daireye devret',
+        'title': 'Wi-Fi Yapılandırma & Kurtarma',
+        'subtitle': 'Modem değişikliğinde panoya yeni Wi-Fi adı ve şifresini aktarın',
+        'icon': Icons.wifi_find_rounded,
+        'color': AppTheme.accentAmber,
+        'onTap': () => WifiRecoveryDialog.show(context),
+      },
+      {
+        'title': 'Sistem Doktoru (Teşhis)',
+        'subtitle': 'API, veritabanı, MQTT köprüsü ve pano haberleşme gecikmesini ölçün',
+        'icon': Icons.health_and_safety_outlined,
+        'color': Colors.cyanAccent,
+        'onTap': () => SystemDoctorDialog.show(context),
+      },
+      {
+        'title': 'Cihaz Envanteri & Seri No',
+        'subtitle': 'Sahadaki panoların seri numarası, batch ve montaj durumunu sorgulayın',
+        'icon': Icons.inventory_2_outlined,
+        'color': AppTheme.accentGreen,
+        'onTap': () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
+            ),
+      },
+      {
+        'title': 'Acil Servis Sıfırlaması & Devir',
+        'subtitle': 'Eski kiracının ulaşılamadığı panoyu sıfırlayıp daireye devredin',
         'icon': Icons.sync_problem_rounded,
         'color': Colors.redAccent,
         'onTap': () => showDialog(
               context: context,
               builder: (_) => const TransferOwnershipDialog(),
             ),
-      },
-      {
-        'title': 'Sistem Doktoru (Teşhis)',
-        'subtitle': 'Bulut API, MQTT kuyrukları ve canlı gecikme teşhisi',
-        'icon': Icons.health_and_safety_outlined,
-        'color': Colors.cyanAccent,
-        'onTap': () => SystemDoctorDialog.show(context),
       },
       {
         'title': 'Yetkili Servis Ağı (Salt Okunur)',
@@ -888,400 +848,6 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  /// Saha Teknisyeni Konsolu (Montaj, Devreye Alma, Pano Değişimi & Teşhis Odaklı)
-  Widget _buildInstallerDashboard(BuildContext context, AutomationState state) {
-    final user = state.currentUser;
-
-    return RefreshIndicator(
-      onRefresh: () async {
-        await state.refresh();
-      },
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 1. Saha Teknisyeni Karşılama & Yetki Kartı
-            _buildInstallerHeaderCard(user),
-            const SizedBox(height: 16),
-
-            // 2. Canlı Altyapı & Sağlık Çubuğu (API, DB, MQTT)
-            _buildInfrastructureStatusRow(),
-            const SizedBox(height: 20),
-
-            // 3. Montaj & Cihaz Sayaçları
-            _buildInstallerMetricCards(state),
-            const SizedBox(height: 24),
-
-            // 4. Saha Montaj & Servis Görevleri Başlığı
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Expanded(
-                  child: Text(
-                    '🛠️ Saha Servis & Devreye Alma Görevleri',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                    );
-                  },
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentPurple),
-                  label: const Text(
-                    'Servis Modu',
-                    style: TextStyle(fontSize: 12.5, color: AppTheme.accentPurple, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            // 5. Saha Görevleri & Araçları Izgarası
-            _buildInstallerActionGrid(context),
-            const SizedBox(height: 20),
-
-            // 6. Güvenlik ve Montaj Hatırlatması
-            _buildInstallerSafetyNotice(),
-            const SizedBox(height: 16),
-
-            // 7. Sandviç Menü Hatırlatma İpucu
-            _buildDrawerTipBox(context),
-            const SizedBox(height: 30),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInstallerHeaderCard(dynamic user) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: AppTheme.cardDark,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.accentPurple.withValues(alpha: 0.35)),
-        boxShadow: [
-          BoxShadow(
-            color: AppTheme.accentPurple.withValues(alpha: 0.08),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.accentPurple.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.handyman_rounded, color: AppTheme.accentPurple, size: 24),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            user?.fullName?.isNotEmpty == true ? user!.fullName : 'Saha Montaj Teknisyeni',
-                            style: const TextStyle(
-                              fontSize: 17,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppTheme.accentPurple.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text(
-                            'SAHA TEKNİSYENİ',
-                            style: TextStyle(
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.accentPurple,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      user?.email?.isNotEmpty == true ? user!.email : 'teknisyen@gudeteknoloji.com.tr',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Saha montaj ve devreye alma konsolundasınız. Bu ekrandan 8 röle ve 8 dijital giriş donanım testlerini yapabilir, yeni panoları eşleştirebilir, arızalı pano değişimini yönetebilir ve sistem sağlık teşhislerini gerçekleştirebilirsiniz.',
-            style: TextStyle(
-              fontSize: 12.5,
-              color: AppTheme.textMuted,
-              height: 1.35,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInstallerMetricCards(AutomationState state) {
-    final activeHomeName = state.activeHome?.name;
-    final hasActiveHome = activeHomeName != null && activeHomeName.isNotEmpty;
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final cardWidth = (constraints.maxWidth - 10) / 2;
-
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            SizedBox(
-              width: cardWidth,
-              child: _buildMetricCard(
-                title: 'Aktif Daire Pano',
-                value: hasActiveHome ? activeHomeName : 'Seçilmedi',
-                icon: Icons.home_work_rounded,
-                color: AppTheme.accentPurple,
-                badgeText: hasActiveHome ? 'DEVREDE' : 'BOŞTA',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                  );
-                },
-              ),
-            ),
-            SizedBox(
-              width: cardWidth,
-              child: _buildMetricCard(
-                title: 'Cihaz Envanteri',
-                value: 'Envanter',
-                icon: Icons.inventory_2,
-                color: AppTheme.accentGreen,
-                badgeText: 'STOK & SERİ NO',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
-                  );
-                },
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildInstallerActionGrid(BuildContext context) {
-    final actions = [
-      {
-        'title': 'Devreye Alma (Commissioning)',
-        'subtitle': '8 Röle & 8 Giriş anlık canlı test, darbe/kalıcı röle tetikleme ve onaylama',
-        'icon': Icons.verified_outlined,
-        'color': AppTheme.accentPurple,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServiceModePage()),
-            ),
-      },
-      {
-        'title': 'Karekod ile Pano Eşle (Claim)',
-        'subtitle': 'Sıfır panoyu kamerayla okutarak daireye tanımlayın veya Kurulum PIN girin',
-        'icon': Icons.qr_code_scanner_rounded,
-        'color': AppTheme.primaryBlueLight,
-        'onTap': () => _openQrClaimFlow(context),
-      },
-      {
-        'title': 'Pano Değişimi (Afet & Hasar)',
-        'subtitle': 'Arızalı panonun UUID\'sini yenisiyle değiştirip daire verilerini aktarın',
-        'icon': Icons.published_with_changes_outlined,
-        'color': Colors.tealAccent,
-        'onTap': () => ReplaceBoardDialog.show(context),
-      },
-      {
-        'title': 'Wi-Fi Yapılandırma & Kurtarma',
-        'subtitle': 'Modem değişikliğinde panoya yeni Wi-Fi adı ve şifresini aktarın',
-        'icon': Icons.wifi_find_rounded,
-        'color': AppTheme.accentAmber,
-        'onTap': () => WifiRecoveryDialog.show(context),
-      },
-      {
-        'title': 'Sistem Doktoru (Teşhis)',
-        'subtitle': 'API, veritabanı, MQTT köprüsü ve pano haberleşme gecikmesini ölçün',
-        'icon': Icons.health_and_safety_outlined,
-        'color': Colors.cyanAccent,
-        'onTap': () => SystemDoctorDialog.show(context),
-      },
-      {
-        'title': 'Cihaz Envanteri & Seri No',
-        'subtitle': 'Sahadaki panoların seri numarası, batch ve montaj durumunu sorgulayın',
-        'icon': Icons.inventory_2_outlined,
-        'color': AppTheme.accentGreen,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
-            ),
-      },
-      {
-        'title': 'Acil Servis Sıfırlaması',
-        'subtitle': 'Eski kiracının ulaşılamadığı durumlarda panoyu sıfırlayıp yeni sahibine devredin',
-        'icon': Icons.sync_problem_rounded,
-        'color': Colors.redAccent,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServiceModePage()),
-            ),
-      },
-    ];
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isWide = constraints.maxWidth > 550;
-        final itemWidth = isWide ? (constraints.maxWidth - 10) / 2 : constraints.maxWidth;
-
-        return Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: actions.map((item) {
-            final color = item['color'] as Color;
-            return SizedBox(
-              width: itemWidth,
-              child: InkWell(
-                onTap: item['onTap'] as VoidCallback,
-                borderRadius: BorderRadius.circular(14),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppTheme.cardDark,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.cardBorder),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: color.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(item['icon'] as IconData, color: color, size: 22),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              item['title'] as String,
-                              style: const TextStyle(
-                                fontSize: 13.5,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              item['subtitle'] as String,
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: AppTheme.textMuted,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted, size: 20),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          }).toList(),
-        );
-      },
-    );
-  }
-
-  Widget _buildInstallerSafetyNotice() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.accentAmber.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.3)),
-      ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.shield_outlined, color: AppTheme.accentAmber, size: 22),
-          SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Yetkili Servis & Montaj Güvenliği Uyarısı',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.accentAmber,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Yüksek gerilim (220V AC) hatlarında bağlantı yaparken ana sigortayı mutlaka kapatınız. 8 Röle ve 8 Dijital Giriş testleri tamamlandıktan sonra Servis Modundan "Devreye Alma Onayını" vermeyi unutmayınız.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppTheme.textMuted,
-                    height: 1.35,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _buildSuperUserHeaderCard(dynamic user) {
     return Container(
