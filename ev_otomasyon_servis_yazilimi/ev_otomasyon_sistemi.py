@@ -1,3 +1,4 @@
+# pyright: reportUnknownParameterType=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportMissingTypeStubs=false
 """
 AHBU Ev Otomasyon Sistemi - Servis ve Üretim Aracı
 1. Firmware Yükleyici (Waveshare ESP32-S3 Flasher)
@@ -71,14 +72,14 @@ def load_version_info():
     }
 
 
-def save_version_info(data):
+def save_version_info(data: dict):
     """Versiyon bilgisini kaydeder."""
     os.makedirs(RELEASES_DIR, exist_ok=True)
     with open(VERSION_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def increment_version_str(ver_str):
+def increment_version_str(ver_str: str) -> str:
     """1.0.0 -> 1.0.1 şeklinde versiyonu artırır."""
     parts = ver_str.split(".")
     if len(parts) == 3:
@@ -91,7 +92,7 @@ def increment_version_str(ver_str):
     return f"{ver_str}.1"
 
 
-def format_serial_badge(serial_val):
+def format_serial_badge(serial_val) -> str:
     """Sıra numarasını güvenli şekilde 4 haneli badge formatına (#0001) dönüştürür."""
     if serial_val is None or str(serial_val).strip() == "":
         return "#0001"
