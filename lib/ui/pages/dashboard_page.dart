@@ -21,6 +21,7 @@ import 'service_management_page.dart';
 import 'device_inventory_page.dart';
 import 'replace_board_dialog.dart';
 import 'family/transfer_ownership_dialog.dart';
+import 'family/join_home_dialog.dart';
 import '../widgets/biometric_prompt_dialog.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -147,6 +148,10 @@ class _DashboardPageState extends State<DashboardPage> {
     final isSuper = state.isSuperUser;
     final isService = state.isServiceUser;
     final isStaff = state.isServiceManagerOrSuper;
+    // Dairesi olmayan bireysel kullanıcı: staff değil, giriş yapmış ama hiçbir eve üye değil
+    final isHomelessUser = !isStaff &&
+        state.currentUser != null &&
+        (state.activeHome == null || state.homes.isEmpty);
     final status = state.status;
     final isConnected = state.isConnected;
     final isCloud = state.mode == AppMode.cloud;
@@ -324,87 +329,103 @@ class _DashboardPageState extends State<DashboardPage> {
                   onPressed: () => UserProfileDialog.show(context),
                 ),
               ]
-            : [
-                // Mod Değiştirici (Bulut / Yerel)
-                IconButton(
-                  icon: Icon(
-                    isCloud ? Icons.cloud_outlined : Icons.wifi_outlined,
-                    color: isCloud ? AppTheme.primaryBlueLight : AppTheme.accentAmber,
-                  ),
-                  tooltip: isCloud ? 'Bulut Modu (MQTTS)' : 'Yerel Ağ Modu (LAN)',
-                  onPressed: () {
-                    state.setMode(isCloud ? AppMode.direct : AppMode.cloud);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(isCloud ? 'Direct LAN Moduna geçildi' : 'Cloud MQTTS Moduna geçildi'),
-                        duration: const Duration(seconds: 1),
+            : isHomelessUser
+                ? [
+                    // Dairesi olmayan kullanıcı: sadece Yenile + Profil
+                    IconButton(
+                      icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
+                      tooltip: 'Yenile',
+                      onPressed: () => state.refresh(),
+                    ),
+                    IconButton(
+                      icon: _buildUserAvatar(state),
+                      tooltip: 'Kullanıcı Profili & Oturum',
+                      onPressed: () => UserProfileDialog.show(context),
+                    ),
+                  ]
+                : [
+                    // Mod Değiştirici (Bulut / Yerel)
+                    IconButton(
+                      icon: Icon(
+                        isCloud ? Icons.cloud_outlined : Icons.wifi_outlined,
+                        color: isCloud ? AppTheme.primaryBlueLight : AppTheme.accentAmber,
                       ),
-                    );
-                  },
-                ),
-                // Cihaz Ayarları (Owner görebilir)
-                if (!state.isMember)
-                  IconButton(
-                    icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
-                    tooltip: 'Cihaz Ayarları',
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
-                      );
-                    },
-                  ),
-                // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
-                if (state.isOwner)
-                  IconButton(
-                    icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
-                    tooltip: 'Aile & Misafir Yönetimi',
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
-                      );
-                    },
-                  ),
-                // Karekod ile Cihaz Eşle / Eve Katıl
-                IconButton(
-                  icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
-                  tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
-                  onPressed: () => _openQrClaimFlow(context),
-                ),
-                // Sistem Doktoru (Hızlı Teşhis)
-                IconButton(
-                  icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
-                  tooltip: 'Sistem Doktoru (Teşhis)',
-                  onPressed: () => SystemDoctorDialog.show(context),
-                ),
-                // Yenile
-                IconButton(
-                  icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
-                  tooltip: 'Yenile',
-                  onPressed: () => state.refresh(),
-                ),
-                // Kullanıcı Profili & Çıkış
-                IconButton(
-                  icon: _buildUserAvatar(state),
-                  tooltip: 'Kullanıcı Profili & Oturum',
-                  onPressed: () => UserProfileDialog.show(context),
-                ),
-              ],
+                      tooltip: isCloud ? 'Bulut Modu (MQTTS)' : 'Yerel Ağ Modu (LAN)',
+                      onPressed: () {
+                        state.setMode(isCloud ? AppMode.direct : AppMode.cloud);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(isCloud ? 'Direct LAN Moduna geçildi' : 'Cloud MQTTS Moduna geçildi'),
+                            duration: const Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                    ),
+                    // Cihaz Ayarları (Owner görebilir)
+                    if (!state.isMember)
+                      IconButton(
+                        icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
+                        tooltip: 'Cihaz Ayarları',
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
+                          );
+                        },
+                      ),
+                    // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
+                    if (state.isOwner)
+                      IconButton(
+                        icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
+                        tooltip: 'Aile & Misafir Yönetimi',
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
+                          );
+                        },
+                      ),
+                    // Karekod ile Cihaz Eşle / Eve Katıl
+                    IconButton(
+                      icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
+                      tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
+                      onPressed: () => _openQrClaimFlow(context),
+                    ),
+                    // Sistem Doktoru (Hızlı Teşhis)
+                    IconButton(
+                      icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
+                      tooltip: 'Sistem Doktoru (Teşhis)',
+                      onPressed: () => SystemDoctorDialog.show(context),
+                    ),
+                    // Yenile
+                    IconButton(
+                      icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
+                      tooltip: 'Yenile',
+                      onPressed: () => state.refresh(),
+                    ),
+                    // Kullanıcı Profili & Çıkış
+                    IconButton(
+                      icon: _buildUserAvatar(state),
+                      tooltip: 'Kullanıcı Profili & Oturum',
+                      onPressed: () => UserProfileDialog.show(context),
+                    ),
+                  ],
       ),
       body: isSuper
           ? _buildSuperUserDashboard(context, state)
           : isService
               ? _buildServiceUserDashboard(context, state)
-              : _buildApartmentDashboard(
-                  context: context,
-                  state: state,
-                  activeLightCount: activeLightCount,
-                  activeShutterCount: activeShutterCount,
-                  isConnected: isConnected,
-                  isCloud: isCloud,
-                  status: status,
-                ),
+              : isHomelessUser
+                  ? _buildNoHomeIndividualDashboard(context, state)
+                  : _buildApartmentDashboard(
+                      context: context,
+                      state: state,
+                      activeLightCount: activeLightCount,
+                      activeShutterCount: activeShutterCount,
+                      isConnected: isConnected,
+                      isCloud: isCloud,
+                      status: status,
+                    ),
     );
   }
 
@@ -2023,6 +2044,276 @@ class _DashboardPageState extends State<DashboardPage> {
           child: Text(
             badge,
             style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Dairesi olmayan yeni bireysel kullanıcı için basitleştirilmiş giriş ekranı.
+  /// Yalnızca "Kod ile Bir Eve Katıl" seçeneğini gösterir.
+  /// Kullanıcı bir eve katıldıktan sonra state güncellenir ve normal dashboard açılır.
+  Widget _buildNoHomeIndividualDashboard(BuildContext context, AutomationState state) {
+    final userName = state.currentUser?.fullName ?? state.currentUser?.email ?? 'Kullanıcı';
+
+    return RefreshIndicator(
+      onRefresh: () async => state.refresh(),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Karşılama Kartı ──────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppTheme.primaryBlue.withValues(alpha: 0.18),
+                    AppTheme.primaryBlueLight.withValues(alpha: 0.08),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppTheme.primaryBlueLight.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppTheme.primaryBlue.withValues(alpha: 0.2),
+                      border: Border.all(color: AppTheme.primaryBlueLight.withValues(alpha: 0.5), width: 1.5),
+                    ),
+                    child: const Icon(Icons.key_rounded, color: AppTheme.primaryBlueLight, size: 36),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Hoş Geldiniz, ${userName.split(' ').first}!',
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary,
+                    ),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.accentAmber.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.4)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.info_outline, color: AppTheme.accentAmber, size: 14),
+                        SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            'Henüz kayıtlı bir daireniz yok',
+                            style: TextStyle(fontSize: 13, color: AppTheme.accentAmber),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const SizedBox(height: 28),
+
+            // ── Ev Katılım Butonu ─────────────────────────────────────────
+            const Text(
+              'Daireye Katılmak İçin',
+              style: TextStyle(
+                fontSize: 13,
+                color: AppTheme.textMuted,
+                fontWeight: FontWeight.w500,
+                letterSpacing: 0.4,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+
+            // Birincil: Kod ile Katıl
+            FilledButton.icon(
+              icon: const Icon(Icons.vpn_key_outlined, size: 20),
+              label: const Text(
+                'Kod ile Bir Eve Katıl',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppTheme.primaryBlue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: () async {
+                final joined = await JoinHomeDialog.show(context);
+                if (joined == true && context.mounted) {
+                  state.refresh();
+                }
+              },
+            ),
+
+            const SizedBox(height: 12),
+
+            // İkincil: QR Kodu ile Katıl
+            OutlinedButton.icon(
+              icon: const Icon(Icons.qr_code_scanner, size: 20),
+              label: const Text('Karekod ile Katıl', style: TextStyle(fontSize: 15)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppTheme.primaryBlueLight,
+                side: BorderSide(color: AppTheme.primaryBlueLight.withValues(alpha: 0.5)),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              onPressed: () async {
+                final raw = await Navigator.push<String>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => QrScannerPage(
+                      onManualFallback: () => JoinHomeDialog.show(context),
+                    ),
+                  ),
+                );
+                if (raw != null && raw.isNotEmpty && context.mounted) {
+                  final trimmed = raw.trim();
+                  if (trimmed.startsWith('AHBU-INVITE:') ||
+                      (trimmed.startsWith('AHBU-') && !trimmed.contains(':'))) {
+                    try {
+                      final res = await state.joinHome(trimmed);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Row(children: [
+                            const Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(child: Text((res['message'] ?? 'Eve başarıyla katıldınız!').toString())),
+                          ]),
+                          backgroundColor: AppTheme.accentGreen,
+                          duration: const Duration(seconds: 4),
+                        ),
+                      );
+                      state.refresh();
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Katılım hatası: ${e.toString().replaceAll("Exception: ", "")}'),
+                          backgroundColor: AppTheme.accentRed,
+                        ),
+                      );
+                    }
+                  } else {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Bu karekod bir eve katılım kodu değil. Lütfen ev sahibinden davet kodu alın.'),
+                        backgroundColor: AppTheme.accentRed,
+                      ),
+                    );
+                  }
+                }
+              },
+            ),
+
+            const SizedBox(height: 32),
+
+            // ── Bilgilendirme Kartı ───────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppTheme.cardDark,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppTheme.cardBorder),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.help_outline_rounded, color: AppTheme.accentCyan, size: 18),
+                      SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Nasıl Daireye Katılırım?',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  _buildInstructionStep(
+                    step: '1',
+                    text: 'Dairenizin sahibinden veya yöneticisinden bir davet kodu alın.',
+                    color: AppTheme.primaryBlueLight,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildInstructionStep(
+                    step: '2',
+                    text: '"Kod ile Bir Eve Katıl" butonuna basın ve size iletilen kodu girin.',
+                    color: AppTheme.accentCyan,
+                  ),
+                  const SizedBox(height: 8),
+                  _buildInstructionStep(
+                    step: '3',
+                    text: 'Katılım onaylandıktan sonra dairenizin tüm kontrolleri otomatik olarak açılacaktır.',
+                    color: AppTheme.accentGreen,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInstructionStep({
+    required String step,
+    required String text,
+    required Color color,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 22,
+          height: 22,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color.withValues(alpha: 0.2),
+            border: Border.all(color: color.withValues(alpha: 0.5)),
+          ),
+          child: Center(
+            child: Text(
+              step,
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
           ),
         ),
       ],

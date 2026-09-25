@@ -127,3 +127,12 @@ Bu kontrol listesi, sıfırlanmış ve temizlenmiş veritabanı üzerinde **haya
 ---
 
 *Not: Her test adımını sırayla gerçekleştirdikten sonra ilgili kutucuğu `[x]` olarak işaretleyebilirsiniz.*
+
+---
+
+### ASAMA 11: Dairesi Olmayan Yeni Bireysel Kullanici - Sadelesstirilmis Katilim Ekrani
+
+- [ ] **11.1.** Dairesi olmayan kullanici ile giris: Normal daire kontrolleri gizlenmeli, yalnizca 'Kod ile Bir Eve Katil' ve 'Karekod ile Katil' butonlari ile bilgi karti gorulmeli.
+- [ ] **11.2.** Kod ile katilim akisi: Gecerli davet kodu ile katilim basarili oldugunda sayfa otomatik yenilenmeli ve normal dashboard acilmali.
+- [ ] **11.3.** QR ile katilim: Davet QR'i basarili islenmeli; cihaz esleme QR'i hata vermeli.
+- [ ] **11.4.** AppBar sadelesstirilmesi: Yalnizca Yenile ve Profil ikonlari gozukmeli; mod degistirici ve ayarlar gizli olmali.

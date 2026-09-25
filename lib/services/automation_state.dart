@@ -169,6 +169,13 @@ class AutomationState extends ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
+  void setHomesForTesting(List<HomeModel> homes, {HomeModel? activeHome}) {
+    _homes = List.from(homes);
+    _activeHome = activeHome ?? (homes.isNotEmpty ? homes.first : null);
+    notifyListeners();
+  }
+
   AutomationState() {
     _init();
   }
