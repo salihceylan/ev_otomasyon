@@ -167,24 +167,41 @@ class SuperUserDrawer extends StatelessWidget {
                       );
                     },
                   ),
-                  if (isSuper || isService) ...[
-                    _buildDrawerItem(
-                      context: context,
-                      icon: Icons.admin_panel_settings_outlined,
-                      activeIcon: Icons.admin_panel_settings,
-                      title: 'Servis Sorumluları',
-                      subtitle: isSuper ? 'Yetkili servis ve personeller' : 'Yetkili servis ağı (Salt Okunur)',
-                      color: AppTheme.accentCyan,
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
-                          ),
-                        );
-                      },
-                    ),
+                  _buildDrawerItem(
+                    context: context,
+                    icon: Icons.admin_panel_settings_outlined,
+                    activeIcon: Icons.admin_panel_settings,
+                    title: 'Servis Sorumluları',
+                    subtitle: isSuper ? 'Yetkili servisleri ekle & düzenle' : 'Yetkili servis ağı (Salt Okunur)',
+                    color: AppTheme.accentCyan,
+                    onTap: () {
+                      Navigator.pop(context);
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
+                        ),
+                      );
+                    },
+                  ),
+                  // Sistem Doktoru: "Sistemin sağlıklı çalışmasını kontrol eder" (Hem Süper hem Servis kullanabilir)
+                  _buildDrawerItem(
+                    context: context,
+                    icon: Icons.health_and_safety_outlined,
+                    activeIcon: Icons.health_and_safety,
+                    title: 'Sistem Doktoru',
+                    subtitle: 'DB, MQTT ve sistem sağlığı teşhisi',
+                    color: Colors.cyanAccent,
+                    onTap: () {
+                      Navigator.pop(context);
+                      SystemDoctorDialog.show(context);
+                    },
+                  ),
+                  // =========================================================================
+                  // YALNIZCA SERVİS SORUMLULARI İÇİN SAHA & MONTAJ ARAÇLARI
+                  // (Süper Kullanıcıda bu menüler kesinlikle bulunmaz)
+                  // =========================================================================
+                  if (isService) ...[
                     _buildDrawerItem(
                       context: context,
                       icon: Icons.task_alt_outlined,
@@ -202,70 +219,58 @@ class SuperUserDrawer extends StatelessWidget {
                         );
                       },
                     ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.handyman_outlined,
+                      activeIcon: Icons.handyman,
+                      title: 'Servis Modu & Kalibrasyon',
+                      subtitle: 'Pano yapılandırması & testler',
+                      color: AppTheme.accentPurple,
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const ServiceModePage()),
+                        );
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.qr_code_scanner_outlined,
+                      activeIcon: Icons.qr_code_scanner,
+                      title: 'Karekod ile Pano Eşle',
+                      subtitle: 'Yeni panoyu daireye eşleştir',
+                      color: AppTheme.primaryBlueLight,
+                      onTap: () {
+                        Navigator.pop(context);
+                        ClaimManualDialog.show(context);
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.published_with_changes_outlined,
+                      activeIcon: Icons.published_with_changes,
+                      title: 'Pano Değişimi (Afet Modu)',
+                      subtitle: 'Buluttan birebir pano aktarımı',
+                      color: Colors.tealAccent,
+                      onTap: () {
+                        Navigator.pop(context);
+                        ReplaceBoardDialog.show(context);
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.wifi_find_outlined,
+                      activeIcon: Icons.wifi_find,
+                      title: 'Wi-Fi Yapılandırma & Kurtarma',
+                      subtitle: 'Modem değişimi & Pano Smart AP',
+                      color: AppTheme.accentAmber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        WifiRecoveryDialog.show(context);
+                      },
+                    ),
                   ],
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.handyman_outlined,
-                    activeIcon: Icons.handyman,
-                    title: 'Servis Modu & Kalibrasyon',
-                    subtitle: 'Pano yapılandırması & testler',
-                    color: AppTheme.accentPurple,
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                      );
-                    },
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.qr_code_scanner_outlined,
-                    activeIcon: Icons.qr_code_scanner,
-                    title: 'Karekod ile Pano Eşle',
-                    subtitle: 'Yeni panoyu daireye eşleştir',
-                    color: AppTheme.primaryBlueLight,
-                    onTap: () {
-                      Navigator.pop(context);
-                      ClaimManualDialog.show(context);
-                    },
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.health_and_safety_outlined,
-                    activeIcon: Icons.health_and_safety,
-                    title: 'Sistem Doktoru',
-                    subtitle: 'DB, MQTT ve gecikme teşhisi',
-                    color: Colors.cyanAccent,
-                    onTap: () {
-                      Navigator.pop(context);
-                      SystemDoctorDialog.show(context);
-                    },
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.published_with_changes_outlined,
-                    activeIcon: Icons.published_with_changes,
-                    title: 'Pano Değişimi (Afet Modu)',
-                    subtitle: 'Buluttan birebir pano aktarımı',
-                    color: Colors.tealAccent,
-                    onTap: () {
-                      Navigator.pop(context);
-                      ReplaceBoardDialog.show(context);
-                    },
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.wifi_find_outlined,
-                    activeIcon: Icons.wifi_find,
-                    title: 'Wi-Fi Yapılandırma & Kurtarma',
-                    subtitle: 'Modem değişimi & Pano Smart AP',
-                    color: AppTheme.accentAmber,
-                    onTap: () {
-                      Navigator.pop(context);
-                      WifiRecoveryDialog.show(context);
-                    },
-                  ),
                   const Divider(color: AppTheme.cardBorder, height: 24, indent: 8, endIndent: 8),
                   // Tema Geçişi
                   ListTile(

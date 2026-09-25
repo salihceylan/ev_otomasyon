@@ -50,8 +50,15 @@ void main() {
       expect(state.isServiceManagerOrSuper, isFalse);
     });
 
-    testWidgets('ServiceManagementPage renders tabs and tools without overflow', (tester) async {
+    testWidgets('ServiceManagementPage renders tabs and tools for service_user without overflow', (tester) async {
       final state = AutomationState();
+      final serviceUser = UserModel.fromJson({
+        'id': '2bb81ee3-5e3e-4b4f-ad0b-5b765d540576',
+        'email': 'servis@gudeteknoloji.com.tr',
+        'full_name': 'Servis Sorumlusu',
+        'role': 'service_user',
+      });
+      state.setCurrentUserForTesting(serviceUser);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -62,8 +69,8 @@ void main() {
         ),
       );
 
-      // Sayfa başlığı ve tablar görünmeli
-      expect(find.text('Servis & Yönetici Paneli'), findsOneWidget);
+      // Servis sorumlusunda sekme çubuğu ve saha araçları görünmeli
+      expect(find.text('Servis & Saha Konsolu'), findsOneWidget);
       expect(find.text('Sorumlular'), findsOneWidget);
       expect(find.text('Görevler & Araçlar'), findsOneWidget);
 
@@ -80,6 +87,34 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('3. Acil Servis Sıfırlaması & Daire Devri'), findsOneWidget);
+    });
+
+    testWidgets('ServiceManagementPage hides Görevler & Araçlar tab for super_user and shows direct Sorumlular list', (tester) async {
+      final state = AutomationState();
+      final superUser = UserModel.fromJson({
+        'id': '1ab81ee3-5e3e-4b4f-ad0b-5b765d540575',
+        'email': 'salihceylan@gmail.com',
+        'full_name': 'Salih Ceylan',
+        'role': 'super_user',
+      });
+      state.setCurrentUserForTesting(superUser);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChangeNotifierProvider<AutomationState>.value(
+            value: state,
+            child: const ServiceManagementPage(autoLoad: false),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Süper kullanıcıda başlık Servis Sorumluları Yönetimi olmalı
+      expect(find.text('Servis Sorumluları Yönetimi'), findsOneWidget);
+      // Görevler & Araçlar sekmesi Süper Kullanıcıda KESİNLİKLE OLMAMALIDIR
+      expect(find.text('Görevler & Araçlar'), findsNothing);
+      // Doğrudan Sorumlu Ekle butonu görünmeli
+      expect(find.text('Sorumlu Ekle'), findsOneWidget);
     });
 
     testWidgets('SuperUserDrawer renders menu items without overflow', (tester) async {
@@ -113,16 +148,21 @@ void main() {
       expect(find.text('salihceylan@gmail.com'), findsOneWidget);
       expect(find.text('SÜPER YÖNETİCİ KONSOLU'), findsOneWidget);
       expect(find.text('Yönetici Konsolu'), findsOneWidget);
+      expect(find.text('Cihaz Envanteri'), findsOneWidget);
       expect(find.text('Servis Sorumluları'), findsOneWidget);
-      expect(find.text('Görevler & Araçlar'), findsOneWidget);
+      expect(find.text('Sistem Doktoru'), findsOneWidget);
 
-      // Scroll ListView to view remaining items
+      // Saha montaj & servis araçları Süper Kullanıcıda KESİNLİKLE GÖRÜNMEMELİDİR
+      expect(find.text('Görevler & Araçlar'), findsNothing);
+      expect(find.text('Servis Modu & Kalibrasyon'), findsNothing);
+      expect(find.text('Karekod ile Pano Eşle'), findsNothing);
+      expect(find.text('Pano Değişimi (Afet Modu)'), findsNothing);
+      expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsNothing);
+
+      // Scroll ListView to view exit button
       await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pumpAndSettle();
 
-      expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
-      expect(find.text('Sistem Doktoru'), findsOneWidget);
-      expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
       expect(find.text('Güvenli Çıkış Yap'), findsOneWidget);
     });
 

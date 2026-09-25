@@ -136,3 +136,12 @@ Bu kontrol listesi, sÄ±fÄ±rlanmÄ±ÅŸ ve temizlenmiÅŸ veritabanÄ± Ã¼zerinde **haya
 - [ ] **11.2.** Kod ile katilim akisi: Gecerli davet kodu ile katilim basarili oldugunda sayfa otomatik yenilenmeli ve normal dashboard acilmali.
 - [ ] **11.3.** QR ile katilim: Davet QR'i basarili islenmeli; cihaz esleme QR'i hata vermeli.
 - [ ] **11.4.** AppBar sadelesstirilmesi: Yalnizca Yenile ve Profil ikonlari gozukmeli; mod degistirici ve ayarlar gizli olmali.
+
+---
+
+### AÞAMA 12: Süper Kullanýcý ve Servis Sorumlusu Menü & Panel Ýzolasyonu Doðrulamasý
+
+- [ ] **12.1. Süper Kullanýcý Sandviç Menü:** Süper kullanýcýda menüde yalnýzca 'Yönetici Konsolu', 'Cihaz Envanteri', 'Servis Sorumlularý', 'Sistem Doktoru' yer almalý; 'Görevler & Araçlar', 'Servis Modu', 'Karekod ile Pano Eþle', 'Pano Deðiþimi', 'Wi-Fi Yapýlandýrma' kesinlikle bulunmamalýdýr.
+- [ ] **12.2. Süper Kullanýcý Panel Ýzolasyonu:** Konsol hýzlý iþlemlerinde yalnýzca 'Cihaz Envanteri & Ekleme', 'Servis Sorumlularý Yönetimi' ve 'Sistem Doktoru' kartlarý yer almalý; saha/kalibrasyon kartlarý bulunmamalýdýr.
+- [ ] **12.3. Süper Kullanýcý Sorumlular Sayfasý:** 'Servis Sorumlularý' sayfasý açýldýðýnda sekme çubuðu ve saha görevleri sekmesi olmamalý, doðrudan sorumlu listesi ve 'Sorumlu Ekle' butonu yer almalýdýr.
+- [ ] **12.4. Servis Sorumlusu Saha Araçlarý Bütünlüðü:** Yetkili servis sorumlusu ile girildiðinde hem menüde hem panellerde tüm saha araçlarý (Görevler & Araçlar, Servis Modu, Pano Eþle, Pano Deðiþimi, Wi-Fi Kurtarma vb.) eksiksiz listelenmelidir.

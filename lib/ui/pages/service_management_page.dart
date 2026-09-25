@@ -122,21 +122,23 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Column(
+        title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Servis & Yönetici Paneli',
-              style: TextStyle(
+              isSuper ? 'Servis Sorumluları Yönetimi' : 'Servis & Saha Konsolu',
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: Colors.white,
               ),
             ),
-            SizedBox(height: 2),
+            const SizedBox(height: 2),
             Text(
-              'Güde Teknoloji • Yetkili Servis Ağı',
-              style: TextStyle(
+              isSuper
+                  ? 'Yetkili Servis Ağı & Personel Denetimi'
+                  : 'Güde Teknoloji • Yetkili Servis Ağı',
+              style: const TextStyle(
                 fontSize: 11,
                 color: AppTheme.accentCyan,
                 fontWeight: FontWeight.w500,
@@ -151,24 +153,26 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
             onPressed: _loadAllData,
           ),
         ],
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorColor: AppTheme.accentCyan,
-          indicatorWeight: 3,
-          labelColor: Colors.white,
-          unselectedLabelColor: AppTheme.textMuted,
-          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-          tabs: const [
-            Tab(
-              icon: Icon(Icons.shield_outlined, size: 18),
-              text: 'Sorumlular',
-            ),
-            Tab(
-              icon: Icon(Icons.task_alt_rounded, size: 18),
-              text: 'Görevler & Araçlar',
-            ),
-          ],
-        ),
+        bottom: isSuper
+            ? null // Süper kullanıcıda saha/araç sekmeleri olmaz, doğrudan sorumlu listesi gösterilir
+            : TabBar(
+                controller: _tabController,
+                indicatorColor: AppTheme.accentCyan,
+                indicatorWeight: 3,
+                labelColor: Colors.white,
+                unselectedLabelColor: AppTheme.textMuted,
+                labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                tabs: const [
+                  Tab(
+                    icon: Icon(Icons.shield_outlined, size: 18),
+                    text: 'Sorumlular',
+                  ),
+                  Tab(
+                    icon: Icon(Icons.task_alt_rounded, size: 18),
+                    text: 'Görevler & Araçlar',
+                  ),
+                ],
+              ),
       ),
       body: CircuitBackground(
         child: SafeArea(
@@ -178,13 +182,15 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
                 )
               : _errorMessage != null
                   ? _buildErrorView()
-                  : TabBarView(
-                      controller: _tabController,
-                      children: [
-                        _buildManagersTab(isSuper),
-                        _buildTasksAndToolsTab(context),
-                      ],
-                    ),
+                  : isSuper
+                      ? _buildManagersTab(isSuper)
+                      : TabBarView(
+                          controller: _tabController,
+                          children: [
+                            _buildManagersTab(isSuper),
+                            _buildTasksAndToolsTab(context),
+                          ],
+                        ),
         ),
       ),
       floatingActionButton: _buildFloatingActionButton(isSuper),
@@ -192,19 +198,17 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   }
 
   Widget? _buildFloatingActionButton(bool isSuper) {
-    if (_tabController.index == 0) {
-      if (!isSuper) return null; // Servis sorumlusu sorumlu ekleyemez!
-      return FloatingActionButton.extended(
-        onPressed: () => _openCreateUserDialog(context, isSuper, defaultRole: 'service_user'),
-        backgroundColor: AppTheme.accentCyan,
-        icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.black),
-        label: const Text(
-          'Sorumlu Ekle',
-          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-        ),
-      );
-    }
-    return null;
+    if (!isSuper) return null; // Servis sorumlusu sorumlu ekleyemez!
+    // Süper kullanıcı için tab indeksi fark etmeksizin her zaman Sorumlu Ekle butonu aktiftir
+    return FloatingActionButton.extended(
+      onPressed: () => _openCreateUserDialog(context, isSuper, defaultRole: 'service_user'),
+      backgroundColor: AppTheme.accentCyan,
+      icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.black),
+      label: const Text(
+        'Sorumlu Ekle',
+        style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+      ),
+    );
   }
 
   Widget _buildErrorView() {

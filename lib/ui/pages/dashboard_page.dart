@@ -1214,8 +1214,8 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _buildSuperUserActionGrid(BuildContext context) {
     final actions = [
       {
-        'title': 'Cihaz Envanteri & Karekodlar',
-        'subtitle': 'Fabrika kayıtları, seri no ve QR yaşam döngüsü',
+        'title': 'Cihaz Envanteri & Ekleme',
+        'subtitle': 'Fabrika panolarını tanımla, seri no & QR ekle/düzenle',
         'icon': Icons.inventory_2_outlined,
         'color': AppTheme.accentAmber,
         'onTap': () => Navigator.push(
@@ -1224,8 +1224,8 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
       },
       {
-        'title': 'Servis Sorumluları Paneli',
-        'subtitle': 'Yeni servis sorumlusu ekle & düzenle',
+        'title': 'Servis Sorumluları Yönetimi',
+        'subtitle': 'Yetkili servis sorumlularını sisteme ekle & düzenle',
         'icon': Icons.people_outline,
         'color': AppTheme.accentCyan,
         'onTap': () => Navigator.push(
@@ -1234,28 +1234,11 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
       },
       {
-        'title': 'Sistem Doktoru (Teşhis)',
-        'subtitle': 'PostgreSQL latency, MQTT köprüsü ve servis testi',
+        'title': 'Sistem Doktoru (Sağlık & Teşhis)',
+        'subtitle': 'Altyapı sağlığı, DB gecikmesi, MQTT köprüsü denetimi',
         'icon': Icons.health_and_safety_outlined,
         'color': Colors.cyanAccent,
         'onTap': () => SystemDoctorDialog.show(context),
-      },
-      {
-        'title': 'Servis Modu & Kalibrasyon',
-        'subtitle': 'Pano röle ve panjur çıkış ayarlarını yapılandır',
-        'icon': Icons.handyman_outlined,
-        'color': AppTheme.accentPurple,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServiceModePage()),
-            ),
-      },
-      {
-        'title': 'Pano Değişimi (Afet Modu)',
-        'subtitle': 'Arızalı donanımı buluttan tek tıkla yenisine aktar',
-        'icon': Icons.published_with_changes_outlined,
-        'color': Colors.tealAccent,
-        'onTap': () => ReplaceBoardDialog.show(context),
       },
     ];
 
