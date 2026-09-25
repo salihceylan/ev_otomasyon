@@ -149,7 +149,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Tab 0 Sorumlular: Kısıtlama Uyarısı görünmeli, Sorumlu Ekle FAB olmamalı
-      expect(find.text('Yetkili Servis Sorumluları'), findsOneWidget);
+      expect(find.text('Süper Yöneticiler & Servis Sorumluları'), findsOneWidget);
       expect(find.text('Sorumlu Ekle'), findsNothing);
 
       // Tab 1 Görevler & Araçlar: Açılmalı ve tüm servis araçlarını kullanabilmeli

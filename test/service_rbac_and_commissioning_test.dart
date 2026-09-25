@@ -25,7 +25,7 @@ void main() {
 
       // Donanım koruma uyarısını görmeli
       expect(find.text('🔒 Donanım & Motor Koruması Aktif'), findsOneWidget);
-      expect(find.text('Yetkili Servis PIN Girişi'), findsOneWidget);
+      expect(find.text('Yetkili Servis Girişi'), findsOneWidget);
       expect(find.text('Servis Oturumu Aç'), findsOneWidget);
     });
 

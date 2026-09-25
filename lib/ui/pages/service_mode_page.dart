@@ -126,9 +126,9 @@ class _ServiceModePageState extends State<ServiceModePage> {
                 const SizedBox(height: 16),
                 _buildPinLoginCard(state),
                 const SizedBox(height: 16),
-                _buildGeneratePinForTechnicianCard(state),
+                _buildGeneratePinForServiceCard(state),
               ] else ...[
-                _buildInstallerActiveCard(state),
+                _buildServiceUserActiveCard(state),
                 const SizedBox(height: 16),
                 _buildCommissioningCard(state),
                 const SizedBox(height: 16),
@@ -200,7 +200,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Yetkili Servis PIN Girişi',
+                  'Yetkili Servis Girişi',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -265,7 +265,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
     );
   }
 
-  Widget _buildGeneratePinForTechnicianCard(AutomationState state) {
+  Widget _buildGeneratePinForServiceCard(AutomationState state) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -282,7 +282,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Ev Sahibi: Servis PIN\'i Üret',
+                  'Ev Sahibi: Yetkili Servise PIN Üret',
                   style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -366,23 +366,23 @@ class _ServiceModePageState extends State<ServiceModePage> {
     );
   }
 
-  Widget _buildInstallerActiveCard(AutomationState state) {
+  Widget _buildServiceUserActiveCard(AutomationState state) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.accentPurple.withValues(alpha: 0.12),
+        color: AppTheme.accentCyan.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.accentPurple.withValues(alpha: 0.4)),
+        border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.4)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppTheme.accentPurple.withValues(alpha: 0.2),
+              color: AppTheme.accentCyan.withValues(alpha: 0.2),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.engineering, color: AppTheme.accentPurple, size: 24),
+            child: const Icon(Icons.engineering, color: AppTheme.accentCyan, size: 24),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -390,8 +390,8 @@ class _ServiceModePageState extends State<ServiceModePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Aktif Servis Modu',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.accentPurple),
+                  'Aktif Yetkili Servis Modu',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.accentCyan),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),

@@ -340,7 +340,7 @@ class EvCloudApiService {
     setRefreshToken(null);
   }
 
-  /// 6 Haneli Servis PIN'i ile Yetkili Servis Girişi
+  /// 6 Haneli Servis PIN'i ile Kurulumcu / Teknisyen Girişi
   Future<Map<String, dynamic>> serviceLogin(String servicePin) async {
     final uri = Uri.parse('$baseUrl/v1/auth/service-login');
     final res = await http.post(
@@ -430,7 +430,7 @@ class EvCloudApiService {
     throw Exception(data['message'] ?? 'Cihaz sahiplenilemedi (Kod: ${res.statusCode})');
   }
 
-  /// Yetkili Servis: Sistemi test edip "Çalışır" olarak onaylama ve devreye alma (Commissioning)
+  /// Teknisyen: Sistemi test edip "Çalışır" olarak onaylama ve devreye alma (Commissioning)
   Future<Map<String, dynamic>> commissionSystem(int homeId, {String? notes, bool testsPassed = true}) async {
     final uri = Uri.parse('$baseUrl/homes/$homeId/commissioning');
     final res = await _authenticatedRequest(
@@ -451,7 +451,7 @@ class EvCloudApiService {
     throw Exception(data['message'] ?? 'Sistem devreye alma onayı verilemedi');
   }
 
-  /// Dairenin devreye alma ve yetkili servis onay durumunu sorgulama
+  /// Dairenin devreye alma ve teknisyen onay durumunu sorgulama
   Future<Map<String, dynamic>> getCommissioningStatus(int homeId) async {
     final uri = Uri.parse('$baseUrl/homes/$homeId/commissioning-status');
     final res = await _authenticatedRequest(
@@ -492,7 +492,7 @@ class EvCloudApiService {
     throw Exception(data['message'] ?? 'Kontrol noktası güncellenemedi');
   }
 
-  /// Ev Sahibi: Yetkili Servis için 2 saatlik servis PIN'i oluşturma
+  /// Ev Sahibi: Teknisyen için 2 saatlik servis PIN'i oluşturma
   Future<ServiceTokenModel> createServiceToken(int homeId, {int durationHours = 2}) async {
     final uri = Uri.parse('$baseUrl/homes/$homeId/service-token');
     final res = await _authenticatedRequest(
@@ -642,7 +642,7 @@ class EvCloudApiService {
     throw Exception(data['message'] ?? 'Devir işlemi iptal edilemedi');
   }
 
-  /// ADIM 13: Yetkili Servis / Acil Sıfırlama - Cihazı Sıfırlama / Yeni Malik Atama
+  /// ADIM 13: Teknisyen / Acil Sıfırlama - Cihazı Sıfırlama / Yeni Malik Atama
   Future<Map<String, dynamic>> emergencyResetDevice({
     required String deviceUuid,
     required String reason,
@@ -872,7 +872,7 @@ class EvCloudApiService {
     throw Exception(data['message'] ?? data['error'] ?? 'Kullanıcı listesi alınamadı (${res.statusCode})');
   }
 
-  /// Yeni kullanıcı oluştur (super_user, service_user, user)
+  /// Yeni kullanıcı oluştur (super_user, service_user, installer, user)
   Future<Map<String, dynamic>> createAdminUser({
     required String fullName,
     required String email,

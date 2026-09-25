@@ -178,6 +178,7 @@ class UserProfileDialog extends StatelessWidget {
                 ),
               ],
 
+
               // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi)
               if (state.isOwner && state.activeHome != null) ...[
                 const SizedBox(height: 14),

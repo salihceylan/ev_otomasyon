@@ -77,9 +77,7 @@ class SuperUserDrawer extends StatelessWidget {
                             Text(
                               user?.fullName.isNotEmpty == true
                                   ? user!.fullName
-                                  : (isSuper
-                                      ? 'Süper Yönetici'
-                                      : 'Yetkili Servis Sorumlusu'),
+                                  : (isSuper ? 'Süper Yönetici' : 'Yetkili Servis Sorumlusu'),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -189,11 +187,11 @@ class SuperUserDrawer extends StatelessWidget {
                     ),
                     _buildDrawerItem(
                       context: context,
-                      icon: Icons.task_alt,
+                      icon: Icons.task_alt_outlined,
                       activeIcon: Icons.task_alt,
                       title: 'Görevler & Araçlar',
-                      subtitle: 'Saha araçları, afet kurtarma & testler',
-                      color: AppTheme.accentAmber,
+                      subtitle: 'Saha servis ve montaj operasyonları',
+                      color: AppTheme.accentGreen,
                       onTap: () {
                         Navigator.pop(context);
                         Navigator.push(
@@ -259,15 +257,15 @@ class SuperUserDrawer extends StatelessWidget {
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.wifi_find_outlined,
-                      activeIcon: Icons.wifi_find,
-                      title: 'Wi-Fi Yapılandırma & Kurtarma',
-                      subtitle: 'Modem değişimi & Pano Smart AP',
-                      color: AppTheme.accentAmber,
-                      onTap: () {
-                        Navigator.pop(context);
-                        WifiRecoveryDialog.show(context);
-                      },
-                    ),
+                    activeIcon: Icons.wifi_find,
+                    title: 'Wi-Fi Yapılandırma & Kurtarma',
+                    subtitle: 'Modem değişimi & Pano Smart AP',
+                    color: AppTheme.accentAmber,
+                    onTap: () {
+                      Navigator.pop(context);
+                      WifiRecoveryDialog.show(context);
+                    },
+                  ),
                   const Divider(color: AppTheme.cardBorder, height: 24, indent: 8, endIndent: 8),
                   // Tema Geçişi
                   ListTile(

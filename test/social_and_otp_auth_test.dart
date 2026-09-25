@@ -37,7 +37,7 @@ void main() {
       expect(find.text('Google ile Devam Et'), findsOneWidget);
       expect(find.text('Apple ile Giriş Yap'), findsOneWidget);
       expect(find.text('Telefon Numarası ile Şifresiz Giriş (SMS)'), findsOneWidget);
-      expect(find.text('Teknisyen / Kurulumcu Girişi (PIN)'), findsOneWidget);
+      expect(find.text('Yetkili Servis Girişi (PIN)'), findsOneWidget);
       expect(find.text('Yerel Ağ Modu (ESP32 Doğrudan Erişim)'), findsOneWidget);
 
       expect(tester.takeException(), isNull);

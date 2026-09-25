@@ -161,7 +161,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
           tabs: const [
             Tab(
               icon: Icon(Icons.shield_outlined, size: 18),
-              text: 'Servis Sorumluları',
+              text: 'Sorumlular',
             ),
             Tab(
               icon: Icon(Icons.task_alt_rounded, size: 18),
@@ -192,7 +192,8 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   }
 
   Widget? _buildFloatingActionButton(bool isSuper) {
-    if (_tabController.index == 0 && isSuper) {
+    if (_tabController.index == 0) {
+      if (!isSuper) return null; // Servis sorumlusu sorumlu ekleyemez!
       return FloatingActionButton.extended(
         onPressed: () => _openCreateUserDialog(context, isSuper, defaultRole: 'service_user'),
         backgroundColor: AppTheme.accentCyan,
@@ -271,19 +272,14 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Expanded(
-                child: Text(
-                  'Yetkili Servis Sorumluları',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              const Text(
+                'Süper Yöneticiler & Servis Sorumluları',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
                 ),
               ),
-              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
@@ -309,7 +305,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   }
 
   // ===========================================================================
-  // TAB 3: SERVİS GÖREVLERİ & ARAÇLARI
+  // TAB 2: SERVİS GÖREVLERİ & ARAÇLARI
   // ===========================================================================
   Widget _buildTasksAndToolsTab(BuildContext context) {
     return ListView(
@@ -325,7 +321,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
         ),
         const SizedBox(height: 6),
         const Text(
-          'Servis sorumlularının sahada yürüteceği tüm montaj, test ve devreye alma görevleri:',
+          'Yetkili servis sorumlularının sahada yürüteceği görevler aşağıda gruplanmıştır:',
           style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
         ),
         const SizedBox(height: 16),
@@ -452,16 +448,16 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
               ),
               const SizedBox(width: 8),
               _buildMiniStat(
-                label: 'Devreye Alınan',
-                value: '${_summary?['commissioned_homes_count'] ?? 0}',
-                color: Colors.greenAccent,
-                icon: Icons.task_alt_rounded,
+                label: 'Teknisyen',
+                value: '${users?['installers'] ?? 0}',
+                color: Colors.amberAccent,
+                icon: Icons.engineering_rounded,
               ),
               const SizedBox(width: 8),
               _buildMiniStat(
                 label: 'Pano',
                 value: '${devices?['total_devices'] ?? 0}',
-                color: AppTheme.accentAmber,
+                color: Colors.greenAccent,
                 icon: Icons.router_rounded,
               ),
             ],
@@ -797,7 +793,12 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
     final phoneCtrl = TextEditingController();
     final notesCtrl = TextEditingController();
 
-    String selectedRole = defaultRole ?? 'service_user';
+    // Sorumlu ekleme yetkisi sadece Süper Kullanıcıya aittir.
+    // Servis sorumlusu sadece daire kullanıcısı ekleyebilir.
+    String selectedRole = defaultRole ?? (isSuper ? 'service_user' : 'user');
+    if (!isSuper && (selectedRole == 'super_user' || selectedRole == 'service_user')) {
+      selectedRole = 'user';
+    }
 
     showDialog(
       context: context,
@@ -809,9 +810,13 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
               borderRadius: BorderRadius.circular(20),
               side: const BorderSide(color: AppTheme.accentCyan, width: 1.5),
             ),
-            title: const Text(
-              'Yeni Servis Sorumlusu / Kullanıcı Ekle',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            title: Text(
+              isSuper
+                  ? (selectedRole == 'service_user' || selectedRole == 'super_user'
+                      ? 'Yeni Servis Sorumlusu / Yönetici Ekle'
+                      : 'Yeni Daire Sakini / Müşteri Ekle')
+                  : 'Yeni Daire Sakini / Müşteri Ekle',
+              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
             ),
             content: SingleChildScrollView(
               child: Column(
@@ -833,15 +838,16 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
                         dropdownColor: AppTheme.surfaceDark,
                         isExpanded: true,
                         items: [
-                          if (isSuper)
+                          if (isSuper) ...[
                             const DropdownMenuItem(
                               value: 'super_user',
                               child: Text('👑 Süper Yönetici (super_user)', style: TextStyle(color: AppTheme.accentPurple)),
                             ),
-                          const DropdownMenuItem(
-                            value: 'service_user',
-                            child: Text('🛠️ Servis Sorumlusu (service_user)', style: TextStyle(color: AppTheme.accentCyan)),
-                          ),
+                            const DropdownMenuItem(
+                              value: 'service_user',
+                              child: Text('🛠️ Servis Sorumlusu (service_user)', style: TextStyle(color: AppTheme.accentCyan)),
+                            ),
+                          ],
                           const DropdownMenuItem(
                             value: 'user',
                             child: Text('👤 Daire Sakini / Müşteri (user)', style: TextStyle(color: Colors.white70)),

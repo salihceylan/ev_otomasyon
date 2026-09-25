@@ -91,7 +91,7 @@ class _LoginPageState extends State<LoginPage> {
                   SizedBox(width: 10),
                   Flexible(
                     child: Text(
-                      'Teknisyen Girişi',
+                      'Yetkili Servis Girişi',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -608,12 +608,12 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     const SizedBox(height: 16),
 
-                    // Teknisyen / Servis Girişi Butonu
+                    // Yetkili Servis Girişi Butonu
                     OutlinedButton.icon(
                       onPressed: _showServicePinDialog,
                       icon: const Icon(Icons.handyman_outlined, color: AppTheme.accentAmber, size: 20),
                       label: const Text(
-                        'Teknisyen / Kurulumcu Girişi (PIN)',
+                        'Yetkili Servis Girişi (PIN)',
                         style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
                       ),
                       style: OutlinedButton.styleFrom(

@@ -53,7 +53,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _loadSuperUserSummary() async {
     final state = context.read<AutomationState>();
-    if (!state.isServiceManagerOrSuper) return;
+    if (!state.isSuperUser) return;
     if (_loadingSuperUserSummary) return;
 
     setState(() => _loadingSuperUserSummary = true);
@@ -146,8 +146,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final state = context.watch<AutomationState>();
     final isSuper = state.isSuperUser;
     final isService = state.isServiceUser;
-    final isServiceManagerOrSuper = state.isServiceManagerOrSuper;
-    final isStaff = isServiceManagerOrSuper;
+    final isStaff = state.isServiceManagerOrSuper;
     final status = state.status;
     final isConnected = state.isConnected;
     final isCloud = state.mode == AppMode.cloud;
@@ -304,13 +303,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                 ],
               ),
-        actions: isServiceManagerOrSuper
+        actions: isStaff
             ? [
-                IconButton(
-                  icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
-                  tooltip: 'Karekod Tara (Pano Eşle)',
-                  onPressed: () => _openQrClaimFlow(context),
-                ),
                 IconButton(
                   icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
                   tooltip: 'Sistem Doktoru (Teşhis)',
@@ -348,81 +342,69 @@ class _DashboardPageState extends State<DashboardPage> {
                     );
                   },
                 ),
-                // Süper Yönetici & Servis Sorumlusu Yönetim Paneli (ADIM 19)
-                if (state.isServiceManagerOrSuper)
+                // Cihaz Ayarları (Owner görebilir)
+                if (!state.isMember)
                   IconButton(
-                    icon: const Icon(Icons.admin_panel_settings_rounded, color: AppTheme.accentCyan),
-                    tooltip: 'Süper Yönetici & Servis Paneli',
+                    icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
+                    tooltip: 'Cihaz Ayarları',
                     onPressed: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
+                        MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
                       );
                     },
                   ),
-                // Cihaz Ayarları (Owner veya Yönetici görebilir)
-                if (!state.isMember)
-                      IconButton(
-                        icon: const Icon(Icons.settings_outlined, color: AppTheme.textMuted),
-                        tooltip: 'Cihaz Ayarları',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const DeviceSettingsPage()),
-                          );
-                        },
-                      ),
-                    // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
-                    if (state.isOwner)
-                      IconButton(
-                        icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
-                        tooltip: 'Aile & Misafir Yönetimi',
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
-                          );
-                        },
-                      ),
-                    // Karekod ile Cihaz Eşle / Eve Katıl
-                    IconButton(
-                      icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
-                      tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
-                      onPressed: () => _openQrClaimFlow(context),
-                    ),
-                    // Sistem Doktoru (Hızlı Teşhis)
-                    IconButton(
-                      icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
-                      tooltip: 'Sistem Doktoru (Teşhis)',
-                      onPressed: () => SystemDoctorDialog.show(context),
-                    ),
-                    // Yenile
-                    IconButton(
-                      icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
-                      tooltip: 'Yenile',
-                      onPressed: () => state.refresh(),
-                    ),
-                    // Kullanıcı Profili & Çıkış
-                    IconButton(
-                      icon: _buildUserAvatar(state),
-                      tooltip: 'Kullanıcı Profili & Oturum',
-                      onPressed: () => UserProfileDialog.show(context),
-                    ),
-                  ],
+                // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi görebilir - ADIM 12)
+                if (state.isOwner)
+                  IconButton(
+                    icon: const Icon(Icons.group_outlined, color: AppTheme.primaryBlueLight),
+                    tooltip: 'Aile & Misafir Yönetimi',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const FamilyMembersPage()),
+                      );
+                    },
+                  ),
+                // Karekod ile Cihaz Eşle / Eve Katıl
+                IconButton(
+                  icon: const Icon(Icons.qr_code_scanner, color: AppTheme.primaryBlueLight),
+                  tooltip: 'Karekod Tara (Cihaz / Eve Katıl)',
+                  onPressed: () => _openQrClaimFlow(context),
+                ),
+                // Sistem Doktoru (Hızlı Teşhis)
+                IconButton(
+                  icon: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent),
+                  tooltip: 'Sistem Doktoru (Teşhis)',
+                  onPressed: () => SystemDoctorDialog.show(context),
+                ),
+                // Yenile
+                IconButton(
+                  icon: const Icon(Icons.refresh, color: AppTheme.textMuted),
+                  tooltip: 'Yenile',
+                  onPressed: () => state.refresh(),
+                ),
+                // Kullanıcı Profili & Çıkış
+                IconButton(
+                  icon: _buildUserAvatar(state),
+                  tooltip: 'Kullanıcı Profili & Oturum',
+                  onPressed: () => UserProfileDialog.show(context),
+                ),
+              ],
       ),
       body: isSuper
           ? _buildSuperUserDashboard(context, state)
           : isService
               ? _buildServiceUserDashboard(context, state)
               : _buildApartmentDashboard(
-                      context: context,
-                      state: state,
-                      activeLightCount: activeLightCount,
-                      activeShutterCount: activeShutterCount,
-                      isConnected: isConnected,
-                      isCloud: isCloud,
-                      status: status,
-                    ),
+                  context: context,
+                  state: state,
+                  activeLightCount: activeLightCount,
+                  activeShutterCount: activeShutterCount,
+                  isConnected: isConnected,
+                  isCloud: isCloud,
+                  status: status,
+                ),
     );
   }
 
@@ -450,7 +432,7 @@ class _DashboardPageState extends State<DashboardPage> {
             _buildInfrastructureStatusRow(),
             const SizedBox(height: 20),
 
-            // 3. Operasyonel Sayaçlar (Servis Sorumluları, Teknisyenler, Devreye Alınan)
+            // 3. Operasyonel Sayaçlar (Servis Sorumluları, Pano Envanteri, Devreye Alınan)
             _buildSuperUserMetricCards(summary),
             const SizedBox(height: 24),
 
@@ -498,7 +480,7 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  /// Yetkili Servis Sorumlusu Konsolu (Daire Kontrollerinden Arındırılmış, Saha & Servis Odaklı)
+  /// Yetkili Servis Sorumlusu Konsolu (Daire Kontrollerinden Arındırılmış, Saha & Montaj Odaklı)
   Widget _buildServiceUserDashboard(BuildContext context, AutomationState state) {
     final user = state.currentUser;
     final summary = _superUserSummary;
@@ -522,7 +504,7 @@ class _DashboardPageState extends State<DashboardPage> {
             _buildInfrastructureStatusRow(),
             const SizedBox(height: 20),
 
-            // 3. Saha Operasyon Sayaçları (Cihaz Envanteri, Daireler)
+            // 3. Saha Operasyon Sayaçları (Pano Envanteri, Daireler)
             _buildServiceUserMetricCards(summary),
             const SizedBox(height: 24),
 
@@ -546,12 +528,12 @@ class _DashboardPageState extends State<DashboardPage> {
                   onPressed: () {
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 1)),
+                      MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
                     );
                   },
                   icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentCyan),
                   label: const Text(
-                    'Görevler & Araçlar',
+                    'Tüm Paneli Aç',
                     style: TextStyle(fontSize: 12.5, color: AppTheme.accentCyan, fontWeight: FontWeight.bold),
                   ),
                 ),
@@ -559,9 +541,9 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
             const SizedBox(height: 8),
             _buildServiceUserActionGrid(context),
-            const SizedBox(height: 16),
+            const SizedBox(height: 20),
 
-            // 5. Yetkili Servis Güvenlik Uyarısı
+            // 5. Güvenlik Uyarısı
             _buildServiceSafetyNotice(),
             const SizedBox(height: 16),
 
@@ -654,7 +636,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           const SizedBox(height: 12),
           const Text(
-            'Saha operasyonlarını yönetebilir, dairelere takılan panoları devreye alabilir, afet durumunda pano klonlama ve daire devir işlemlerini yürütebilirsiniz.',
+            'Saha panolarını envantere alabilir, dairelere takılan panoları devreye alabilir, afet durumunda pano klonlama ve daire devir işlemlerini yürütebilirsiniz.',
             style: TextStyle(
               fontSize: 12.5,
               color: AppTheme.textMuted,
@@ -667,8 +649,8 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildServiceUserMetricCards(Map<String, dynamic>? summary) {
-    final deviceCount = summary?['total_devices'] ?? summary?['devices']?['total_devices'] ?? 0;
-    final homeCount = summary?['commissioned_homes_count'] ?? summary?['devices']?['commissioned_devices'] ?? 0;
+    final deviceCount = summary?['total_devices'] ?? 0;
+    final homeCount = summary?['commissioned_homes_count'] ?? 0;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -684,8 +666,8 @@ class _DashboardPageState extends State<DashboardPage> {
                 title: 'Pano Envanteri',
                 value: '$deviceCount',
                 icon: Icons.inventory_2_outlined,
-                color: AppTheme.accentAmber,
-                badgeText: 'ENVANTER',
+                color: AppTheme.accentCyan,
+                badgeText: 'STOK & PANO',
                 onTap: () {
                   Navigator.push(
                     context,
@@ -741,7 +723,7 @@ class _DashboardPageState extends State<DashboardPage> {
       },
       {
         'title': 'Cihaz Envanteri & Seri No',
-        'subtitle': 'Sahadaki panoların seri numarası, batch ve montaj durumunu sorgulayın',
+        'subtitle': 'Fabrika kayıtları, seri no ve QR yaşam döngüsünü sorgulayın',
         'icon': Icons.inventory_2_outlined,
         'color': AppTheme.accentAmber,
         'onTap': () => Navigator.push(
@@ -760,7 +742,7 @@ class _DashboardPageState extends State<DashboardPage> {
         'title': 'Wi-Fi Yapılandırma & Kurtarma',
         'subtitle': 'Modem değişikliğinde panoya yeni Wi-Fi adı ve şifresini aktarın',
         'icon': Icons.wifi_find_rounded,
-        'color': const Color(0xFFF59E0B),
+        'color': Colors.orangeAccent,
         'onTap': () => WifiRecoveryDialog.show(context),
       },
       {
@@ -1068,9 +1050,9 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildSuperUserMetricCards(Map<String, dynamic>? summary) {
-    final serviceCount = summary?['total_service_managers'] ?? summary?['users']?['service_users'] ?? 1;
-    final deviceCount = summary?['total_devices'] ?? summary?['devices']?['total_devices'] ?? 0;
-    final homeCount = summary?['commissioned_homes_count'] ?? summary?['devices']?['commissioned_devices'] ?? summary?['homes']?['total_homes'] ?? 0;
+    final serviceCount = summary?['total_service_managers'] ?? 1;
+    final deviceCount = summary?['total_devices'] ?? 0;
+    final homeCount = summary?['commissioned_homes_count'] ?? 0;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1129,7 +1111,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 2),
                     ),
                   );
                 },
@@ -1222,7 +1204,7 @@ class _DashboardPageState extends State<DashboardPage> {
       },
       {
         'title': 'Servis Sorumluları Paneli',
-        'subtitle': 'Yetkili servis sorumlularını ekle, düzenle ve yönet',
+        'subtitle': 'Yeni servis sorumlusu ekle & düzenle',
         'icon': Icons.people_outline,
         'color': AppTheme.accentCyan,
         'onTap': () => Navigator.push(

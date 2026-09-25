@@ -64,8 +64,8 @@ void main() {
 
       // Sayfa başlığı ve tablar görünmeli
       expect(find.text('Servis & Yönetici Paneli'), findsOneWidget);
-      expect(find.text('Servis Sorumluları'), findsWidgets);
-      expect(find.text('Görevler & Araçlar'), findsWidgets);
+      expect(find.text('Sorumlular'), findsOneWidget);
+      expect(find.text('Görevler & Araçlar'), findsOneWidget);
 
       // Görevler sekmesine geçiş
       await tester.tap(find.text('Görevler & Araçlar'));
@@ -232,11 +232,11 @@ void main() {
         findsOneWidget,
       );
 
-      // Görevler & Araçlar tabına geçebilmeli
+      // Görevler & Araçlar tabına geçince FAB olmamalı
       await tester.tap(find.text('Görevler & Araçlar'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Tanımlı Servis Görevleri & Eylemleri'), findsOneWidget);
+      expect(find.byType(FloatingActionButton), findsNothing);
     });
 
     testWidgets('ServiceManagementPage shows Sorumlu Ekle button for super_user on Tab 0', (tester) async {

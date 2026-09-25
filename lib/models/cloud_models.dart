@@ -4,7 +4,7 @@ class UserModel {
   final String email;
   final String fullName;
   final String phone;
-  final String role; // super_user, service_user, owner, resident, guest
+  final String role; // super_user, service_user, installer, owner, resident, guest
   final String? token;
   final String? adminNotes;
 
@@ -23,7 +23,7 @@ class UserModel {
   bool get isSuperUser => role == 'super_user';
   bool get isServiceUser => role == 'service_user';
   bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;
-  bool get isInstaller => false; // teknisyen rolü kaldırıldı, tüm yetkiler servis sorumlusunda
+  bool get isInstaller => role == 'installer';
   bool get isOwner => role == 'owner';
   bool get isResident => role == 'resident';
   bool get isGuest => role == 'guest';
