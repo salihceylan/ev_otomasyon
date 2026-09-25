@@ -14,7 +14,7 @@ class QrScannerPage extends StatefulWidget {
   State<QrScannerPage> createState() => _QrScannerPageState();
 }
 
-class _QrScannerPageState extends State<QrScannerPage> with WidgetsBindingObserver {
+class _QrScannerPageState extends State<QrScannerPage> {
   late final MobileScannerController _controller;
   bool _isTorchOn = false;
   bool _isScanned = false;
@@ -22,25 +22,15 @@ class _QrScannerPageState extends State<QrScannerPage> with WidgetsBindingObserv
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _controller = MobileScannerController(
       detectionSpeed: DetectionSpeed.noDuplicates,
       facing: CameraFacing.back,
+      formats: const [BarcodeFormat.qrCode],
     );
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _controller.start();
-    } else if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
-      _controller.stop();
-    }
-  }
-
-  @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _controller.dispose();
     super.dispose();
   }
@@ -77,14 +67,26 @@ class _QrScannerPageState extends State<QrScannerPage> with WidgetsBindingObserv
             ),
             tooltip: 'Flaş',
             onPressed: () async {
-              await _controller.toggleTorch();
-              setState(() => _isTorchOn = !_isTorchOn);
+              try {
+                await _controller.toggleTorch();
+                if (mounted) {
+                  setState(() => _isTorchOn = !_isTorchOn);
+                }
+              } catch (e) {
+                debugPrint('Torch error: $e');
+              }
             },
           ),
           IconButton(
             icon: const Icon(Icons.flip_camera_ios_rounded, color: Colors.white),
             tooltip: 'Kamera Değiştir',
-            onPressed: () => _controller.switchCamera(),
+            onPressed: () async {
+              try {
+                await _controller.switchCamera();
+              } catch (e) {
+                debugPrint('Switch camera error: $e');
+              }
+            },
           ),
         ],
       ),
