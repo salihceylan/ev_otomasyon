@@ -113,8 +113,16 @@ Bu kontrol listesi, sıfırlanmış ve temizlenmiş veritabanı üzerinde **haya
 
 ### AŞAMA 9: Süper Kullanıcı Takip & Teşhis (Final Kontrol)
 - [ ] **9.1. Süper Kullanıcı ile Tekrar Giriş:** `salihceylan@gmail.com` ile oturum açın.
-- [ ] **9.2. Canlı Servis İstatistikleri:** Servis Paneli'ndeki göstergelerin güncellendiğini görün (Oluşturulan servis görevlisi sayısı, teknisyen sayısı, devreye alınmış aktif daireler).
+- [ ] **9.2. Canlı Servis İstatistikleri:** Servis Paneli'ndeki göstergelerin güncellendiğini görün (Oluşturulan servis görevlisi sayısı, pano envanteri, devreye alınmış aktif daireler).
 - [ ] **9.3. Sistem Doktoru:** Sistem Doktoru aracını çalıştırarak Veritabanı Gecikmesi, MQTT Köprüsü, WebSocket ve Servis Uç Noktalarının yeşil/sağlıklı olduğunu teyit edin.
+
+---
+
+### AŞAMA 10: Yetkili Servis Konsolu & Tümleşik Saha Araçları Doğrulaması
+- [ ] **10.1. Yetkili Servis Girişi:** `mistikahmet35@gmail.com` (Yetkili Servis Sorumlusu) ile giriş yapın.
+- [ ] **10.2. Konsol Başlığı & Rozet:** Ekranda "Yetkili Servis Konsolu", "Saha Operasyon & Montaj Yönetimi" alt başlığı ve turkuaz "YETKİLİ SERVİS" rozetinin görüntülendiğini doğrulayın.
+- [ ] **10.3. Tümleşik 8 Saha Aracı:** Ekranda 8 saha aracının (Devreye Alma, Karekod ile Pano Eşle, Cihaz Envanteri & Seri No, Pano Değişimi, Wi-Fi Yapılandırma & Kurtarma, Sistem Doktoru, Acil Sıfırlama & Mülk Devri, Yetkili Servis Ağı) eksiksiz yer aldığını ve çalıştığını test edin.
+- [ ] **10.4. 2 Sekmeli Servis Paneli:** "Tüm Paneli Aç" veya Sandviç Menüden "Servis Sorumluları" sayfasına giderek tabların yalnızca "Sorumlular" ve "Görevler & Araçlar" olarak 2 sekmeden oluştuğunu doğrulayın.
 
 ---
 
