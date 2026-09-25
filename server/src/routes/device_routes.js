@@ -30,7 +30,6 @@ const handleClaim = async (req, res) => {
 
     const result = await deviceService.claimDevice({
       userId: req.user.id,
-      userRole: req.user.role,
       homeId,
       homeName,
       deviceUuid,
@@ -53,16 +52,18 @@ router.post('/claim', authenticateToken, handleClaim);
 
 /**
  * @route   POST /api/v1/devices/emergency-reset veya POST /api/devices/emergency-reset
- * @desc    Ulaşılamayan kiracı / acil servis sıfırlaması (Yalnızca Yetkili Servis Sorumlusu korumalı)
+ * @desc    Ulaşılamayan kiracı / acil servis sıfırlaması (Yetkili Servis & Süper Yönetici korumalı)
  */
 const handleEmergencyReset = async (req, res) => {
   try {
-    const isAuthorized = req.user && req.user.role === 'service_user';
+    const isAuthorized = req.user.role === 'service_user' || 
+                         req.user.role === 'super_user' || 
+                         req.user.role === 'admin';
 
     if (!isAuthorized) {
       return errorResponse(
         res,
-        'Bu acil sıfırlama işlemi yalnızca Yetkili Servis Sorumlusu (service_user) tarafından yürütülebilir.',
+        'Bu acil sıfırlama işlemi yalnızca Yetkili Servis Sorumlusu veya Süper Yönetici tarafından yürütülebilir.',
         403
       );
     }
@@ -105,24 +106,16 @@ router.get('/home/:home_id', authenticateToken, requireHomeAccess(['owner', 'res
 
 /**
  * @route   POST /api/devices/:id/command
- * @desc    Cihaza doğrudan MQTT komutu gönderir (Yetkili ev üyeleri veya servis)
+ * @desc    Cihaza doğrudan MQTT komutu gönderir
  */
-router.post('/:id/command', authenticateToken, async (req, res, next) => {
-  const targetHomeId = req.body.home_id || req.body.homeId;
-  if (!targetHomeId) {
-    return errorResponse(res, 'home_id zorunludur.', 400);
-  }
-  req.params.home_id = targetHomeId;
-  return requireHomeAccess(['owner', 'resident', 'service_user', 'super_user'])(req, res, next);
-}, async (req, res) => {
+router.post('/:id/command', authenticateToken, async (req, res) => {
   try {
-    const { home_id, homeId, command } = req.body;
-    const targetHomeId = home_id || homeId;
-    if (!command) {
-      return errorResponse(res, 'command nesnesi sağlanmalıdır.', 400);
+    const { home_id, command } = req.body;
+    if (!home_id || !command) {
+      return errorResponse(res, 'home_id ve command nesnesi sağlanmalıdır.', 400);
     }
 
-    const result = await deviceService.sendCommand(targetHomeId, req.params.id, command);
+    const result = await deviceService.sendCommand(home_id, req.params.id, command);
     return successResponse(res, result, 'Komut cihaza iletildi.');
   } catch (err) {
     return errorResponse(res, err.message, err.statusCode || 500);
@@ -140,7 +133,6 @@ const handleDiagnostic = async (req, res) => {
 
     const result = await deviceService.getSystemDiagnostic({
       userId: req.user.id,
-      userRole: req.user.role,
       homeId,
     });
     return successResponse(res, result, 'Teşhis raporu oluşturuldu.', 200);
@@ -187,20 +179,13 @@ router.post('/replace-board', authenticateToken, async (req, res) => {
  * @route   POST /api/v1/devices/child-lock
  * @desc    ADIM 17: Çocuk Kilidi (Fiziksel Duvar Anahtarlarını Kilitler/Açar)
  */
-router.post('/child-lock', authenticateToken, async (req, res, next) => {
-  const targetHomeId = req.body.home_id || req.body.homeId;
-  if (!targetHomeId) {
-    return errorResponse(res, 'home_id zorunludur.', 400);
-  }
-  req.params.home_id = targetHomeId;
-  return requireHomeAccess(['owner', 'resident', 'super_user'])(req, res, next);
-}, async (req, res) => {
+router.post('/child-lock', authenticateToken, async (req, res) => {
   try {
     const { home_id, homeId, enabled } = req.body;
     const targetHomeId = home_id || homeId;
 
-    if (enabled === undefined) {
-      return errorResponse(res, 'enabled parametresi zorunludur.', 400);
+    if (!targetHomeId || enabled === undefined) {
+      return errorResponse(res, 'home_id ve enabled parametreleri zorunludur.', 400);
     }
 
     const result = await deviceService.setChildLock(targetHomeId, !!enabled);
@@ -214,7 +199,7 @@ router.post('/child-lock', authenticateToken, async (req, res, next) => {
  * @route   GET /api/v1/devices/child-lock/:home_id
  * @desc    ADIM 17: Çocuk Kilidi Durumu
  */
-router.get('/child-lock/:home_id', authenticateToken, requireHomeAccess(['owner', 'resident', 'guest', 'service_user', 'super_user']), async (req, res) => {
+router.get('/child-lock/:home_id', authenticateToken, async (req, res) => {
   try {
     const result = await deviceService.getChildLock(req.params.home_id);
     return successResponse(res, result);
@@ -227,7 +212,7 @@ router.get('/child-lock/:home_id', authenticateToken, requireHomeAccess(['owner'
  * @route   GET /api/v1/devices/peace-notification/:home_id
  * @desc    ADIM 17: Gece Huzur Bildirimi Durumu ve Açık Lambalar
  */
-router.get('/peace-notification/:home_id', authenticateToken, requireHomeAccess(['owner', 'resident', 'guest', 'service_user', 'super_user']), async (req, res) => {
+router.get('/peace-notification/:home_id', authenticateToken, async (req, res) => {
   try {
     const result = await deviceService.getPeaceNotificationSettings(req.params.home_id);
     return successResponse(res, result);
@@ -240,7 +225,7 @@ router.get('/peace-notification/:home_id', authenticateToken, requireHomeAccess(
  * @route   PUT /api/v1/devices/peace-notification/:home_id
  * @desc    ADIM 17: Gece Huzur Bildirimi Ayarlarını Güncelle (Saat, Aktiflik)
  */
-router.put('/peace-notification/:home_id', authenticateToken, requireHomeAccess(['owner', 'super_user']), async (req, res) => {
+router.put('/peace-notification/:home_id', authenticateToken, async (req, res) => {
   try {
     const { enabled, notification_time, notificationTime } = req.body;
     const result = await deviceService.updatePeaceNotificationSettings(req.params.home_id, {
@@ -257,17 +242,14 @@ router.put('/peace-notification/:home_id', authenticateToken, requireHomeAccess(
  * @route   POST /api/v1/devices/peace-notification/close-all
  * @desc    ADIM 17: "Salonda 2 lamba açık. [Hepsini Kapat]" tek tıkla açık lambaları kapatır
  */
-router.post('/peace-notification/close-all', authenticateToken, async (req, res, next) => {
-  const targetHomeId = req.body.home_id || req.body.homeId;
-  if (!targetHomeId) {
-    return errorResponse(res, 'home_id zorunludur.', 400);
-  }
-  req.params.home_id = targetHomeId;
-  return requireHomeAccess(['owner', 'resident', 'super_user'])(req, res, next);
-}, async (req, res) => {
+router.post('/peace-notification/close-all', authenticateToken, async (req, res) => {
   try {
     const { home_id, homeId } = req.body;
     const targetHomeId = home_id || homeId;
+
+    if (!targetHomeId) {
+      return errorResponse(res, 'home_id zorunludur.', 400);
+    }
 
     const result = await deviceService.closeAllOpenLights(targetHomeId, req.user.id);
     return successResponse(res, result, result.message, 200);

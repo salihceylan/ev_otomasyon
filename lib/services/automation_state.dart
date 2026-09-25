@@ -968,9 +968,6 @@ class AutomationState extends ChangeNotifier {
     final homeId = _activeHome?.effectiveId ??
         (_activeHome?.idStr.isNotEmpty == true ? _activeHome!.idStr : (_activeHome?.id != 0 ? _activeHome?.id : null));
     if (homeId == null) {
-      if (isSuperUser || isServiceUser) {
-        return await cloudApi.fetchSystemDiagnostic('0');
-      }
       throw Exception('Aktif daire seçili değil.');
     }
     return await cloudApi.fetchSystemDiagnostic(homeId);

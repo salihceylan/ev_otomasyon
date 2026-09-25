@@ -72,12 +72,9 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
       final state = Provider.of<AutomationState>(context, listen: false);
       final api = state.cloudApi;
       final isSuper = state.isSuperUser;
-      final isService = state.isServiceUser;
 
       // Paralel ve hataya dayanıklı istekler
-      final summaryFuture = isService
-          ? api.getServiceSummary().catchError((_) => <String, dynamic>{})
-          : Future.value(<String, dynamic>{});
+      final summaryFuture = api.getServiceSummary().catchError((_) => <String, dynamic>{});
       final superUsersFuture = isSuper
           ? api.listAdminUsers(role: 'super_user').catchError((_) => <String, dynamic>{'users': []})
           : Future.value(<String, dynamic>{'users': []});
@@ -119,7 +116,6 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   Widget build(BuildContext context) {
     final state = Provider.of<AutomationState>(context);
     final isSuper = state.isSuperUser;
-    final isService = state.isServiceUser;
 
     return Scaffold(
       backgroundColor: AppTheme.bgDark,
@@ -185,8 +181,8 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
                   : TabBarView(
                       controller: _tabController,
                       children: [
-                        _buildManagersTab(isSuper, isService),
-                        _buildTasksAndToolsTab(context, isService: isService),
+                        _buildManagersTab(isSuper),
+                        _buildTasksAndToolsTab(context),
                       ],
                     ),
         ),
@@ -241,17 +237,15 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   // ===========================================================================
   // TAB 1: SÜPER VE SERVİS SORUMLULARI
   // ===========================================================================
-  Widget _buildManagersTab(bool isSuper, bool isService) {
+  Widget _buildManagersTab(bool isSuper) {
     return RefreshIndicator(
       onRefresh: _loadAllData,
       color: AppTheme.accentCyan,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
         children: [
-          if (isService) ...[
-            _buildMetricsOverview(),
-            const SizedBox(height: 16),
-          ],
+          _buildMetricsOverview(),
+          const SizedBox(height: 16),
           if (!isSuper) ...[
             Container(
               padding: const EdgeInsets.all(12),
@@ -313,7 +307,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   // ===========================================================================
   // TAB 2: SERVİS GÖREVLERİ & ARAÇLARI
   // ===========================================================================
-  Widget _buildTasksAndToolsTab(BuildContext context, {required bool isService}) {
+  Widget _buildTasksAndToolsTab(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
       children: [
@@ -363,39 +357,37 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
           },
         ),
 
-        if (isService) ...[
-          const SizedBox(height: 12),
-          _buildTaskCard(
-            icon: Icons.sync_problem_rounded,
-            color: Colors.redAccent,
-            title: '3. Acil Servis Sıfırlaması & Daire Devri',
-            description:
-                'Eski kiracı veya ev sahibine ulaşılamadığında; fiziksel mülk doğrulamasıyla panoyu güvenle boşa çıkarıp yeni daireye atayın.',
-            buttonLabel: 'Acil Sıfırlama & Devir',
-            onTap: () {
-              showDialog(
-                context: context,
-                builder: (_) => const TransferOwnershipDialog(),
-              );
-            },
-          ),
+        const SizedBox(height: 12),
+        _buildTaskCard(
+          icon: Icons.sync_problem_rounded,
+          color: Colors.redAccent,
+          title: '3. Acil Servis Sıfırlaması & Daire Devri',
+          description:
+              'Eski kiracı veya ev sahibine ulaşılamadığında; fiziksel mülk doğrulamasıyla panoyu güvenle boşa çıkarıp yeni daireye atayın.',
+          buttonLabel: 'Acil Sıfırlama & Devir',
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (_) => const TransferOwnershipDialog(),
+            );
+          },
+        ),
 
-          const SizedBox(height: 12),
-          _buildTaskCard(
-            icon: Icons.medical_services_outlined,
-            color: Colors.tealAccent,
-            title: '4. Buluttan Tek Tıkla Pano Değişimi (Disaster Recovery)',
-            description:
-                'Yıldırım veya arıza sebebiyle değişen panonun tüm 40 röle, isim ve kalibrasyon yedeğini 5 saniyede yeni panoya aktarın.',
-            buttonLabel: 'Pano Değişimi Aç',
-            onTap: () {
-              showDialog(
-                context: context,
-                builder: (_) => const ReplaceBoardDialog(),
-              );
-            },
-          ),
-        ],
+        const SizedBox(height: 12),
+        _buildTaskCard(
+          icon: Icons.medical_services_outlined,
+          color: Colors.tealAccent,
+          title: '4. Buluttan Tek Tıkla Pano Değişimi (Disaster Recovery)',
+          description:
+              'Yıldırım veya arıza sebebiyle değişen panonun tüm 40 röle, isim ve kalibrasyon yedeğini 5 saniyede yeni panoya aktarın.',
+          buttonLabel: 'Pano Değişimi Aç',
+          onTap: () {
+            showDialog(
+              context: context,
+              builder: (_) => const ReplaceBoardDialog(),
+            );
+          },
+        ),
 
         const SizedBox(height: 12),
         _buildTaskCard(

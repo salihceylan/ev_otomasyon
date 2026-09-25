@@ -18,24 +18,11 @@ class DeviceService {
   /**
    * FAZ 6.3: Cihaz Sahiplenme Doğrulama Motoru (Sıfır-Güven & PIN Yakma)
    */
-  async claimDevice({ userId, userRole, homeId, homeName, deviceUuid, setupPin, targetOwnerIdentifier }) {
+  async claimDevice({ userId, homeId, homeName, deviceUuid, setupPin, targetOwnerIdentifier }) {
     if (!deviceUuid || !setupPin) {
       const err = new Error('Cihaz UUID (deviceUuid / uid) ve 6 haneli Kurulum PIN (setupPin / pin) zorunludur.');
       err.statusCode = 400;
       throw err;
-    }
-
-    if (targetOwnerIdentifier) {
-      let role = userRole;
-      if (!role && userId) {
-        const callerRes = await db.query('SELECT role FROM users WHERE id = $1', [userId]);
-        if (callerRes.rows.length > 0) role = callerRes.rows[0].role;
-      }
-      if (role !== 'service_user') {
-        const err = new Error('Başkası / Ev Sahibi adına cihaz sahiplendirme işlemi yalnızca Yetkili Servis Sorumlusu (service_user) tarafından yapılabilir.');
-        err.statusCode = 403;
-        throw err;
-      }
     }
 
     const cleanUuid = String(deviceUuid).trim().toUpperCase();
@@ -489,51 +476,33 @@ class DeviceService {
    * ADIM 16: Sistem Doktoru (Self-Diagnostic)
    * 3 Katmanlı Teşhis: [Bulut], [Ev Modemi/İnternet], [Pano Gücü]
    */
-  async getSystemDiagnostic({ userId, userRole, homeId }) {
+  async getSystemDiagnostic({ userId, homeId }) {
     const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-    let role = userRole;
-    if (!role && userId) {
-      const uRes = await db.query('SELECT role FROM users WHERE id = $1', [userId]);
-      if (uRes.rows.length > 0) role = uRes.rows[0].role;
-    }
-    const isGlobalStaff = role === 'super_user' || role === 'service_user';
-
-    // Eğer homeId verilmemiş, '0' veya geçersizse:
-    let resolvedHomeId = null;
-    if (homeId && homeId !== '0' && homeId !== 0 && UUID_REGEX.test(String(homeId))) {
-      resolvedHomeId = homeId;
-    } else {
-      // Kullanıcının kayıtlı bir evi var mı kontrol et
+    // Eğer homeId verilmemiş, '0' veya UUID formatında değilse, kullanıcının ilk dairesini otomatik bul
+    if (!homeId || homeId === '0' || homeId === 0 || !UUID_REGEX.test(String(homeId))) {
       const fallbackRes = await db.query(
         `SELECT home_id FROM home_users WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1`,
         [userId]
       );
       if (fallbackRes.rows.length > 0) {
-        resolvedHomeId = fallbackRes.rows[0].home_id;
-      }
-    }
-
-    // 1. Daire Yetki Kontrolü
-    if (resolvedHomeId) {
-      if (!isGlobalStaff) {
-        const permRes = await db.query(
-          `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
-          [resolvedHomeId, userId]
-        );
-        if (permRes.rows.length === 0) {
-          const err = new Error('Bu evin teşhis bilgilerini görüntüleme yetkiniz yok.');
-          err.statusCode = 403;
-          throw err;
-        }
-      }
-    } else {
-      // Dairesi yok ve global personel de değilse 404
-      if (!isGlobalStaff) {
+        homeId = fallbackRes.rows[0].home_id;
+      } else {
         const err = new Error('Aktif bir ev/daire kaydı bulunamadı.');
         err.statusCode = 404;
         throw err;
       }
+    }
+
+    // 1. Kullanıcının bu eve erişim yetkisini doğrula
+    const permRes = await db.query(
+      `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
+      [homeId, userId]
+    );
+    if (permRes.rows.length === 0) {
+      const err = new Error('Bu evin teşhis bilgilerini görüntüleme yetkiniz yok.');
+      err.statusCode = 403;
+      throw err;
     }
 
     // 2. Bulut Altyapı Kontrolü (DB Latency & MQTT Bridge)
@@ -546,37 +515,6 @@ class DeviceService {
     const cloudLatencyMs = Date.now() - startTime;
     const mqttOk = mqttBridge.isConnected();
     const cloudStatus = (dbOk && mqttOk) ? 'OK' : 'DEGRADED';
-
-    // Dairesiz genel sistem teşhisi (Süper Yönetici veya genel personel durumu)
-    if (!resolvedHomeId) {
-      return {
-        cloud: {
-          status: cloudStatus,
-          latency_ms: cloudLatencyMs,
-          db_connected: dbOk,
-          mqtt_bridge_connected: mqttOk,
-        },
-        home_network: {
-          status: 'SKIPPED',
-          device_ip: null,
-          last_seen_at: null,
-          seconds_since_last_seen: null,
-        },
-        hardware_power: {
-          status: 'SKIPPED',
-          is_online: false,
-        },
-        endpoint_count: 0,
-        diagnosis_title: cloudStatus === 'OK' ? 'Sistem Altyapısı Sağlıklı' : 'Altyapı Kesintisi / Bozulma',
-        diagnosis_summary: cloudStatus === 'OK'
-          ? 'PostgreSQL veritabanı ve EMQX MQTT köprüsü aktif ve canlı çalışıyor.'
-          : 'Veritabanı veya MQTT köprüsünde gecikme ya da bağlantı kesintisi tespit edildi.',
-        diagnosis_level: cloudStatus === 'OK' ? 'ok' : 'error',
-        action_recommendation: cloudStatus === 'OK' ? null : 'PM2 ve sunucu servislerini kontrol edin.',
-      };
-    }
-
-    homeId = resolvedHomeId;
 
     // 3. Daireye Bağlı Pano Bilgisi
     const devRes = await db.query(
@@ -717,9 +655,9 @@ class DeviceService {
     const cleanOldUuid = oldDeviceUuid ? String(oldDeviceUuid).trim().toUpperCase() : null;
     const cleanPin = String(setupPin).trim();
 
-    // 1. Yetki Kontrolü: Ev Sahibi (owner) veya Yetkili Servis (service_user) yapabilir (super_user'dan alındı)
+    // 1. Yetki Kontrolü: Ev Sahibi (owner), Yetkili Servis (service_user) veya Süper Yönetici (super_user) yapabilir
     const globalUserRes = await db.query(`SELECT role FROM users WHERE id = $1`, [userId]);
-    const isGlobalStaff = globalUserRes.rows.length > 0 && globalUserRes.rows[0].role === 'service_user';
+    const isGlobalStaff = globalUserRes.rows.length > 0 && ['super_user', 'service_user'].includes(globalUserRes.rows[0].role);
 
     if (!isGlobalStaff) {
       const userRoleRes = await db.query(

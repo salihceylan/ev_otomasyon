@@ -670,10 +670,7 @@ class EvCloudApiService {
 
   /// ADIM 16: Sistem Doktoru (Self-Diagnostic) Raporu Çekme
   Future<Map<String, dynamic>> fetchSystemDiagnostic(dynamic homeId) async {
-    final path = (homeId == null || homeId.toString() == '0' || homeId.toString().isEmpty)
-        ? '$baseUrl/v1/devices/diagnostic'
-        : '$baseUrl/v1/devices/diagnostic/$homeId';
-    final uri = Uri.parse(path);
+    final uri = Uri.parse('$baseUrl/v1/devices/diagnostic/$homeId');
     final res = await _authenticatedRequest(
       () => http.get(uri, headers: _headers).timeout(const Duration(seconds: 8)),
     );

@@ -36,7 +36,7 @@ router.get('/service-tokens', authenticateToken, requireHomeAccess(['owner']), a
 
 // POST /api/homes/:home_id/commissioning
 // ADIM 11: Yetkili Servis Sorumlusunun sistemi test edip "Çalışır" olarak onaylaması (Commissioning)
-router.post('/commissioning', authenticateToken, requireHomeAccess(['service_user']), async (req, res) => {
+router.post('/commissioning', authenticateToken, requireHomeAccess(['service_user', 'super_user']), async (req, res) => {
   try {
     const { notes, tests_passed = true } = req.body;
     const homeId = req.params.home_id;

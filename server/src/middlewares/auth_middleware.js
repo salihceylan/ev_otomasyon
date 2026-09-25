@@ -31,12 +31,9 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'servic
         return errorResponse(res, 'Daire (home_id) parametresi belirtilmelidir.', 400);
       }
 
-      // Süper yönetici kontrolü
+      // Süper yönetici doğrudan erişebilir
       if (req.user && req.user.role === 'super_user') {
-        if (!allowedRoles.includes('super_user')) {
-          return errorResponse(res, 'Bu işlem Süper Yönetici (super_user) için yetkilendirilmemiştir.', 403);
-        }
-        req.homeAccess = { role: 'super_user', is_super: true };
+        req.homeAccess = { role: 'service_user', is_super: true };
         return next();
       }
 
@@ -49,11 +46,8 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'servic
       );
 
       if (result.rows.length === 0) {
-        // Genel yetkili servis sorumlusu ise: Sadece allowedRoles içinde service_user varsa erişebilir
+        // Genel yetkili servis sorumlusu ise erişebilir
         if (req.user && req.user.role === 'service_user') {
-          if (!allowedRoles.includes('service_user')) {
-            return errorResponse(res, 'Bu işlem Yetkili Servis Sorumlusu (service_user) için yetkilendirilmemiştir.', 403);
-          }
           req.homeAccess = { role: 'service_user' };
           return next();
         }
@@ -111,19 +105,10 @@ function requireServiceManager(req, res, next) {
   next();
 }
 
-function requireServiceUser(req, res, next) {
-  if (!req.user || req.user.role !== 'service_user') {
-    return errorResponse(res, 'Bu işlem için Yetkili Servis Sorumlusu (service_user) yetkisi gereklidir.', 403);
-  }
-  next();
-}
-
 module.exports = {
   authenticateToken,
   requireHomeAccess,
   requireSuperUser,
   requireServiceManager,
-  requireServiceUser,
 };
-
 

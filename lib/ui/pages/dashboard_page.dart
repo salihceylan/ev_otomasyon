@@ -33,8 +33,8 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   String _selectedRoom = 'Tümü';
-  Map<String, dynamic>? _serviceSummary;
-  bool _loadingServiceSummary = false;
+  Map<String, dynamic>? _superUserSummary;
+  bool _loadingSuperUserSummary = false;
 
   @override
   void initState() {
@@ -45,29 +45,29 @@ class _DashboardPageState extends State<DashboardPage> {
       if (state.shouldPromptBiometrics) {
         BiometricPromptDialog.show(context, label: state.biometricLabel);
       }
-      if (state.isServiceUser) {
-        _loadServiceSummary();
+      if (state.isSuperUser) {
+        _loadSuperUserSummary();
       }
     });
   }
 
-  Future<void> _loadServiceSummary() async {
+  Future<void> _loadSuperUserSummary() async {
     final state = context.read<AutomationState>();
-    if (!state.isServiceUser) return;
-    if (_loadingServiceSummary) return;
+    if (!state.isSuperUser) return;
+    if (_loadingSuperUserSummary) return;
 
-    setState(() => _loadingServiceSummary = true);
+    setState(() => _loadingSuperUserSummary = true);
     try {
       final summary = await state.cloudApi.getServiceSummary();
       if (mounted) {
         setState(() {
-          _serviceSummary = summary;
-          _loadingServiceSummary = false;
+          _superUserSummary = summary;
+          _loadingSuperUserSummary = false;
         });
       }
     } catch (_) {
       if (mounted) {
-        setState(() => _loadingServiceSummary = false);
+        setState(() => _loadingSuperUserSummary = false);
       }
     }
   }
@@ -315,9 +315,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   tooltip: 'Yenile',
                   onPressed: () {
                     state.refresh();
-                    if (state.isServiceUser) {
-                      _loadServiceSummary();
-                    }
+                    _loadSuperUserSummary();
                   },
                 ),
                 IconButton(
@@ -413,10 +411,12 @@ class _DashboardPageState extends State<DashboardPage> {
   /// Süper Yönetici Konsol Arayüzü (Daire Kontrollerinden Tamamen Arındırılmış)
   Widget _buildSuperUserDashboard(BuildContext context, AutomationState state) {
     final user = state.currentUser;
+    final summary = _superUserSummary;
 
     return RefreshIndicator(
       onRefresh: () async {
         await state.refresh();
+        await _loadSuperUserSummary();
       },
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -432,8 +432,8 @@ class _DashboardPageState extends State<DashboardPage> {
             _buildInfrastructureStatusRow(),
             const SizedBox(height: 20),
 
-            // 3. Tüm Sistem Teşhisi (System Doctor) Vurgu Kartı
-            _buildSystemDiagnosticsCard(context),
+            // 3. Operasyonel Sayaçlar (Servis Sorumluları, Pano Envanteri, Devreye Alınan)
+            _buildSuperUserMetricCards(summary),
             const SizedBox(height: 24),
 
             // 4. Hızlı Yönetici İşlemleri
@@ -483,12 +483,12 @@ class _DashboardPageState extends State<DashboardPage> {
   /// Yetkili Servis Sorumlusu Konsolu (Daire Kontrollerinden Arındırılmış, Saha & Montaj Odaklı)
   Widget _buildServiceUserDashboard(BuildContext context, AutomationState state) {
     final user = state.currentUser;
-    final summary = _serviceSummary;
+    final summary = _superUserSummary;
 
     return RefreshIndicator(
       onRefresh: () async {
         await state.refresh();
-        await _loadServiceSummary();
+        await _loadSuperUserSummary();
       },
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
@@ -1049,84 +1049,77 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Widget _buildSystemDiagnosticsCard(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.cardDark,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.35)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.cyanAccent.withValues(alpha: 0.08),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.cyanAccent.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.health_and_safety_outlined, color: Colors.cyanAccent, size: 20),
-              ),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Tüm Sistem Teşhisi (System Doctor)',
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.textPrimary,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+  Widget _buildSuperUserMetricCards(Map<String, dynamic>? summary) {
+    final serviceCount = summary?['total_service_managers'] ?? 1;
+    final deviceCount = summary?['total_devices'] ?? 0;
+    final homeCount = summary?['commissioned_homes_count'] ?? 0;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth > 550;
+        final cardWidth = isWide ? (constraints.maxWidth - 20) / 3 : (constraints.maxWidth - 10) / 2;
+
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            SizedBox(
+              width: cardWidth,
+              child: _buildMetricCard(
+                title: 'Servis Sorumluları',
+                value: '$serviceCount',
+                icon: Icons.admin_panel_settings,
+                color: AppTheme.accentCyan,
+                badgeText: 'YÖNETİCİ',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
                     ),
-                    SizedBox(height: 2),
-                    Text(
-                      'PostgreSQL, EMQX MQTT köprüsü & Bulut API sağlığı',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: AppTheme.textMuted,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => SystemDoctorDialog.show(context),
-              icon: const Icon(Icons.play_arrow_rounded, size: 18),
-              label: const Text('Teşhisi Başlat (Sistem Doktoru)'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.cyanAccent.withValues(alpha: 0.15),
-                foregroundColor: Colors.cyanAccent,
-                side: const BorderSide(color: Colors.cyanAccent, width: 0.8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  );
+                },
               ),
             ),
-          ),
-        ],
-      ),
+            SizedBox(
+              width: cardWidth,
+              child: _buildMetricCard(
+                title: 'Pano Envanteri',
+                value: '$deviceCount',
+                icon: Icons.inventory_2_outlined,
+                color: AppTheme.accentAmber,
+                badgeText: 'ENVANTER',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const DeviceInventoryPage(),
+                    ),
+                  );
+                },
+              ),
+            ),
+            SizedBox(
+              width: isWide ? cardWidth : constraints.maxWidth,
+              child: _buildMetricCard(
+                title: 'Devreye Alınan',
+                value: '$homeCount',
+                icon: Icons.task_alt,
+                color: AppTheme.accentGreen,
+                badgeText: 'AKTİF DAİRE',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const ServiceManagementPage(initialTabIndex: 2),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -1235,6 +1228,13 @@ class _DashboardPageState extends State<DashboardPage> {
               context,
               MaterialPageRoute(builder: (_) => const ServiceModePage()),
             ),
+      },
+      {
+        'title': 'Pano Değişimi (Afet Modu)',
+        'subtitle': 'Arızalı donanımı buluttan tek tıkla yenisine aktar',
+        'icon': Icons.published_with_changes_outlined,
+        'color': Colors.tealAccent,
+        'onTap': () => ReplaceBoardDialog.show(context),
       },
     ];
 
