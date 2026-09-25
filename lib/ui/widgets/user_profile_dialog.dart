@@ -6,6 +6,7 @@ import '../pages/family/invite_family_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
 import '../pages/family/family_members_page.dart';
 import '../pages/service_management_page.dart';
+import '../pages/service_mode_page.dart';
 
 class UserProfileDialog extends StatelessWidget {
   const UserProfileDialog({super.key});
@@ -180,6 +181,31 @@ class UserProfileDialog extends StatelessWidget {
                 ),
               ],
 
+              // Saha Teknisyeni Konsol Butonu
+              if (state.isInstaller) ...[
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ServiceModePage()),
+                      );
+                    },
+                    icon: const Icon(Icons.handyman_rounded, size: 18),
+                    label: const Text('Devreye Alma & Donanım Testi'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentPurple,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+
               // Aile & Misafir Yönetimi (Yalnızca Ev Sahibi)
               if (state.isOwner && state.activeHome != null) ...[
                 const SizedBox(height: 14),
@@ -222,24 +248,26 @@ class UserProfileDialog extends StatelessWidget {
                 ),
               ],
 
-              // Başka Bir Eve Katıl (Tüm roller)
-              const SizedBox(height: 10),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    JoinHomeDialog.show(context);
-                  },
-                  icon: const Icon(Icons.vpn_key_outlined, size: 18, color: AppTheme.accentGreen),
-                  label: const Text('Başka Bir Eve Katıl (Kod İle)', style: TextStyle(color: AppTheme.textPrimary)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    side: const BorderSide(color: AppTheme.cardBorder),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              // Başka Bir Eve Katıl (Yalnızca sakin, misafir ve aile bireyleri için)
+              if (!state.isServiceManagerOrSuper && !state.isInstaller) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                      JoinHomeDialog.show(context);
+                    },
+                    icon: const Icon(Icons.vpn_key_outlined, size: 18, color: AppTheme.accentGreen),
+                    label: const Text('Başka Bir Eve Katıl (Kod İle)', style: TextStyle(color: AppTheme.textPrimary)),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      side: const BorderSide(color: AppTheme.cardBorder),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
                   ),
                 ),
-              ),
+              ],
 
               // Tema Seçimi (Hızlı Geçiş)
               const SizedBox(height: 10),

@@ -89,10 +89,10 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
         installersFuture,
       ]);
 
-      final summaryData = results[0] as Map<String, dynamic>;
-      final superUsersRes = results[1] as Map<String, dynamic>;
-      final serviceUsersRes = results[2] as Map<String, dynamic>;
-      final installersRes = results[3] as Map<String, dynamic>;
+      final summaryData = results[0];
+      final superUsersRes = results[1];
+      final serviceUsersRes = results[2];
+      final installersRes = results[3];
 
       final List<dynamic> combinedManagers = [
         ...(superUsersRes['users'] as List? ?? []),
@@ -190,18 +190,19 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
                   : TabBarView(
                       controller: _tabController,
                       children: [
-                        _buildManagersTab(isSuper),
-                        _buildInstallersTab(isSuper),
+                        _buildManagersTab(isSuper, isInstaller: state.isInstaller),
+                        _buildInstallersTab(isSuper, isInstaller: state.isInstaller),
                         _buildTasksAndToolsTab(context),
                       ],
                     ),
         ),
       ),
-      floatingActionButton: _buildFloatingActionButton(isSuper),
+      floatingActionButton: _buildFloatingActionButton(isSuper, isInstaller: state.isInstaller),
     );
   }
 
-  Widget? _buildFloatingActionButton(bool isSuper) {
+  Widget? _buildFloatingActionButton(bool isSuper, {bool isInstaller = false}) {
+    if (isInstaller) return null; // Saha teknisyeni kullanıcı ekleyemez
     if (_tabController.index == 0) {
       if (!isSuper) return null; // Servis sorumlusu sorumlu ekleyemez!
       return FloatingActionButton.extended(
@@ -257,7 +258,40 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   // ===========================================================================
   // TAB 1: SÜPER VE SERVİS SORUMLULARI
   // ===========================================================================
-  Widget _buildManagersTab(bool isSuper) {
+  Widget _buildManagersTab(bool isSuper, {bool isInstaller = false}) {
+    if (isInstaller) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: AppTheme.cardDark,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.cardBorder),
+            ),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.shield_outlined, color: AppTheme.accentCyan, size: 40),
+                SizedBox(height: 12),
+                Text(
+                  'Yetkili Servis Sorumluları Yönetimi',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Sorumlu listeleri ve yönetici hesapları yalnızca Süper Yönetici tarafından görüntülenebilir ve yönetilebilir. Bir saha teknisyeni olarak doğrudan "Görevler & Araçlar" sekmesindeki araçları kullanabilirsiniz.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return RefreshIndicator(
       onRefresh: _loadAllData,
       color: AppTheme.accentCyan,
@@ -327,7 +361,40 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   // ===========================================================================
   // TAB 2: SAHA TEKNİSYENLERİ
   // ===========================================================================
-  Widget _buildInstallersTab(bool isSuper) {
+  Widget _buildInstallersTab(bool isSuper, {bool isInstaller = false}) {
+    if (isInstaller) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: AppTheme.cardDark,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.cardBorder),
+            ),
+            child: const Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.engineering_outlined, color: AppTheme.accentAmber, size: 40),
+                SizedBox(height: 12),
+                Text(
+                  'Saha Teknisyenleri Yönetimi',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Teknisyen ekleme, silme ve yetkilendirme işlemleri yalnızca Süper Yönetici ve Yetkili Servis Sorumluları tarafından yürütülebilir.',
+                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return RefreshIndicator(
       onRefresh: _loadAllData,
       color: AppTheme.accentCyan,

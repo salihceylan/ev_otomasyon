@@ -6,6 +6,8 @@ import '../pages/replace_board_dialog.dart';
 import '../pages/service_management_page.dart';
 import '../pages/service_mode_page.dart';
 import '../pages/system_doctor_dialog.dart';
+import '../pages/wifi_recovery_dialog.dart';
+import '../pages/claim/claim_manual_dialog.dart';
 import '../theme/app_theme.dart';
 
 /// AHBU Süper Yönetici Sandviç (Hamburger) Menüsü (Drawer)
@@ -19,10 +21,24 @@ class SuperUserDrawer extends StatelessWidget {
     final isDark = state.themeMode == ThemeMode.dark;
 
     final isSuper = state.isSuperUser;
+    final isService = state.isServiceUser;
+    final isInstaller = state.isInstaller;
 
-    final badgeColor = isSuper ? AppTheme.accentPurple : AppTheme.accentCyan;
-    final badgeText = isSuper ? 'SÜPER YÖNETİCİ KONSOLU' : 'YETKİLİ SERVİS KONSOLU';
-    final badgeIcon = isSuper ? Icons.verified_user : Icons.engineering_rounded;
+    final badgeColor = isSuper
+        ? AppTheme.accentPurple
+        : isService
+            ? AppTheme.accentCyan
+            : const Color(0xFFF59E0B);
+    final badgeText = isSuper
+        ? 'SÜPER YÖNETİCİ KONSOLU'
+        : isService
+            ? 'YETKİLİ SERVİS KONSOLU'
+            : 'SAHA TEKNİSYENİ KONSOLU';
+    final badgeIcon = isSuper
+        ? Icons.verified_user
+        : isService
+            ? Icons.engineering_rounded
+            : Icons.handyman_rounded;
 
     return Drawer(
       backgroundColor: AppTheme.bgDark,
@@ -74,7 +90,11 @@ class SuperUserDrawer extends StatelessWidget {
                             Text(
                               user?.fullName.isNotEmpty == true
                                   ? user!.fullName
-                                  : (isSuper ? 'Süper Yönetici' : 'Yetkili Servis Sorumlusu'),
+                                  : (isSuper
+                                      ? 'Süper Yönetici'
+                                      : isService
+                                          ? 'Yetkili Servis Sorumlusu'
+                                          : 'Saha Montaj Teknisyeni'),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -99,7 +119,7 @@ class SuperUserDrawer extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 14),
-                  // Süper Kullanıcı / Servis Sorumlusu Rozeti
+                  // Süper Kullanıcı / Servis Sorumlusu / Teknisyen Rozeti
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
@@ -141,8 +161,16 @@ class SuperUserDrawer extends StatelessWidget {
                     context: context,
                     icon: Icons.dashboard_outlined,
                     activeIcon: Icons.dashboard,
-                    title: isSuper ? 'Yönetici Konsolu' : 'Servis Konsolu',
-                    subtitle: isSuper ? 'Sistem durumu & ana kontroller' : 'Saha operasyonları & ana kontroller',
+                    title: isSuper
+                        ? 'Yönetici Konsolu'
+                        : isService
+                            ? 'Servis Konsolu'
+                            : 'Teknisyen Konsolu',
+                    subtitle: isSuper
+                        ? 'Sistem durumu & ana kontroller'
+                        : isService
+                            ? 'Saha operasyonları & ana kontroller'
+                            : 'Montaj görevleri & test araçları',
                     onTap: () {
                       Navigator.pop(context); // Menüyü kapat, zaten konsoldayız
                     },
@@ -162,40 +190,42 @@ class SuperUserDrawer extends StatelessWidget {
                       );
                     },
                   ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.admin_panel_settings_outlined,
-                    activeIcon: Icons.admin_panel_settings,
-                    title: 'Servis Sorumluları',
-                    subtitle: isSuper ? 'Yetkili servis ve personeller' : 'Yetkili servis ağı (Salt Okunur)',
-                    color: AppTheme.accentCyan,
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
-                        ),
-                      );
-                    },
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.engineering_outlined,
-                    activeIcon: Icons.engineering,
-                    title: 'Saha Teknisyenleri',
-                    subtitle: 'Montaj personeli ve ustalar',
-                    color: AppTheme.accentAmber,
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
-                        ),
-                      );
-                    },
-                  ),
+                  if (isSuper || isService) ...[
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.admin_panel_settings_outlined,
+                      activeIcon: Icons.admin_panel_settings,
+                      title: 'Servis Sorumluları',
+                      subtitle: isSuper ? 'Yetkili servis ve personeller' : 'Yetkili servis ağı (Salt Okunur)',
+                      color: AppTheme.accentCyan,
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
+                          ),
+                        );
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.engineering_outlined,
+                      activeIcon: Icons.engineering,
+                      title: 'Saha Teknisyenleri',
+                      subtitle: 'Montaj personeli ve ustalar',
+                      color: AppTheme.accentAmber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.handyman_outlined,
@@ -211,6 +241,19 @@ class SuperUserDrawer extends StatelessWidget {
                       );
                     },
                   ),
+                  if (isInstaller)
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.qr_code_scanner_outlined,
+                      activeIcon: Icons.qr_code_scanner,
+                      title: 'Karekod ile Pano Eşle',
+                      subtitle: 'Yeni panoyu daireye eşleştir',
+                      color: AppTheme.primaryBlueLight,
+                      onTap: () {
+                        Navigator.pop(context);
+                        ClaimManualDialog.show(context);
+                      },
+                    ),
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.health_and_safety_outlined,
@@ -235,6 +278,19 @@ class SuperUserDrawer extends StatelessWidget {
                       ReplaceBoardDialog.show(context);
                     },
                   ),
+                  if (isInstaller)
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.wifi_find_outlined,
+                      activeIcon: Icons.wifi_find,
+                      title: 'Wi-Fi Yapılandırma & Kurtarma',
+                      subtitle: 'Modem değişimi & Pano Smart AP',
+                      color: AppTheme.accentAmber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        WifiRecoveryDialog.show(context);
+                      },
+                    ),
                   const Divider(color: AppTheme.cardBorder, height: 24, indent: 8, endIndent: 8),
                   // Tema Geçişi
                   ListTile(

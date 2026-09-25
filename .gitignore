@@ -55,3 +55,4 @@ __pycache__/
 # Node modules
 node_modules/
 **/node_modules/
+ev_otomasyon_servis_yazilimi/labels/
