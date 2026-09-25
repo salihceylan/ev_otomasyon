@@ -34,7 +34,7 @@ class AdminUserService {
 
     // Eğer çağıran kullanıcı service_user ise, super_user'ları liste dışı tutabilir veya sadece servis ekibini görebilir
     if (currentUser && currentUser.role === 'service_user') {
-      conditions.push(`u.role IN ('service_user', 'user')`);
+      conditions.push(`u.role IN ('service_user', 'installer', 'user')`);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -69,7 +69,8 @@ class AdminUserService {
         CASE 
           WHEN u.role = 'super_user' THEN 1
           WHEN u.role = 'service_user' THEN 2
-          ELSE 3
+          WHEN u.role = 'installer' THEN 3
+          ELSE 4
         END,
         u.created_at DESC
       LIMIT $${paramIdx++} OFFSET $${paramIdx++}
@@ -126,9 +127,9 @@ class AdminUserService {
       [userId]
     );
 
-    // Eğer servis sorumlusu ise son devreye alma (commissioning) kayıtları
+    // Eğer teknisyen veya servis sorumlusu ise son devreye alma (commissioning) kayıtları
     let commissioningLogs = [];
-    if (user.role === 'service_user') {
+    if (user.role === 'installer' || user.role === 'service_user') {
       const logsRes = await db.query(
         `SELECT cl.id, cl.home_id, h.name as home_name, cl.tests_passed, cl.notes, cl.created_at
          FROM commissioning_logs cl
@@ -149,7 +150,7 @@ class AdminUserService {
   }
 
   /**
-   * Yeni kullanıcı oluşturur (Süper Kullanıcı, Servis Sorumlusu)
+   * Yeni kullanıcı oluşturur (Süper Kullanıcı, Servis Sorumlusu, Montaj Teknisyeni)
    */
   async createUser({ full_name, email, password, phone, role = 'user', admin_notes, currentUser }) {
     if (!full_name || !email || !password) {
@@ -162,7 +163,7 @@ class AdminUserService {
     const cleanPhone = phone ? String(phone).trim() : null;
     const cleanRole = String(role).trim().toLowerCase();
 
-    const validRoles = ['super_user', 'service_user', 'user'];
+    const validRoles = ['super_user', 'service_user', 'installer', 'user'];
     if (!validRoles.includes(cleanRole)) {
       const err = new Error(`Geçersiz rol. İzin verilen roller: ${validRoles.join(', ')}`);
       err.statusCode = 400;
@@ -179,10 +180,10 @@ class AdminUserService {
       }
     }
 
-    // service_user sadece regular user tanımlayabilir
+    // service_user sadece installer veya regular user tanımlayabilir
     if (currentUser && currentUser.role === 'service_user') {
-      if (cleanRole !== 'user') {
-        const err = new Error('Servis Sorumluları yalnızca standart daire kullanıcısı tanımlayabilir.');
+      if (cleanRole !== 'installer' && cleanRole !== 'user') {
+        const err = new Error('Servis Sorumluları yalnızca Saha Teknisyeni (installer) veya standart kullanıcı tanımlayabilir.');
         err.statusCode = 403;
         throw err;
       }
@@ -390,6 +391,7 @@ class AdminUserService {
       SELECT 
         COUNT(*) FILTER (WHERE role = 'super_user') as total_super_users,
         COUNT(*) FILTER (WHERE role = 'service_user') as total_service_users,
+        COUNT(*) FILTER (WHERE role = 'installer') as total_installers,
         COUNT(*) FILTER (WHERE role = 'user') as total_regular_users,
         COUNT(*) as total_users
       FROM users
@@ -411,6 +413,7 @@ class AdminUserService {
         total_users: parseInt(countsRes.rows[0].total_users, 10),
         super_users: parseInt(countsRes.rows[0].total_super_users, 10),
         service_users: parseInt(countsRes.rows[0].total_service_users, 10),
+        installers: parseInt(countsRes.rows[0].total_installers, 10),
         regular_users: parseInt(countsRes.rows[0].total_regular_users, 10),
       },
       homes: {

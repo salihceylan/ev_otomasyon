@@ -15,34 +15,15 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  group('Teknisyen Rolünün Kaldırılması ve Servis Sorumlusuna Devri Testleri', () {
-    final legacyInstallerUser = UserModel.fromJson({
-      'id': '33333333-3333-3333-3333-333333333333',
-      'email': 'eski_teknisyen@gudeteknoloji.com.tr',
-      'full_name': 'Murat Usta',
-      'role': 'installer',
-    });
-
+  group('Yetkili Servis Sorumlusu (Service User) Rol ve Ekran İzolasyon Testleri', () {
     final serviceUser = UserModel.fromJson({
-      'id': '22222222-2222-2222-2222-222222222222',
+      'id': '33333333-3333-3333-3333-333333333333',
       'email': 'servis@gudeteknoloji.com.tr',
-      'full_name': 'Ahmet Sorumlu',
+      'full_name': 'Murat Sorumlu',
       'role': 'service_user',
     });
 
-    test('Installer role is eliminated and legacy installer flags evaluate to false', () {
-      expect(legacyInstallerUser.isInstaller, isFalse);
-      expect(legacyInstallerUser.isServiceUser, isFalse);
-      expect(legacyInstallerUser.isSuperUser, isFalse);
-      expect(legacyInstallerUser.isServiceManagerOrSuper, isFalse);
-
-      final state = AutomationState();
-      state.setCurrentUserForTesting(legacyInstallerUser);
-      expect(state.isInstaller, isFalse);
-      expect(state.isServiceManagerOrSuper, isFalse);
-    });
-
-    test('Service user correctly inherits all field and service mode flags', () {
+    test('UserModel and AutomationState correctly report service_user role flags', () {
       expect(serviceUser.isInstaller, isFalse);
       expect(serviceUser.isServiceUser, isTrue);
       expect(serviceUser.isSuperUser, isFalse);
@@ -51,11 +32,12 @@ void main() {
       final state = AutomationState();
       state.setCurrentUserForTesting(serviceUser);
       expect(state.isInstaller, isFalse);
+      expect(state.isServiceUser, isTrue);
       expect(state.isServiceMode, isTrue);
       expect(state.isServiceManagerOrSuper, isTrue);
     });
 
-    testWidgets('DashboardPage renders Yetkili Servis Konsolu with all 8 field tools', (tester) async {
+    testWidgets('DashboardPage renders Yetkili Servis Konsolu for service_user role', (tester) async {
       tester.view.physicalSize = const Size(600, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -78,8 +60,8 @@ void main() {
       expect(find.text('Saha Operasyon & Montaj Yönetimi'), findsOneWidget);
       expect(find.byTooltip('Sandviç Menü'), findsOneWidget);
 
-      // 2. Servis Sorumlusu Başlık Kartı
-      expect(find.text('Ahmet Sorumlu'), findsOneWidget);
+      // 2. Saha Servis Sorumlusu Başlık Kartı
+      expect(find.text('Murat Sorumlu'), findsOneWidget);
       expect(find.text('YETKİLİ SERVİS'), findsOneWidget);
       expect(find.text('servis@gudeteknoloji.com.tr'), findsOneWidget);
 
@@ -89,28 +71,29 @@ void main() {
       expect(find.text('MQTT Köprüsü'), findsOneWidget);
 
       // 4. Sayaçlar
-      expect(find.text('Cihaz Envanteri'), findsOneWidget);
+      expect(find.text('Pano Envanteri'), findsOneWidget);
       expect(find.text('Devreye Alınan'), findsOneWidget);
 
-      // 5. Birleştirilmiş 8 Saha Görevi & Servis Araçları
+      // 5. Saha Görevleri & Araçları
       expect(find.text('🛠️ Saha Servis & Devreye Alma Görevleri'), findsOneWidget);
       expect(find.text('Devreye Alma (Commissioning)'), findsOneWidget);
       expect(find.text('Karekod ile Pano Eşle (Claim)'), findsOneWidget);
+      expect(find.text('Cihaz Envanteri & Seri No'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet & Hasar)'), findsOneWidget);
       expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsOneWidget);
       expect(find.text('Sistem Doktoru (Teşhis)'), findsOneWidget);
-      expect(find.text('Cihaz Envanteri & Seri No'), findsOneWidget);
-      expect(find.text('Acil Servis Sıfırlaması & Devir'), findsOneWidget);
-      expect(find.text('Yetkili Servis Ağı (Salt Okunur)'), findsOneWidget);
+      expect(find.text('Acil Sıfırlama & Mülk Devri'), findsOneWidget);
 
-      // 6. Eski Teknisyen Konsolu veya Daire Sakini Elemanları KESİNLİKLE OLMAMALI
-      expect(find.text('Saha Teknisyeni Konsolu'), findsNothing);
-      expect(find.text('Saha Teknisyen Yönetimi'), findsNothing);
+      // 6. Güvenlik Uyarısı
+      expect(find.text('Yetkili Servis Güvenlik Uyarısı'), findsOneWidget);
+
+      // 7. Daire Sakini Kontrolleri KESİNLİKLE GÖRÜNMEMELİDİR
       expect(find.text('Evinize Hoş Geldiniz!'), findsNothing);
       expect(find.text('Salon'), findsNothing);
+      expect(find.text('Mutfak'), findsNothing);
     });
 
-    testWidgets('SuperUserDrawer equips service_user with all field tools without installer artifacts', (tester) async {
+    testWidgets('SuperUserDrawer shows service console and tools for service_user', (tester) async {
       tester.view.physicalSize = const Size(600, 1200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -135,27 +118,23 @@ void main() {
       await tester.pumpAndSettle();
 
       // Drawer Header
-      expect(find.text('Ahmet Sorumlu'), findsOneWidget);
+      expect(find.text('Murat Sorumlu'), findsOneWidget);
       expect(find.text('servis@gudeteknoloji.com.tr'), findsOneWidget);
       expect(find.text('YETKİLİ SERVİS KONSOLU'), findsOneWidget);
 
-      // Servis Sorumlusu Doğrudan Tüm Saha Araçlarına Sahiptir
-      expect(find.text('Yetkili Servis Konsolu'), findsOneWidget);
+      // Servis Elemanları Görünmeli
+      expect(find.text('Servis Konsolu'), findsOneWidget);
       expect(find.text('Cihaz Envanteri'), findsOneWidget);
-      expect(find.text('Servis Yönetim Konsolu'), findsOneWidget);
-      expect(find.text('Devreye Alma & Donanım Testi'), findsOneWidget);
+      expect(find.text('Servis Sorumluları'), findsOneWidget);
+      expect(find.text('Görevler & Araçlar'), findsOneWidget);
+      expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
       expect(find.text('Karekod ile Pano Eşle'), findsOneWidget);
       expect(find.text('Sistem Doktoru'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
       expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsOneWidget);
-
-      // Teknisyen başlığı veya menüsü kesinlikle olmamalıdır
-      expect(find.text('SAHA TEKNİSYENİ KONSOLU'), findsNothing);
-      expect(find.text('Teknisyen Konsolu'), findsNothing);
-      expect(find.text('Saha Teknisyenleri'), findsNothing);
     });
 
-    testWidgets('ServiceManagementPage has only 2 tabs and no installers tab', (tester) async {
+    testWidgets('ServiceManagementPage locks managers tab creation and shows tools for service_user', (tester) async {
       final state = AutomationState();
       state.setCurrentUserForTesting(serviceUser);
 
@@ -169,12 +148,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Tab 0 Servis Sorumluları
-      expect(find.text('Servis Sorumluları'), findsOneWidget);
-      expect(find.text('Görevler & Araçlar'), findsOneWidget);
-      expect(find.text('Teknisyenler'), findsNothing);
+      // Tab 0 Sorumlular: Kısıtlama Uyarısı görünmeli, Sorumlu Ekle FAB olmamalı
+      expect(find.text('Yetkili Servis Sorumluları'), findsOneWidget);
+      expect(find.text('Sorumlu Ekle'), findsNothing);
 
-      // Tab 1 Görevler & Araçlar
+      // Tab 1 Görevler & Araçlar: Açılmalı ve tüm servis araçlarını kullanabilmeli
       await tester.tap(find.text('Görevler & Araçlar'));
       await tester.pumpAndSettle();
 

@@ -200,7 +200,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Teknisyen / Kurulumcu Girişi',
+                  'Yetkili Servis PIN Girişi',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -282,7 +282,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Ev Sahibi: Servis Sorumlusuna Servis PIN\'i Üret',
+                  'Ev Sahibi: Servis PIN\'i Üret',
                   style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -291,7 +291,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Servis sorumlusunun panoyu ayarlayabilmesi için 2 saat süreli tek kullanımlık servis PIN kodu üretir.',
+            'Yetkili servisin panoyu ayarlayabilmesi için 2 saat süreli tek kullanımlık servis PIN kodu üretir.',
             style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
           ),
           const SizedBox(height: 12),
@@ -390,7 +390,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Aktif Servis / Kurulumcu Modu',
+                  'Aktif Servis Modu',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: AppTheme.accentPurple),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

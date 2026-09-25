@@ -35,8 +35,8 @@ router.get('/service-tokens', authenticateToken, requireHomeAccess(['owner']), a
 });
 
 // POST /api/homes/:home_id/commissioning
-// Devreye Alma (Commissioning) - Servis Sorumlusu & Süper Yönetici onayı
-router.post('/commissioning', authenticateToken, requireHomeAccess(['service_user', 'super_user', 'owner']), async (req, res) => {
+// ADIM 11: Teknisyenin sistemi test edip "Çalışır" olarak onaylaması (Commissioning)
+router.post('/commissioning', authenticateToken, requireHomeAccess(['installer']), async (req, res) => {
   try {
     const { notes, tests_passed = true } = req.body;
     const homeId = req.params.home_id;
@@ -52,7 +52,7 @@ router.post('/commissioning', authenticateToken, requireHomeAccess(['service_use
            commissioning_notes = $2
        WHERE home_id = $3
        RETURNING id, device_uuid, is_commissioned, commissioning_status, commissioned_at`,
-      [technicianId, notes || 'Sistem Yetkili Servis Sorumlusu tarafından test edildi ve onaylandı.', homeId]
+      [technicianId, notes || 'Sistem teknisyen tarafından test edildi ve onaylandı.', homeId]
     );
 
     // 2. Devreye alma günlüğüne ekle
@@ -79,7 +79,7 @@ router.post('/commissioning', authenticateToken, requireHomeAccess(['service_use
 });
 
 // GET /api/homes/:home_id/commissioning-status
-router.get('/commissioning-status', authenticateToken, requireHomeAccess(['owner', 'service_user', 'super_user']), async (req, res) => {
+router.get('/commissioning-status', authenticateToken, requireHomeAccess(['owner', 'installer']), async (req, res) => {
   try {
     const homeId = req.params.home_id;
     const resDb = await db.query(

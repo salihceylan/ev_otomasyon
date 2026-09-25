@@ -12,8 +12,7 @@ async function run() {
         u.email, 
         u.phone, 
         u.full_name, 
-        u.role as user_role,
-        hu.role as home_role, 
+        hu.role, 
         h.name as home_name
       FROM users u
       LEFT JOIN home_users hu ON u.id = hu.user_id

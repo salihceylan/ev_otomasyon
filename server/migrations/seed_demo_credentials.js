@@ -54,19 +54,19 @@ async function seedTestUsers() {
       ON CONFLICT (home_id, user_id) DO UPDATE SET role = 'resident'
     `, [homeId, memberUser.id]);
 
-    // 3. Saha & Servis Sorumlusu (Service User)
+    // 3. Teknik Servis / Montaj Teknisyeni (Installer)
     await pool.query(`
-      INSERT INTO users (email, phone, full_name, password_hash, role, is_active)
-      VALUES ('servis@ahbu.com', '+905553334455', 'Murat Usta (Servis Sorumlusu)', $1, 'service_user', TRUE)
-      ON CONFLICT (email) DO UPDATE SET password_hash = $1, full_name = 'Murat Usta (Servis Sorumlusu)', role = 'service_user', is_active = TRUE
+      INSERT INTO users (email, phone, full_name, password_hash, is_active)
+      VALUES ('teknisyen@ahbu.com', '+905553334455', 'Murat Usta (Yetkili Servis)', $1, TRUE)
+      ON CONFLICT (email) DO UPDATE SET password_hash = $1, full_name = 'Murat Usta (Yetkili Servis)', is_active = TRUE
     `, [installerPass]);
 
-    const serviceUser = (await pool.query("SELECT id FROM users WHERE email = 'servis@ahbu.com'")).rows[0];
+    const installerUser = (await pool.query("SELECT id FROM users WHERE email = 'teknisyen@ahbu.com'")).rows[0];
     await pool.query(`
       INSERT INTO home_users (home_id, user_id, role)
-      VALUES ($1, $2, 'service_user')
-      ON CONFLICT (home_id, user_id) DO UPDATE SET role = 'service_user'
-    `, [homeId, serviceUser.id]);
+      VALUES ($1, $2, 'installer')
+      ON CONFLICT (home_id, user_id) DO UPDATE SET role = 'installer'
+    `, [homeId, installerUser.id]);
 
     console.log('✅ Demo kullanicilari basariyla olusturuldu / guncellendi!');
   } catch (err) {

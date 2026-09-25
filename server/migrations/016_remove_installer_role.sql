@@ -6,13 +6,10 @@ BEGIN;
 
 -- 1. Bağımlı tablolardaki teknisyen (installer) kayıtlarını temizle
 DELETE FROM emergency_reset_logs WHERE installer_user_id IN (SELECT id FROM users WHERE role = 'installer');
-DELETE FROM device_replacement_logs WHERE replaced_by_user_id IN (SELECT id FROM users WHERE role = 'installer');
+DELETE FROM disaster_recovery_logs WHERE replaced_by_user_id IN (SELECT id FROM users WHERE role = 'installer');
 DELETE FROM commissioning_logs WHERE technician_id IN (SELECT id FROM users WHERE role = 'installer');
 DELETE FROM service_tokens WHERE created_by IN (SELECT id FROM users WHERE role = 'installer');
 DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE role = 'installer');
-DELETE FROM password_resets WHERE user_id IN (SELECT id FROM users WHERE role = 'installer');
-DELETE FROM password_reset_tokens WHERE user_id IN (SELECT id FROM users WHERE role = 'installer');
-DELETE FROM home_transfers WHERE from_user_id IN (SELECT id FROM users WHERE role = 'installer') OR accepted_by IN (SELECT id FROM users WHERE role = 'installer');
 
 -- 2. Cihaz ve ev ilişkilerinde teknisyeni boşa çıkar veya sil
 UPDATE devices SET commissioned_by = NULL WHERE commissioned_by IN (SELECT id FROM users WHERE role = 'installer');

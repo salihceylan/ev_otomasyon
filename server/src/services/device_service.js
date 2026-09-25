@@ -493,21 +493,15 @@ class DeviceService {
       }
     }
 
-    // 1. Kullanıcının bu eve erişim yetkisini doğrula (Servis Sorumlusu ve Süper Yönetici tüm daireleri teşhis edebilir)
-    const userRes = await db.query(`SELECT role FROM users WHERE id = $1`, [userId]);
-    const globalRole = userRes.rows[0]?.role;
-    const isServiceOrSuper = globalRole === 'super_user' || globalRole === 'service_user' || globalRole === 'admin';
-
-    if (!isServiceOrSuper) {
-      const permRes = await db.query(
-        `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
-        [homeId, userId]
-      );
-      if (permRes.rows.length === 0) {
-        const err = new Error('Bu evin teşhis bilgilerini görüntüleme yetkiniz yok.');
-        err.statusCode = 403;
-        throw err;
-      }
+    // 1. Kullanıcının bu eve erişim yetkisini doğrula
+    const permRes = await db.query(
+      `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
+      [homeId, userId]
+    );
+    if (permRes.rows.length === 0) {
+      const err = new Error('Bu evin teşhis bilgilerini görüntüleme yetkiniz yok.');
+      err.statusCode = 403;
+      throw err;
     }
 
     // 2. Bulut Altyapı Kontrolü (DB Latency & MQTT Bridge)
@@ -660,22 +654,13 @@ class DeviceService {
     const cleanOldUuid = oldDeviceUuid ? String(oldDeviceUuid).trim().toUpperCase() : null;
     const cleanPin = String(setupPin).trim();
 
-    // 1. Yetki Kontrolü: Ev Sahibi (owner), Servis Sorumlusu (service_user) veya Süper Yönetici yapabilir
-    const userRes = await db.query(`SELECT role FROM users WHERE id = $1`, [userId]);
-    const globalRole = userRes.rows[0]?.role;
-    const isServiceOrSuper = globalRole === 'super_user' || globalRole === 'service_user' || globalRole === 'admin';
-
-    let isOwner = false;
-    if (!isServiceOrSuper) {
-      const userRoleRes = await db.query(
-        `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
-        [homeId, userId]
-      );
-      isOwner = userRoleRes.rows.length > 0 && userRoleRes.rows[0].role === 'owner';
-    }
-
-    if (!isServiceOrSuper && !isOwner) {
-      const err = new Error('Bu felaket kurtarma işlemini yalnızca Ev Sahibi, Servis Sorumlusu veya Süper Yönetici yürütebilir.');
+    // 1. Yetki Kontrolü: Yalnızca Ev Sahibi (owner) veya Teknisyen (installer) yapabilir
+    const userRoleRes = await db.query(
+      `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
+      [homeId, userId]
+    );
+    if (userRoleRes.rows.length === 0 || !['owner', 'installer'].includes(userRoleRes.rows[0].role)) {
+      const err = new Error('Bu felaket kurtarma işlemini yalnızca Ev Sahibi veya Yetkili Teknisyen yürütebilir.');
       err.statusCode = 403;
       throw err;
     }

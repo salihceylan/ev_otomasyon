@@ -388,7 +388,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Teknisyen İçin Geçici Servis PIN\'i Üret',
+                  'Yetkili Servis İçin Geçici PIN Üret',
                   style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -397,7 +397,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Kurulum veya arıza için gelen teknisyenin panoyu ayarlayabilmesi için 2 saat süreli PIN üretin.',
+            'Kurulum veya arıza için gelen yetkili servisin panoyu ayarlayabilmesi için 2 saat süreli PIN üretin.',
             style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
           ),
           const SizedBox(height: 12),

@@ -23,15 +23,9 @@ class SuperUserDrawer extends StatelessWidget {
     final isSuper = state.isSuperUser;
     final isService = state.isServiceUser;
 
-    final badgeColor = isSuper
-        ? AppTheme.accentPurple
-        : AppTheme.accentCyan;
-    final badgeText = isSuper
-        ? 'SÜPER YÖNETİCİ KONSOLU'
-        : 'YETKİLİ SERVİS KONSOLU';
-    final badgeIcon = isSuper
-        ? Icons.verified_user
-        : Icons.engineering_rounded;
+    final badgeColor = isSuper ? AppTheme.accentPurple : AppTheme.accentCyan;
+    final badgeText = isSuper ? 'SÜPER YÖNETİCİ KONSOLU' : 'YETKİLİ SERVİS KONSOLU';
+    final badgeIcon = isSuper ? Icons.verified_user : Icons.engineering_rounded;
 
     return Drawer(
       backgroundColor: AppTheme.bgDark,
@@ -85,9 +79,7 @@ class SuperUserDrawer extends StatelessWidget {
                                   ? user!.fullName
                                   : (isSuper
                                       ? 'Süper Yönetici'
-                                      : isService
-                                          ? 'Yetkili Servis Sorumlusu'
-                                          : 'Saha Montaj Teknisyeni'),
+                                      : 'Yetkili Servis Sorumlusu'),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
@@ -112,7 +104,7 @@ class SuperUserDrawer extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 14),
-                  // Süper Kullanıcı / Servis Sorumlusu / Teknisyen Rozeti
+                  // Süper Kullanıcı / Servis Sorumlusu Rozeti
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
@@ -154,9 +146,7 @@ class SuperUserDrawer extends StatelessWidget {
                     context: context,
                     icon: Icons.dashboard_outlined,
                     activeIcon: Icons.dashboard,
-                    title: isSuper
-                        ? 'Yönetici Konsolu'
-                        : 'Yetkili Servis Konsolu',
+                    title: isSuper ? 'Yönetici Konsolu' : 'Servis Konsolu',
                     subtitle: isSuper
                         ? 'Sistem durumu & ana kontroller'
                         : 'Saha operasyonları & ana kontroller',
@@ -179,29 +169,48 @@ class SuperUserDrawer extends StatelessWidget {
                       );
                     },
                   ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.admin_panel_settings_outlined,
-                    activeIcon: Icons.admin_panel_settings,
-                    title: 'Servis Yönetim Konsolu',
-                    subtitle: isSuper ? 'Yetkili servis sorumluları ve görevler' : 'Servis sorumluları ve saha görevleri',
-                    color: AppTheme.accentCyan,
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
-                        ),
-                      );
-                    },
-                  ),
+                  if (isSuper || isService) ...[
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.admin_panel_settings_outlined,
+                      activeIcon: Icons.admin_panel_settings,
+                      title: 'Servis Sorumluları',
+                      subtitle: isSuper ? 'Yetkili servis ve personeller' : 'Yetkili servis ağı (Salt Okunur)',
+                      color: AppTheme.accentCyan,
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
+                          ),
+                        );
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.task_alt,
+                      activeIcon: Icons.task_alt,
+                      title: 'Görevler & Araçlar',
+                      subtitle: 'Saha araçları, afet kurtarma & testler',
+                      color: AppTheme.accentAmber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.handyman_outlined,
                     activeIcon: Icons.handyman,
-                    title: 'Devreye Alma & Donanım Testi',
-                    subtitle: '8 Röle, 8 Giriş klemens & motor kalibrasyonu',
+                    title: 'Servis Modu & Kalibrasyon',
+                    subtitle: 'Pano yapılandırması & testler',
                     color: AppTheme.accentPurple,
                     onTap: () {
                       Navigator.pop(context);
@@ -216,7 +225,7 @@ class SuperUserDrawer extends StatelessWidget {
                     icon: Icons.qr_code_scanner_outlined,
                     activeIcon: Icons.qr_code_scanner,
                     title: 'Karekod ile Pano Eşle',
-                    subtitle: 'Yeni panoyu daireye eşleştir (Claim)',
+                    subtitle: 'Yeni panoyu daireye eşleştir',
                     color: AppTheme.primaryBlueLight,
                     onTap: () {
                       Navigator.pop(context);
@@ -250,15 +259,15 @@ class SuperUserDrawer extends StatelessWidget {
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.wifi_find_outlined,
-                    activeIcon: Icons.wifi_find,
-                    title: 'Wi-Fi Yapılandırma & Kurtarma',
-                    subtitle: 'Modem değişimi & Pano Smart AP',
-                    color: AppTheme.accentAmber,
-                    onTap: () {
-                      Navigator.pop(context);
-                      WifiRecoveryDialog.show(context);
-                    },
-                  ),
+                      activeIcon: Icons.wifi_find,
+                      title: 'Wi-Fi Yapılandırma & Kurtarma',
+                      subtitle: 'Modem değişimi & Pano Smart AP',
+                      color: AppTheme.accentAmber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        WifiRecoveryDialog.show(context);
+                      },
+                    ),
                   const Divider(color: AppTheme.cardBorder, height: 24, indent: 8, endIndent: 8),
                   // Tema Geçişi
                   ListTile(

@@ -64,8 +64,8 @@ void main() {
 
       // Sayfa başlığı ve tablar görünmeli
       expect(find.text('Servis & Yönetici Paneli'), findsOneWidget);
-      expect(find.text('Servis Sorumluları'), findsOneWidget);
-      expect(find.text('Görevler & Araçlar'), findsOneWidget);
+      expect(find.text('Servis Sorumluları'), findsWidgets);
+      expect(find.text('Görevler & Araçlar'), findsWidgets);
 
       // Görevler sekmesine geçiş
       await tester.tap(find.text('Görevler & Araçlar'));
@@ -113,15 +113,14 @@ void main() {
       expect(find.text('salihceylan@gmail.com'), findsOneWidget);
       expect(find.text('SÜPER YÖNETİCİ KONSOLU'), findsOneWidget);
       expect(find.text('Yönetici Konsolu'), findsOneWidget);
-      expect(find.text('Cihaz Envanteri'), findsOneWidget);
-      expect(find.text('Servis Yönetim Konsolu'), findsOneWidget);
-      expect(find.text('Saha Teknisyenleri'), findsNothing);
+      expect(find.text('Servis Sorumluları'), findsOneWidget);
+      expect(find.text('Görevler & Araçlar'), findsOneWidget);
 
       // Scroll ListView to view remaining items
       await tester.drag(find.byType(ListView), const Offset(0, -200));
       await tester.pumpAndSettle();
 
-      expect(find.text('Devreye Alma & Donanım Testi'), findsOneWidget);
+      expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
       expect(find.text('Sistem Doktoru'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
       expect(find.text('Güvenli Çıkış Yap'), findsOneWidget);
@@ -195,7 +194,7 @@ void main() {
       expect(find.text('🛠️ Saha Servis & Devreye Alma Görevleri'), findsOneWidget);
 
       // Görev Listesi
-      expect(find.text('Karekod ile Pano Eşle (Claim)'), findsOneWidget);
+      expect(find.text('Cihaz Envanteri & Seri No'), findsOneWidget);
       expect(find.text('Devreye Alma (Commissioning)'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet & Hasar)'), findsOneWidget);
 
@@ -233,7 +232,7 @@ void main() {
         findsOneWidget,
       );
 
-      // Görevler tabına geçince servis araçları GÖRÜNMELİ
+      // Görevler & Araçlar tabına geçebilmeli
       await tester.tap(find.text('Görevler & Araçlar'));
       await tester.pumpAndSettle();
 

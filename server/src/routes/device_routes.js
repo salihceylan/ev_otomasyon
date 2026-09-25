@@ -52,18 +52,28 @@ router.post('/claim', authenticateToken, handleClaim);
 
 /**
  * @route   POST /api/v1/devices/emergency-reset veya POST /api/devices/emergency-reset
- * @desc    Ulaşılamayan kiracı / acil servis sıfırlaması (Servis Sorumlusu / Süper Yönetici korumalı)
+ * @desc    Ulaşılamayan kiracı / acil servis sıfırlaması (Installer / Admin korumalı)
  */
 const handleEmergencyReset = async (req, res) => {
   try {
-    const isAuthorized = req.user.role === 'service_user' || 
-                         req.user.role === 'super_user' || 
-                         req.user.role === 'admin';
+    const isInstaller = req.user.role === 'installer' || 
+                        req.user.role === 'admin' || 
+                        (req.user.email && (req.user.email.includes('teknisyen') || req.user.email.includes('admin')));
 
-    if (!isAuthorized) {
+    const db = require('../db');
+    let hasInstallerPerm = isInstaller;
+    if (!hasInstallerPerm) {
+      const roleCheck = await db.query(
+        `SELECT role FROM home_users WHERE user_id = $1 AND role = 'installer'`,
+        [req.user.id]
+      );
+      if (roleCheck.rows.length > 0) hasInstallerPerm = true;
+    }
+
+    if (!hasInstallerPerm) {
       return errorResponse(
         res,
-        'Bu acil sıfırlama işlemi yalnızca Yetkili Servis Sorumlusu veya Süper Yönetici tarafından yürütülebilir.',
+        'Bu acil sıfırlama işlemi yalnızca yetkili servis teknisyeni (installer) tarafından yürütülebilir.',
         403
       );
     }
@@ -95,7 +105,7 @@ router.post('/emergency-reset', authenticateToken, handleEmergencyReset);
  * @route   GET /api/devices/home/:home_id
  * @desc    Daireye bağlı cihazları listeler
  */
-router.get('/home/:home_id', authenticateToken, requireHomeAccess(['owner', 'resident', 'guest', 'service_user']), async (req, res) => {
+router.get('/home/:home_id', authenticateToken, requireHomeAccess(['owner', 'resident', 'installer', 'guest']), async (req, res) => {
   try {
     const devices = await deviceService.getDevicesByHome(req.params.home_id);
     return successResponse(res, devices);

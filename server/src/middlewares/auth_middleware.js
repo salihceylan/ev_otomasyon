@@ -22,7 +22,7 @@ async function authenticateToken(req, res, next) {
   }
 }
 
-function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'service_user', 'super_user']) {
+function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'installer']) {
   return async (req, res, next) => {
     try {
       const homeId = req.params.home_id || req.body.home_id || req.query.home_id;
@@ -31,18 +31,9 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'servic
         return errorResponse(res, 'Daire (home_id) parametresi belirtilmelidir.', 400);
       }
 
-      // Süper Yönetici veya Servis Sorumlusu sistem genelinde tüm evlere tam yetkiyle erişebilir
-      if (req.user && (req.user.role === 'super_user' || req.user.role === 'service_user')) {
-        req.homeAccess = {
-          home_id: homeId,
-          role: req.user.role,
-        };
-        return next();
-      }
-
       // Kullanicinin bu evdeki rolunu sorgula
       const result = await db.query(
-        `SELECT role, valid_from, valid_until 
+        `SELECT role, installer_expires_at, valid_from, valid_until 
          FROM home_users 
          WHERE home_id = $1 AND user_id = $2`,
         [homeId, req.user.id]
@@ -53,6 +44,13 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'servic
       }
 
       const membership = result.rows[0];
+
+      // Kurulumcu / Teknisyen ise sure kontrolu yap (Adim 4.3)
+      if (membership.role === 'installer') {
+        if (!membership.installer_expires_at || new Date(membership.installer_expires_at) < new Date()) {
+          return errorResponse(res, 'Teknisyen servis yetkinizin 2 saatlik suresi dolmustur. Ev sahibinden yeni servis PIN\'i talep edin.', 403);
+        }
+      }
 
       // ADIM 12: Misafir / Temizlikçi ise geçerlilik süresi ve saat aralığı kontrolü yap
       if (membership.role === 'guest') {

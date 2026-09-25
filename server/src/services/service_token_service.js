@@ -57,25 +57,25 @@ class ServiceTokenService {
       techUser = userRes.rows[0];
     }
 
-    // Home_users tablosuna 'service_user' rolu ve 2 saatlik bitis tarihiyle kaydet / guncelle
+    // Home_users tablosuna 'installer' rolu ve 2 saatlik bitis tarihiyle kaydet / guncelle
     await db.query(
-      `INSERT INTO home_users (home_id, user_id, role)
-       VALUES ($1, $2, 'service_user')
+      `INSERT INTO home_users (home_id, user_id, role, installer_expires_at)
+       VALUES ($1, $2, 'installer', $3)
        ON CONFLICT (home_id, user_id) 
-       DO UPDATE SET role = 'service_user'`,
-      [serviceToken.home_id, techUser.id]
+       DO UPDATE SET role = 'installer', installer_expires_at = EXCLUDED.installer_expires_at`,
+      [serviceToken.home_id, techUser.id, serviceToken.expires_at]
     );
 
     // Token'i kullanildi olarak isaretle
     await db.query('UPDATE service_tokens SET is_used = TRUE WHERE id = $1', [serviceToken.id]);
 
-    // 2 saat gecerli servis sorumlusu JWT token'i uret
+    // 2 saat gecerli teknisyen JWT token'i uret
     const token = jwt.sign(
       {
         id: techUser.id,
         email: techUser.email,
         full_name: techUser.full_name,
-        role: 'service_user',
+        role: 'installer',
         home_id: serviceToken.home_id,
         expires_at: serviceToken.expires_at,
       },
@@ -90,9 +90,9 @@ class ServiceTokenService {
         name: serviceToken.home_name,
         mqtt_username: serviceToken.mqtt_username,
       },
-      role: 'service_user',
+      role: 'installer',
       expires_at: serviceToken.expires_at,
-      message: 'Geçici servis sorumlusu oturumu başlatıldı.',
+      message: 'Gecici teknisyen oturumu baslatildi. Yetkiniz 2 saat sonra otomatik olarak sonlanacaktir.',
     };
   }
 }
