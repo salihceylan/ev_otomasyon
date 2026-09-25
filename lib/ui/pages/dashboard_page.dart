@@ -530,35 +530,18 @@ class _DashboardPageState extends State<DashboardPage> {
             const SizedBox(height: 24),
 
             // 4. Yetkili Servis Saha İş Akışı & Eylemleri
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Expanded(
-                  child: Text(
-                    '🛠️ Saha Servis & Devreye Alma Görevleri',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                '🛠️ Saha Servis & Devreye Alma Görevleri',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.textPrimary,
                 ),
-                TextButton.icon(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => const ServiceManagementPage()),
-                    );
-                  },
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 16, color: AppTheme.accentCyan),
-                  label: const Text(
-                    'Tüm Paneli Aç',
-                    style: TextStyle(fontSize: 12.5, color: AppTheme.accentCyan, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             const SizedBox(height: 8),
             _buildServiceUserActionGrid(context),
@@ -689,14 +672,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 icon: Icons.inventory_2_outlined,
                 color: AppTheme.accentCyan,
                 badgeText: 'STOK & PANO',
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const DeviceInventoryPage(),
-                    ),
-                  );
-                },
+                onTap: null, // Yalnızca bilgilendirme, envanter yönetimi Süper Yöneticiye aittir
               ),
             ),
             SizedBox(
@@ -711,7 +687,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                      builder: (_) => const ServiceModePage(),
                     ),
                   );
                 },
@@ -743,16 +719,6 @@ class _DashboardPageState extends State<DashboardPage> {
         'onTap': () => _openQrClaimFlow(context),
       },
       {
-        'title': 'Cihaz Envanteri & Seri No',
-        'subtitle': 'Fabrika kayıtları, seri no ve QR yaşam döngüsünü sorgulayın',
-        'icon': Icons.inventory_2_outlined,
-        'color': AppTheme.accentAmber,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
-            ),
-      },
-      {
         'title': 'Pano Değişimi (Afet & Hasar)',
         'subtitle': 'Arızalı panonun UUID\'sini yenisiyle değiştirip daire verilerini aktarın',
         'icon': Icons.published_with_changes_outlined,
@@ -767,13 +733,6 @@ class _DashboardPageState extends State<DashboardPage> {
         'onTap': () => WifiRecoveryDialog.show(context),
       },
       {
-        'title': 'Sistem Doktoru (Teşhis)',
-        'subtitle': 'Bulut API, MQTT kuyrukları ve canlı gecikme teşhisi',
-        'icon': Icons.health_and_safety_outlined,
-        'color': Colors.cyanAccent,
-        'onTap': () => SystemDoctorDialog.show(context),
-      },
-      {
         'title': 'Acil Sıfırlama & Mülk Devri',
         'subtitle': 'Eski sahibine ulaşılamayan panoyu sıfırlayıp daireye devret',
         'icon': Icons.sync_problem_rounded,
@@ -781,16 +740,6 @@ class _DashboardPageState extends State<DashboardPage> {
         'onTap': () => showDialog(
               context: context,
               builder: (_) => const TransferOwnershipDialog(),
-            ),
-      },
-      {
-        'title': 'Yetkili Servis Ağı (Salt Okunur)',
-        'subtitle': 'Kayıtlı servis sorumlularını ve bölgeleri görüntüle',
-        'icon': Icons.shield_outlined,
-        'color': AppTheme.accentPurple,
-        'onTap': () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServiceManagementPage(initialTabIndex: 0)),
             ),
       },
     ];
@@ -1150,7 +1099,7 @@ class _DashboardPageState extends State<DashboardPage> {
     required IconData icon,
     required Color color,
     required String badgeText,
-    required VoidCallback onTap,
+    VoidCallback? onTap,
   }) {
     return InkWell(
       onTap: onTap,

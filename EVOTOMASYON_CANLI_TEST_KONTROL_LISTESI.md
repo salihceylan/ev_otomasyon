@@ -1,132 +1,132 @@
-# AHBU Ev Otomasyonu - Canlı Saha & Sistem Uçtan Uca Test Kontrol Listesi
+﻿# AHBU Ev Otomasyonu - CanlÄ± Saha & Sistem UÃ§tan Uca Test Kontrol Listesi
 
-Bu kontrol listesi, sıfırlanmış ve temizlenmiş veritabanı üzerinde **hayatın normal akışında** sistemin canlı olarak ayağa kaldırılması ve test edilmesi için hazırlanmıştır.
-
----
-
-## 🔑 Başlangıç Bilgileri
-
-* **Sunucu (VPS API):** `http://178.210.161.55:5000` / Canlı Port 5000 (PM2: `ev-api`)
-* **Süper Yönetici E-Posta:** `salihceylan@gmail.com`
-* **Süper Yönetici Şifre:** `Fingon08.`
-* **Veritabanı Durumu:** Tamamen temizlendi. Sadece `salihceylan@gmail.com` (`super_user`) mevcuttur. Test cihazları, test daireleri ve test kullanıcıları sıfırlanmıştır.
-* **MQTT Altyapısı:** EMQX Port 1884 & Port 8883 MQTTS devrede ve aktiftir (`mqtt_bridge: healthy`).
+Bu kontrol listesi, sÄ±fÄ±rlanmÄ±ÅŸ ve temizlenmiÅŸ veritabanÄ± Ã¼zerinde **hayatÄ±n normal akÄ±ÅŸÄ±nda** sistemin canlÄ± olarak ayaÄŸa kaldÄ±rÄ±lmasÄ± ve test edilmesi iÃ§in hazÄ±rlanmÄ±ÅŸtÄ±r.
 
 ---
 
-## 📋 Adım Adım Kontrol Listesi
+## ğŸ”‘ BaÅŸlangÄ±Ã§ Bilgileri
 
-### AŞAMA 1: Süper Kullanıcı Girişi & Sistem Sağlık Kontrolü
-- [x] **1.1. Uygulamayı Başlatma:** Mobil veya masaüstü uygulamayı açın. Açılış animasyonunun ve dairesel AI devre logosunun akıcı geldiğini doğrulayın.
-- [X] **1.2. Süper Kullanıcı Girişi:** `salihceylan@gmail.com` ve `Fingon08.` bilgileriyle giriş yapın.
-- [X] **1.3. Süper Yönetici Konsolu:** Daire kullanıcısı olmadığınız için ana ekranda gereksiz lamba, panjur, oda veya ev eşleme kartları yer almaz; doğrudan altyapı durumunu ve yönetim kısayollarını içeren **Süper Yönetici Konsolu** karşılar.
-- [X] **1.4. Sol Sandviç Menü (☰):** Sol üstteki sandviç (hamburger) menü simgesine dokunarak Süper Yönetici Çekmecesini (Drawer) açın. Buradan Servis Sorumluları, Teknisyenler, Servis Modu, Sistem Doktoru, Afet Modu Pano Değişimi, Tema ve Çıkış seçeneklerine erişildiğini doğrulayın.
-- [X] **1.5. Canlı Altyapı & Operasyonel Sayaçlar:** Ana konsoldaki API Sunucusu (Port 5000), Veritabanı (Port 5434) ve MQTT Köprüsü (EMQX) yeşil durumlarını, ayrıca Servis Sorumluları, Saha Teknisyenleri ve Devreye Alınan Daire sayaçlarını inceleyin.
+* **Sunucu (VPS API):** `http://178.210.161.55:5000` / CanlÄ± Port 5000 (PM2: `ev-api`)
+* **SÃ¼per YÃ¶netici E-Posta:** `salihceylan@gmail.com`
+* **SÃ¼per YÃ¶netici Åifre:** `Fingon08.`
+* **VeritabanÄ± Durumu:** Tamamen temizlendi. Sadece `salihceylan@gmail.com` (`super_user`) mevcuttur. Test cihazlarÄ±, test daireleri ve test kullanÄ±cÄ±larÄ± sÄ±fÄ±rlanmÄ±ÅŸtÄ±r.
+* **MQTT AltyapÄ±sÄ±:** EMQX Port 1884 & Port 8883 MQTTS devrede ve aktiftir (`mqtt_bridge: healthy`).
 
 ---
 
-### AŞAMA 2: Yeni Servis Sorumlusu (Service User) Tanımlama
-- [X] **2.1. Sorumlu Ekleme:** Sorumlular sekmesinin sağ altındaki `+ Sorumlu Ekle` butonuna dokunun.
+## ğŸ“‹ AdÄ±m AdÄ±m Kontrol Listesi
+
+### AÅAMA 1: SÃ¼per KullanÄ±cÄ± GiriÅŸi & Sistem SaÄŸlÄ±k KontrolÃ¼
+- [x] **1.1. UygulamayÄ± BaÅŸlatma:** Mobil veya masaÃ¼stÃ¼ uygulamayÄ± aÃ§Ä±n. AÃ§Ä±lÄ±ÅŸ animasyonunun ve dairesel AI devre logosunun akÄ±cÄ± geldiÄŸini doÄŸrulayÄ±n.
+- [X] **1.2. SÃ¼per KullanÄ±cÄ± GiriÅŸi:** `salihceylan@gmail.com` ve `Fingon08.` bilgileriyle giriÅŸ yapÄ±n.
+- [X] **1.3. SÃ¼per YÃ¶netici Konsolu:** Daire kullanÄ±cÄ±sÄ± olmadÄ±ÄŸÄ±nÄ±z iÃ§in ana ekranda gereksiz lamba, panjur, oda veya ev eÅŸleme kartlarÄ± yer almaz; doÄŸrudan altyapÄ± durumunu ve yÃ¶netim kÄ±sayollarÄ±nÄ± iÃ§eren **SÃ¼per YÃ¶netici Konsolu** karÅŸÄ±lar.
+- [X] **1.4. Sol SandviÃ§ MenÃ¼ (â˜°):** Sol Ã¼stteki sandviÃ§ (hamburger) menÃ¼ simgesine dokunarak SÃ¼per YÃ¶netici Ã‡ekmecesini (Drawer) aÃ§Ä±n. Buradan Servis SorumlularÄ±, Teknisyenler, Servis Modu, Sistem Doktoru, Afet Modu Pano DeÄŸiÅŸimi, Tema ve Ã‡Ä±kÄ±ÅŸ seÃ§eneklerine eriÅŸildiÄŸini doÄŸrulayÄ±n.
+- [X] **1.5. CanlÄ± AltyapÄ± & Operasyonel SayaÃ§lar:** Ana konsoldaki API Sunucusu (Port 5000), VeritabanÄ± (Port 5434) ve MQTT KÃ¶prÃ¼sÃ¼ (EMQX) yeÅŸil durumlarÄ±nÄ±, ayrÄ±ca Servis SorumlularÄ±, Saha Teknisyenleri ve Devreye AlÄ±nan Daire sayaÃ§larÄ±nÄ± inceleyin.
+
+---
+
+### AÅAMA 2: Yeni Servis Sorumlusu (Service User) TanÄ±mlama
+- [X] **2.1. Sorumlu Ekleme:** Sorumlular sekmesinin saÄŸ altÄ±ndaki `+ Sorumlu Ekle` butonuna dokunun.
 - [X] **2.2. Bilgileri Doldurma:**
-  - **Ad Soyad:** (Örn: *Ahmet Servis Müdürü*)
-  - **E-posta:** (Örn: *servis@gudeteknoloji.com.tr*)
-  - **Şifre:** En az 6 karakter (Örn: *Servis2026!*)
-  - **Telefon:** (Örn: *+905551112233*)
-  - **Rol:** `Servis Sorumlusu (service_user)` seçin.
-- [X] **2.3. Kayıt ve Canlı Yenileme:** Kaydet butonuna basın. Form kapandıktan sonra listenin otomatik yenilenerek yeni servis sorumlusunun listede belirdiğini teyit edin.
-- [X] **2.4. Süper Kullanıcı Çıkışı:** Sağ üstteki profil simgesinden *"Çıkış Yap"* diyerek oturumu kapatın.
+  - **Ad Soyad:** (Ã–rn: *Ahmet Servis MÃ¼dÃ¼rÃ¼*)
+  - **E-posta:** (Ã–rn: *servis@gudeteknoloji.com.tr*)
+  - **Åifre:** En az 6 karakter (Ã–rn: *Servis2026!*)
+  - **Telefon:** (Ã–rn: *+905551112233*)
+  - **Rol:** `Servis Sorumlusu (service_user)` seÃ§in.
+- [X] **2.3. KayÄ±t ve CanlÄ± Yenileme:** Kaydet butonuna basÄ±n. Form kapandÄ±ktan sonra listenin otomatik yenilenerek yeni servis sorumlusunun listede belirdiÄŸini teyit edin.
+- [X] **2.4. SÃ¼per KullanÄ±cÄ± Ã‡Ä±kÄ±ÅŸÄ±:** SaÄŸ Ã¼stteki profil simgesinden *"Ã‡Ä±kÄ±ÅŸ Yap"* diyerek oturumu kapatÄ±n.
 
 ---
 
-### AŞAMA 3: Servis Sorumlusu Olarak Giriş Yapma & Teknisyen Tanımlama
-- [X] **3.1. Servis Sorumlusu Girişi:** Oluşturulan servis sorumlusu e-postası ve şifresi ile sisteme giriş yapın.
-- [X] **3.2. Yetkili Servis Konsolu Doğrulaması:** 
-  - Servis sorumlusu giriş yaptığında karmaşık daire ekranı (ışık, panjur vb.) yerine doğrudan **Yetkili Servis Konsolu** karşılar.
-  - Canlı altyapı çipleri (API Port 5000, DB 5434, MQTT EMQX), operasyonel sayaçlar ve saha devreye alma aksiyon listesi (Saha Teknisyen Yönetimi, Devreye Alma, Pano Değişimi, Acil Devir, Sistem Doktoru, Yetkili Servis Ağı) yer alır.
-  - Sol sandviç menüde (☰) `🛠️ YETKİLİ SERVİS KONSOLU` rozeti görüntülenir.
-- [X] **3.3. Servis Sorumlusu Ekleme Kısıtlaması (Rol İzolasyonu):**
-  - Servis sorumlusunun yeni bir servis sorumlusu (`service_user`) veya süper kullanıcı (`super_user`) ekleyemediğini doğrulayın. (Servis sorumlularını sadece Süper Kullanıcı ekler).
-  - Servis Yönetim Paneli -> "Sorumlular" sekmesinde `+ Sorumlu Ekle` butonu tamamen gizlidir; liste "Salt Okunur" rozetiyle korunur.
-  - Backend API seviyesinde `service_user` rolünün `super_user` veya `service_user` oluşturması/düzenlemesi 403 Forbidden ile engellenmiştir.
+### AÅAMA 3: Servis Sorumlusu Olarak GiriÅŸ Yapma & Teknisyen TanÄ±mlama
+- [X] **3.1. Servis Sorumlusu GiriÅŸi:** OluÅŸturulan servis sorumlusu e-postasÄ± ve ÅŸifresi ile sisteme giriÅŸ yapÄ±n.
+- [X] **3.2. Yetkili Servis Konsolu DoÄŸrulamasÄ±:** 
+  - Servis sorumlusu giriÅŸ yaptÄ±ÄŸÄ±nda karmaÅŸÄ±k daire ekranÄ± (Ä±ÅŸÄ±k, panjur vb.) yerine doÄŸrudan **Yetkili Servis Konsolu** karÅŸÄ±lar.
+  - CanlÄ± altyapÄ± Ã§ipleri (API Port 5000, DB 5434, MQTT EMQX), operasyonel sayaÃ§lar ve saha devreye alma aksiyon listesi (Saha Teknisyen YÃ¶netimi, Devreye Alma, Pano DeÄŸiÅŸimi, Acil Devir, Sistem Doktoru, Yetkili Servis AÄŸÄ±) yer alÄ±r.
+  - Sol sandviÃ§ menÃ¼de (â˜°) `ğŸ› ï¸ YETKÄ°LÄ° SERVÄ°S KONSOLU` rozeti gÃ¶rÃ¼ntÃ¼lenir.
+- [X] **3.3. Servis Sorumlusu Ekleme KÄ±sÄ±tlamasÄ± (Rol Ä°zolasyonu):**
+  - Servis sorumlusunun yeni bir servis sorumlusu (`service_user`) veya sÃ¼per kullanÄ±cÄ± (`super_user`) ekleyemediÄŸini doÄŸrulayÄ±n. (Servis sorumlularÄ±nÄ± sadece SÃ¼per KullanÄ±cÄ± ekler).
+  - Servis YÃ¶netim Paneli -> "Sorumlular" sekmesinde `+ Sorumlu Ekle` butonu tamamen gizlidir; liste "Salt Okunur" rozetiyle korunur.
+  - Backend API seviyesinde `service_user` rolÃ¼nÃ¼n `super_user` veya `service_user` oluÅŸturmasÄ±/dÃ¼zenlemesi 403 Forbidden ile engellenmiÅŸtir.
 
 
 ---
 
-### AŞAMA 4: Daire Sahibi (Müşteri / Admin) Tanımlama
-- [ ] **4.1. Müşteri Hesabı Oluşturma:** Servis Sorumlusu panelinden dairenin asıl sahibi olacak kullanıcıyı sisteme ekleyin veya cihaz eşleme adımında müşterinin e-posta/telefon bilgisini hedef sahip olarak belirleyin.
-- [ ] **4.2. Daire Bilgisi:** Daireye verilecek isim (Örn: *"Daire 4 - Ceylan Apartmanı"* veya *"Yazlık Daire"*).
+### AÅAMA 4: Daire Sahibi (MÃ¼ÅŸteri / Admin) TanÄ±mlama
+- [ ] **4.1. MÃ¼ÅŸteri HesabÄ± OluÅŸturma:** Servis Sorumlusu panelinden dairenin asÄ±l sahibi olacak kullanÄ±cÄ±yÄ± sisteme ekleyin veya cihaz eÅŸleme adÄ±mÄ±nda mÃ¼ÅŸterinin e-posta/telefon bilgisini hedef sahip olarak belirleyin.
+- [ ] **4.2. Daire Bilgisi:** Daireye verilecek isim (Ã–rn: *"Daire 4 - Ceylan ApartmanÄ±"* veya *"YazlÄ±k Daire"*).
 
 ---
 
-### AŞAMA 4.5: Fabrika / Atölye - Cihaz Karekodu Üretimi & Etiket Basımı (Masaüstü Aracı)
-- [ ] **4.5. Masaüstü Servis Yazılımını Başlatma:** `G:\site\ev_otomasyon\ev_otomasyon_servis_yazilimi\ev_otomasyon_sistemi.bat` çalıştırılır ve *"🏷️ 2. Karekod Üret & Etiket Bas (Envanter)"* sekmesine geçilir.
-- [ ] **4.6. Donanımdan MAC Okuma & Bilgi Üretimi:** COM Port seçilerek *"📡 Karttan MAC Oku"* butonuna basılır. Çipin donanım MAC adresi (`E8:F6:0A:XX:XX:XX`), benzersiz UUID'si (`AHBU-S3-XXXXXX`) ve 6 haneli rastgele Kurulum PIN'i (`XXXXXX`) otomatik doldurulur.
-- [ ] **4.7. Sunucuya Kayıt & Sıfır-Mükerrerlik Doğrulaması:** 
-  - *"☁️ Sunucu Envanterine Kaydet & Karekod Üret"* butonuna basılır.
-  - Cihazın sunucuda değişmez ID, artan sıra no (`serial_no`) ve kayıt zamanıyla (`created_at`) envantere `IN_STOCK` olarak eklendiği görülür.
-  - Aynı cihaz için butona 2. kez basılarak mükerrer kayıt korumasının (HTTP 409) devreye girdiği ve engellediği teyit edilir.
-- [ ] **4.8. Termal Etiket Çıktısı & Yapıştırma:** Ekranda otomatik render edilen yüksek çözünürlüklü etiket önizlenir, *"💾 Kaydet"* veya *"🖨️ Yazdır"* ile termal barkod etiketi çıkartılarak pano kapağına yapıştırılır.
+### AÅAMA 4.5: Fabrika / AtÃ¶lye - Cihaz Karekodu Ãœretimi & Etiket BasÄ±mÄ± (MasaÃ¼stÃ¼ AracÄ±)
+- [ ] **4.5. MasaÃ¼stÃ¼ Servis YazÄ±lÄ±mÄ±nÄ± BaÅŸlatma:** `G:\site\ev_otomasyon\ev_otomasyon_servis_yazilimi\ev_otomasyon_sistemi.bat` Ã§alÄ±ÅŸtÄ±rÄ±lÄ±r ve *"ğŸ·ï¸ 2. Karekod Ãœret & Etiket Bas (Envanter)"* sekmesine geÃ§ilir.
+- [ ] **4.6. DonanÄ±mdan MAC Okuma & Bilgi Ãœretimi:** COM Port seÃ§ilerek *"ğŸ“¡ Karttan MAC Oku"* butonuna basÄ±lÄ±r. Ã‡ipin donanÄ±m MAC adresi (`E8:F6:0A:XX:XX:XX`), benzersiz UUID'si (`AHBU-S3-XXXXXX`) ve 6 haneli rastgele Kurulum PIN'i (`XXXXXX`) otomatik doldurulur.
+- [ ] **4.7. Sunucuya KayÄ±t & SÄ±fÄ±r-MÃ¼kerrerlik DoÄŸrulamasÄ±:** 
+  - *"â˜ï¸ Sunucu Envanterine Kaydet & Karekod Ãœret"* butonuna basÄ±lÄ±r.
+  - CihazÄ±n sunucuda deÄŸiÅŸmez ID, artan sÄ±ra no (`serial_no`) ve kayÄ±t zamanÄ±yla (`created_at`) envantere `IN_STOCK` olarak eklendiÄŸi gÃ¶rÃ¼lÃ¼r.
+  - AynÄ± cihaz iÃ§in butona 2. kez basÄ±larak mÃ¼kerrer kayÄ±t korumasÄ±nÄ±n (HTTP 409) devreye girdiÄŸi ve engellediÄŸi teyit edilir.
+- [ ] **4.8. Termal Etiket Ã‡Ä±ktÄ±sÄ± & YapÄ±ÅŸtÄ±rma:** Ekranda otomatik render edilen yÃ¼ksek Ã§Ã¶zÃ¼nÃ¼rlÃ¼klÃ¼ etiket Ã¶nizlenir, *"ğŸ’¾ Kaydet"* veya *"ğŸ–¨ï¸ YazdÄ±r"* ile termal barkod etiketi Ã§Ä±kartÄ±larak pano kapaÄŸÄ±na yapÄ±ÅŸtÄ±rÄ±lÄ±r.
 
 ---
 
-### AŞAMA 5: Cihazı Sisteme Ekleme & Daireye Atama (Claiming)
-- [ ] **5.1. Pano Eşleme Ekranını Açma:** Ana ekrandaki *"Karekod ile Cihaz Eşle"* veya *"Kodu Elle Gir (Manuel Eşleme)"* seçeneğini açın.
+### AÅAMA 5: CihazÄ± Sisteme Ekleme & Daireye Atama (Claiming)
+- [ ] **5.1. Pano EÅŸleme EkranÄ±nÄ± AÃ§ma:** Ana ekrandaki *"Karekod ile Cihaz EÅŸle"* veya *"Kodu Elle Gir (Manuel EÅŸleme)"* seÃ§eneÄŸini aÃ§Ä±n.
 - [ ] **5.2. Cihaz Bilgilerini Girme:**
-  - **Cihaz Seri No / UUID:** Panonun üzerinde yazan UUID (Örn: `DEV-S3-XXXX-AHBU`)
-  - **Kurulum PIN (Setup PIN):** Panonun 6 haneli kurulum şifresi
-  - **Daire Adı:** Hedef Daire İsmi
-  - **Müşteri (Hedef Sahip):** 4. Adımda tanımlanan daire sahibinin e-postası
-- [ ] **5.3. Sahiplenme Onayı:** "Eşle ve Daireye Ata" butonuna basın.
-- [ ] **5.4. Otomatik Yapılandırma:** Cihazın daireye başarıyla bağlandığını, 16 adet kontrol kanalının (röleler ve panjurlar) veritabanında otomatik oluştuğunu görün.
+  - **Cihaz Seri No / UUID:** Panonun Ã¼zerinde yazan UUID (Ã–rn: `DEV-S3-XXXX-AHBU`)
+  - **Kurulum PIN (Setup PIN):** Panonun 6 haneli kurulum ÅŸifresi
+  - **Daire AdÄ±:** Hedef Daire Ä°smi
+  - **MÃ¼ÅŸteri (Hedef Sahip):** 4. AdÄ±mda tanÄ±mlanan daire sahibinin e-postasÄ±
+- [ ] **5.3. Sahiplenme OnayÄ±:** "EÅŸle ve Daireye Ata" butonuna basÄ±n.
+- [ ] **5.4. Otomatik YapÄ±landÄ±rma:** CihazÄ±n daireye baÅŸarÄ±yla baÄŸlandÄ±ÄŸÄ±nÄ±, 16 adet kontrol kanalÄ±nÄ±n (rÃ¶leler ve panjurlar) veritabanÄ±nda otomatik oluÅŸtuÄŸunu gÃ¶rÃ¼n.
 
 ---
 
-### AŞAMA 6: Servis Modu ile Röle & Panjur Yapılandırması (Kalibrasyon)
-- [ ] **6.1. Servis Modunu Açma:** Servis Yönetim Paneli -> *Görevler & Araçlar* sekmesinden **"Servis Modu (Cihaz Kurulumu & Kalibrasyon)"** aracına girin.
-- [ ] **6.2. Kanal İsimlendirme:**
-  - Kanal 1-2: *Salon Panjuru (Yukarı / Aşağı)*
+### AÅAMA 6: Servis Modu ile RÃ¶le & Panjur YapÄ±landÄ±rmasÄ± (Kalibrasyon)
+- [ ] **6.1. Servis Modunu AÃ§ma:** Servis YÃ¶netim Paneli -> *GÃ¶revler & AraÃ§lar* sekmesinden **"Servis Modu (Cihaz Kurulumu & Kalibrasyon)"** aracÄ±na girin.
+- [ ] **6.2. Kanal Ä°simlendirme:**
+  - Kanal 1-2: *Salon Panjuru (YukarÄ± / AÅŸaÄŸÄ±)*
   - Kanal 3: *Salon Avize (Lamba)*
   - Kanal 4: *Mutfak Tezgah Spot (Lamba)*
-  - Kanal 5: *Kombi / Termostat (İmpuls / Darbe Rölesi)*
-  - vb. çıkışları isimlendirin.
-- [ ] **6.3. Panjur Motor Süresi:** Panjur çıkışları için motor seyir süresini (Örn: *20 saniye*) ve elektriksel interlock (çift yön çakışma önleyici) korumasını ayarlayın.
-- [ ] **6.4. Ayarları Panoya Gönderme:** "Panoya Senkronize Et" butonuna basarak ayarların cihaza iletildiğini doğrulayın.
+  - Kanal 5: *Kombi / Termostat (Ä°mpuls / Darbe RÃ¶lesi)*
+  - vb. Ã§Ä±kÄ±ÅŸlarÄ± isimlendirin.
+- [ ] **6.3. Panjur Motor SÃ¼resi:** Panjur Ã§Ä±kÄ±ÅŸlarÄ± iÃ§in motor seyir sÃ¼resini (Ã–rn: *20 saniye*) ve elektriksel interlock (Ã§ift yÃ¶n Ã§akÄ±ÅŸma Ã¶nleyici) korumasÄ±nÄ± ayarlayÄ±n.
+- [ ] **6.4. AyarlarÄ± Panoya GÃ¶nderme:** "Panoya Senkronize Et" butonuna basarak ayarlarÄ±n cihaza iletildiÄŸini doÄŸrulayÄ±n.
 
 ---
 
-### AŞAMA 7: Devreye Alma (Commissioning) Onayı
-- [ ] **7.1. Canlı Donanım Testi:** Servis Modu test ekranında her bir röleyi sırayla açıp kapatarak panodaki röle seslerini ve lamba tepkilerini doğrulayın.
-- [ ] **7.2. Panjur Testi:** Panjurları yukarı/aşağı sürüp durdurma emrinin çalıştığını görün.
-- [ ] **7.3. Devreye Alma Onayı Verme:** Tüm testlerin geçtiğini işaretleyip *"Devreye Almayı Onayla ve Müşteriye Teslim Et"* butonuna basın.
-- [ ] **7.4. Servis Çıkışı:** Servis sorumlusu oturumunu kapatın.
+### AÅAMA 7: Devreye Alma (Commissioning) OnayÄ±
+- [ ] **7.1. CanlÄ± DonanÄ±m Testi:** Servis Modu test ekranÄ±nda her bir rÃ¶leyi sÄ±rayla aÃ§Ä±p kapatarak panodaki rÃ¶le seslerini ve lamba tepkilerini doÄŸrulayÄ±n.
+- [ ] **7.2. Panjur Testi:** PanjurlarÄ± yukarÄ±/aÅŸaÄŸÄ± sÃ¼rÃ¼p durdurma emrinin Ã§alÄ±ÅŸtÄ±ÄŸÄ±nÄ± gÃ¶rÃ¼n.
+- [ ] **7.3. Devreye Alma OnayÄ± Verme:** TÃ¼m testlerin geÃ§tiÄŸini iÅŸaretleyip *"Devreye AlmayÄ± Onayla ve MÃ¼ÅŸteriye Teslim Et"* butonuna basÄ±n.
+- [ ] **7.4. Servis Ã‡Ä±kÄ±ÅŸÄ±:** Servis sorumlusu oturumunu kapatÄ±n.
 
 ---
 
-### AŞAMA 8: Daire Sahibinin Kendi Ekranından Canlı Kontrolü
-- [ ] **8.1. Daire Sahibi Girişi:** Daire sahibinin e-posta ve şifresi ile uygulamaya giriş yapın.
-- [ ] **8.2. Hazır Panel Karşılaması:** Daire sahibinin karşısına doğrudan dairesinin kontrol paneli, tanımlanmış lamba ve panjur kartlarının eksiksiz geldiğini görün.
-- [ ] **8.3. Lamba Aç/Kapa:** Lamba kartlarına dokunarak canlı olarak röleleri açıp kapatın.
-- [ ] **8.4. Panjur Kontrolü:** Panjur kartından yukarı/aşağı ve yüzdeye göre konumlandırma komutlarını çalıştırın.
-- [ ] **8.5. Hepsini Kapat (Gece Huzur Modu):** Glanceable üst bar veya Huzur Modu kartından *"Hepsini Kapat"* butonuna basarak tüm ışıkların tek dokunuşla kapandığını test edin.
+### AÅAMA 8: Daire Sahibinin Kendi EkranÄ±ndan CanlÄ± KontrolÃ¼
+- [ ] **8.1. Daire Sahibi GiriÅŸi:** Daire sahibinin e-posta ve ÅŸifresi ile uygulamaya giriÅŸ yapÄ±n.
+- [ ] **8.2. HazÄ±r Panel KarÅŸÄ±lamasÄ±:** Daire sahibinin karÅŸÄ±sÄ±na doÄŸrudan dairesinin kontrol paneli, tanÄ±mlanmÄ±ÅŸ lamba ve panjur kartlarÄ±nÄ±n eksiksiz geldiÄŸini gÃ¶rÃ¼n.
+- [ ] **8.3. Lamba AÃ§/Kapa:** Lamba kartlarÄ±na dokunarak canlÄ± olarak rÃ¶leleri aÃ§Ä±p kapatÄ±n.
+- [ ] **8.4. Panjur KontrolÃ¼:** Panjur kartÄ±ndan yukarÄ±/aÅŸaÄŸÄ± ve yÃ¼zdeye gÃ¶re konumlandÄ±rma komutlarÄ±nÄ± Ã§alÄ±ÅŸtÄ±rÄ±n.
+- [ ] **8.5. Hepsini Kapat (Gece Huzur Modu):** Glanceable Ã¼st bar veya Huzur Modu kartÄ±ndan *"Hepsini Kapat"* butonuna basarak tÃ¼m Ä±ÅŸÄ±klarÄ±n tek dokunuÅŸla kapandÄ±ÄŸÄ±nÄ± test edin.
 
 ---
 
-### AŞAMA 9: Süper Kullanıcı Takip & Teşhis (Final Kontrol)
-- [ ] **9.1. Süper Kullanıcı ile Tekrar Giriş:** `salihceylan@gmail.com` ile oturum açın.
-- [ ] **9.2. Canlı Servis İstatistikleri:** Servis Paneli'ndeki göstergelerin güncellendiğini görün (Oluşturulan servis görevlisi sayısı, pano envanteri, devreye alınmış aktif daireler).
-- [ ] **9.3. Sistem Doktoru:** Sistem Doktoru aracını çalıştırarak Veritabanı Gecikmesi, MQTT Köprüsü, WebSocket ve Servis Uç Noktalarının yeşil/sağlıklı olduğunu teyit edin.
+### AÅAMA 9: SÃ¼per KullanÄ±cÄ± Takip & TeÅŸhis (Final Kontrol)
+- [ ] **9.1. SÃ¼per KullanÄ±cÄ± ile Tekrar GiriÅŸ:** `salihceylan@gmail.com` ile oturum aÃ§Ä±n.
+- [ ] **9.2. CanlÄ± Servis Ä°statistikleri:** Servis Paneli'ndeki gÃ¶stergelerin gÃ¼ncellendiÄŸini gÃ¶rÃ¼n (OluÅŸturulan servis gÃ¶revlisi sayÄ±sÄ±, pano envanteri, devreye alÄ±nmÄ±ÅŸ aktif daireler).
+- [ ] **9.3. Sistem Doktoru:** Sistem Doktoru aracÄ±nÄ± Ã§alÄ±ÅŸtÄ±rarak VeritabanÄ± Gecikmesi, MQTT KÃ¶prÃ¼sÃ¼, WebSocket ve Servis UÃ§ NoktalarÄ±nÄ±n yeÅŸil/saÄŸlÄ±klÄ± olduÄŸunu teyit edin.
 
 ---
 
-### AŞAMA 10: Yetkili Servis Konsolu & Tümleşik Saha Araçları Doğrulaması
-- [ ] **10.1. Yetkili Servis Girişi:** `mistikahmet35@gmail.com` (Yetkili Servis Sorumlusu) ile giriş yapın.
-- [ ] **10.2. Konsol Başlığı & Rozet:** Ekranda "Yetkili Servis Konsolu", "Saha Operasyon & Montaj Yönetimi" alt başlığı ve turkuaz "YETKİLİ SERVİS" rozetinin görüntülendiğini doğrulayın.
-- [ ] **10.3. Tümleşik 8 Saha Aracı:** Ekranda 8 saha aracının (Devreye Alma, Karekod ile Pano Eşle, Cihaz Envanteri & Seri No, Pano Değişimi, Wi-Fi Yapılandırma & Kurtarma, Sistem Doktoru, Acil Sıfırlama & Mülk Devri, Yetkili Servis Ağı) eksiksiz yer aldığını ve çalıştığını test edin.
-- [ ] **10.4. 2 Sekmeli Servis Paneli:** "Tüm Paneli Aç" veya Sandviç Menüden "Servis Sorumluları" sayfasına giderek tabların yalnızca "Sorumlular" ve "Görevler & Araçlar" olarak 2 sekmeden oluştuğunu doğrulayın.
+### AÅAMA 10: Yetkili Servis Konsolu & TÃ¼mleÅŸik Saha AraÃ§larÄ± DoÄŸrulamasÄ±
+- [ ] **10.1. Yetkili Servis GiriÅŸi:** `mistikahmet35@gmail.com` (Yetkili Servis Sorumlusu) ile giriÅŸ yapÄ±n.
+- [ ] **10.2. Konsol BaÅŸlÄ±ÄŸÄ± & Rozet:** Ekranda "Yetkili Servis Konsolu", "Saha Operasyon & Montaj YÃ¶netimi" alt baÅŸlÄ±ÄŸÄ± ve turkuaz "YETKÄ°LÄ° SERVÄ°S" rozetinin gÃ¶rÃ¼ntÃ¼lendiÄŸini doÄŸrulayÄ±n.
+- [ ] **10.3. TÃ¼mleÅŸik 8 Saha AracÄ±:** Ekranda 8 saha aracÄ±nÄ±n (Devreye Alma, Karekod ile Pano EÅŸle, Cihaz Envanteri & Seri No, Pano DeÄŸiÅŸimi, Wi-Fi YapÄ±landÄ±rma & Kurtarma, Sistem Doktoru, Acil SÄ±fÄ±rlama & MÃ¼lk Devri, Yetkili Servis AÄŸÄ±) eksiksiz yer aldÄ±ÄŸÄ±nÄ± ve Ã§alÄ±ÅŸtÄ±ÄŸÄ±nÄ± test edin.
+- [ ] **10.4. 2 Sekmeli Servis Paneli:** "TÃ¼m Paneli AÃ§" veya SandviÃ§ MenÃ¼den "Servis SorumlularÄ±" sayfasÄ±na giderek tablarÄ±n yalnÄ±zca "Sorumlular" ve "GÃ¶revler & AraÃ§lar" olarak 2 sekmeden oluÅŸtuÄŸunu doÄŸrulayÄ±n.
 
 ---
 
-*Not: Her test adımını sırayla gerçekleştirdikten sonra ilgili kutucuğu `[x]` olarak işaretleyebilirsiniz.*
+*Not: Her test adÄ±mÄ±nÄ± sÄ±rayla gerÃ§ekleÅŸtirdikten sonra ilgili kutucuÄŸu `[x]` olarak iÅŸaretleyebilirsiniz.*
 
 ---
 
@@ -139,9 +139,10 @@ Bu kontrol listesi, sıfırlanmış ve temizlenmiş veritabanı üzerinde **haya
 
 ---
 
-### A�AMA 12: S�per Kullan�c� ve Servis Sorumlusu Men� & Panel �zolasyonu Do�rulamas�
+### AŞAMA 12: Süper Kullanıcı ve Servis Sorumlusu Menü & Panel İzolasyonu Doğrulaması
 
-- [ ] **12.1. S�per Kullan�c� Sandvi� Men�:** S�per kullan�c�da men�de yaln�zca 'Y�netici Konsolu', 'Cihaz Envanteri', 'Servis Sorumlular�', 'Sistem Doktoru' yer almal�; 'G�revler & Ara�lar', 'Servis Modu', 'Karekod ile Pano E�le', 'Pano De�i�imi', 'Wi-Fi Yap�land�rma' kesinlikle bulunmamal�d�r.
-- [ ] **12.2. S�per Kullan�c� Panel �zolasyonu:** Konsol h�zl� i�lemlerinde yaln�zca 'Cihaz Envanteri & Ekleme', 'Servis Sorumlular� Y�netimi' ve 'Sistem Doktoru' kartlar� yer almal�; saha/kalibrasyon kartlar� bulunmamal�d�r.
-- [ ] **12.3. S�per Kullan�c� Sorumlular Sayfas�:** 'Servis Sorumlular�' sayfas� a��ld���nda sekme �ubu�u ve saha g�revleri sekmesi olmamal�, do�rudan sorumlu listesi ve 'Sorumlu Ekle' butonu yer almal�d�r.
-- [ ] **12.4. Servis Sorumlusu Saha Ara�lar� B�t�nl���:** Yetkili servis sorumlusu ile girildi�inde hem men�de hem panellerde t�m saha ara�lar� (G�revler & Ara�lar, Servis Modu, Pano E�le, Pano De�i�imi, Wi-Fi Kurtarma vb.) eksiksiz listelenmelidir.
+- [ ] **12.1. Süper Kullanıcı Sandviç Menü:** Süper kullanıcıda menüde yalnızca 'Yönetici Konsolu', 'Cihaz Envanteri', 'Servis Sorumluları', 'Sistem Doktoru' yer almalı; saha montaj araçları ('Servis Modu', 'Karekod ile Pano Eşle', 'Pano Değişimi', 'Wi-Fi Yapılandırma & Kurtarma', 'Acil Sıfırlama & Mülk Devri') kesinlikle bulunmamalıdır.
+- [ ] **12.2. Süper Kullanıcı Panel İzolasyonu:** Konsol hızlı işlemlerinde yalnızca 'Cihaz Envanteri & Ekleme', 'Servis Sorumluları Yönetimi' ve 'Sistem Doktoru' kartları yer almalı; saha/kalibrasyon kartları bulunmamalıdır.
+- [ ] **12.3. Süper Kullanıcı Sorumlular Sayfası:** 'Servis Sorumluları' sayfası açıldığında doğrudan sorumlu listesi ve 'Sorumlu Ekle' butonu yer almalı; servis araçları sekmesi bulunmamalıdır.
+- [ ] **12.4. Servis Sorumlusu Sandviç Menü İzolasyonu:** Servis sorumlusunda menüde yalnızca 'Servis Konsolu' ve saha montaj araçları ('Servis Modu & Kalibrasyon', 'Karekod ile Pano Eşle', 'Pano Değişimi (Afet Modu)', 'Wi-Fi Yapılandırma & Kurtarma', 'Acil Sıfırlama & Mülk Devri') yer almalı; 'Cihaz Envanteri', 'Servis Sorumluları' ve 'Sistem Doktoru' KESİNLİKLE görünmemelidir.
+- [ ] **12.5. Servis Sorumlusu Panel İzolasyonu:** Servis Sorumlusu Dashboard'ında yalnızca 5 saha aracı (Devreye Alma, Karekod ile Pano Eşle, Pano Değişimi, Wi-Fi Yapılandırma, Acil Sıfırlama) yer almalı; Süper User'a ait 'Cihaz Envanteri & Seri No', 'Sistem Doktoru (Teşhis)', 'Yetkili Servis Ağı' kartları ve 'Tüm Paneli Aç' linki KESİNLİKLE görünmemelidir.

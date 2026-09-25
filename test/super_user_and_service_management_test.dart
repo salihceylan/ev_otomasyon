@@ -234,8 +234,9 @@ void main() {
       expect(find.text('🛠️ Saha Servis & Devreye Alma Görevleri'), findsOneWidget);
 
       // Görev Listesi
-      expect(find.text('Cihaz Envanteri & Seri No'), findsOneWidget);
+      expect(find.text('Cihaz Envanteri & Seri No'), findsNothing);
       expect(find.text('Devreye Alma (Commissioning)'), findsOneWidget);
+      expect(find.text('Karekod ile Pano Eşle (Claim)'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet & Hasar)'), findsOneWidget);
 
       // Daire sakini kontrolleri görünmemeli

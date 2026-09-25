@@ -76,11 +76,15 @@ void main() {
       expect(find.text('🛠️ Saha Servis & Devreye Alma Görevleri'), findsOneWidget);
       expect(find.text('Devreye Alma (Commissioning)'), findsOneWidget);
       expect(find.text('Karekod ile Pano Eşle (Claim)'), findsOneWidget);
-      expect(find.text('Cihaz Envanteri & Seri No'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet & Hasar)'), findsOneWidget);
       expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsOneWidget);
-      expect(find.text('Sistem Doktoru (Teşhis)'), findsOneWidget);
       expect(find.text('Acil Sıfırlama & Mülk Devri'), findsOneWidget);
+
+      // Cihaz Envanteri, Servis Sorumluları ve Sistem Doktoru servis sorumlusunda KESİNLİKLE GÖRÜNMEMELİDİR (Yalnızca Süper User)
+      expect(find.text('Cihaz Envanteri & Seri No'), findsNothing);
+      expect(find.text('Sistem Doktoru (Teşhis)'), findsNothing);
+      expect(find.text('Yetkili Servis Ağı (Salt Okunur)'), findsNothing);
+      expect(find.text('Tüm Paneli Aç'), findsNothing);
 
       // 6. Güvenlik Uyarısı
       expect(find.text('Yetkili Servis Güvenlik Uyarısı'), findsOneWidget);
@@ -122,14 +126,16 @@ void main() {
 
       // Servis Elemanları Görünmeli
       expect(find.text('Servis Konsolu'), findsOneWidget);
-      expect(find.text('Cihaz Envanteri'), findsOneWidget);
-      expect(find.text('Servis Sorumluları'), findsOneWidget);
-      expect(find.text('Görevler & Araçlar'), findsOneWidget);
       expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
       expect(find.text('Karekod ile Pano Eşle'), findsOneWidget);
-      expect(find.text('Sistem Doktoru'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
       expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsOneWidget);
+      expect(find.text('Acil Sıfırlama & Mülk Devri'), findsOneWidget);
+
+      // Süper User'a Ait Menüler Servis Sorumlusunda KESİNLİKLE OLMAMALIDIR
+      expect(find.text('Cihaz Envanteri'), findsNothing);
+      expect(find.text('Servis Sorumluları'), findsNothing);
+      expect(find.text('Sistem Doktoru'), findsNothing);
     });
 
     testWidgets('ServiceManagementPage locks managers tab creation and shows tools for service_user', (tester) async {

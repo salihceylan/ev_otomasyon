@@ -8,6 +8,7 @@ import '../pages/service_mode_page.dart';
 import '../pages/system_doctor_dialog.dart';
 import '../pages/wifi_recovery_dialog.dart';
 import '../pages/claim/claim_manual_dialog.dart';
+import '../pages/family/transfer_ownership_dialog.dart';
 import '../theme/app_theme.dart';
 
 /// AHBU Süper Yönetici Sandviç (Hamburger) Menüsü (Drawer)
@@ -152,73 +153,61 @@ class SuperUserDrawer extends StatelessWidget {
                       Navigator.pop(context); // Menüyü kapat, zaten konsoldayız
                     },
                   ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.inventory_2_outlined,
-                    activeIcon: Icons.inventory_2,
-                    title: 'Cihaz Envanteri',
-                    subtitle: 'Karekodlar, seri no & durum takibi',
-                    color: AppTheme.accentAmber,
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
-                      );
-                    },
-                  ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.admin_panel_settings_outlined,
-                    activeIcon: Icons.admin_panel_settings,
-                    title: 'Servis Sorumluları',
-                    subtitle: isSuper ? 'Yetkili servisleri ekle & düzenle' : 'Yetkili servis ağı (Salt Okunur)',
-                    color: AppTheme.accentCyan,
-                    onTap: () {
-                      Navigator.pop(context);
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
-                        ),
-                      );
-                    },
-                  ),
-                  // Sistem Doktoru: "Sistemin sağlıklı çalışmasını kontrol eder" (Hem Süper hem Servis kullanabilir)
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.health_and_safety_outlined,
-                    activeIcon: Icons.health_and_safety,
-                    title: 'Sistem Doktoru',
-                    subtitle: 'DB, MQTT ve sistem sağlığı teşhisi',
-                    color: Colors.cyanAccent,
-                    onTap: () {
-                      Navigator.pop(context);
-                      SystemDoctorDialog.show(context);
-                    },
-                  ),
                   // =========================================================================
-                  // YALNIZCA SERVİS SORUMLULARI İÇİN SAHA & MONTAJ ARAÇLARI
-                  // (Süper Kullanıcıda bu menüler kesinlikle bulunmaz)
+                  // YALNIZCA SÜPER YÖNETİCİ MENÜLERİ (Cihaz Ekleme/Düzenleme, Sorumlu & Sağlık)
+                  // (Servis Sorumluları bu menüleri KESİNLİKLE GÖRMEZ)
                   // =========================================================================
-                  if (isService) ...[
+                  if (isSuper) ...[
                     _buildDrawerItem(
                       context: context,
-                      icon: Icons.task_alt_outlined,
-                      activeIcon: Icons.task_alt,
-                      title: 'Görevler & Araçlar',
-                      subtitle: 'Saha servis ve montaj operasyonları',
-                      color: AppTheme.accentGreen,
+                      icon: Icons.inventory_2_outlined,
+                      activeIcon: Icons.inventory_2,
+                      title: 'Cihaz Envanteri',
+                      subtitle: 'Karekodlar, seri no & fabrika kayıtları',
+                      color: AppTheme.accentAmber,
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
+                        );
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.admin_panel_settings_outlined,
+                      activeIcon: Icons.admin_panel_settings,
+                      title: 'Servis Sorumluları',
+                      subtitle: 'Yetkili servisleri ekle & düzenle',
+                      color: AppTheme.accentCyan,
                       onTap: () {
                         Navigator.pop(context);
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const ServiceManagementPage(initialTabIndex: 1),
+                            builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
                           ),
                         );
                       },
                     ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.health_and_safety_outlined,
+                      activeIcon: Icons.health_and_safety,
+                      title: 'Sistem Doktoru',
+                      subtitle: 'DB, MQTT ve sistem sağlığı teşhisi',
+                      color: Colors.cyanAccent,
+                      onTap: () {
+                        Navigator.pop(context);
+                        SystemDoctorDialog.show(context);
+                      },
+                    ),
+                  ],
+                  // =========================================================================
+                  // YALNIZCA SERVİS SORUMLULARI İÇİN SAHA & MONTAJ OPERASYON ARAÇLARI
+                  // (Süper Kullanıcıda bu menüler bulunmaz; Servis Sorumlularına özgüdür)
+                  // =========================================================================
+                  if (isService) ...[
                     _buildDrawerItem(
                       context: context,
                       icon: Icons.handyman_outlined,
@@ -268,6 +257,21 @@ class SuperUserDrawer extends StatelessWidget {
                       onTap: () {
                         Navigator.pop(context);
                         WifiRecoveryDialog.show(context);
+                      },
+                    ),
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.sync_problem_rounded,
+                      activeIcon: Icons.sync_problem,
+                      title: 'Acil Sıfırlama & Mülk Devri',
+                      subtitle: 'Eski sahibini boşa çıkar & yeni daireye devret',
+                      color: Colors.redAccent,
+                      onTap: () {
+                        Navigator.pop(context);
+                        showDialog(
+                          context: context,
+                          builder: (_) => const TransferOwnershipDialog(),
+                        );
                       },
                     ),
                   ],
