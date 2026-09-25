@@ -22,13 +22,22 @@ async function authenticateToken(req, res, next) {
   }
 }
 
-function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'installer']) {
+function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'service_user']) {
   return async (req, res, next) => {
     try {
       const homeId = req.params.home_id || req.body.home_id || req.query.home_id;
 
       if (!homeId) {
         return errorResponse(res, 'Daire (home_id) parametresi belirtilmelidir.', 400);
+      }
+
+      // Süper yönetici kontrolü
+      if (req.user && req.user.role === 'super_user') {
+        if (!allowedRoles.includes('super_user')) {
+          return errorResponse(res, 'Bu işlem Süper Yönetici (super_user) için yetkilendirilmemiştir.', 403);
+        }
+        req.homeAccess = { role: 'super_user', is_super: true };
+        return next();
       }
 
       // Kullanicinin bu evdeki rolunu sorgula
@@ -40,15 +49,23 @@ function requireHomeAccess(allowedRoles = ['owner', 'resident', 'guest', 'instal
       );
 
       if (result.rows.length === 0) {
+        // Genel yetkili servis sorumlusu ise: Sadece allowedRoles içinde service_user varsa erişebilir
+        if (req.user && req.user.role === 'service_user') {
+          if (!allowedRoles.includes('service_user')) {
+            return errorResponse(res, 'Bu işlem Yetkili Servis Sorumlusu (service_user) için yetkilendirilmemiştir.', 403);
+          }
+          req.homeAccess = { role: 'service_user' };
+          return next();
+        }
         return errorResponse(res, 'Bu daireye erisim yetkiniz bulunmamaktadir.', 403);
       }
 
       const membership = result.rows[0];
 
-      // Kurulumcu / Teknisyen ise sure kontrolu yap (Adim 4.3)
-      if (membership.role === 'installer') {
-        if (!membership.installer_expires_at || new Date(membership.installer_expires_at) < new Date()) {
-          return errorResponse(res, 'Teknisyen servis yetkinizin 2 saatlik suresi dolmustur. Ev sahibinden yeni servis PIN\'i talep edin.', 403);
+      // Geçici servis erişimi ise süre kontrolü yap
+      if (membership.role === 'service_user' && membership.installer_expires_at) {
+        if (new Date(membership.installer_expires_at) < new Date()) {
+          return errorResponse(res, 'Yetkili servis erisim surenizin (2 saat) suresi dolmustur. Ev sahibinden yeni servis PIN\'i talep edin.', 403);
         }
       }
 
@@ -94,10 +111,19 @@ function requireServiceManager(req, res, next) {
   next();
 }
 
+function requireServiceUser(req, res, next) {
+  if (!req.user || req.user.role !== 'service_user') {
+    return errorResponse(res, 'Bu işlem için Yetkili Servis Sorumlusu (service_user) yetkisi gereklidir.', 403);
+  }
+  next();
+}
+
 module.exports = {
   authenticateToken,
   requireHomeAccess,
   requireSuperUser,
   requireServiceManager,
+  requireServiceUser,
 };
+
 

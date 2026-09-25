@@ -5,7 +5,7 @@ const { authenticateToken, requireHomeAccess } = require('../middlewares/auth_mi
 const { successResponse, errorResponse } = require('../utils/helpers');
 
 // GET /api/homes/:home_id/endpoints (Dairedeki Tum Kontrol Noktalari)
-router.get('/', authenticateToken, requireHomeAccess(['owner', 'resident', 'installer', 'guest']), async (req, res) => {
+router.get('/', authenticateToken, requireHomeAccess(['owner', 'resident', 'service_user', 'guest']), async (req, res) => {
   try {
     const endpoints = await endpointService.getEndpointsByHome(req.params.home_id);
     return successResponse(res, endpoints);
@@ -15,17 +15,21 @@ router.get('/', authenticateToken, requireHomeAccess(['owner', 'resident', 'inst
 });
 
 // PUT /api/homes/:home_id/endpoints/:id (Oda, İsim, Tip, Motor Kalibrasyon Süresi Güncelleme)
-// ADIM 11 RBAC Kuralı: Aile Admini donanım/klemens/motor sürelerini DEĞİŞTİREMEZ. Yalnızca yetkili servis teknisyeni değiştirebilir.
-router.put('/:id', authenticateToken, requireHomeAccess(['owner', 'installer']), async (req, res) => {
+// ADIM 11 RBAC Kuralı: Aile Sakini donanım/klemens/motor sürelerini DEĞİŞTİREMEZ. Yalnızca Yetkili Servis Sorumlusu veya Süper Yönetici değiştirebilir.
+router.put('/:id', authenticateToken, requireHomeAccess(['owner', 'service_user']), async (req, res) => {
   try {
     const { name, room, type, shutter_duration_sec, channel, channel_index } = req.body;
 
     // Donanım ve Motor Koruma Kuralı
-    if (req.homeAccess.role !== 'installer') {
+    const isService = req.user.role === 'service_user' || 
+                      req.user.role === 'super_user' || 
+                      req.homeAccess.role === 'service_user';
+
+    if (!isService) {
       if (shutter_duration_sec !== undefined || channel !== undefined || channel_index !== undefined) {
         return errorResponse(
           res,
-          'Donanım ve motor koruması: Klemens eşlemesi ve panjur motor kalibrasyonu KESİNLİKLE yalnızca yetkili servis teknisyeni tarafından değiştirilebilir.',
+          'Donanım ve motor koruması: Klemens eşlemesi ve panjur motor kalibrasyonu KESİNLİKLE yalnızca Yetkili Servis Sorumlusu tarafından değiştirilebilir.',
           403
         );
       }
@@ -44,7 +48,7 @@ router.put('/:id', authenticateToken, requireHomeAccess(['owner', 'installer']),
 });
 
 // POST /api/homes/:home_id/endpoints/:id/control (Lamba Ac/Kapa, Panjur % Surus)
-router.post('/:id/control', authenticateToken, requireHomeAccess(['owner', 'resident', 'installer', 'guest']), async (req, res) => {
+router.post('/:id/control', authenticateToken, requireHomeAccess(['owner', 'resident', 'service_user', 'guest']), async (req, res) => {
   try {
     const result = await endpointService.controlEndpoint(req.params.home_id, req.params.id, req.body);
     return successResponse(res, result, 'Komut iletildi.');

@@ -76,8 +76,8 @@ void main() {
 
       await tester.pumpAndSettle();
 
-      // Başlangıçta teknisyen oturumu açık değilken donanım koruması ve PIN girişi görünmeli
-      expect(find.text('Kurulumcu & Servis Menüsü'), findsOneWidget);
+      // Başlangıçta yetkili servis oturumu açık değilken donanım koruması ve PIN girişi görünmeli
+      expect(find.text('Yetkili Servis Menüsü'), findsOneWidget);
       expect(find.textContaining('Donanım & Motor Koruması'), findsWidgets);
     });
   });

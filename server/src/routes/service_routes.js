@@ -5,7 +5,7 @@ const { authenticateToken, requireHomeAccess } = require('../middlewares/auth_mi
 const { successResponse, errorResponse } = require('../utils/helpers');
 const db = require('../db');
 
-// FAZ 4 - Adım 4.3: Ev sahibinin 2 saat geçerli teknisyen servis PIN'i üretmesi
+// FAZ 4 - Adım 4.3: Ev sahibinin 2 saat geçerli yetkili servis PIN'i üretmesi
 // POST /api/homes/:home_id/service-token
 router.post('/service-token', authenticateToken, requireHomeAccess(['owner']), async (req, res) => {
   try {
@@ -35,8 +35,8 @@ router.get('/service-tokens', authenticateToken, requireHomeAccess(['owner']), a
 });
 
 // POST /api/homes/:home_id/commissioning
-// ADIM 11: Teknisyenin sistemi test edip "Çalışır" olarak onaylaması (Commissioning)
-router.post('/commissioning', authenticateToken, requireHomeAccess(['installer']), async (req, res) => {
+// ADIM 11: Yetkili Servis Sorumlusunun sistemi test edip "Çalışır" olarak onaylaması (Commissioning)
+router.post('/commissioning', authenticateToken, requireHomeAccess(['service_user']), async (req, res) => {
   try {
     const { notes, tests_passed = true } = req.body;
     const homeId = req.params.home_id;
@@ -52,7 +52,7 @@ router.post('/commissioning', authenticateToken, requireHomeAccess(['installer']
            commissioning_notes = $2
        WHERE home_id = $3
        RETURNING id, device_uuid, is_commissioned, commissioning_status, commissioned_at`,
-      [technicianId, notes || 'Sistem teknisyen tarafından test edildi ve onaylandı.', homeId]
+      [technicianId, notes || 'Sistem yetkili servis sorumlusu tarafından test edildi ve onaylandı.', homeId]
     );
 
     // 2. Devreye alma günlüğüne ekle
@@ -79,7 +79,7 @@ router.post('/commissioning', authenticateToken, requireHomeAccess(['installer']
 });
 
 // GET /api/homes/:home_id/commissioning-status
-router.get('/commissioning-status', authenticateToken, requireHomeAccess(['owner', 'installer']), async (req, res) => {
+router.get('/commissioning-status', authenticateToken, requireHomeAccess(['owner', 'service_user', 'super_user']), async (req, res) => {
   try {
     const homeId = req.params.home_id;
     const resDb = await db.query(

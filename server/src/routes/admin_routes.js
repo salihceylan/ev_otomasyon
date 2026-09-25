@@ -11,6 +11,7 @@ const {
   authenticateToken,
   requireSuperUser,
   requireServiceManager,
+  requireServiceUser,
 } = require('../middlewares/auth_middleware');
 
 // Tüm admin rotaları oturum (JWT) ve en az Servis Yöneticisi / Süper Kullanıcı rolü gerektirir
@@ -44,7 +45,7 @@ router.get('/users', async (req, res, next) => {
 
 /**
  * @route   POST /api/admin/users
- * @desc    Yeni kullanıcı (Süper Kullanıcı, Servis Sorumlusu, Montaj Teknisyeni) oluşturur
+ * @desc    Yeni kullanıcı (Süper Kullanıcı, Servis Sorumlusu, Daire Kullanıcısı) oluşturur
  */
 router.post('/users', async (req, res, next) => {
   try {
@@ -71,7 +72,7 @@ router.post('/users', async (req, res, next) => {
 
 /**
  * @route   GET /api/admin/users/:id
- * @desc    Kullanıcı detayını (bağlı evler, teknisyen logları) getirir
+ * @desc    Kullanıcı detayını (bağlı evler, servis logları) getirir
  */
 router.get('/users/:id', async (req, res, next) => {
   try {
@@ -135,9 +136,9 @@ router.delete('/users/:id', async (req, res, next) => {
 
 /**
  * @route   GET /api/admin/service-summary
- * @desc    Sistem ve servis özet istatistiklerini getirir (Sadece Süper Kullanıcı)
+ * @desc    Sistem ve servis özet istatistiklerini getirir (Sadece Yetkili Servis Sorumlusu)
  */
-router.get('/service-summary', requireSuperUser, async (req, res, next) => {
+router.get('/service-summary', requireServiceUser, async (req, res, next) => {
   try {
     const summary = await adminUserService.getServiceSummary();
     res.json({

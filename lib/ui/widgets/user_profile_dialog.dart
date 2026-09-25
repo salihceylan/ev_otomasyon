@@ -222,7 +222,7 @@ class UserProfileDialog extends StatelessWidget {
               ],
 
               // Başka Bir Eve Katıl (Yalnızca sakin, misafir ve aile bireyleri için)
-              if (!state.isServiceManagerOrSuper && !state.isInstaller) ...[
+              if (!state.isServiceManagerOrSuper) ...[
                 const SizedBox(height: 10),
                 SizedBox(
                   width: double.infinity,

@@ -14,6 +14,12 @@ async function requireHomeAdmin(req, res, next) {
     const homeId = req.params.homeId || req.params.home_id || req.body.home_id || req.body.homeId;
     if (!homeId) return res.status(400).json({ error: 'home_id gerekli' });
 
+    if (req.user && req.user.role === 'super_user') {
+      req.homeId = homeId;
+      req.memberRole = 'super_user';
+      return next();
+    }
+
     const memberRes = await db.query(
       `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,
       [homeId, req.user.id]
@@ -41,6 +47,12 @@ async function requireHomeMember(req, res, next) {
   try {
     const homeId = req.params.homeId || req.params.home_id || req.query.home_id;
     if (!homeId) return res.status(400).json({ error: 'home_id gerekli' });
+
+    if (req.user && req.user.role === 'super_user') {
+      req.homeId = homeId;
+      req.memberRole = 'super_user';
+      return next();
+    }
 
     const memberRes = await db.query(
       `SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2`,

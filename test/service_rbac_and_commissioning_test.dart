@@ -52,7 +52,7 @@ void main() {
     test('AutomationState role-based getters work as expected', () {
       final state = AutomationState();
       expect(state.isServiceMode, isFalse);
-      expect(state.isInstaller, isFalse);
+      expect(state.isServiceUser, isFalse);
       expect(state.isOwner, isFalse);
       expect(state.isMember, isFalse);
     });

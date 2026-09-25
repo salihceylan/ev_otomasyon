@@ -105,7 +105,7 @@ router.get('/magic-login/:token', async (req, res) => {
   }
 });
 
-// POST /api/auth/service-login (Kurulumcu / Teknisyen 2 Saatlik Geçici PIN ile Giriş)
+// POST /api/auth/service-login (Yetkili Servis Sorumlusu 2 Saatlik Geçici PIN ile Giriş)
 router.post('/service-login', async (req, res) => {
   try {
     const { service_pin, technician_name, technician_email } = req.body;
@@ -113,7 +113,7 @@ router.post('/service-login', async (req, res) => {
       return errorResponse(res, 'Servis PIN kodu zorunludur.', 400);
     }
     const result = await serviceTokenService.loginWithServicePin(service_pin, technician_email, technician_name);
-    return successResponse(res, result, 'Teknisyen servis girişi başarılı');
+    return successResponse(res, result, 'Yetkili servis girişi başarılı');
   } catch (err) {
     return errorResponse(res, err.message, err.statusCode || 403);
   }

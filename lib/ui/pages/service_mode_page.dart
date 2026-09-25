@@ -73,7 +73,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AutomationState>();
-    final isInstaller = state.isServiceMode;
+    final isService = state.isServiceMode;
 
     return Scaffold(
       appBar: AppBar(
@@ -95,7 +95,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Kurulumcu & Servis Menüsü',
+                    'Yetkili Servis Menüsü',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -121,7 +121,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!isInstaller) ...[
+              if (!isService) ...[
                 _buildHardwareProtectionWarning(),
                 const SizedBox(height: 16),
                 _buildPinLoginCard(state),

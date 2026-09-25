@@ -242,18 +242,19 @@ class SuperUserDrawer extends StatelessWidget {
                       SystemDoctorDialog.show(context);
                     },
                   ),
-                  _buildDrawerItem(
-                    context: context,
-                    icon: Icons.published_with_changes_outlined,
-                    activeIcon: Icons.published_with_changes,
-                    title: 'Pano Değişimi (Afet Modu)',
-                    subtitle: 'Buluttan birebir pano aktarımı',
-                    color: Colors.tealAccent,
-                    onTap: () {
-                      Navigator.pop(context);
-                      ReplaceBoardDialog.show(context);
-                    },
-                  ),
+                  if (isService)
+                    _buildDrawerItem(
+                      context: context,
+                      icon: Icons.published_with_changes_outlined,
+                      activeIcon: Icons.published_with_changes,
+                      title: 'Pano Değişimi (Afet Modu)',
+                      subtitle: 'Buluttan birebir pano aktarımı',
+                      color: Colors.tealAccent,
+                      onTap: () {
+                        Navigator.pop(context);
+                        ReplaceBoardDialog.show(context);
+                      },
+                    ),
                   _buildDrawerItem(
                     context: context,
                     icon: Icons.wifi_find_outlined,

@@ -50,8 +50,15 @@ void main() {
       expect(state.isServiceManagerOrSuper, isFalse);
     });
 
-    testWidgets('ServiceManagementPage renders tabs and tools without overflow', (tester) async {
+    testWidgets('ServiceManagementPage renders tabs and tools according to role (Disaster Recovery & Reset only for service_user)', (tester) async {
       final state = AutomationState();
+      final serviceUser = UserModel.fromJson({
+        'id': '22222222-2222-2222-2222-222222222222',
+        'email': 'servis@gudeteknoloji.com.tr',
+        'full_name': 'Servis Müdürü',
+        'role': 'service_user',
+      });
+      state.setCurrentUserForTesting(serviceUser);
 
       await tester.pumpWidget(
         MaterialApp(
@@ -76,13 +83,16 @@ void main() {
       expect(find.text('2. Devreye Alma (Commissioning) Onayı'), findsOneWidget);
 
       // Aşağı kaydır
-      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await tester.drag(find.byType(ListView), const Offset(0, -600));
       await tester.pumpAndSettle();
 
+      // Servis sorumlusu Acil Sıfırlama ve Pano Değişimi (Disaster Recovery) görevlerini görebilmeli
       expect(find.text('3. Acil Servis Sıfırlaması & Daire Devri'), findsOneWidget);
+      expect(find.text('4. Buluttan Tek Tıkla Pano Değişimi (Disaster Recovery)'), findsOneWidget);
+      expect(find.text('5. Sistem Doktoru (Otomatik Donanım Teşhisi)'), findsOneWidget);
     });
 
-    testWidgets('SuperUserDrawer renders menu items without overflow', (tester) async {
+    testWidgets('SuperUserDrawer renders menu items without overflow (Pano Değişimi hidden for super_user)', (tester) async {
       final state = AutomationState();
       final user = UserModel.fromJson({
         'id': '1ab81ee3-5e3e-4b4f-ad0b-5b765d540575',
@@ -122,7 +132,8 @@ void main() {
 
       expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
       expect(find.text('Sistem Doktoru'), findsOneWidget);
-      expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
+      // Pano Değişimi (Afet Modu) süper kullanıcıdan alındı, GÖRÜNMEMELİ:
+      expect(find.text('Pano Değişimi (Afet Modu)'), findsNothing);
       expect(find.text('Güvenli Çıkış Yap'), findsOneWidget);
     });
 
@@ -151,10 +162,12 @@ void main() {
       expect(find.text('AHBU Altyapı & Servis Denetimi'), findsOneWidget);
       expect(find.byTooltip('Sandviç Menü'), findsOneWidget);
 
-      // Altyapı bileşenleri
+      // Altyapı bileşenleri & Tüm Sistem Teşhisi
       expect(find.text('API Sunucusu'), findsOneWidget);
       expect(find.text('Veritabanı'), findsOneWidget);
       expect(find.text('MQTT Köprüsü'), findsOneWidget);
+      expect(find.text('Tüm Sistem Teşhisi (System Doctor)'), findsOneWidget);
+      expect(find.text('Pano Değişimi (Afet Modu)'), findsNothing);
 
       // Daire kontrolleri GÖRÜNMEMELİ
       expect(find.text('Evinize Hoş Geldiniz!'), findsNothing);

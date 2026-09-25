@@ -24,14 +24,12 @@ void main() {
     });
 
     test('UserModel and AutomationState correctly report service_user role flags', () {
-      expect(serviceUser.isInstaller, isFalse);
       expect(serviceUser.isServiceUser, isTrue);
       expect(serviceUser.isSuperUser, isFalse);
       expect(serviceUser.isServiceManagerOrSuper, isTrue);
 
       final state = AutomationState();
       state.setCurrentUserForTesting(serviceUser);
-      expect(state.isInstaller, isFalse);
       expect(state.isServiceUser, isTrue);
       expect(state.isServiceMode, isTrue);
       expect(state.isServiceManagerOrSuper, isTrue);

@@ -65,8 +65,7 @@ class AutomationState extends ChangeNotifier {
   bool get isMqttConnected => _isMqttConnected;
   String? get servicePin => _servicePin;
   DateTime? get servicePinExpiry => _servicePinExpiry;
-  bool get isServiceMode => _currentUser?.role == 'installer' || _currentUser?.role == 'service_user';
-  bool get isInstaller => _currentUser?.role == 'installer';
+  bool get isServiceMode => _currentUser?.role == 'service_user';
   bool get isServiceUser => _currentUser?.role == 'service_user';
   bool get isSuperUser => _currentUser?.role == 'super_user';
   bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;
@@ -724,7 +723,7 @@ class AutomationState extends ChangeNotifier {
     }
   }
 
-  /// ADIM 11: Teknisyenin sistemi test edip "Çalışır" olarak devreye alması
+  /// ADIM 11: Yetkili Servis Sorumlusunun sistemi test edip "Çalışır" olarak devreye alması
   Future<Map<String, dynamic>> commissionSystem({String? notes}) async {
     if (_activeHome == null) throw Exception('Aktif ev seçilmedi');
     try {
@@ -921,7 +920,7 @@ class AutomationState extends ChangeNotifier {
     }
   }
 
-  /// ADIM 13: Teknisyen / Acil Sıfırlama - Cihazı Sıfırlama / Yeni Malik Atama
+  /// ADIM 13: Yetkili Servis Sorumlusu / Acil Sıfırlama - Cihazı Sıfırlama / Yeni Malik Atama
   Future<Map<String, dynamic>> emergencyResetDevice({
     required String deviceUuid,
     required String reason,
@@ -969,6 +968,9 @@ class AutomationState extends ChangeNotifier {
     final homeId = _activeHome?.effectiveId ??
         (_activeHome?.idStr.isNotEmpty == true ? _activeHome!.idStr : (_activeHome?.id != 0 ? _activeHome?.id : null));
     if (homeId == null) {
+      if (isSuperUser || isServiceUser) {
+        return await cloudApi.fetchSystemDiagnostic('0');
+      }
       throw Exception('Aktif daire seçili değil.');
     }
     return await cloudApi.fetchSystemDiagnostic(homeId);
@@ -1137,7 +1139,7 @@ class AutomationState extends ChangeNotifier {
     }
   }
 
-  // --- Cihaz Sahiplenme & Teknisyen Token ---
+  // --- Cihaz Sahiplenme & Yetkili Servis Token ---
 
   Future<String> generateServiceToken({int durationHours = 2}) async {
     if (_activeHome == null) throw Exception('Önce bir daire seçilmelidir');
