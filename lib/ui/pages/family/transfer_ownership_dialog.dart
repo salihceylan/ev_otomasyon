@@ -3,18 +3,21 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../../services/automation_state.dart';
+import '../../../utils/qr_claim_parser.dart';
+import '../claim/qr_scanner_page.dart';
 import '../../theme/app_theme.dart';
 
 class TransferOwnershipDialog extends StatefulWidget {
-  const TransferOwnershipDialog({super.key});
+  final int initialTab;
+  const TransferOwnershipDialog({super.key, this.initialTab = 0});
 
-  static Future<void> show(BuildContext context) {
+  static Future<void> show(BuildContext context, {int initialTab = 0}) {
     final state = context.read<AutomationState>();
     return showDialog(
       context: context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
-        child: const TransferOwnershipDialog(),
+        child: TransferOwnershipDialog(initialTab: initialTab),
       ),
     );
   }
@@ -25,14 +28,21 @@ class TransferOwnershipDialog extends StatefulWidget {
 
 class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   final _targetController = TextEditingController();
+  final _emergencyUuidController = TextEditingController();
+  final _emergencyReasonController = TextEditingController();
+  final _emergencyNewOwnerController = TextEditingController();
+
+  late int _selectedTab;
   bool _isLoading = true;
   bool _isActionLoading = false;
+  bool _isEmergencyResetting = false;
   String? _errorMessage;
   Map<String, dynamic>? _pendingTransfer;
 
   @override
   void initState() {
     super.initState();
+    _selectedTab = widget.initialTab;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadTransferStatus();
     });
@@ -41,6 +51,9 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   @override
   void dispose() {
     _targetController.dispose();
+    _emergencyUuidController.dispose();
+    _emergencyReasonController.dispose();
+    _emergencyNewOwnerController.dispose();
     super.dispose();
   }
 
@@ -186,7 +199,75 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
               ),
               const Divider(height: 24, color: AppTheme.cardBorder),
 
-              if (_isLoading) ...[
+              // TAB SEÇİCİ
+              Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _selectedTab = 0),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _selectedTab == 0
+                              ? AppTheme.accentAmber.withValues(alpha: 0.15)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: _selectedTab == 0
+                                ? AppTheme.accentAmber
+                                : Colors.white12,
+                          ),
+                        ),
+                        child: Text(
+                          'Daire Devri (Kod & QR)',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: _selectedTab == 0 ? FontWeight.bold : FontWeight.normal,
+                            color: _selectedTab == 0 ? AppTheme.accentAmber : AppTheme.textMuted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setState(() => _selectedTab = 1),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _selectedTab == 1
+                              ? AppTheme.accentRed.withValues(alpha: 0.15)
+                              : Colors.transparent,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: _selectedTab == 1
+                                ? AppTheme.accentRed
+                                : Colors.white12,
+                          ),
+                        ),
+                        child: Text(
+                          'Acil Pano Sıfırlama',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: _selectedTab == 1 ? FontWeight.bold : FontWeight.normal,
+                            color: _selectedTab == 1 ? AppTheme.accentRed : AppTheme.textMuted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              if (_selectedTab == 1) ...[
+                _buildEmergencyResetView(),
+              ] else if (_isLoading) ...[
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 32),
                   child: Center(child: CircularProgressIndicator()),
@@ -417,6 +498,245 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
         ),
       ],
     );
+  }
+
+  Widget _buildEmergencyResetView() {
+    final state = context.read<AutomationState>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppTheme.accentRed.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppTheme.accentRed.withValues(alpha: 0.3)),
+          ),
+          child: const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, color: AppTheme.accentRed, size: 20),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Eski kiracı ulaşılamıyorsa veya telefon kayıpsa; panonun QR kodunu okutarak cihazı boşa çıkarabilir veya doğrudan yeni malike devredebilirsiniz.',
+                  style: TextStyle(fontSize: 11.5, color: AppTheme.textMuted, height: 1.3),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // 1. KAREKOD TARA BUTONU
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () async {
+              final raw = await Navigator.push<String>(
+                context,
+                MaterialPageRoute(builder: (_) => const QrScannerPage()),
+              );
+              if (raw != null && raw.trim().isNotEmpty && mounted) {
+                final parsed = QrClaimParser.parse(raw);
+                setState(() {
+                  _emergencyUuidController.text = parsed?.uid ?? raw.trim();
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('✅ Pano karekodu okundu (UUID: ${_emergencyUuidController.text})'),
+                    backgroundColor: AppTheme.accentGreen,
+                  ),
+                );
+              }
+            },
+            icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentRed, size: 20),
+            label: const Text(
+              'Pano QR Kodunu Tara (Kamera)',
+              style: TextStyle(color: AppTheme.accentRed, fontWeight: FontWeight.bold),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: AppTheme.accentRed.withValues(alpha: 0.5)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Cihaz UUID
+        TextField(
+          controller: _emergencyUuidController,
+          decoration: InputDecoration(
+            labelText: 'Cihaz UUID (Pano Etiketi)',
+            hintText: 'AHBU-S3-PANEL-XXXX',
+            labelStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            prefixIcon: const Icon(Icons.qr_code, size: 20),
+            filled: true,
+            fillColor: AppTheme.cardDark,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentRed),
+              tooltip: 'Kamera ile Tara',
+              onPressed: () async {
+                final raw = await Navigator.push<String>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const QrScannerPage()),
+                );
+                if (raw != null && raw.trim().isNotEmpty && mounted) {
+                  final parsed = QrClaimParser.parse(raw);
+                  setState(() {
+                    _emergencyUuidController.text = parsed?.uid ?? raw.trim();
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('✅ Pano karekodu okundu: ${_emergencyUuidController.text}'),
+                      backgroundColor: AppTheme.accentGreen,
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // Sıfırlama Gerekçesi (Zorunlu)
+        TextField(
+          controller: _emergencyReasonController,
+          decoration: InputDecoration(
+            labelText: 'Sıfırlama Gerekçesi (Zorunlu)',
+            hintText: 'Örn: Kiracı tahliye edildi, sözleşme ibraz edildi',
+            labelStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            prefixIcon: const Icon(Icons.description_outlined, size: 20),
+            filled: true,
+            fillColor: AppTheme.cardDark,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // Yeni Malik (Opsiyonel)
+        TextField(
+          controller: _emergencyNewOwnerController,
+          decoration: InputDecoration(
+            labelText: 'Yeni Malik E-posta / Telefon (Opsiyonel)',
+            hintText: 'Boş bırakılırsa fabrika stok durumuna döner',
+            labelStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            prefixIcon: const Icon(Icons.person_outline, size: 20),
+            filled: true,
+            fillColor: AppTheme.cardDark,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        ElevatedButton.icon(
+          onPressed: _isEmergencyResetting ? null : () => _executeEmergencyReset(state),
+          icon: _isEmergencyResetting
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+              : const Icon(Icons.restore, size: 18),
+          label: const Text('Acil Sıfırla & Eski Aileyi Azlet'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.accentRed,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 13),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            textStyle: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _executeEmergencyReset(AutomationState state) async {
+    final uuid = _emergencyUuidController.text.trim();
+    final reason = _emergencyReasonController.text.trim();
+    final newOwner = _emergencyNewOwnerController.text.trim();
+
+    if (uuid.isEmpty || reason.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Lütfen cihaz UUID ve sıfırlama gerekçesini eksiksiz girin.'),
+          backgroundColor: AppTheme.accentRed,
+        ),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceDark,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: AppTheme.cardBorder),
+        ),
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: AppTheme.accentRed, size: 24),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Acil Sıfırlama Onayı',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          '$uuid kimlikli cihaz sıfırlanacak ve eski ailenin tüm yetki ve oturumları sonlandırılacaktır. Bu işlemi onaylıyor musunuz?',
+          style: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Vazgeç', style: TextStyle(color: AppTheme.textMuted)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentRed, foregroundColor: Colors.white),
+            child: const Text('Evet, Sıfırla'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _isEmergencyResetting = true);
+
+    try {
+      final res = await state.emergencyResetDevice(
+        deviceUuid: uuid,
+        reason: reason,
+        newOwnerIdentifier: newOwner.isNotEmpty ? newOwner : null,
+      );
+
+      if (!mounted) return;
+      setState(() => _isEmergencyResetting = false);
+      final message = res['message'] ?? 'Acil servis sıfırlaması başarıyla tamamlandı.';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('✅ $message'),
+          backgroundColor: AppTheme.accentGreen,
+        ),
+      );
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isEmergencyResetting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Hata: ${e.toString().replaceAll('Exception: ', '')}'),
+          backgroundColor: AppTheme.accentRed,
+        ),
+      );
+    }
   }
 }
 

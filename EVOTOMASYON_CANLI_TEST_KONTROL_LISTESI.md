@@ -1,4 +1,4 @@
-﻿# AHBU Ev Otomasyonu - CanlÄ± Saha & Sistem UÃ§tan Uca Test Kontrol Listesi
+# AHBU Ev Otomasyonu - CanlÄ± Saha & Sistem UÃ§tan Uca Test Kontrol Listesi
 
 Bu kontrol listesi, sÄ±fÄ±rlanmÄ±ÅŸ ve temizlenmiÅŸ veritabanÄ± Ã¼zerinde **hayatÄ±n normal akÄ±ÅŸÄ±nda** sistemin canlÄ± olarak ayaÄŸa kaldÄ±rÄ±lmasÄ± ve test edilmesi iÃ§in hazÄ±rlanmÄ±ÅŸtÄ±r.
 
@@ -155,3 +155,12 @@ Bu kontrol listesi, sÄ±fÄ±rlanmÄ±ÅŸ ve temizlenmiÅŸ veritabanÄ± Ã¼
 - [ ] **13.2. Devreye Alma İçinde Karekod Tarama:** Devreye Alma menüsünde 'Yeni Pano Cihazı Eşleme & Müşteriye Teslim' kartında 'Pano Karekodunu Oku (Kamera ile Tara)' butonuna basıldığında kameranın açıldığını, QR okutulduğunda Pano UUID ve 6 haneli Kurulum PIN alanlarının otomatik dolduğunu test edin.
 - [ ] **13.3. Servis Sorumlusu Cihaz Sahipliği Engeli:** Servis sorumlusu kendi e-posta/telefonunu girdiğinde veya müşteri alanı boşken sistemi kurmayı denediğinde sistemin 'Yetkili servis sorumlusu cihaz sahibi olamaz! Cihaz daire sahibine (müşteriye) tanımlanmalıdır.' uyarısı verdiğini doğrulayın.
 - [ ] **13.4. Müşteri OTP Gönderim ve Doğrulama Akışı:** Daire sahibinin e-posta/telefonu girilip 'Müşteriye Doğrulama Kodu Gönder' butonuna basıldığında müşteriye 6 haneli onay kodu iletildiğini; bu kod sisteme girilmeden cihazın kişiye veya daireye kesinlikle tanımlanamadığını (onay kodu girilip doğrulandığında ise cihazın müşteriye başarıyla tanımlandığını) doğrulayın.
+
+---
+
+### AŞAMA 14: Acil Servis Sıfırlaması & Pano Değişiminde Karekod (QR Kod) Okuma Doğrulaması
+
+- [ ] **14.1. Devreye Alma Menüsünde Acil Servis Sıfırlaması QR Okuma:** Servis Modu (Devreye Alma) sayfasındaki '⚠️ Acil Servis Sıfırlaması' kartında 'Acil Sıfırlama için Pano Karekodunu Oku' butonu veya UUID alanı yanındaki QR tarama ikonuna basıldığında kameranın açıldığını, panonun QR kodu okutulduğunda UUID alanının otomatik olarak dolduğunu ve yeşil onay bildirimi gösterildiğini doğrulayın.
+- [ ] **14.2. Acil Sıfırlama & Mülk Devri Diyaloğunda QR Okuma:** Dashboard ve menüdeki 'Acil Sıfırlama & Mülk Devri' diyaloğuna 'Acil Pano Sıfırlama' sekmesinin eklendiğini, bu sekmede kamera ile pano QR kodunun okutularak UUID'nin otomatik doldurulduğunu ve gerekçe girilerek cihazın tek tıkla boşa çıkarılabildiğini test edin.
+- [ ] **14.3. Pano Değişimi (Disaster Recovery) QR Okuma:** 'Pano Değişimi & Kurtarma' diyaloğunda Yeni Pano UUID alanındaki kamera ikonuyla yeni kartın QR kodunun okutulduğunda hem UUID hem de Kurulum PIN alanlarının otomatik doldurulduğunu doğrulayın.
+

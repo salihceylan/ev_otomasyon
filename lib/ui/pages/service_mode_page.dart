@@ -1093,6 +1093,42 @@ class _ServiceModePageState extends State<ServiceModePage> {
           ),
           const SizedBox(height: 14),
 
+          // 1. KAREKOD TARA BUTONU
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () async {
+                final raw = await Navigator.push<String>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const QrScannerPage()),
+                );
+                if (raw != null && raw.trim().isNotEmpty && mounted) {
+                  final parsed = QrClaimParser.parse(raw);
+                  setState(() {
+                    _emergencyUuidController.text = parsed?.uid ?? raw.trim();
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('✅ Pano karekodu okundu (UUID: ${_emergencyUuidController.text})'),
+                      backgroundColor: AppTheme.accentGreen,
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentRed, size: 20),
+              label: const Text(
+                'Acil Sıfırlama için Pano Karekodunu Oku',
+                style: TextStyle(color: AppTheme.accentRed, fontWeight: FontWeight.bold),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: AppTheme.accentRed.withValues(alpha: 0.5)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
           // Cihaz UUID
           TextField(
             controller: _emergencyUuidController,
@@ -1105,6 +1141,28 @@ class _ServiceModePageState extends State<ServiceModePage> {
               filled: true,
               fillColor: AppTheme.surfaceDark,
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentRed),
+                tooltip: 'Kamera ile Tara',
+                onPressed: () async {
+                  final raw = await Navigator.push<String>(
+                    context,
+                    MaterialPageRoute(builder: (_) => const QrScannerPage()),
+                  );
+                  if (raw != null && raw.trim().isNotEmpty && mounted) {
+                    final parsed = QrClaimParser.parse(raw);
+                    setState(() {
+                      _emergencyUuidController.text = parsed?.uid ?? raw.trim();
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('✅ Pano karekodu okundu: ${_emergencyUuidController.text}'),
+                        backgroundColor: AppTheme.accentGreen,
+                      ),
+                    );
+                  }
+                },
+              ),
             ),
           ),
           const SizedBox(height: 10),

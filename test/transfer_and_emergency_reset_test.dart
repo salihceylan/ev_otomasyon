@@ -61,10 +61,43 @@ void main() {
       expect(find.text('AHBU-TR-998877'), findsOneWidget);
     });
 
-    testWidgets('ServiceModePage contains emergency reset section in installer mode', (tester) async {
+    testWidgets('TransferOwnershipDialog switches to emergency reset tab and renders QR scanner button', (tester) async {
       final state = AutomationState();
       addTearDown(() => state.dispose());
 
+      await tester.pumpWidget(
+        ChangeNotifierProvider<AutomationState>.value(
+          value: state,
+          child: const MaterialApp(
+            home: Scaffold(
+              body: TransferOwnershipDialog(),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Sekmeler görünmeli
+      expect(find.text('Daire Devri (Kod & QR)'), findsOneWidget);
+      expect(find.text('Acil Pano Sıfırlama'), findsOneWidget);
+
+      // Acil Pano Sıfırlama sekmesine geç
+      await tester.tap(find.text('Acil Pano Sıfırlama'));
+      await tester.pumpAndSettle();
+
+      // Acil sıfırlama formu ve QR butonu görünmeli
+      expect(find.text('Pano QR Kodunu Tara (Kamera)'), findsOneWidget);
+      expect(find.text('Cihaz UUID (Pano Etiketi)'), findsOneWidget);
+      expect(find.text('Sıfırlama Gerekçesi (Zorunlu)'), findsOneWidget);
+      expect(find.text('Acil Sıfırla & Eski Aileyi Azlet'), findsOneWidget);
+    });
+
+    testWidgets('ServiceModePage contains emergency reset QR scan button in service mode', (tester) async {
+      final state = AutomationState();
+      addTearDown(() => state.dispose());
+
+      // Servis yetkilisi oturumu simüle et
       await tester.pumpWidget(
         ChangeNotifierProvider<AutomationState>.value(
           value: state,

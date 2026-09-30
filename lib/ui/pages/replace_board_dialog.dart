@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
+import '../../utils/qr_claim_parser.dart';
+import 'claim/qr_scanner_page.dart';
 import '../theme/app_theme.dart';
 
 class ReplaceBoardDialog extends StatefulWidget {
@@ -189,6 +191,33 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
             filled: true,
             fillColor: AppTheme.cardDark,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+            suffixIcon: IconButton(
+              icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentPurple),
+              tooltip: 'Kamera ile Karekod Oku',
+              onPressed: () async {
+                final raw = await Navigator.push<String>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const QrScannerPage()),
+                );
+                if (raw != null && raw.trim().isNotEmpty && mounted) {
+                  final parsed = QrClaimParser.parse(raw);
+                  setState(() {
+                    if (parsed != null) {
+                      _uuidController.text = parsed.uid;
+                      _pinController.text = parsed.pin;
+                    } else {
+                      _uuidController.text = raw.trim();
+                    }
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('✅ Pano seri no okundu: ${_uuidController.text}'),
+                      backgroundColor: AppTheme.accentGreen,
+                    ),
+                  );
+                }
+              },
+            ),
           ),
         ),
         const SizedBox(height: 12),
