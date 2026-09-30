@@ -461,13 +461,13 @@ class _DashboardPageState extends State<DashboardPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
                     '⚡ Hızlı Yönetici İşlemleri',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimary,
+                      color: Theme.of(context).brightness == Brightness.dark ? Colors.white : AppTheme.textPrimaryLight,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -530,14 +530,14 @@ class _DashboardPageState extends State<DashboardPage> {
             const SizedBox(height: 24),
 
             // 4. Yetkili Servis Saha İş Akışı & Eylemleri
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: Text(
                 '🛠️ Saha Servis & Devreye Alma Görevleri',
                 style: TextStyle(
                   fontSize: 15,
                   fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary,
+                  color: Theme.of(context).brightness == Brightness.dark ? Colors.white : AppTheme.textPrimaryLight,
                 ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -561,16 +561,23 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildServiceUserHeaderCard(dynamic user) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppTheme.cardDark,
+        color: isDark ? AppTheme.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.35)),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.accentCyan.withValues(alpha: 0.35)
+              : AppTheme.accentCyan.withValues(alpha: 0.5),
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppTheme.accentCyan.withValues(alpha: 0.08),
+            color: isDark
+                ? AppTheme.accentCyan.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.05),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -599,10 +606,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         Flexible(
                           child: Text(
                             user?.fullName?.isNotEmpty == true ? user!.fullName : 'Yetkili Servis Sorumlusu',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
+                              color: isDark ? Colors.white : AppTheme.textPrimaryLight,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -629,7 +636,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SizedBox(height: 2),
                     Text(
                       user?.email?.isNotEmpty == true ? user!.email : 'servis@gudeteknoloji.com.tr',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -639,11 +649,11 @@ class _DashboardPageState extends State<DashboardPage> {
             ],
           ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             'Saha panolarını envantere alabilir, dairelere takılan panoları devreye alabilir, afet durumunda pano klonlama ve daire devir işlemlerini yürütebilirsiniz.',
             style: TextStyle(
               fontSize: 12.5,
-              color: AppTheme.textMuted,
+              color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
               height: 1.35,
             ),
           ),
@@ -737,6 +747,8 @@ class _DashboardPageState extends State<DashboardPage> {
       },
     ];
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth > 550;
@@ -755,9 +767,20 @@ class _DashboardPageState extends State<DashboardPage> {
                 child: Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: AppTheme.cardDark,
+                    color: isDark ? AppTheme.cardDark : Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.cardBorder),
+                    border: Border.all(
+                      color: isDark ? AppTheme.cardBorder : AppTheme.cardBorderLight,
+                    ),
+                    boxShadow: isDark
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.04),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                   ),
                   child: Row(
                     children: [
@@ -777,10 +800,10 @@ class _DashboardPageState extends State<DashboardPage> {
                           children: [
                             Text(
                               item['title'] as String,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13.5,
                                 fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary,
+                                color: isDark ? Colors.white : AppTheme.textPrimaryLight,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -788,9 +811,9 @@ class _DashboardPageState extends State<DashboardPage> {
                             const SizedBox(height: 2),
                             Text(
                               item['subtitle'] as String,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
-                                color: AppTheme.textMuted,
+                                color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -798,7 +821,11 @@ class _DashboardPageState extends State<DashboardPage> {
                           ],
                         ),
                       ),
-                      const Icon(Icons.chevron_right_rounded, color: AppTheme.textMuted, size: 20),
+                      Icon(
+                        Icons.chevron_right_rounded,
+                        color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+                        size: 20,
+                      ),
                     ],
                   ),
                 ),
@@ -811,23 +838,35 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildServiceSafetyNotice() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppTheme.accentAmber.withValues(alpha: 0.1),
+        color: isDark ? AppTheme.accentAmber.withValues(alpha: 0.1) : Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.3)),
+        border: Border.all(
+          color: AppTheme.accentAmber.withValues(alpha: isDark ? 0.3 : 0.5),
+        ),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.03),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
       ),
-      child: const Row(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.shield_outlined, color: AppTheme.accentAmber, size: 22),
-          SizedBox(width: 12),
+          const Icon(Icons.shield_outlined, color: AppTheme.accentAmber, size: 22),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                const Text(
                   'Yetkili Servis Güvenlik Uyarısı',
                   style: TextStyle(
                     fontSize: 13,
@@ -835,12 +874,12 @@ class _DashboardPageState extends State<DashboardPage> {
                     color: AppTheme.accentAmber,
                   ),
                 ),
-                SizedBox(height: 4),
+                const SizedBox(height: 4),
                 Text(
                   'Yüksek gerilim (220V AC) hatlarında bağlantı yaparken ana sigortayı mutlaka kapatınız. 8 Röle ve 8 Dijital Giriş testleri tamamlandıktan sonra Servis Modundan "Devreye Alma Onayını" vermeyi unutmayınız.',
                   style: TextStyle(
                     fontSize: 12,
-                    color: AppTheme.textMuted,
+                    color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
                     height: 1.35,
                   ),
                 ),
@@ -853,16 +892,23 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildSuperUserHeaderCard(dynamic user) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: AppTheme.cardDark,
+        color: isDark ? AppTheme.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.35)),
+        border: Border.all(
+          color: isDark
+              ? AppTheme.accentCyan.withValues(alpha: 0.35)
+              : AppTheme.accentCyan.withValues(alpha: 0.5),
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppTheme.accentCyan.withValues(alpha: 0.08),
+            color: isDark
+                ? AppTheme.accentCyan.withValues(alpha: 0.08)
+                : Colors.black.withValues(alpha: 0.05),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -891,10 +937,10 @@ class _DashboardPageState extends State<DashboardPage> {
                         Flexible(
                           child: Text(
                             user?.fullName?.isNotEmpty == true ? user!.fullName : 'Salih Ceylan',
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 17,
                               fontWeight: FontWeight.bold,
-                              color: AppTheme.textPrimary,
+                              color: isDark ? Colors.white : AppTheme.textPrimaryLight,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -921,7 +967,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SizedBox(height: 2),
                     Text(
                       user?.email?.isNotEmpty == true ? user!.email : 'salihceylan@gmail.com',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -931,11 +980,11 @@ class _DashboardPageState extends State<DashboardPage> {
             ],
           ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             'Sistem genelindeki yetkili servis yöneticilerini tanımlayabilir, montaj ekiplerini denetleyebilir ve altyapı bileşenlerini izleyebilirsiniz.',
             style: TextStyle(
               fontSize: 12.5,
-              color: AppTheme.textMuted,
+              color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
               height: 1.35,
             ),
           ),
@@ -981,12 +1030,22 @@ class _DashboardPageState extends State<DashboardPage> {
     required String subtitle,
     required Color color,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
+        color: isDark ? color.withValues(alpha: 0.1) : Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        border: Border.all(color: color.withValues(alpha: isDark ? 0.3 : 0.45)),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.03),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1003,7 +1062,10 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
               Text(
                 subtitle,
-                style: const TextStyle(fontSize: 9.5, color: AppTheme.textMuted),
+                style: TextStyle(
+                  fontSize: 9.5,
+                  color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+                ),
               ),
             ],
           ),
@@ -1094,15 +1156,27 @@ class _DashboardPageState extends State<DashboardPage> {
     required String badgeText,
     VoidCallback? onTap,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: AppTheme.cardDark,
+          color: isDark ? AppTheme.cardDark : Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
+          border: Border.all(
+            color: isDark ? color.withValues(alpha: 0.3) : color.withValues(alpha: 0.4),
+          ),
+          boxShadow: isDark
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1131,18 +1205,18 @@ class _DashboardPageState extends State<DashboardPage> {
             const SizedBox(height: 10),
             Text(
               value,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
-                color: AppTheme.textPrimary,
+                color: isDark ? Colors.white : AppTheme.textPrimaryLight,
               ),
             ),
             const SizedBox(height: 2),
             Text(
               title,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
-                color: AppTheme.textMuted,
+                color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -1184,6 +1258,8 @@ class _DashboardPageState extends State<DashboardPage> {
       },
     ];
 
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final isWide = constraints.maxWidth > 550;
@@ -1202,9 +1278,20 @@ class _DashboardPageState extends State<DashboardPage> {
                 child: Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: AppTheme.cardDark,
+                    color: isDark ? AppTheme.cardDark : Colors.white,
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: AppTheme.cardBorder),
+                    border: Border.all(
+                      color: isDark ? AppTheme.cardBorder : AppTheme.cardBorderLight,
+                    ),
+                    boxShadow: isDark
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.04),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
                   ),
                   child: Row(
                     children: [
@@ -1223,10 +1310,10 @@ class _DashboardPageState extends State<DashboardPage> {
                           children: [
                             Text(
                               item['title'] as String,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13.5,
                                 fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary,
+                                color: isDark ? Colors.white : AppTheme.textPrimaryLight,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -1234,9 +1321,9 @@ class _DashboardPageState extends State<DashboardPage> {
                             const SizedBox(height: 2),
                             Text(
                               item['subtitle'] as String,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
-                                color: AppTheme.textMuted,
+                                color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
                               ),
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -1244,7 +1331,11 @@ class _DashboardPageState extends State<DashboardPage> {
                           ],
                         ),
                       ),
-                      const Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 18,
+                        color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+                      ),
                     ],
                   ),
                 ),
@@ -1257,13 +1348,25 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildDrawerTipBox(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B),
+        color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(
+          color: isDark ? AppTheme.cardBorder : AppTheme.cardBorderLight,
+        ),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.03),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
       ),
       child: Row(
         children: [
@@ -1276,10 +1379,13 @@ class _DashboardPageState extends State<DashboardPage> {
             child: const Icon(Icons.menu_open_rounded, color: AppTheme.accentCyan, size: 18),
           ),
           const SizedBox(width: 12),
-          const Expanded(
+          Expanded(
             child: Text(
               'Tüm yönetim araçlarına ve personel listelerine sol üstteki sandviç menüden (☰) de hızlıca ulaşabilirsiniz.',
-              style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+              ),
             ),
           ),
           const SizedBox(width: 8),
@@ -1653,17 +1759,23 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget _buildWelcomeClaimCard(BuildContext context) {
     final state = Provider.of<AutomationState>(context);
     final isServiceOrSuper = state.isServiceManagerOrSuper;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
       decoration: BoxDecoration(
-        color: AppTheme.cardDark,
+        color: isDark ? AppTheme.cardDark : Colors.white,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.cardBorder, width: 1.2),
+        border: Border.all(
+          color: isDark ? AppTheme.cardBorder : Colors.black12,
+          width: 1.2,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
+            color: isDark
+                ? Colors.black.withValues(alpha: 0.3)
+                : Colors.black.withValues(alpha: 0.05),
             blurRadius: 16,
             offset: const Offset(0, 4),
           ),
@@ -1686,21 +1798,21 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
           ),
           const SizedBox(height: 20),
-          const Text(
+          Text(
             'Evinize Hoş Geldiniz!',
             style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimary,
+              color: isDark ? Colors.white : AppTheme.textPrimaryLight,
             ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 10),
-          const Text(
+          Text(
             'Akıllı panonuzun lamba ve panjurlarını yönetebilmek için pano kapağındaki karekodu tarayarak kurulumu tamamlayın.',
             style: TextStyle(
               fontSize: 14,
-              color: AppTheme.textMuted,
+              color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
               height: 1.4,
             ),
             textAlign: TextAlign.center,
@@ -1729,14 +1841,23 @@ class _DashboardPageState extends State<DashboardPage> {
             width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: () => ClaimManualDialog.show(context),
-              icon: const Icon(Icons.keyboard_alt_outlined, size: 18, color: AppTheme.textMuted),
-              label: const Text(
+              icon: Icon(
+                Icons.keyboard_alt_outlined,
+                size: 18,
+                color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+              ),
+              label: Text(
                 'Kodu Elle Gir (Manuel Eşleme)',
-                style: TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+                style: TextStyle(
+                  fontSize: 14,
+                  color: isDark ? AppTheme.textPrimary : AppTheme.textPrimaryLight,
+                ),
               ),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                side: const BorderSide(color: AppTheme.cardBorder),
+                side: BorderSide(
+                  color: isDark ? AppTheme.cardBorder : Colors.black12,
+                ),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
             ),
@@ -1945,16 +2066,17 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildSectionHeader(String title, String badge) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Expanded(
           child: Text(
             title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w700,
-              color: AppTheme.textPrimary,
+              color: isDark ? Colors.white : AppTheme.textPrimaryLight,
             ),
             overflow: TextOverflow.ellipsis,
           ),
@@ -1963,12 +2085,21 @@ class _DashboardPageState extends State<DashboardPage> {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: AppTheme.cardBorder.withValues(alpha: 0.4),
+            color: isDark
+                ? AppTheme.cardBorder.withValues(alpha: 0.4)
+                : Colors.black.withValues(alpha: 0.05),
             borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isDark ? Colors.transparent : Colors.black12,
+            ),
           ),
           child: Text(
             badge,
-            style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.w600),
+            style: TextStyle(
+              fontSize: 11,
+              color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ],
@@ -1979,6 +2110,7 @@ class _DashboardPageState extends State<DashboardPage> {
   /// Yalnızca "Kod ile Bir Eve Katıl" seçeneğini gösterir.
   /// Kullanıcı bir eve katıldıktan sonra state güncellenir ve normal dashboard açılır.
   Widget _buildNoHomeIndividualDashboard(BuildContext context, AutomationState state) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final userName = state.currentUser?.fullName ?? state.currentUser?.email ?? 'Kullanıcı';
 
     return RefreshIndicator(
@@ -1995,14 +2127,26 @@ class _DashboardPageState extends State<DashboardPage> {
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: [
-                    AppTheme.primaryBlue.withValues(alpha: 0.18),
-                    AppTheme.primaryBlueLight.withValues(alpha: 0.08),
+                    AppTheme.primaryBlue.withValues(alpha: isDark ? 0.18 : 0.10),
+                    AppTheme.primaryBlueLight.withValues(alpha: isDark ? 0.08 : 0.04),
                   ],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
+                color: isDark ? null : Colors.white,
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppTheme.primaryBlueLight.withValues(alpha: 0.3)),
+                border: Border.all(
+                  color: AppTheme.primaryBlueLight.withValues(alpha: isDark ? 0.3 : 0.4),
+                ),
+                boxShadow: isDark
+                    ? null
+                    : [
+                        BoxShadow(
+                          color: AppTheme.primaryBlue.withValues(alpha: 0.06),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
               ),
               child: Column(
                 children: [
@@ -2019,10 +2163,10 @@ class _DashboardPageState extends State<DashboardPage> {
                   const SizedBox(height: 16),
                   Text(
                     'Hoş Geldiniz, ${userName.split(' ').first}!',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimary,
+                      color: isDark ? Colors.white : AppTheme.textPrimaryLight,
                     ),
                     textAlign: TextAlign.center,
                     maxLines: 2,
@@ -2059,11 +2203,11 @@ class _DashboardPageState extends State<DashboardPage> {
             const SizedBox(height: 28),
 
             // ── Ev Katılım Butonu ─────────────────────────────────────────
-            const Text(
+            Text(
               'Daireye Katılmak İçin',
               style: TextStyle(
                 fontSize: 13,
-                color: AppTheme.textMuted,
+                color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
                 fontWeight: FontWeight.w500,
                 letterSpacing: 0.4,
               ),
@@ -2099,8 +2243,12 @@ class _DashboardPageState extends State<DashboardPage> {
               icon: const Icon(Icons.qr_code_scanner, size: 20),
               label: const Text('Karekod ile Katıl', style: TextStyle(fontSize: 15)),
               style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.primaryBlueLight,
-                side: BorderSide(color: AppTheme.primaryBlueLight.withValues(alpha: 0.5)),
+                foregroundColor: isDark ? AppTheme.primaryBlueLight : AppTheme.primaryBlue,
+                side: BorderSide(
+                  color: isDark
+                      ? AppTheme.primaryBlueLight.withValues(alpha: 0.5)
+                      : AppTheme.primaryBlue.withValues(alpha: 0.5),
+                ),
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
@@ -2160,24 +2308,35 @@ class _DashboardPageState extends State<DashboardPage> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppTheme.cardDark,
+                color: isDark ? AppTheme.cardDark : Colors.white,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: AppTheme.cardBorder),
+                border: Border.all(
+                  color: isDark ? AppTheme.cardBorder : Colors.black12,
+                ),
+                boxShadow: isDark
+                    ? null
+                    : [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.04),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Row(
+                  Row(
                     children: [
-                      Icon(Icons.help_outline_rounded, color: AppTheme.accentCyan, size: 18),
-                      SizedBox(width: 8),
+                      const Icon(Icons.help_outline_rounded, color: AppTheme.accentCyan, size: 18),
+                      const SizedBox(width: 8),
                       Flexible(
                         child: Text(
                           'Nasıl Daireye Katılırım?',
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
-                            color: AppTheme.textPrimary,
+                            color: isDark ? Colors.white : AppTheme.textPrimaryLight,
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -2189,18 +2348,21 @@ class _DashboardPageState extends State<DashboardPage> {
                     step: '1',
                     text: 'Dairenizin sahibinden veya yöneticisinden bir davet kodu alın.',
                     color: AppTheme.primaryBlueLight,
+                    isDark: isDark,
                   ),
                   const SizedBox(height: 8),
                   _buildInstructionStep(
                     step: '2',
                     text: '"Kod ile Bir Eve Katıl" butonuna basın ve size iletilen kodu girin.',
                     color: AppTheme.accentCyan,
+                    isDark: isDark,
                   ),
                   const SizedBox(height: 8),
                   _buildInstructionStep(
                     step: '3',
                     text: 'Katılım onaylandıktan sonra dairenizin tüm kontrolleri otomatik olarak açılacaktır.',
                     color: AppTheme.accentGreen,
+                    isDark: isDark,
                   ),
                 ],
               ),
@@ -2215,6 +2377,7 @@ class _DashboardPageState extends State<DashboardPage> {
     required String step,
     required String text,
     required Color color,
+    required bool isDark,
   }) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2238,7 +2401,11 @@ class _DashboardPageState extends State<DashboardPage> {
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+            style: TextStyle(
+              fontSize: 13,
+              color: isDark ? AppTheme.textMuted : AppTheme.textMutedLight,
+              height: 1.4,
+            ),
           ),
         ),
       ],

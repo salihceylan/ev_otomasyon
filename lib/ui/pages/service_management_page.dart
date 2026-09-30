@@ -116,9 +116,10 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
   Widget build(BuildContext context) {
     final state = Provider.of<AutomationState>(context);
     final isSuper = state.isSuperUser;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
-      backgroundColor: AppTheme.bgDark,
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -127,10 +128,10 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
           children: [
             Text(
               isSuper ? 'Servis Sorumluları Yönetimi' : 'Servis & Saha Konsolu',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.white,
+                color: isDark ? Colors.white : AppTheme.textPrimaryLight,
               ),
             ),
             const SizedBox(height: 2),

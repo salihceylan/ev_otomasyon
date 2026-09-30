@@ -164,3 +164,13 @@ Bu kontrol listesi, sÄ±fÄ±rlanmÄ±ÅŸ ve temizlenmiÅŸ veritabanÄ± Ã¼
 - [ ] **14.2. Acil Sıfırlama & Mülk Devri Diyaloğunda QR Okuma:** Dashboard ve menüdeki 'Acil Sıfırlama & Mülk Devri' diyaloğuna 'Acil Pano Sıfırlama' sekmesinin eklendiğini, bu sekmede kamera ile pano QR kodunun okutularak UUID'nin otomatik doldurulduğunu ve gerekçe girilerek cihazın tek tıkla boşa çıkarılabildiğini test edin.
 - [ ] **14.3. Pano Değişimi (Disaster Recovery) QR Okuma:** 'Pano Değişimi & Kurtarma' diyaloğunda Yeni Pano UUID alanındaki kamera ikonuyla yeni kartın QR kodunun okutulduğunda hem UUID hem de Kurulum PIN alanlarının otomatik doldurulduğunu doğrulayın.
 
+---
+
+### AŞAMA 15: Aydınlık Tema & Yüksek Çözünürlüklü Elektronik Devre Arka Planı Doğrulaması
+
+- [ ] **15.1. Aydınlık Temada Elektronik Devre Görünürlüğü:** Aydınlık tema modunda (Light Theme) arka planda özel tasarlanmış platin/buz mavisi elektronik devre kartı (PCB yolları, via delikleri, mikroçip hatları) net ve estetik şekilde görünmeli; gri veya düz beyazla örtülmemelidir.
+- [ ] **15.2. Saha Servis & Konsol Başlık Metinleri Kontrastı:** Aydınlık temada "🛠️ Saha Servis & Devreye Alma Görevleri", "⚡ Hızlı Yönetici İşlemleri" ve tüm bölüm başlıkları `#0F172A` (koyu lacivert/siyah) renginde olmalı, asla beyaz veya silik görünmemelidir.
+- [ ] **15.3. Görev Kartları ve Metrik Kutuları Uyumluluğu:** Servis sorumlusu ve süper kullanıcı konsolundaki tüm görev kartları, metrik kutuları ve bilgi panelleri açık modda temiz beyaz kart yüzeyi (`#FFFFFF`), belirgin çerçeve (`#CBD5E1`) ve yüksek kontrastlı okunabilir metinlerle görüntülenmelidir.
+- [ ] **15.4. Koyu Mod Uyumluluğunun Korunması:** Koyu tema moduna (Dark Theme) geçildiğinde derin siber lacivert devre kartı arka planı ve parlak neon cyan/mavi veri hatları eksiksiz çalışmalı; hiçbir modda taşma (RenderFlex overflow) olmamalıdır.
+
+

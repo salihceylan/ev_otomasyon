@@ -17,28 +17,29 @@ class CircuitBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgAsset = isDark
+        ? 'assets/images/ai_circuit_bg.jpg'
+        : 'assets/images/ai_circuit_bg_light.jpg';
 
     return Stack(
       children: [
         // 0. Temel Koyu/Açık Zemin Rengi
         Positioned.fill(
           child: Container(
-            color: isDark ? const Color(0xFF0B1120) : const Color(0xFFF1F5F9),
+            color: isDark ? const Color(0xFF0B1120) : const Color(0xFFF8FAFC),
           ),
         ),
 
         // 1. Elektronik Devre & Yapay Zeka Temalı Arka Plan Görseli
         Positioned.fill(
           child: Image.asset(
-            'assets/images/ai_circuit_bg.jpg',
+            bgAsset,
             fit: BoxFit.cover,
             errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
           ),
         ),
 
-        // 2. Siber Gradyan & Karartma Katmanı
-        // Odaklanılması gereken kartları, butonları ve metinleri asla ezmez,
-        // derinlik katar ve göz yormayan siber bir atmosfer sunar.
+        // 2. Siber Gradyan & Karartma/Aydınlatma Katmanı
         Positioned.fill(
           child: Container(
             decoration: BoxDecoration(
@@ -47,14 +48,14 @@ class CircuitBackground extends StatelessWidget {
                 end: Alignment.bottomCenter,
                 colors: isDark
                     ? [
-                        const Color(0xFF0B1120).withValues(alpha: 0.72),
-                        const Color(0xFF0B1120).withValues(alpha: 0.86),
-                        const Color(0xFF0B1120).withValues(alpha: 0.94),
+                        const Color(0xFF0B1120).withValues(alpha: 0.50),
+                        const Color(0xFF0B1120).withValues(alpha: 0.70),
+                        const Color(0xFF0B1120).withValues(alpha: 0.88),
                       ]
                     : [
-                        const Color(0xFFF1F5F9).withValues(alpha: 0.88),
-                        const Color(0xFFF1F5F9).withValues(alpha: 0.94),
-                        const Color(0xFFF1F5F9).withValues(alpha: 0.98),
+                        const Color(0xFFF8FAFC).withValues(alpha: 0.30),
+                        const Color(0xFFF8FAFC).withValues(alpha: 0.50),
+                        const Color(0xFFF8FAFC).withValues(alpha: 0.70),
                       ],
                 stops: const [0.0, 0.45, 1.0],
               ),
@@ -62,7 +63,7 @@ class CircuitBackground extends StatelessWidget {
           ),
         ),
 
-        // 3. Vektörel PCB Veri Yolları (Vurgu katmanı)
+        // 3. Vektörel PCB Veri Yolları (Vurgu katmanı - saydam çizim)
         Positioned.fill(
           child: RepaintBoundary(
             child: CustomPaint(
@@ -85,16 +86,11 @@ class CircuitBoardPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 0. Temel Zemin Rengi
-    final bgPaint = Paint()
-      ..color = isDark ? const Color(0xFF0B1120) : const Color(0xFFF1F5F9)
-      ..style = PaintingStyle.fill;
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
-
-    // Renk ve opasite: Koyu modda siber mavi/cyan, açık modda ardıç mavisi/slate
-    final baseColor = isDark ? const Color(0xFF38BDF8) : const Color(0xFF475569);
-    final traceOpacity = isDark ? 0.05 : 0.04;
-    final chipOpacity = isDark ? 0.04 : 0.035;
+    // 0. Saydam katman (Arka plan görselini örtmeyecek şekilde)
+    // Renk ve opasite: Koyu modda siber cyan, açık modda canlı mavi
+    final baseColor = isDark ? const Color(0xFF38BDF8) : const Color(0xFF0284C7);
+    final traceOpacity = isDark ? 0.08 : 0.09;
+    final chipOpacity = isDark ? 0.05 : 0.06;
 
     final tracePaint = Paint()
       ..color = baseColor.withValues(alpha: traceOpacity)
@@ -107,7 +103,7 @@ class CircuitBoardPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
 
     final viaHolePaint = Paint()
-      ..color = isDark ? const Color(0xFF0B1120) : const Color(0xFFF1F5F9)
+      ..color = isDark ? const Color(0xFF0B1120) : const Color(0xFFF8FAFC)
       ..style = PaintingStyle.fill;
 
     final chipBodyPaint = Paint()
