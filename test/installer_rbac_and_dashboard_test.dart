@@ -75,12 +75,12 @@ void main() {
       // 5. Saha Görevleri & Araçları
       expect(find.text('🛠️ Saha Servis & Devreye Alma Görevleri'), findsOneWidget);
       expect(find.text('Devreye Alma (Commissioning)'), findsOneWidget);
-      expect(find.text('Karekod ile Pano Eşle (Claim)'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet & Hasar)'), findsOneWidget);
       expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsOneWidget);
       expect(find.text('Acil Sıfırlama & Mülk Devri'), findsOneWidget);
 
-      // Cihaz Envanteri, Servis Sorumluları ve Sistem Doktoru servis sorumlusunda KESİNLİKLE GÖRÜNMEMELİDİR (Yalnızca Süper User)
+      // Bağımsız Karekod Eşleme, Cihaz Envanteri, Servis Sorumluları ve Sistem Doktoru servis panosunda KESİNLİKLE GÖRÜNMEMELİDİR
+      expect(find.text('Karekod ile Pano Eşle (Claim)'), findsNothing);
       expect(find.text('Cihaz Envanteri & Seri No'), findsNothing);
       expect(find.text('Sistem Doktoru (Teşhis)'), findsNothing);
       expect(find.text('Yetkili Servis Ağı (Salt Okunur)'), findsNothing);
@@ -126,13 +126,13 @@ void main() {
 
       // Servis Elemanları Görünmeli
       expect(find.text('Servis Konsolu'), findsOneWidget);
-      expect(find.text('Servis Modu & Kalibrasyon'), findsOneWidget);
-      expect(find.text('Karekod ile Pano Eşle'), findsOneWidget);
+      expect(find.text('Devreye Alma & Servis Modu'), findsOneWidget);
       expect(find.text('Pano Değişimi (Afet Modu)'), findsOneWidget);
       expect(find.text('Wi-Fi Yapılandırma & Kurtarma'), findsOneWidget);
       expect(find.text('Acil Sıfırlama & Mülk Devri'), findsOneWidget);
 
-      // Süper User'a Ait Menüler Servis Sorumlusunda KESİNLİKLE OLMAMALIDIR
+      // Bağımsız Karekod Eşleme ve Süper User Menüleri Servis Sorumlusunda KESİNLİKLE OLMAMALIDIR
+      expect(find.text('Karekod ile Pano Eşle'), findsNothing);
       expect(find.text('Cihaz Envanteri'), findsNothing);
       expect(find.text('Servis Sorumluları'), findsNothing);
       expect(find.text('Sistem Doktoru'), findsNothing);

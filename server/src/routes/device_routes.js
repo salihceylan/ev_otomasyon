@@ -12,6 +12,42 @@ const { successResponse, errorResponse } = require('../utils/helpers');
  * @route   POST /api/v1/devices/claim veya POST /api/devices/claim
  * @desc    Karekod veya elle girilen UID/PIN ile panoyu kullanıcıya sahiplendirir (Zero-Trust Claiming)
  */
+/**
+ * @route   POST /api/v1/devices/claim/request-otp veya POST /api/devices/claim/request-otp
+ * @desc    Servis Sorumlusu için müşteriye 6 haneli cihaz eşleme onay kodu (OTP) gönderir
+ */
+const handleRequestClaimOtp = async (req, res) => {
+  try {
+    const deviceUuid = req.body.device_uuid || req.body.uid;
+    const targetOwnerIdentifier = req.body.target_owner || req.body.owner_email || req.body.owner_phone;
+
+    if (!deviceUuid || !targetOwnerIdentifier) {
+      return errorResponse(
+        res,
+        'Cihaz kimliği (device_uuid) ve Daire Sahibi (target_owner) alanları zorunludur.',
+        400
+      );
+    }
+
+    const result = await deviceService.requestClaimOtp({
+      requesterId: req.user.id,
+      requesterRole: req.user.role,
+      deviceUuid,
+      targetOwnerIdentifier,
+    });
+
+    return successResponse(res, result, result.message, 200);
+  } catch (err) {
+    return errorResponse(res, err.message, err.statusCode || 500);
+  }
+};
+
+router.post('/claim/request-otp', authenticateToken, handleRequestClaimOtp);
+
+/**
+ * @route   POST /api/v1/devices/claim veya POST /api/devices/claim
+ * @desc    Karekod veya elle girilen UID/PIN ile panoyu kullanıcıya sahiplendirir (Zero-Trust Claiming)
+ */
 const handleClaim = async (req, res) => {
   try {
     const deviceUuid = req.body.device_uuid || req.body.uid;
@@ -19,6 +55,7 @@ const handleClaim = async (req, res) => {
     const homeId = req.body.home_id || req.body.homeId;
     const homeName = req.body.home_name || req.body.homeName;
     const targetOwnerIdentifier = req.body.target_owner || req.body.owner_email || req.body.owner_phone;
+    const otpCode = req.body.otp_code || req.body.otpCode;
 
     if (!deviceUuid || !setupPin) {
       return errorResponse(
@@ -35,6 +72,8 @@ const handleClaim = async (req, res) => {
       deviceUuid,
       setupPin,
       targetOwnerIdentifier,
+      otpCode,
+      requesterRole: req.user.role,
     });
 
     return successResponse(

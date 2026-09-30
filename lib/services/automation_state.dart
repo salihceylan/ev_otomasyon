@@ -691,12 +691,25 @@ class AutomationState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Servis Sorumlusu için Müşteriye Cihaz Kurulum Onay OTP Kodu Gönderme
+  Future<Map<String, dynamic>> requestClaimOtp({
+    required String deviceUuid,
+    required String targetOwner,
+  }) async {
+    return await cloudApi.requestClaimOtp(
+      deviceUuid: deviceUuid,
+      targetOwner: targetOwner,
+    );
+  }
+
+  /// Cihaz Sahiplenme & Devreye Alma (Device Claiming - Setup PIN ve OTP ile)
   Future<Map<String, dynamic>> claimDevice(
     String deviceUuid,
     String setupPin, {
     String? homeName,
     int? homeId,
     String? targetOwner,
+    String? otpCode,
   }) async {
     try {
       final res = await cloudApi.claimDevice(
@@ -705,6 +718,7 @@ class AutomationState extends ChangeNotifier {
         homeName: homeName,
         homeId: homeId ?? _activeHome?.id,
         targetOwner: targetOwner,
+        otpCode: otpCode,
       );
 
       final dynamic claimedHomeRaw = res['home'];
@@ -713,13 +727,16 @@ class AutomationState extends ChangeNotifier {
           homeId ??
           _activeHome?.id;
 
-      await fetchHomes();
+      // Servis kullanıcısı başkasının evini kendi aktif evi olarak almaz
+      if (!isServiceUser) {
+        await fetchHomes();
 
-      if (_homes.isNotEmpty) {
-        final targetHome = (targetHomeId != null)
-            ? _homes.firstWhere((h) => h.id == targetHomeId, orElse: () => _homes.first)
-            : _homes.first;
-        await selectHome(targetHome);
+        if (_homes.isNotEmpty) {
+          final targetHome = (targetHomeId != null)
+              ? _homes.firstWhere((h) => h.id == targetHomeId, orElse: () => _homes.first)
+              : _homes.first;
+          await selectHome(targetHome);
+        }
       }
 
       notifyListeners();

@@ -146,3 +146,12 @@ Bu kontrol listesi, sÄ±fÄ±rlanmÄ±ÅŸ ve temizlenmiÅŸ veritabanÄ± Ã¼
 - [ ] **12.3. Süper Kullanıcı Sorumlular Sayfası:** 'Servis Sorumluları' sayfası açıldığında doğrudan sorumlu listesi ve 'Sorumlu Ekle' butonu yer almalı; servis araçları sekmesi bulunmamalıdır.
 - [ ] **12.4. Servis Sorumlusu Sandviç Menü İzolasyonu:** Servis sorumlusunda menüde yalnızca 'Servis Konsolu' ve saha montaj araçları ('Servis Modu & Kalibrasyon', 'Karekod ile Pano Eşle', 'Pano Değişimi (Afet Modu)', 'Wi-Fi Yapılandırma & Kurtarma', 'Acil Sıfırlama & Mülk Devri') yer almalı; 'Cihaz Envanteri', 'Servis Sorumluları' ve 'Sistem Doktoru' KESİNLİKLE görünmemelidir.
 - [ ] **12.5. Servis Sorumlusu Panel İzolasyonu:** Servis Sorumlusu Dashboard'ında yalnızca 5 saha aracı (Devreye Alma, Karekod ile Pano Eşle, Pano Değişimi, Wi-Fi Yapılandırma, Acil Sıfırlama) yer almalı; Süper User'a ait 'Cihaz Envanteri & Seri No', 'Sistem Doktoru (Teşhis)', 'Yetkili Servis Ağı' kartları ve 'Tüm Paneli Aç' linki KESİNLİKLE görünmemelidir.
+
+---
+
+### AŞAMA 13: Servis Sorumlusu Devreye Alma Menüsünde Karekod Eşleme & Müşteri OTP Doğrulaması
+
+- [ ] **13.1. Bağımsız Karekod Menüsü İzolasyonu:** Servis Sorumlusu konsolunda ve Sandviç Menüde bağımsız 'Karekod ile Pano Eşle' seçeneğinin bulunmadığını; bunun yerine tüm pano eşleme işlemlerinin 'Devreye Alma (Commissioning)' menüsü içine taşındığını doğrulayın.
+- [ ] **13.2. Devreye Alma İçinde Karekod Tarama:** Devreye Alma menüsünde 'Yeni Pano Cihazı Eşleme & Müşteriye Teslim' kartında 'Pano Karekodunu Oku (Kamera ile Tara)' butonuna basıldığında kameranın açıldığını, QR okutulduğunda Pano UUID ve 6 haneli Kurulum PIN alanlarının otomatik dolduğunu test edin.
+- [ ] **13.3. Servis Sorumlusu Cihaz Sahipliği Engeli:** Servis sorumlusu kendi e-posta/telefonunu girdiğinde veya müşteri alanı boşken sistemi kurmayı denediğinde sistemin 'Yetkili servis sorumlusu cihaz sahibi olamaz! Cihaz daire sahibine (müşteriye) tanımlanmalıdır.' uyarısı verdiğini doğrulayın.
+- [ ] **13.4. Müşteri OTP Gönderim ve Doğrulama Akışı:** Daire sahibinin e-posta/telefonu girilip 'Müşteriye Doğrulama Kodu Gönder' butonuna basıldığında müşteriye 6 haneli onay kodu iletildiğini; bu kod sisteme girilmeden cihazın kişiye veya daireye kesinlikle tanımlanamadığını (onay kodu girilip doğrulandığında ise cihazın müşteriye başarıyla tanımlandığını) doğrulayın.

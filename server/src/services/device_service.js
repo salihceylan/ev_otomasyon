@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const db = require('../db');
 const mqttBridge = require('../mqtt_bridge');
 const authService = require('./auth_service');
+const mailer = require('../utils/mailer');
 
 class DeviceService {
   /**
@@ -16,9 +17,129 @@ class DeviceService {
   }
 
   /**
-   * FAZ 6.3: Cihaz Sahiplenme Doğrulama Motoru (Sıfır-Güven & PIN Yakma)
+   * device_claim_otps tablosunun varlığını garanti eder
    */
-  async claimDevice({ userId, homeId, homeName, deviceUuid, setupPin, targetOwnerIdentifier }) {
+  async ensureOtpTable() {
+    try {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS device_claim_otps (
+          id                SERIAL PRIMARY KEY,
+          device_uuid       VARCHAR(100) NOT NULL,
+          target_identifier VARCHAR(255) NOT NULL,
+          otp_hash          VARCHAR(255) NOT NULL,
+          expires_at        TIMESTAMPTZ NOT NULL,
+          attempts          SMALLINT NOT NULL DEFAULT 0,
+          created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_claim_otps_uuid ON device_claim_otps(device_uuid);
+        CREATE INDEX IF NOT EXISTS idx_device_claim_otps_target ON device_claim_otps(target_identifier);
+      `);
+    } catch (_) {}
+  }
+
+  /**
+   * Servis Sorumlusu için Müşteriye 6 Haneli Cihaz Eşleme Onay Kodu (OTP) Gönderme
+   */
+  async requestClaimOtp({ requesterId, requesterRole, deviceUuid, targetOwnerIdentifier }) {
+    if (!deviceUuid || !String(deviceUuid).trim()) {
+      const err = new Error('Pano Cihaz UUID zorunludur.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (!targetOwnerIdentifier || !String(targetOwnerIdentifier).trim()) {
+      const err = new Error('Daire Sahibi (Müşteri) e-posta veya telefon numarası zorunludur.');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    await this.ensureOtpTable();
+
+    const cleanUuid = String(deviceUuid).trim().toUpperCase();
+    const cleanTarget = String(targetOwnerIdentifier).trim();
+
+    // 1. Cihaz envanterde var mı ve durumu uygun mu kontrol et
+    const invRes = await db.query(
+      `SELECT id, device_uuid, status FROM device_inventory WHERE device_uuid = $1`,
+      [cleanUuid]
+    );
+
+    if (invRes.rows.length === 0) {
+      const legRes = await db.query('SELECT id, is_claimed FROM devices WHERE device_uuid = $1', [cleanUuid]);
+      if (legRes.rows.length === 0) {
+        const err = new Error(`Bu cihaz envanterde kayıtlı değil (${cleanUuid}).`);
+        err.statusCode = 404;
+        throw err;
+      }
+      if (legRes.rows[0].is_claimed) {
+        const err = new Error('Bu cihaz zaten bir daireye sahiplendirilmiştir.');
+        err.statusCode = 409;
+        throw err;
+      }
+    } else {
+      const inv = invRes.rows[0];
+      if (inv.status === 'CLAIMED') {
+        const err = new Error('Bu cihaz zaten bir daireye tanımlanmış ve sahiplenilmiştir.');
+        err.statusCode = 409;
+        throw err;
+      }
+      if (inv.status === 'REVOKED' || inv.status === 'SUSPENDED') {
+        const err = new Error('Bu cihaz arıza veya askı gerekçesiyle işlem yapılamaz.');
+        err.statusCode = 403;
+        throw err;
+      }
+    }
+
+    // 2. Servis Sorumlusu kontrolü: Servis Sorumlusu kendi adına cihaz kuramaz
+    if (requesterRole === 'service_user' && requesterId) {
+      const techRes = await db.query('SELECT email, phone FROM users WHERE id = $1', [requesterId]);
+      if (techRes.rows.length > 0) {
+        const techEmail = (techRes.rows[0].email || '').toLowerCase();
+        const techPhone = techRes.rows[0].phone || '';
+        if (cleanTarget.toLowerCase() === techEmail || cleanTarget === techPhone) {
+          const err = new Error('Yetkili servis sorumlusu cihaz veya ev sahibi olamaz! Cihaz daire sahibine (müşteriye) tanımlanmalıdır.');
+          err.statusCode = 403;
+          throw err;
+        }
+      }
+    }
+
+    // 3. 6 haneli OTP kodu üret ve kaydet
+    const code = crypto.randomInt(100000, 999999).toString();
+    const otpHash = crypto.createHash('sha256').update(code).digest('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 dakika
+
+    // Eski OTP'leri temizle
+    await db.query(
+      `DELETE FROM device_claim_otps WHERE device_uuid = $1 AND LOWER(target_identifier) = LOWER($2)`,
+      [cleanUuid, cleanTarget]
+    );
+
+    await db.query(
+      `INSERT INTO device_claim_otps (device_uuid, target_identifier, otp_hash, expires_at)
+       VALUES ($1, $2, $3, $4)`,
+      [cleanUuid, cleanTarget, otpHash, expiresAt]
+    );
+
+    // E-posta gönder (varsa nodemailer ile, yoksa güvenli log fallback)
+    await mailer.sendClaimOtpEmail({
+      to: cleanTarget,
+      deviceUuid: cleanUuid,
+      code,
+    });
+
+    return {
+      success: true,
+      message: `Doğrulama kodu ${cleanTarget} adresine gönderildi.`,
+      expires_in: 900,
+      debug_code: process.env.NODE_ENV !== 'production' ? code : undefined,
+    };
+  }
+
+  /**
+   * FAZ 6.3: Cihaz Sahiplenme Doğrulama Motoru (Sıfır-Güven, Müşteri OTP & PIN Yakma)
+   */
+  async claimDevice({ userId, homeId, homeName, deviceUuid, setupPin, targetOwnerIdentifier, otpCode, requesterRole }) {
     if (!deviceUuid || !setupPin) {
       const err = new Error('Cihaz UUID (deviceUuid / uid) ve 6 haneli Kurulum PIN (setupPin / pin) zorunludur.');
       err.statusCode = 400;
@@ -105,9 +226,85 @@ class DeviceService {
       }
     }
 
-    // ADIM 11: Yetkili Servis Sorumlusu Devreye Alma (Provisioning) Kontrolü
+    // ADIM 11: Yetkili Servis Sorumlusu Devreye Alma (Provisioning) ve OTP Kontrolü
     let effectiveOwnerId = userId;
     let isTechnicianProvisioning = false;
+
+    // Servis kullanıcısı kontrolü: servis kullanıcısı kendi adına veya hedef müşteri olmadan cihaz sahiplenemez!
+    let effectiveRole = requesterRole;
+    if (!effectiveRole && userId) {
+      const uRes = await db.query('SELECT role, email, phone FROM users WHERE id = $1', [userId]);
+      if (uRes.rows.length > 0) {
+        effectiveRole = uRes.rows[0].role;
+      }
+    }
+
+    if (effectiveRole === 'service_user') {
+      if (!targetOwnerIdentifier || !String(targetOwnerIdentifier).trim()) {
+        const err = new Error('Yetkili servis sorumlusu cihaz sahibi olamaz! Cihazı daire sahibine (müşteriye) tanımlamak için müşteri e-posta veya telefonunu girmelisiniz.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      // Servis kullanıcısının kendi maili/telefonu ile teslim etmesini engelle
+      const techRes = await db.query('SELECT email, phone FROM users WHERE id = $1', [userId]);
+      if (techRes.rows.length > 0) {
+        const techEmail = (techRes.rows[0].email || '').toLowerCase();
+        const techPhone = techRes.rows[0].phone || '';
+        const cleanT = String(targetOwnerIdentifier).trim();
+        if (cleanT.toLowerCase() === techEmail || cleanT === techPhone) {
+          const err = new Error('Yetkili servis sorumlusu cihaz sahibi olamaz! Cihaz daire sahibine (müşteriye) devredilmelidir.');
+          err.statusCode = 403;
+          throw err;
+        }
+      }
+
+      // OTP Kodu zorunluluğu
+      if (!otpCode || !String(otpCode).trim()) {
+        const err = new Error('Müşteri e-postasına/telefonuna gönderilen 6 haneli doğrulama kodu sisteme girilmeden cihaz tanımlanamaz.');
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+
+    // OTP Doğrulama (targetOwnerIdentifier ve otpCode girilmişse)
+    if (targetOwnerIdentifier && otpCode) {
+      await this.ensureOtpTable();
+      const cleanTarget = String(targetOwnerIdentifier).trim();
+      const cleanOtp = String(otpCode).trim();
+      const inputOtpHash = crypto.createHash('sha256').update(cleanOtp).digest('hex');
+
+      const otpRes = await db.query(
+        `SELECT id, otp_hash, attempts FROM device_claim_otps 
+         WHERE device_uuid = $1 AND LOWER(target_identifier) = LOWER($2) AND expires_at > NOW()`,
+        [cleanUuid, cleanTarget]
+      );
+
+      if (otpRes.rows.length === 0) {
+        const err = new Error('Geçerli bir doğrulama kodu bulunamadı veya süresi doldu (15 dk). Lütfen yeni kod isteyiniz.');
+        err.statusCode = 400;
+        throw err;
+      }
+
+      const otpRecord = otpRes.rows[0];
+      if (otpRecord.attempts >= 5) {
+        await db.query('DELETE FROM device_claim_otps WHERE id = $1', [otpRecord.id]);
+        const err = new Error('5 kez hatalı doğrulama kodu girildi! Güvenlik nedeniyle kod iptal edildi, lütfen yeniden kod isteyiniz.');
+        err.statusCode = 403;
+        throw err;
+      }
+
+      if (otpRecord.otp_hash !== inputOtpHash) {
+        await db.query('UPDATE device_claim_otps SET attempts = attempts + 1 WHERE id = $1', [otpRecord.id]);
+        const remaining = Math.max(0, 5 - (otpRecord.attempts + 1));
+        const err = new Error(`Hatalı doğrulama kodu girdiniz! Kalan deneme hakkı: ${remaining}`);
+        err.statusCode = 400;
+        throw err;
+      }
+
+      // Başarılı doğrulama -> OTP'yi sil
+      await db.query('DELETE FROM device_claim_otps WHERE id = $1', [otpRecord.id]);
+    }
 
     if (targetOwnerIdentifier) {
       isTechnicianProvisioning = true;

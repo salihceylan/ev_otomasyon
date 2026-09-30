@@ -7,7 +7,6 @@ import '../pages/service_management_page.dart';
 import '../pages/service_mode_page.dart';
 import '../pages/system_doctor_dialog.dart';
 import '../pages/wifi_recovery_dialog.dart';
-import '../pages/claim/claim_manual_dialog.dart';
 import '../pages/family/transfer_ownership_dialog.dart';
 import '../theme/app_theme.dart';
 
@@ -210,29 +209,17 @@ class SuperUserDrawer extends StatelessWidget {
                   if (isService) ...[
                     _buildDrawerItem(
                       context: context,
-                      icon: Icons.handyman_outlined,
-                      activeIcon: Icons.handyman,
-                      title: 'Servis Modu & Kalibrasyon',
-                      subtitle: 'Pano yapılandırması & testler',
-                      color: AppTheme.accentPurple,
+                      icon: Icons.verified_outlined,
+                      activeIcon: Icons.verified,
+                      title: 'Devreye Alma & Servis Modu',
+                      subtitle: 'Karekod eşleme, canlı test & onay',
+                      color: AppTheme.accentCyan,
                       onTap: () {
                         Navigator.pop(context);
                         Navigator.push(
                           context,
                           MaterialPageRoute(builder: (_) => const ServiceModePage()),
                         );
-                      },
-                    ),
-                    _buildDrawerItem(
-                      context: context,
-                      icon: Icons.qr_code_scanner_outlined,
-                      activeIcon: Icons.qr_code_scanner,
-                      title: 'Karekod ile Pano Eşle',
-                      subtitle: 'Yeni panoyu daireye eşleştir',
-                      color: AppTheme.primaryBlueLight,
-                      onTap: () {
-                        Navigator.pop(context);
-                        ClaimManualDialog.show(context);
                       },
                     ),
                     _buildDrawerItem(

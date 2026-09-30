@@ -402,13 +402,36 @@ class EvCloudApiService {
     return res.statusCode == 200;
   }
 
-  /// Cihaz Sahiplenme & Devreye Alma (Device Claiming - Setup PIN ile)
+  /// Servis Sorumlusu için Müşteriye Cihaz Kurulum Onay OTP Kodu Gönderme
+  Future<Map<String, dynamic>> requestClaimOtp({
+    required String deviceUuid,
+    required String targetOwner,
+  }) async {
+    final uri = Uri.parse('$baseUrl/v1/devices/claim/request-otp');
+    final body = <String, dynamic>{
+      'device_uuid': deviceUuid,
+      'target_owner': targetOwner,
+    };
+
+    final res = await _authenticatedRequest(
+      () => http.post(uri, headers: _headers, body: jsonEncode(body)).timeout(const Duration(seconds: 8)),
+    );
+
+    final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (res.statusCode == 200 || res.statusCode == 201) {
+      return (data['data'] as Map<String, dynamic>?) ?? data;
+    }
+    throw Exception(data['message'] ?? 'Doğrulama kodu gönderilemedi (Kod: ${res.statusCode})');
+  }
+
+  /// Cihaz Sahiplenme & Devreye Alma (Device Claiming - Setup PIN ve İsteğe Bağlı OTP ile)
   Future<Map<String, dynamic>> claimDevice({
     required String deviceUuid,
     required String setupPin,
     int? homeId,
     String? homeName,
     String? targetOwner,
+    String? otpCode,
   }) async {
     final uri = Uri.parse('$baseUrl/v1/devices/claim');
     final body = <String, dynamic>{
@@ -418,6 +441,7 @@ class EvCloudApiService {
     if (homeId != null) body['home_id'] = homeId;
     if (homeName != null) body['home_name'] = homeName;
     if (targetOwner != null && targetOwner.isNotEmpty) body['target_owner'] = targetOwner;
+    if (otpCode != null && otpCode.isNotEmpty) body['otp_code'] = otpCode;
 
     final res = await _authenticatedRequest(
       () => http.post(uri, headers: _headers, body: jsonEncode(body)).timeout(const Duration(seconds: 8)),

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
+import '../../utils/qr_claim_parser.dart';
 import '../theme/app_theme.dart';
+import 'claim/qr_scanner_page.dart';
 
 class ServiceModePage extends StatefulWidget {
   const ServiceModePage({super.key});
@@ -15,6 +17,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
   final _uuidController = TextEditingController(text: 'AHBU-S3-PANEL-001');
   final _setupPinController = TextEditingController(text: '123456');
   final _targetOwnerController = TextEditingController();
+  final _otpController = TextEditingController();
   final _commissioningNotesController = TextEditingController();
   final _emergencyUuidController = TextEditingController(text: 'AHBU-S3-PANEL-001');
   final _emergencyReasonController = TextEditingController();
@@ -22,6 +25,8 @@ class _ServiceModePageState extends State<ServiceModePage> {
 
   bool _isLoading = false;
   bool _isClaiming = false;
+  bool _isSendingOtp = false;
+  bool _otpSent = false;
   bool _isSubmittingCommissioning = false;
   bool _isLoadingCommissioning = false;
   bool _isEmergencyResetting = false;
@@ -43,6 +48,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
     _uuidController.dispose();
     _setupPinController.dispose();
     _targetOwnerController.dispose();
+    _otpController.dispose();
     _commissioningNotesController.dispose();
     _emergencyUuidController.dispose();
     _emergencyReasonController.dispose();
@@ -596,12 +602,57 @@ class _ServiceModePageState extends State<ServiceModePage> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           const Text(
-            'Pano kapağındaki Device UUID ve 6 haneli Setup PIN ile eşleyin. Müşteri hesabına doğrudan teslim edebilirsiniz.',
-            style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+            'Servis sorumlusu cihaz sahibi olamaz. Cihazı daire sahibine devretmek için pano karekodunu okutun ve müşterinin e-posta/telefonuna iletilen 6 haneli doğrulama kodunu onaylayın.',
+            style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.35),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
+
+          // 1. KAREKOD TARA (KAMERA İLE OKU) BUTONU
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () async {
+                final raw = await Navigator.push<String>(
+                  context,
+                  MaterialPageRoute(builder: (_) => const QrScannerPage()),
+                );
+                if (raw != null && raw.trim().isNotEmpty && mounted) {
+                  final parsed = QrClaimParser.parse(raw);
+                  if (parsed != null) {
+                    setState(() {
+                      _uuidController.text = parsed.uid;
+                      _setupPinController.text = parsed.pin;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('✅ Pano karekodu okundu (UUID ve PIN dolduruldu)'),
+                        backgroundColor: AppTheme.accentGreen,
+                      ),
+                    );
+                  } else {
+                    setState(() {
+                      _uuidController.text = raw.trim();
+                    });
+                  }
+                }
+              },
+              icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentCyan, size: 20),
+              label: const Text(
+                'Pano Karekodunu Oku (Kamera ile Tara)',
+                style: TextStyle(color: AppTheme.accentCyan, fontWeight: FontWeight.bold),
+              ),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppTheme.accentCyan),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // PANO UUID
           TextField(
             controller: _uuidController,
             decoration: InputDecoration(
@@ -610,15 +661,38 @@ class _ServiceModePageState extends State<ServiceModePage> {
               filled: true,
               fillColor: const Color(0xFF0F172A),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.qr_code, color: AppTheme.textMuted),
+                tooltip: 'Kamera ile Tara',
+                onPressed: () async {
+                  final raw = await Navigator.push<String>(
+                    context,
+                    MaterialPageRoute(builder: (_) => const QrScannerPage()),
+                  );
+                  if (raw != null && raw.trim().isNotEmpty && mounted) {
+                    final parsed = QrClaimParser.parse(raw);
+                    setState(() {
+                      if (parsed != null) {
+                        _uuidController.text = parsed.uid;
+                        _setupPinController.text = parsed.pin;
+                      } else {
+                        _uuidController.text = raw.trim();
+                      }
+                    });
+                  }
+                },
+              ),
             ),
           ),
           const SizedBox(height: 10),
+
+          // SETUP PIN
           TextField(
             controller: _setupPinController,
             keyboardType: TextInputType.number,
             maxLength: 6,
             decoration: InputDecoration(
-              labelText: '6 Haneli Setup PIN',
+              labelText: '6 Haneli Kurulum PIN',
               counterText: '',
               hintText: '123456',
               filled: true,
@@ -627,79 +701,245 @@ class _ServiceModePageState extends State<ServiceModePage> {
             ),
           ),
           const SizedBox(height: 10),
+
+          // MÜŞTERİ E-POSTA / TELEFON (ZORUNLU)
           TextField(
             controller: _targetOwnerController,
+            keyboardType: TextInputType.emailAddress,
             decoration: InputDecoration(
-              labelText: 'Müşteri E-Posta / Telefonu (İsteğe Bağlı)',
-              hintText: 'Örn: ahmet@gmail.com veya 05551234567',
+              labelText: 'Daire Sahibi (Müşteri) E-Posta veya Telefonu *',
+              hintText: 'ahmet@gmail.com veya 05551234567',
               filled: true,
               fillColor: const Color(0xFF0F172A),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+              prefixIcon: const Icon(Icons.person_outline, color: AppTheme.accentCyan, size: 20),
             ),
           ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _isClaiming
-                  ? null
-                  : () async {
-                      final uuid = _uuidController.text.trim();
-                      final pin = _setupPinController.text.trim();
-                      final target = _targetOwnerController.text.trim();
+          const SizedBox(height: 14),
 
-                      if (uuid.isEmpty || pin.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Lütfen UUID ve PIN alanlarını doldurun')),
-                        );
-                        return;
-                      }
+          // 2. OTP GÖNDERME VE DOĞRULAMA AKIŞI
+          if (!_otpSent) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isSendingOtp
+                    ? null
+                    : () async {
+                        final uuid = _uuidController.text.trim();
+                        final pin = _setupPinController.text.trim();
+                        final target = _targetOwnerController.text.trim();
 
-                      setState(() => _isClaiming = true);
-                      try {
-                        await state.claimDevice(
-                          uuid,
-                          pin,
-                          targetOwner: target.isNotEmpty ? target : null,
-                        );
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              target.isNotEmpty
-                                  ? '✅ Cihaz başarıyla daireye ve "$target" müşterisine bağlandı!'
-                                  : '✅ Cihaz başarıyla daireye bağlandı!',
-                            ),
-                            backgroundColor: AppTheme.accentGreen,
-                          ),
-                        );
-                      } catch (e) {
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Eşleme Hatası: $e'), backgroundColor: AppTheme.accentRed),
-                        );
-                      } finally {
-                        if (mounted) {
-                          setState(() => _isClaiming = false);
+                        if (uuid.isEmpty || pin.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Lütfen Pano UUID ve PIN alanlarını doldurun')),
+                          );
+                          return;
                         }
-                      }
-                    },
-              icon: _isClaiming
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.link, size: 18),
-              label: const Text('Cihazı Daireye & Müşteriye Sahiplen'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryBlue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+
+                        if (target.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Lütfen cihazın teslim edileceği Daire Sahibi e-posta veya telefonunu girin'),
+                              backgroundColor: AppTheme.accentAmber,
+                            ),
+                          );
+                          return;
+                        }
+
+                        setState(() => _isSendingOtp = true);
+                        try {
+                          final res = await state.requestClaimOtp(
+                            deviceUuid: uuid,
+                            targetOwner: target,
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _otpSent = true;
+                            _isSendingOtp = false;
+                          });
+                          final msg = res['message'] ?? 'Doğrulama kodu müşteriye gönderildi.';
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('✅ $msg'),
+                              backgroundColor: AppTheme.accentGreen,
+                            ),
+                          );
+                        } catch (e) {
+                          if (!mounted) return;
+                          setState(() => _isSendingOtp = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Hata: $e'), backgroundColor: AppTheme.accentRed),
+                          );
+                        }
+                      },
+                icon: _isSendingOtp
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.send_rounded, size: 18),
+                label: const Text('Müşteriye Doğrulama Kodu Gönder'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryBlue,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
               ),
             ),
-          ),
+          ] else ...[
+            // OTP KODU ALANI VE ONAYLAMA
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.primaryBlue.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.mark_email_read_outlined, color: AppTheme.primaryBlueLight, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${_targetOwnerController.text} adresine 6 haneli kod iletildi.',
+                          style: const TextStyle(fontSize: 12, color: AppTheme.primaryBlueLight, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _otpController,
+                    keyboardType: TextInputType.number,
+                    maxLength: 6,
+                    style: const TextStyle(letterSpacing: 8, fontSize: 18, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                    decoration: InputDecoration(
+                      labelText: 'Müşteri Doğrulama Kodu (6 Hane)',
+                      counterText: '',
+                      hintText: '••••••',
+                      hintStyle: const TextStyle(letterSpacing: 8),
+                      filled: true,
+                      fillColor: const Color(0xFF0F172A),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _isSendingOtp
+                        ? null
+                        : () async {
+                            setState(() => _isSendingOtp = true);
+                            try {
+                              await state.requestClaimOtp(
+                                deviceUuid: _uuidController.text.trim(),
+                                targetOwner: _targetOwnerController.text.trim(),
+                              );
+                              if (!mounted) return;
+                              setState(() => _isSendingOtp = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('✅ Yeni doğrulama kodu müşteriye tekrar gönderildi.'),
+                                  backgroundColor: AppTheme.accentGreen,
+                                ),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              setState(() => _isSendingOtp = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Hata: $e'), backgroundColor: AppTheme.accentRed),
+                              );
+                            }
+                          },
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                    child: const Text('Tekrar Kod Gönder', style: TextStyle(fontSize: 12)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton.icon(
+                    onPressed: _isClaiming
+                        ? null
+                        : () async {
+                            final uuid = _uuidController.text.trim();
+                            final pin = _setupPinController.text.trim();
+                            final target = _targetOwnerController.text.trim();
+                            final otp = _otpController.text.trim();
+
+                            if (otp.length != 6) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Lütfen müşteriden aldığınız 6 haneli doğrulama kodunu eksiksiz girin'),
+                                  backgroundColor: AppTheme.accentAmber,
+                                ),
+                              );
+                              return;
+                            }
+
+                            setState(() => _isClaiming = true);
+                            try {
+                              await state.claimDevice(
+                                uuid,
+                                pin,
+                                targetOwner: target,
+                                otpCode: otp,
+                              );
+                              await _loadCommissioningStatus();
+                              if (!mounted) return;
+                              setState(() {
+                                _isClaiming = false;
+                                _otpSent = false;
+                                _otpController.clear();
+                              });
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('✅ Cihaz başarıyla daireye ve "$target" müşterisine tanımlandı!'),
+                                  backgroundColor: AppTheme.accentGreen,
+                                ),
+                              );
+                            } catch (e) {
+                              if (!mounted) return;
+                              setState(() => _isClaiming = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('Eşleme Hatası: $e'), backgroundColor: AppTheme.accentRed),
+                              );
+                            }
+                          },
+                    icon: _isClaiming
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.verified_user, size: 18),
+                    label: const Text('Doğrula & Müşteriye Teslim Et', style: TextStyle(fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.accentGreen,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

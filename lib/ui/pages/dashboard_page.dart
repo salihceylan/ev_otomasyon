@@ -703,20 +703,13 @@ class _DashboardPageState extends State<DashboardPage> {
     final actions = [
       {
         'title': 'Devreye Alma (Commissioning)',
-        'subtitle': '8 Röle & 8 Giriş anlık canlı test, darbe/kalıcı röle tetikleme ve onaylama',
+        'subtitle': 'Pano karekod eşleme & müşteri OTP onayı, 8 röle/8 giriş canlı test ve devreye alma',
         'icon': Icons.verified_outlined,
         'color': AppTheme.accentCyan,
         'onTap': () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ServiceModePage()),
             ),
-      },
-      {
-        'title': 'Karekod ile Pano Eşle (Claim)',
-        'subtitle': 'Sıfır panoyu kamerayla okutarak daireye tanımlayın veya Kurulum PIN girin',
-        'icon': Icons.qr_code_scanner_rounded,
-        'color': AppTheme.primaryBlueLight,
-        'onTap': () => _openQrClaimFlow(context),
       },
       {
         'title': 'Pano Değişimi (Afet & Hasar)',
