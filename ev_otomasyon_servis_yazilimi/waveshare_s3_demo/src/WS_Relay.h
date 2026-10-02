@@ -6,7 +6,7 @@
 
 
 /*************************************************************  I/O  *************************************************************/
-#define Relay_Number_MAX  8 
+#define Relay_Number_MAX  8
 #define GPIO_PIN_CH1      EXIO_PIN1    // CH1 Control GPIO
 #define GPIO_PIN_CH2      EXIO_PIN2    // CH2 Control GPIO
 #define GPIO_PIN_CH3      EXIO_PIN3    // CH3 Control GPIO
@@ -41,16 +41,17 @@ typedef enum {
   STATE_Retain = 2,   // Stay in place
 } Status_adjustment;
 
-extern bool Relay_Flag[8];  // Relay current status flag
-
-void Relay_Init(void);
+// ---------------------------------------------------------------------------------------------
+// Röle sürücüsü ince katmanı (TCA9554 gölge kayıt + interlock üzerinden; bkz. WS_TCA9554PWR.h).
+// UYARI: Röle/panjur DURUMUNU yalnızca SmartAutomation değiştirir (CONTRACTS §4). Bu fonksiyonlar
+// uygulama katmanından DOĞRUDAN çağrılmamalıdır; panjur kuralları (ölü zaman, konum) SmartAutomation'dadır.
+// Eski demo "Relay_Analysis / Relay_Immediate*" fonksiyonları (DI/RTC/BLE/MQTT demo yolları, interlock'u
+// atlıyordu) KALDIRILDI; hiçbir canlı kod çağırmıyordu.
+// ---------------------------------------------------------------------------------------------
+void Relay_Init(void);                      // setup()'ın İLK işi (I2C_Init'ten hemen sonra): röleleri KAPATIR
+void Relay_SignalFailure(void);             // arıza uyarısı (LED/buzzer) tetikler
 bool Relay_Closs(uint8_t CHx);
 bool Relay_Open(uint8_t CHx);
 bool Relay_CHx_Toggle(uint8_t CHx);
 bool Relay_CHx(uint8_t CHx, bool State);
 bool Relay_CHxs_PinState(uint8_t PinState);
-
-void Relay_Analysis(uint8_t *buf,uint8_t Mode_Flag);
-void Relay_Immediate(uint8_t CHx, bool State, uint8_t Mode_Flag);
-void Relay_Immediate_CHxs(uint8_t PinState, uint8_t Mode_Flag);
-void Relay_Immediate_CHxn(Status_adjustment * Relay_n, uint8_t Mode_Flag);

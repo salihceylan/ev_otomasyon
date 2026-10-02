@@ -38,19 +38,9 @@ CREATE TRIGGER trg_device_inventory_updated
     BEFORE UPDATE ON device_inventory 
     FOR EACH ROW EXECUTE FUNCTION update_timestamp();
 
--- Sahadaki Test Cihazının Envantere Eklenmesi (PIN: '123456' -> SHA256: 'ba3253876aed6bc22d4a6ff53d8406c6ad864195ed144ab5c87621b6c233b548')
-INSERT INTO device_inventory (device_uuid, mac_address, pin_hash, model, batch_no, status)
-VALUES (
-    'AHBU-S3-PANEL-001',
-    'E8:F6:0A:DD:87:54',
-    'ba3253876aed6bc22d4a6ff53d8406c6ad864195ed144ab5c87621b6c233b548',
-    'ESP32-S3-POE-ETH-8DI-8RO',
-    'BATCH-PROTOTYPE-01',
-    'IN_STOCK'
-)
-ON CONFLICT (device_uuid) DO UPDATE 
-SET mac_address = EXCLUDED.mac_address,
-    pin_hash = EXCLUDED.pin_hash,
-    status = EXCLUDED.status,
-    updated_at = CURRENT_TIMESTAMP;
+-- NOT (WP-C, denetim 2026-10-01): Bu dosyada daha once SAHADAKI TEST CIHAZININ ENVANTERE EKLENMESI
+-- (bilinen, tahmin edilebilir bir PIN ozetiyle) ve `ON CONFLICT ... DO UPDATE` ile durumu IN_STOCK'a
+-- GERI ALAN bir tohum (seed) komutu vardi. Dosya yeniden calistirilirsa sahiplenilmis cihaz stoga
+-- donup bilinen PIN'le yeniden sahiplenilebiliyordu. Tohum veri migrations/dev_seeds/ altina
+-- tasindi (yalnizca gelistirme; uretimde calismaz, PIN ortamdan gelir ve cakismada DOKUNMAZ).
 

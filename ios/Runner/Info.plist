@@ -6,6 +6,15 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Pano kapağındaki QR kodu tarayarak cihazınızı eşleştirmek için kamera izni gereklidir.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Uygulamayı açarken kimliğinizi Face ID ile doğrulamak ve evinizin kontrolünü yalnızca size açık tutmak için gereklidir.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Evinizdeki otomasyon panosuna (ESP32) yerel ağ üzerinden doğrudan bağlanmak ve Wi-Fi kurulumunu yapmak için yerel ağ erişimi gereklidir.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>

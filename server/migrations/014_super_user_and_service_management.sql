@@ -18,29 +18,8 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
 ADD COLUMN IF NOT EXISTS admin_notes TEXT;
 
--- 3. İlk Super User (salihceylan@gmail.com / Fingon08.) oluştur veya güncelle
-INSERT INTO users (
-  full_name,
-  email,
-  password_hash,
-  phone,
-  role,
-  is_active
-)
-VALUES (
-  'Salih Ceylan',
-  'salihceylan@gmail.com',
-  '$2a$10$J30D1aJus/VF08a7EtzSD..aiFEyvm/fxY0HBwwYTnmgrwnLDGzAS',
-  '+905551234567',
-  'super_user',
-  TRUE
-)
-ON CONFLICT (email) DO UPDATE SET
-  role = 'super_user',
-  password_hash = '$2a$10$J30D1aJus/VF08a7EtzSD..aiFEyvm/fxY0HBwwYTnmgrwnLDGzAS',
-  full_name = 'Salih Ceylan',
-  is_active = TRUE;
-
--- 4. Mevcut demo kullanıcıların rollerini senkronize et
-UPDATE users SET role = 'super_user' WHERE email = 'salih@gudeteknoloji.com.tr';
-UPDATE users SET role = 'installer' WHERE email IN ('ali.montaj@gudeteknoloji.com.tr', 'teknisyen@gudeteknoloji.com.tr', 'teknisyen@ahbu.com');
+-- NOT (WP-C, denetim 2026-10-01): Bu dosyada daha once (3) "ilk super kullanici" TOHUMU (sabit
+-- parola ozetiyle, yeniden calistirmada parolayi GERI YAZAN `ON CONFLICT DO UPDATE`) ve (4) demo
+-- kullanicilarin rol senkronizasyonu vardi. Temiz bir uretim veritabaninda bilinen parolali
+-- bir super kullanici olusturdugu icin migrations/dev_seeds/ altina tasindi (yalnizca gelistirme).
+-- Uretimde ilk super kullanici `node scripts/create_super_user.js` ile (parola ortamdan) olusturulur.

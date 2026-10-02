@@ -1,0 +1,15 @@
+KULLANILMAZ - bu klasördeki imajı (firmware_v1.0.0.bin) karta YAZMAYIN.
+
+İşaretleme tarihi : 2026-10-02
+Yerine geçen sürüm: v1.1.0  ->  firmware_releases/v1.1.0/firmware_combined_0x0.bin
+
+NEDEN (imaj dosyası taranarak doğrulandı):
+  1. USB-seri provizyon YOK: imajda FACTORYINIT ve RESETKEY komutları bulunmaz. Fabrika aracı bu imajla yüklenen
+     kartı flash sonrası provizyonlayamaz ("Kart seri komutlara yanıt vermedi" hatası).
+  2. Cihaza özel AP parolası YOK: kurulum ağı sabit "ESP32-S3-POE-ETH-8DI-8RO" adıyla başlar; cihaza özel
+     ap_pass (WPA2) ve karta özel AHBU-xxxxxx ağ adı üretilmez.
+  3. Eski/sabit yetki modeli: cihaz anahtarı (X-Device-Key) ile yetkilendirme ve AP kaynaklı Wi-Fi servis akışı
+     (docs/CONTRACTS.md 3d, /api/wifi/status) YOK; yeni gömülü arayüz ("Kurulum modu (AP)") YOK.
+  4. Bu nedenle yeni sistemle (sunucu envanteri + yerel anahtar + etiket karekodları) ÇALIŞMAZ.
+
+Dosya silinmedi; yalnızca geçmiş/karşılaştırma için saklanır. "Gözat..." ile bu klasörden dosya seçmeyin.

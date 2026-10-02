@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  YALNIZCA DEBUG (src/main'deki aynı adlı dosyayı geçersiz kılar): QA yerel arka ucu (http://10.0.2.2:5000)
+  ve emülatör cihaz benzetimi düz HTTP kullanır. Bu dosya release/profile derlemesine ASLA taşınmaz.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

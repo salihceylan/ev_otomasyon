@@ -381,11 +381,11 @@ Yine kıdemli IoT mimarı ve Flutter uzmanı rolünle; **katı adım adım ilerl
 ### ADIM 14: Wi-Fi Şifre Değişimi Kurtarma Modu (Smart AP Fallback) [TAMAMLANDI & DOĞRULANDI]
 - **Kapsam (ESP32-S3 Firmware & Flutter):**
   - **Neden?:** Evde modem/şifre değiştiğinde müşterinin servisi aramasını engellemek için.
-  - **Mekanizma:** ESP32 kayıtlı Wi-Fi'a 3 dakika (180 sn) bağlanamazsa otomatik olarak acil kurtarma ağı açar: `AHBU-Kurtarma-[Device/MAC]`.
+  - **Mekanizma:** ESP32 kayıtlı Wi-Fi'a 3 dakika (180 sn) bağlanamazsa otomatik olarak acil kurtarma ağı açar: `AHBU-<MAC son 6>` (WPA2, parola cihaza özel `ap_pass`; sabit ad/parola yoktur — CONTRACTS §3d).
   - Flutter uygulaması yerel ağ koptuğunda "Pano internete bağlanamıyor, yeni şifreyi girmek için tıklayın" uyarısı verir. Telefon geçici ağa bağlanıp yeni Wi-Fi şifresini panoya aktarır ve normal moda döner.
 - **Gerçekleştirilen Geliştirmeler:**
-  - [x] **ESP32-S3 WiFiManager Smart Fallback:** `_disconnectedSince` sayacı ile 180 saniye kesintide `startRecoveryAP()` otomatik tetiklenir, `AHBU-Kurtarma-...` ağı açılır (`192.168.4.1`, Şifre: `ahbu1234`).
-  - [x] **ESP32-S3 WebPortal Kurtarma API Entegrasyonu:** `/api/wifi/scan` ile çevredeki ağları tarama ve `/api/wifi/connect` ile yeni SSID ve şifreyi kalıcı NVS'e yazıp normal STA moduna otomatik dönme.
+  - [x] **ESP32-S3 WiFiManager Smart Fallback:** `_disconnectedSince` sayacı ile 180 saniye kesintide `startRecoveryAP()` otomatik tetiklenir, `AHBU-<MAC son 6>` ağı açılır (`192.168.4.1`, WPA2; parola cihaza özel `ap_pass`, etikette; eski sabit parola kaldırıldı).
+  - [x] **ESP32-S3 WebPortal Kurtarma API Entegrasyonu:** `/api/wifi/scan` ile çevredeki ağları tarama ve `/api/wifi/connect` ile yeni SSID ve şifreyi kalıcı NVS'e yazıp normal STA moduna otomatik dönme (sonuç `GET /api/wifi/status`; bu üç uç cihaz anahtarı yerine **AP kaynaklı** yetkiyle de açılır — CONTRACTS §3d).
   - [x] **Flutter Kurtarma Sihirbazı (`WifiRecoveryDialog`):** Kullanıcı dostu adım adım rehber, tek tıkla pano bağlantı testi, çevredeki Wi-Fi ağlarını listeleme ve güvenli şifre yükleme.
   - [x] **Dashboard & Ayarlar Entegrasyonu:** Cihaz çevrimdışı kaldığında Dashboard'da otomatik beliren kurtarma kartı ve `DeviceSettingsPage` içine eklenen kurtarma aksiyonu.
   - [x] **Birim & Widget Testleri:** `test/wifi_recovery_mode_test.dart` ile diyalog, form doğrulama, buton etkileşimi ve taşmasız layout test edildi; 44/44 Flutter testi başarıyla geçti.
@@ -525,7 +525,7 @@ Ticari bir IoT ürünü geliştiren Kıdemli Sistem Mimarı ve Flutter Uzmanı r
 ### ADIM 22: Süper Yönetici & Servis Yönetim Sistemi (Super User & Service Management)
 - **Kapsam (Veritabanı, Backend & Flutter):**
   - **Sistem Rolleri:** `users` tablosuna `role` alanı (`super_user`, `service_user`, `installer`, `user`), `created_by_user_id` ve `admin_notes` eklendi (`014_super_user_and_service_management.sql`).
-  - **İlk Süper Kullanıcı:** `salihceylan@gmail.com` / `Fingon08.` kullanıcısı oluşturuldu; başka süper yöneticiler ve servis sorumluları (`service_user`) oluşturma yetkisine sahip kılındı.
+  - **İlk Süper Kullanıcı:** `salihceylan@gmail.com` / `<parola: repoda tutulmaz, güvenli yerden alın>` kullanıcısı oluşturuldu; başka süper yöneticiler ve servis sorumluları (`service_user`) oluşturma yetkisine sahip kılındı.
   - **Yetki Hiyerarşisi (RBAC):**
     - Yalnızca `super_user` yeni `super_user` veya `service_user` oluşturabilir/yönetebilir.
     - `service_user` kendi altındaki saha montaj teknisyenlerini (`installer`) oluşturabilir ve yönetebilir; süper kullanıcılara müdahale edemez.

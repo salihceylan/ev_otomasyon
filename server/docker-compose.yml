@@ -1,69 +1,124 @@
-services:
-  emqx:
-    image: emqx/emqx:5.8.0
-    container_name: ev_otomasyon_emqx
-    restart: unless-stopped
-    user: "0:0"
-    ports:
-      - "8884:8883"                   # MQTTS (TLS 1.3 / SSL encrypted on port 8884)
-      - "127.0.0.1:1884:1883"         # Local MQTT (TCP bridge for internal backend)
-      - "127.0.0.1:18084:18083"       # EMQX Web Dashboard (admin panel)
-    environment:
-      - EMQX_NODE__NAME=emqx@127.0.0.1
-      - EMQX_DASHBOARD__DEFAULT_USERNAME=admin
-      - EMQX_DASHBOARD__DEFAULT_PASSWORD=GudeEvOtomasyon2026!Sec
-      - EMQX_LISTENERS__SSL__DEFAULT__BIND=8883
-      - EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CERTFILE=/etc/letsencrypt/live/evotomasyon.gudeteknoloji.com.tr/fullchain.pem
-      - EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__KEYFILE=/etc/letsencrypt/live/evotomasyon.gudeteknoloji.com.tr/privkey.pem
-    volumes:
-      - emqx_data:/opt/emqx/data
-      - emqx_log:/opt/emqx/log
-      - ./acl.conf:/opt/emqx/etc/acl.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-    networks:
-      - ev_network
-    healthcheck:
-      test: ["CMD", "/opt/emqx/bin/emqx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+# ==============================================================================
+# AHBU Akilli Ev - EV OTOMASYONU yigini (EMQX 5 + PostgreSQL 16)          [plan C5]
+# ==============================================================================
+# YALNIZCA ev otomasyonunu hedefler (EMQX 8884, kendi Postgres'i, kendi ag/hacimleri).
+# Ayni sunucudaki uretim kapi sisteminin servislerine (Mosquitto 1883/8883, kapi API'si)
+# DOKUNMAZ: kapsayici/ag/hacim adlari ve yayinlanan portlar farklidir.
+#
+# SIR YOK: bu dosyada parola/anahtar bulunmaz. Degiskenler `server/.env` (git'te TAKIP EDILMEZ)
+# veya ortamdan okunur; `${VAR:?...}` tanimsizsa `docker compose` ACIK HATAYLA durur.
+#
+# GEREKLI degiskenler
+#   POSTGRES_PASSWORD        Postgres sahip rolunun (POSTGRES_USER) parolasi.
+#                            DIKKAT: Mevcut bir veri hacminde parola YALNIZCA ilk olusturmada uygulanir;
+#                            degeri mevcut parolayla ayni tutun veya `ALTER ROLE ... PASSWORD` ile dondurun.
+#   EMQX_DASHBOARD_PASSWORD  EMQX yonetim paneli parolasi (yalnizca ILK acilista uygulanir; sonra
+#                            `docker exec ev_otomasyon_emqx emqx ctl admins passwd <kullanici> <yeni>`).
+#   EMQX_AUTHDB_PASSWORD     EMQX'in kimlik/ACL sorgulari icin kullandigi SALT-OKUNUR veritabani rolunun
+#                            parolasi (rol: scripts/create_db_roles.sql ile ayni parolayla olusturulur).
+#   EMQX_CERT_DIR            Sunucudaki SERTIFIKA DIZINI (icinde fullchain.pem ve privkey.pem). Yalnizca bu
+#                            dizin salt-okunur baglanir (tum /etc/letsencrypt DEGIL). Dizin icin
+#                            scripts/emqx_cert_deploy_hook.sh (certbot deploy-hook) kullanilir.
+# OPSIYONEL degiskenler (varsayilanlar parantezde)
+#   POSTGRES_USER (ev_admin), POSTGRES_DB (ev_otomasyon), EMQX_DASHBOARD_USER (admin),
+#   EMQX_AUTHDB_USER (emqx_auth), EMQX_TLS_BIND_ADDR (0.0.0.0: MQTTS portunun bagli oldugu adres),
+#   EMQX_NODE_COOKIE (EMQX varsayilani; tek dugum oldugu icin onerilen: rastgele deger)
+#
+# Dogrulama (bu dosya bir makinede calistirilmadan yazildi): `docker compose config` ile sozdizimi,
+# hazirlik ortaminda `docker compose up -d` ile calisma denetlenmelidir.
 
+name: ev_otomasyon
+
+services:
   postgres:
     image: postgres:16-alpine
     container_name: ev_otomasyon_postgres
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5434:5432"         # Isolated Postgres (no conflict with 5432/5433)
+      # Yalnizca yerel makine: uygulama (127.0.0.1:5434) ve yonetim betikleri icin. Dis agdan ERISILEMEZ.
+      - "127.0.0.1:5434:5432"
     environment:
-      POSTGRES_DB: ev_otomasyon
-      POSTGRES_USER: ev_admin
-      POSTGRES_PASSWORD: GudeEvPg2026!SecurePass
+      POSTGRES_DB: ${POSTGRES_DB:-ev_otomasyon}
+      POSTGRES_USER: ${POSTGRES_USER:-ev_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD tanimli degil (server/.env)}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - ev_network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ev_admin -d ev_otomasyon"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 512
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  redis:
-    image: redis:7-alpine
-    container_name: ev_otomasyon_redis
+  emqx:
+    image: emqx/emqx:5.8.0
+    container_name: ev_otomasyon_emqx
     restart: unless-stopped
-    command: redis-server --requirepass GudeEvRedis2026!SecureKey --appendonly yes
+    # root DEGIL: kapsayici varsayilan (emqx) kullanicisiyla calisir. Sertifikalar EMQX_CERT_DIR'den
+    # (emqx kullanicisinin okuyabildigi, salt-okunur baglama) gelir.
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
-      - "127.0.0.1:6380:6379"         # Isolated Redis (no conflict with 6379)
+      # Genel MQTTS (cihazlar ve uygulamalar). TEK dis porttur: 8884 -> 8883 (TLS 1.2/1.3, emqx.conf).
+      - "${EMQX_TLS_BIND_ADDR:-0.0.0.0}:8884:8883"
+      # Yalnizca yerel makine: sunucu tarafi koprusu (backend) icin duz MQTT ve yonetim paneli.
+      - "127.0.0.1:1884:1883"
+      - "127.0.0.1:18084:18083"
+    environment:
+      EMQX_NODE__NAME: emqx@127.0.0.1
+      # Erlang dagitim cerezi: tek dugum, dis porta ACIK DEGIL; yine de .env'de rastgele bir deger onerilir.
+      EMQX_NODE__COOKIE: ${EMQX_NODE_COOKIE:-emqxsecretcookie}
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASHBOARD_USER:-admin}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASSWORD:?EMQX_DASHBOARD_PASSWORD tanimli degil (server/.env)}
+      # emqx.conf'taki ${EV_AUTHDB_*} yer tutucularinin degerleri (HOCON ortam degiskeni yerine koyma).
+      # Adlar bilerek EMQX_ ile BASLAMAZ: EMQX_ onekli degiskenler yapilandirma gecersiz kilma sayilir.
+      EV_AUTHDB_SERVER: ev_otomasyon_postgres:5432
+      EV_AUTHDB_NAME: ${POSTGRES_DB:-ev_otomasyon}
+      EV_AUTHDB_USER: ${EMQX_AUTHDB_USER:-emqx_auth}
+      EV_AUTHDB_PASSWORD: ${EMQX_AUTHDB_PASSWORD:?EMQX_AUTHDB_PASSWORD tanimli degil (server/.env)}
     volumes:
-      - redis_data:/data
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+      - ./emqx_config/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      - ./emqx_config/acl.conf:/opt/emqx/etc/acl.conf:ro
+      - ${EMQX_CERT_DIR:?EMQX_CERT_DIR tanimli degil (fullchain.pem + privkey.pem iceren dizin)}:/opt/emqx/etc/certs:ro
     networks:
       - ev_network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "GudeEvRedis2026!SecureKey", "ping"]
-      interval: 10s
+      test: ["CMD", "/opt/emqx/bin/emqx", "ping"]
+      interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 40s
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 2048
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   ev_network:
@@ -77,6 +132,5 @@ volumes:
     name: ev_otomasyon_emqx_log
   postgres_data:
     name: ev_otomasyon_postgres_data
-  redis_data:
-    name: ev_otomasyon_redis_data
-
+# NOT: Kullanilmayan Redis servisi (ve ev_otomasyon_redis_data hacmi) KALDIRILDI; uygulama Redis kullanmaz.
+# Eski hacim sunucuda duruyorsa, hicbir seyin kullanmadigi dogrulandiktan sonra `docker volume rm ev_otomasyon_redis_data`.

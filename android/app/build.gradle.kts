@@ -47,3 +47,8 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // JVM birim testleri (src/test): saf mantik (Ipv4Subnet, BoardNetworkCore). 4.12 cevrimdisi Gradle onbelleginde var.
+    testImplementation("junit:junit:4.12")
+}

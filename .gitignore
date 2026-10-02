@@ -56,3 +56,22 @@ __pycache__/
 node_modules/
 **/node_modules/
 ev_otomasyon_servis_yazilimi/labels/
+
+# Sirlar / ortam dosyalari (denetim 2026-10-01, WP-A A13)
+# Gercek degerler ASLA depoya girmez; yalnizca yer tutucu iceren .env.example izlenir.
+.env
+.env.*
+**/.env
+**/.env.*
+server/.env*
+!.env.example
+!**/.env.example
+!server/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*

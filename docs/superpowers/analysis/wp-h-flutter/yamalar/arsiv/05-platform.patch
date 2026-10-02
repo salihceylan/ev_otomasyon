@@ -1,0 +1,72 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index da2fcbd..e52b758 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -58,2 +58,7 @@
+         </activity>
++        <!-- Gece hatırlatması (FCM) bildirimlerinin küçük simgesi; verilmezse Android uygulama
++             simgesini düz beyaz kare olarak gösterir. Kanal kimliği MainActivity'de oluşturulur. -->
++        <meta-data
++            android:name="com.google.firebase.messaging.default_notification_icon"
++            android:resource="@drawable/ic_stat_peace" />
+         <!-- Don't delete the meta-data below.
+diff --git a/android/app/src/main/kotlin/com/ahbu/evotomasyon/ev_otomasyon/MainActivity.kt b/android/app/src/main/kotlin/com/ahbu/evotomasyon/ev_otomasyon/MainActivity.kt
+index ab8f733..1fb4c69 100644
+--- a/android/app/src/main/kotlin/com/ahbu/evotomasyon/ev_otomasyon/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/ahbu/evotomasyon/ev_otomasyon/MainActivity.kt
+@@ -2,2 +2,4 @@ package com.ahbu.evotomasyon.ev_otomasyon
+ 
++import android.app.NotificationChannel
++import android.app.NotificationManager
+ import android.os.Build
+@@ -11,2 +13,3 @@ class MainActivity : FlutterFragmentActivity() {
+         super.onCreate(savedInstanceState)
++        createPeaceReminderChannel()
+         // Android 12+ (API 31+) siyah SplashScreen beklemesini sonlandır,
+@@ -19,2 +22,18 @@ class MainActivity : FlutterFragmentActivity() {
+     }
++
++    // Sunucu bildirimde channel_id = peace_reminder gönderir; kanal uygulamada yoksa Android
++    // sistem varsayılan kanalına düşer ve hatırlatma sessiz/düşük öncelikli görünebilir.
++    // Kanallar API 26 ile geldiği için daha eski sürümlerde atlanır; yeniden oluşturmak zararsızdır.
++    private fun createPeaceReminderChannel() {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
++        val manager = getSystemService(NotificationManager::class.java) ?: return
++        val channel = NotificationChannel(
++            "peace_reminder",
++            "Gece hatırlatması",
++            NotificationManager.IMPORTANCE_HIGH,
++        ).apply {
++            description = "Gece saatinde açık kalan lamba ve panjurlar için hatırlatma."
++        }
++        manager.createNotificationChannel(channel)
++    }
+ }
+diff --git a/android/app/src/main/res/drawable/ic_stat_peace.xml b/android/app/src/main/res/drawable/ic_stat_peace.xml
+new file mode 100644
+index 0000000..398f326
+--- /dev/null
++++ b/android/app/src/main/res/drawable/ic_stat_peace.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- Gece hatırlatması bildirim küçük simgesi: tek renkli (beyaz) ampul silueti. -->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++    <path
++        android:fillColor="#FFFFFFFF"
++        android:pathData="M12,2C8.14,2 5,5.14 5,9c0,2.38 1.19,4.47 3,5.74L8,17c0,0.55 0.45,1 1,1h6c0.55,0 1,-0.45 1,-1v-2.26c1.81,-1.27 3,-3.36 3,-5.74C19,5.14 15.86,2 12,2zM9,21c0,0.55 0.45,1 1,1h4c0.55,0 1,-0.45 1,-1v-1H9v1z" />
++</vector>
+diff --git a/ios/Runner/Info.plist b/ios/Runner/Info.plist
+index ea13e54..3eb96c0 100644
+--- a/ios/Runner/Info.plist
++++ b/ios/Runner/Info.plist
+@@ -62,2 +62,6 @@
+ 	<true/>
++	<key>UIBackgroundModes</key>
++	<array>
++		<string>remote-notification</string>
++	</array>
+ 	<key>UILaunchStoryboardName</key>

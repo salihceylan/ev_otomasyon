@@ -1,0 +1,9 @@
+{
+  "name": "ev-otomasyon-preview-tools",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only screenshot driver for the Flutter-web preview harness (tool/preview/preview.mjs)",
+  "dependencies": {
+    "puppeteer-core": "^25.12.0"
+  }
+}

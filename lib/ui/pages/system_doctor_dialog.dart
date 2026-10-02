@@ -1,17 +1,31 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../services/automation_state.dart';
-import '../theme/app_theme.dart';
+import '../../models/json_utils.dart';
+import 'service_setup/panel/doctor_report.dart';
+import 'service_setup/setup_style.dart';
+import 'service_setup/setup_widgets.dart';
 import 'wifi_recovery_dialog.dart';
 
+/// Sistem doktoru: bulut / ev ağı / pano gücü için 3 katmanlı tanı.
+///
+/// * Sunucunun göndermediği alan **"Veri yok"** olarak gösterilir; "çalışıyor" ya da "20 ms" gibi bir
+///   değer uydurulmaz.
+/// * Hata türü ayırt edilir: zaman aşımı / ağ yok / oturum süresi (401) / yetki / sunucu hatası.
+/// * Ev ağı kapalı, bilinmiyor ya da hatalıysa **Wi-Fi kurtarma** düğmesi çıkar.
+/// * Süper yönetici bir daire seçmediyse neden çalışmadığı açıkça yazılır.
 class SystemDoctorDialog extends StatefulWidget {
-  final Map<String, dynamic>? initialData;
-
   const SystemDoctorDialog({super.key, this.initialData});
+
+  /// Dışarıdan hazır tanı yanıtı (verilirse ilk açılışta istek atılmaz).
+  final Map<String, dynamic>? initialData;
 
   static Future<void> show(BuildContext context, {Map<String, dynamic>? initialData}) {
     final state = context.read<AutomationState>();
-    return showDialog(
+    return showDialog<void>(
       context: context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
@@ -24,362 +38,255 @@ class SystemDoctorDialog extends StatefulWidget {
   State<SystemDoctorDialog> createState() => _SystemDoctorDialogState();
 }
 
+/// Tanı isteğinin hata türü.
+enum DoctorFailure { timeout, offline, unauthorized, forbidden, notFound, server, unknown }
+
+class _Failure {
+  const _Failure(this.kind, this.title, this.hint);
+
+  final DoctorFailure kind;
+  final String title;
+  final String hint;
+}
+
 class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
-  bool _isLoading = true;
-  String? _errorMessage;
-  Map<String, dynamic>? _diagnosticData;
+  static const Duration _requestTimeout = Duration(seconds: 30);
+
+  bool _loading = false;
+  _Failure? _failure;
+  DoctorReport? _report;
+  int _seq = 0;
 
   @override
   void initState() {
     super.initState();
-    if (widget.initialData != null) {
-      _diagnosticData = widget.initialData;
-      _isLoading = false;
+    final initial = widget.initialData;
+    if (initial != null) {
+      _report = DoctorReport.parse(initial);
     } else {
-      _runDiagnostic();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_run());
+      });
     }
   }
 
-  Future<void> _runDiagnostic() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final state = context.read<AutomationState>();
-      final data = await state.fetchSystemDiagnostic();
-      if (mounted) {
-        setState(() {
-          _diagnosticData = data;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _errorMessage = e.toString().replaceAll('Exception: ', '');
-          _isLoading = false;
-        });
-      }
+  _Failure _classify(Object error) {
+    if (error is TimeoutException) {
+      return const _Failure(
+        DoctorFailure.timeout,
+        'Sunucu zamanında yanıt vermedi',
+        'İşlem zaman aşımına uğradı. İnternet bağlantınızı kontrol edip testi yeniden çalıştırın.',
+      );
     }
+    if (error is ApiException) {
+      if (error.isNetwork) {
+        if (error.cause is TimeoutException) {
+          return const _Failure(
+            DoctorFailure.timeout,
+            'Sunucu zamanında yanıt vermedi',
+            'Bağlantı yavaş ya da sunucu meşgul. Biraz bekleyip testi yeniden çalıştırın.',
+          );
+        }
+        return const _Failure(
+          DoctorFailure.offline,
+          'İnternet bağlantısı yok',
+          'Telefonunuz sunucuya ulaşamıyor. Wi-Fi veya mobil veriyi kontrol edin.',
+        );
+      }
+      if (error.isUnauthorized) {
+        return const _Failure(
+          DoctorFailure.unauthorized,
+          'Oturumunuz sona erdi',
+          'Güvenliğiniz için oturum kapandı. Yeniden giriş yapıp testi tekrar çalıştırın.',
+        );
+      }
+      if (error.isForbidden) {
+        return const _Failure(
+          DoctorFailure.forbidden,
+          'Bu daire için yetkiniz yok',
+          'Sistem doktorunu yalnızca yetkili olduğunuz dairede çalıştırabilirsiniz.',
+        );
+      }
+      if (error.isNotFound) {
+        return const _Failure(
+          DoctorFailure.notFound,
+          'Daire bulunamadı',
+          'Daire silinmiş ya da erişiminiz kaldırılmış olabilir. Ev listesini yenileyin.',
+        );
+      }
+      if (error.isServerError) {
+        return const _Failure(
+          DoctorFailure.server,
+          'Sunucu şu anda yanıt veremiyor',
+          'Sorun sunucuda; birkaç dakika sonra tekrar deneyin. Sürerse yöneticiye bildirin.',
+        );
+      }
+      return _Failure(DoctorFailure.unknown, 'Tanı çalıştırılamadı', error.message);
+    }
+    return const _Failure(
+      DoctorFailure.unknown,
+      'Tanı çalıştırılamadı',
+      'Beklenmeyen bir sorun oluştu. Testi yeniden çalıştırın.',
+    );
+  }
+
+  Future<void> _run() async {
+    final state = context.read<AutomationState>();
+    if (state.activeHome == null) {
+      setState(() {
+        _loading = false;
+        _failure = null;
+        _report = null;
+      });
+      return;
+    }
+    final seq = ++_seq;
+    setState(() {
+      _loading = true;
+      _failure = null;
+    });
+    try {
+      final data = await state.fetchSystemDiagnostic().timeout(_requestTimeout);
+      if (!mounted || seq != _seq) return;
+      setState(() {
+        _report = DoctorReport.parse(asMap(data) ?? const <String, dynamic>{});
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted || seq != _seq) return;
+      setState(() {
+        _failure = _classify(e);
+        _loading = false;
+      });
+    }
+  }
+
+  void _openRecovery() {
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    unawaited(WifiRecoveryDialog.show(navigator.context));
+  }
+
+  @override
+  void dispose() {
+    _seq++; // uçuştaki yanıt artık yok sayılır
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final state = context.watch<AutomationState>();
+    final noHome = state.activeHome == null && _report == null;
     return Dialog(
-      backgroundColor: AppTheme.surfaceDark,
+      backgroundColor: SetupColors.surface(context),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: const BorderSide(color: AppTheme.cardBorder),
+        side: BorderSide(color: SetupColors.border(context)),
       ),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 460),
+        constraints: const BoxConstraints(maxWidth: 480),
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Başlık
               Row(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryBlue.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.health_and_safety_outlined, color: AppTheme.primaryBlueLight, size: 22),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
+                  const Icon(Icons.health_and_safety_outlined, color: SetupColors.primaryLight, size: 24),
+                  const SizedBox(width: 10),
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           'Sistem Doktoru',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                         ),
                         Text(
-                          'Self-Diagnostic & Otomatik Teşhis',
-                          style: TextStyle(fontSize: 11.5, color: AppTheme.textMuted),
+                          state.activeHome == null ? 'Daire seçili değil' : 'Daire: ${state.activeHome!.name}',
+                          key: const Key('doctor_home_name'),
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: SetupColors.muted(context)),
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: AppTheme.textMuted, size: 20),
+                    key: const Key('btn_doctor_close'),
+                    tooltip: 'Kapat',
+                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                    icon: const Icon(Icons.close_rounded),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
-              const Divider(height: 24, color: AppTheme.cardBorder),
-
-              if (_isLoading) ...[
-                const SizedBox(height: 30),
-                const Center(
-                  child: Column(
-                    children: [
-                      CircularProgressIndicator(color: AppTheme.primaryBlue),
-                      SizedBox(height: 16),
-                      Text(
-                        'Sistem katmanları teşhis ediliyor...\n(Bulut, İnternet, Pano Gücü)',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.3),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 30),
-              ] else if (_errorMessage != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: AppTheme.accentRed.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppTheme.accentRed.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.error_outline, color: AppTheme.accentRed, size: 22),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          _errorMessage!,
-                          style: const TextStyle(fontSize: 12.5, color: AppTheme.accentRed),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                ElevatedButton.icon(
-                  onPressed: _runDiagnostic,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Tekrar Dene'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryBlue,
-                    foregroundColor: Colors.white,
-                  ),
-                ),
-              ] else if (_diagnosticData != null) ...[
-                _buildDiagnosticContent(_diagnosticData!),
-              ],
+              Divider(color: SetupColors.border(context)),
+              if (noHome)
+                _NoHome(isSuper: state.capabilities.isSuperUser)
+              else if (_loading)
+                const _Loading()
+              else if (_failure != null)
+                _FailureView(failure: _failure!, onRetry: _run)
+              else if (_report != null)
+                _ReportView(
+                  report: _report!,
+                  canRecover: state.capabilities.canOpenWifiRecovery,
+                  onRecovery: _openRecovery,
+                  onRerun: _run,
+                )
+              else
+                const SizedBox.shrink(),
             ],
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _buildDiagnosticContent(Map<String, dynamic> data) {
-    final cloud = (data['cloud'] as Map<String, dynamic>?) ?? {};
-    final network = (data['home_network'] as Map<String, dynamic>?) ?? {};
-    final hardware = (data['hardware_power'] as Map<String, dynamic>?) ?? {};
+class _NoHome extends StatelessWidget {
+  const _NoHome({required this.isSuper});
 
-    final cloudStatus = cloud['status']?.toString() ?? 'OK';
-    final netStatus = network['status']?.toString() ?? 'UNKNOWN';
-    final powerStatus = hardware['status']?.toString() ?? 'UNKNOWN';
+  final bool isSuper;
 
-    final diagLevel = data['diagnosis_level']?.toString() ?? 'ok';
-    final diagTitle = data['diagnosis_title']?.toString() ?? 'Teşhis Raporu';
-    final diagSummary = data['diagnosis_summary']?.toString() ?? '';
-    final actionRecommendation = data['action_recommendation']?.toString();
-
-    Color summaryColor = AppTheme.accentGreen;
-    IconData summaryIcon = Icons.check_circle_outline;
-    if (diagLevel == 'warning') {
-      summaryColor = Colors.amber;
-      summaryIcon = Icons.warning_amber_rounded;
-    } else if (diagLevel == 'error') {
-      summaryColor = AppTheme.accentRed;
-      summaryIcon = Icons.error_outline;
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // 3 Katmanlı Kartlar
-        _buildTierRow(
-          icon: Icons.cloud_done_outlined,
-          title: '1. Bulut Sunucu & MQTTS',
-          subtitle: cloudStatus == 'OK' ? 'Aktif (Gecikme: ${cloud['latency_ms'] ?? 20} ms)' : 'Bulutta kesinti var',
-          isOk: cloudStatus == 'OK',
-          badgeText: cloudStatus == 'OK' ? 'OK' : 'HATA',
-        ),
-        const SizedBox(height: 10),
-
-        _buildTierRow(
-          icon: Icons.wifi_outlined,
-          title: '2. Ev Modemi & İnternet',
-          subtitle: netStatus == 'OK'
-              ? 'Çevrimiçi (${network['device_ip'] ?? 'Bağlı'})'
-              : (netStatus == 'WARNING' ? 'Sinyal Gecikmeli' : 'İnternet / Modem Kesik'),
-          isOk: netStatus == 'OK',
-          isWarning: netStatus == 'WARNING',
-          badgeText: netStatus == 'OK' ? 'OK' : (netStatus == 'WARNING' ? 'UYARI' : 'HATA'),
-        ),
-        const SizedBox(height: 10),
-
-        _buildTierRow(
-          icon: Icons.electric_bolt_outlined,
-          title: '3. Pano Gücü & Donanım',
-          subtitle: powerStatus == 'OK' ? 'Besleme Normal (Online)' : 'Pano Gücü / Sigorta Kesik',
-          isOk: powerStatus == 'OK',
-          badgeText: powerStatus == 'OK' ? 'OK' : 'KESİK',
-        ),
-        const SizedBox(height: 16),
-
-        // Teşhis Özeti Kartı
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: summaryColor.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: summaryColor.withValues(alpha: 0.35)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(summaryIcon, color: summaryColor, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      diagTitle,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13.5,
-                        color: summaryColor,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                diagSummary,
-                style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary, height: 1.35),
-              ),
-              if (actionRecommendation != null && actionRecommendation.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                const Text(
-                  'Çözüm Önerileri:',
-                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: AppTheme.textMuted),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  actionRecommendation,
-                  style: const TextStyle(fontSize: 11.5, color: AppTheme.textMuted, height: 1.35),
-                ),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Aksiyon Butonları
-        if (netStatus == 'OFFLINE') ...[
-          OutlinedButton.icon(
-            onPressed: () {
-              Navigator.of(context).pop();
-              WifiRecoveryDialog.show(context);
-            },
-            icon: const Icon(Icons.wifi_find_rounded, color: Colors.amber, size: 18),
-            label: const Text(
-              'Modem/Şifre Değiştiyse: Kurtarma Modu',
-              style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
-            ),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Colors.amber),
-              padding: const EdgeInsets.symmetric(vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-
-        ElevatedButton.icon(
-          onPressed: _runDiagnostic,
-          icon: const Icon(Icons.refresh, size: 16),
-          label: const Text('Testi Yeniden Çalıştır'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryBlue,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-      ],
+  @override
+  Widget build(BuildContext context) {
+    return SetupCard(
+      key: const Key('doctor_no_home'),
+      accent: SetupColors.warn,
+      margin: EdgeInsets.zero,
+      child: SetupInfoRow(
+        icon: Icons.home_outlined,
+        color: SetupColors.warn,
+        bold: true,
+        text: isSuper
+            ? 'Süper yönetici hesabı belirli bir daireye bağlı değildir; sistem doktoru bir daire için çalışır. '
+                'Önce Aboneler listesinden ya da ev listesinden bir daire seçin, sonra yeniden açın.'
+            : 'Sistem doktoru bir daire için çalışır. Önce bir daire seçin, sonra yeniden açın.',
+      ),
     );
   }
+}
 
-  Widget _buildTierRow({
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required bool isOk,
-    bool isWarning = false,
-    required String badgeText,
-  }) {
-    Color badgeColor = AppTheme.accentGreen;
-    if (isWarning) {
-      badgeColor = Colors.amber;
-    } else if (!isOk) {
-      badgeColor = AppTheme.accentRed;
-    }
+class _Loading extends StatelessWidget {
+  const _Loading();
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.cardDark,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.cardBorder),
-      ),
-      child: Row(
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 28),
+      child: Column(
+        key: const Key('doctor_loading'),
         children: [
-          Icon(icon, color: badgeColor, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: badgeColor.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: badgeColor.withValues(alpha: 0.4)),
-            ),
-            child: Text(
-              badgeText,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: badgeColor,
-              ),
-            ),
+          const CircularProgressIndicator(),
+          const SizedBox(height: 16),
+          Text(
+            'Sistem katmanları denetleniyor...\n(bulut, ev ağı, pano gücü)',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.muted(context)),
           ),
         ],
       ),
@@ -387,3 +294,317 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
   }
 }
 
+class _FailureView extends StatelessWidget {
+  const _FailureView({required this.failure, required this.onRetry});
+
+  final _Failure failure;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final retryable = failure.kind != DoctorFailure.unauthorized && failure.kind != DoctorFailure.forbidden;
+    return Column(
+      key: Key('doctor_error_${failure.kind.name}'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SetupCard(
+          key: const Key('doctor_error'),
+          accent: SetupColors.error,
+          margin: EdgeInsets.zero,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: failure.title),
+              Padding(
+                padding: const EdgeInsets.only(left: 26, top: 2),
+                child: Text(
+                  failure.hint,
+                  style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.text(context)),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (retryable) ...[
+          const SizedBox(height: 14),
+          SetupPrimaryButton(
+            key: const Key('btn_doctor_retry'),
+            label: 'Tekrar Dene',
+            icon: Icons.refresh_rounded,
+            onPressed: onRetry,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ReportView extends StatelessWidget {
+  const _ReportView({
+    required this.report,
+    required this.canRecover,
+    required this.onRecovery,
+    required this.onRerun,
+  });
+
+  final DoctorReport report;
+  final bool canRecover;
+  final VoidCallback onRecovery;
+  final VoidCallback onRerun;
+
+  static const String _noData = 'Veri yok';
+
+  String _cloudSubtitle() {
+    final parts = <String>[];
+    switch (report.cloudLevel) {
+      case DoctorLevel.ok:
+        parts.add('Çalışıyor');
+      case DoctorLevel.warning:
+        parts.add('Kısmen çalışıyor');
+      case DoctorLevel.error:
+        parts.add('Kesinti var');
+      case DoctorLevel.unknown:
+      case DoctorLevel.notApplicable:
+        return _noData;
+    }
+    parts.add(report.latencyMs == null ? 'Gecikme: $_noData' : 'Gecikme: ${report.latencyMs} ms');
+    final db = report.dbConnected;
+    if (db != null) parts.add(db ? 'Veritabanı bağlı' : 'Veritabanı bağlı değil');
+    final bridge = report.bridgeConnected;
+    if (bridge != null) parts.add(bridge ? 'Mesaj köprüsü bağlı' : 'Mesaj köprüsü bağlı değil');
+    return parts.join(' • ');
+  }
+
+  String _networkSubtitle() {
+    switch (report.networkLevel) {
+      case DoctorLevel.unknown:
+        return _noData;
+      case DoctorLevel.notApplicable:
+        return 'Daireye henüz pano bağlanmamış';
+      case DoctorLevel.ok:
+      case DoctorLevel.warning:
+      case DoctorLevel.error:
+        final label = report.networkLevel == DoctorLevel.ok
+            ? 'Çevrimiçi'
+            : (report.networkLevel == DoctorLevel.warning ? 'Sinyal gecikmeli' : 'İnternet / modem bağlantısı yok');
+        final ip = report.deviceIp;
+        final seen = DoctorReport.seenText(report.secondsSinceSeen);
+        return <String>[label, ?ip, 'Son görülme: ${seen ?? _noData}'].join(' • ');
+    }
+  }
+
+  String _powerSubtitle() {
+    switch (report.powerLevel) {
+      case DoctorLevel.unknown:
+        return _noData;
+      case DoctorLevel.notApplicable:
+        return 'Daireye henüz pano bağlanmamış';
+      case DoctorLevel.ok:
+        return 'Besleme normal';
+      case DoctorLevel.warning:
+      case DoctorLevel.error:
+        return 'Pano gücü veya sigorta kesik olabilir';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = report;
+    final text = SetupColors.text(context);
+    final muted = SetupColors.muted(context);
+    final Color summaryColor;
+    final IconData summaryIcon;
+    switch (r.level) {
+      case 'ok':
+        summaryColor = SetupColors.ok;
+        summaryIcon = Icons.check_circle_outline_rounded;
+      case 'warning':
+        summaryColor = SetupColors.warn;
+        summaryIcon = Icons.warning_amber_rounded;
+      case 'error':
+        summaryColor = SetupColors.error;
+        summaryIcon = Icons.error_outline_rounded;
+      default:
+        summaryColor = SetupColors.info;
+        summaryIcon = Icons.help_outline_rounded;
+    }
+    return Column(
+      key: const Key('doctor_report'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _TierRow(
+          cardKey: 'doctor_tier_cloud',
+          icon: Icons.cloud_done_outlined,
+          title: '1. Bulut sunucu ve güvenli bağlantı',
+          subtitle: _cloudSubtitle(),
+          level: r.cloudLevel,
+        ),
+        _TierRow(
+          cardKey: 'doctor_tier_network',
+          icon: Icons.wifi_outlined,
+          title: '2. Ev modemi ve internet',
+          subtitle: _networkSubtitle(),
+          level: r.networkLevel,
+        ),
+        _TierRow(
+          cardKey: 'doctor_tier_power',
+          icon: Icons.electric_bolt_outlined,
+          title: '3. Pano gücü ve donanım',
+          subtitle: _powerSubtitle(),
+          level: r.powerLevel,
+        ),
+        if (r.devices.length > 1)
+          SetupCard(
+            key: const Key('doctor_devices'),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Dairedeki panolar', style: TextStyle(fontWeight: FontWeight.w800, color: text)),
+                const SizedBox(height: 6),
+                for (final d in r.devices)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Text(
+                      '${d.name ?? d.deviceUuid}: '
+                      '${d.online == null ? _noData : (d.online! ? 'çevrimiçi' : 'çevrimdışı')} • Son görülme: '
+                      '${DoctorReport.seenText(d.secondsSinceSeen) ?? _noData}',
+                      style: TextStyle(fontSize: 12.5, color: muted),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        SetupCard(
+          key: const Key('doctor_summary'),
+          accent: summaryColor,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(summaryIcon, color: SetupColors.readable(context, summaryColor), size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      r.title ?? 'Teşhis özeti: $_noData',
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w800,
+                        color: SetupColors.readable(context, summaryColor),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (r.summary != null) ...[
+                const SizedBox(height: 6),
+                Text(r.summary!, style: TextStyle(fontSize: 13, height: 1.35, color: text)),
+              ],
+              if (r.action != null) ...[
+                const SizedBox(height: 10),
+                Text('Ne yapmalıyım?', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: muted)),
+                const SizedBox(height: 2),
+                Text(r.action!, style: TextStyle(fontSize: 12.5, height: 1.4, color: text)),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        if (r.suggestsWifiRecovery && canRecover) ...[
+          OutlinedButton.icon(
+            key: const Key('btn_doctor_recovery'),
+            onPressed: onRecovery,
+            icon: const Icon(Icons.wifi_find_rounded, size: 18),
+            label: const Text('Modem veya şifre değiştiyse: Wi-Fi kurtarma'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(52),
+              foregroundColor: SetupColors.readable(context, SetupColors.warn),
+              side: const BorderSide(color: SetupColors.warn),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        SetupPrimaryButton(
+          key: const Key('btn_doctor_rerun'),
+          label: 'Testi Yeniden Çalıştır',
+          icon: Icons.refresh_rounded,
+          onPressed: onRerun,
+        ),
+      ],
+    );
+  }
+}
+
+class _TierRow extends StatelessWidget {
+  const _TierRow({
+    required this.cardKey,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.level,
+  });
+
+  final String cardKey;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final DoctorLevel level;
+
+  @override
+  Widget build(BuildContext context) {
+    final Color color;
+    final String badge;
+    switch (level) {
+      case DoctorLevel.ok:
+        color = SetupColors.ok;
+        badge = 'Sağlıklı';
+      case DoctorLevel.warning:
+        color = SetupColors.warn;
+        badge = 'Uyarı';
+      case DoctorLevel.error:
+        color = SetupColors.error;
+        badge = 'Sorun var';
+      case DoctorLevel.unknown:
+        color = SetupColors.info;
+        badge = 'Veri yok';
+      case DoctorLevel.notApplicable:
+        color = SetupColors.info;
+        badge = 'Pano yok';
+    }
+    final readable = SetupColors.readable(context, color);
+    return SetupCard(
+      key: Key(cardKey),
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Icon(icon, color: readable, size: 24),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: SetupColors.text(context))),
+                const SizedBox(height: 2),
+                Text(subtitle, style: TextStyle(fontSize: 12, height: 1.3, color: SetupColors.muted(context))),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withValues(alpha: 0.5)),
+            ),
+            child: Text(
+              badge,
+              key: Key('${cardKey}_badge'),
+              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: readable),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

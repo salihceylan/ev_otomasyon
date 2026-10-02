@@ -1,0 +1,10 @@
+import 'firebase_push_gateway.dart';
+import 'push_config.dart';
+import 'push_gateway.dart';
+
+/// Uygulamanın kullanacağı [PushGateway]'i üretir.
+///
+/// Yapılandırma (`FCM_*` dart-define) yoksa Firebase'e hiç dokunmayan [UnsupportedPushGateway]
+/// döner: davranış push'suz sürümle aynıdır. Varsa gerçek [FirebasePushGateway].
+PushGateway createPushGateway(PushConfig? config) =>
+    config == null ? const UnsupportedPushGateway() : FirebasePushGateway(config: config);

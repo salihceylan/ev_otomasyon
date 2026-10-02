@@ -1,794 +1,1347 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+'use strict';
+
+// ==============================================================================
+// AHBU Akilli Ev - Kimlik dogrulama servisi (WP-A: A4 + A5)
+// ==============================================================================
+//
+// Sozlesme: docs/CONTRACTS.md §1.2
+//  - Access token: 15 dk JWT (sub, role, tv, iat, exp, iss) -> middlewares/jwt_config
+//  - Refresh token: OPAK rastgele deger; DB'de YALNIZCA SHA-256 ozeti; her kullanimda doner
+//    (rotation); kullanilmis token tekrar gelirse AILE (family_id) iptal edilir; 30 gun.
+//  - Sifre: en az 10 karakter (en fazla 72 bayt - bcrypt siniri), bcrypt cost 12.
+//  - Sifre degisimi / sifirlama / dondurma -> refresh token'lar iptal + token_version++.
+//  - Google / Apple: YALNIZCA dogrulanmis kimlik jetonu (imza + aud + iss + exp + email_verified).
+//    Jeton yok/gecersiz -> giris REDDEDILIR. Istemciden gelen e-posta/kimlik alanina GUVENILMEZ.
+//  - OTP / sifirlama kodlari: crypto.randomInt, DB'de HMAC(PIN_PEPPER) ozeti; yeniden istek 60 sn
+//    + saatte 5; deneme sayaci ATOMIK ve yeniden gonderimle SIFIRLANMAZ; kod/token LOG'LANMAZ;
+//    debug_* alanlari yalnizca ALLOW_DEBUG_OTP=true VE NODE_ENV!=='production'.
+//  - Sihirli baglanti GET ile oturum ACMAZ: POST + tek kullanim.
+
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const db = require('../db');
+const { HttpError, generateNumericPin, sha256Hex, isUuid } = require('../utils/helpers');
+const jwtConfig = require('../middlewares/jwt_config');
+const { invalidateUserAuthCache } = require('../middlewares/auth_middleware');
+const pin = require('../utils/pin');
+const mailer = require('../utils/mailer');
 
-class AuthService {
-  /**
-   * Refresh token için SHA-256 hash üretir
-   */
-  _hashToken(token) {
-    return crypto.createHash('sha256').update(token).digest('hex');
+// ---------------------------------------------------------------------------
+// Sabitler
+// ---------------------------------------------------------------------------
+const PASSWORD_MIN_LENGTH = 10;
+const PASSWORD_MAX_BYTES = 72;
+const RESEND_COOLDOWN_SEC = 60;
+const MAX_SENDS_PER_HOUR = 5;
+const MAX_CODE_ATTEMPTS = 5;
+const ACCOUNT_SETUP_TTL_SEC = 72 * 3600;
+const ADMIN_RESET_TTL_SEC = 60 * 60;
+// Oturum iptali sonrasi push belirteci devre disi birakma: yanit en cok bu kadar bekler (plan §5d-1).
+const PUSH_REVOKE_TIMEOUT_MS = 3000;
+const TIMED_OUT = Symbol('push_revoke_timed_out');
+const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
+const DEFAULT_APP_PUBLIC_URL = 'https://evotomasyon.gudeteknoloji.com.tr';
+const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[^\s@<>()[\]\\,;:"]{2,}$/;
+const BCRYPT_HASH_RE = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+
+const USER_COLS = `id, email, full_name, phone, role, is_active, account_status, token_version,
+  must_change_password, email_verified, google_id, apple_id`;
+
+// bcrypt cost: uretimde HER ZAMAN 12. Yalnizca NODE_ENV=test iken BCRYPT_TEST_COST ile
+// testleri hizlandirmak icin dusurulebilir.
+function bcryptCost() {
+  if (process.env.NODE_ENV === 'test' && /^\d+$/.test(String(process.env.BCRYPT_TEST_COST || ''))) {
+    return Math.max(4, Math.min(12, Number(process.env.BCRYPT_TEST_COST)));
   }
+  return 12;
+}
 
-  /**
-   * Access Token (15 dk) ve Refresh Token (365 gün) üretip DB'ye kaydeder
-   */
-  async generateTokens(user) {
-    const jwtSecret = process.env.JWT_SECRET || 'ahbu_default_secret_key_2026';
-    const refreshSecret = process.env.JWT_REFRESH_SECRET || jwtSecret;
+function isDebugOtpAllowed() {
+  return process.env.ALLOW_DEBUG_OTP === 'true' && process.env.NODE_ENV !== 'production';
+}
 
-    // 15 Dakikalık Access Token
-    const accessToken = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        full_name: user.full_name,
-        phone: user.phone || null,
-        role: user.role || 'user',
-      },
-      jwtSecret,
-      { expiresIn: '15m' }
-    );
+function csvEnv(name) {
+  return String(process.env[name] || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
-    // 1 Yıllık (365 Gün) Refresh Token
-    const refreshToken = jwt.sign(
-      {
-        id: user.id,
-        type: 'refresh',
-      },
-      refreshSecret,
-      { expiresIn: '365d' }
-    );
+function appPublicUrl() {
+  return String(process.env.APP_PUBLIC_URL || DEFAULT_APP_PUBLIC_URL).replace(/\/+$/, '');
+}
 
-    const tokenHash = this._hashToken(refreshToken);
-    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-
-    // Veritabanına kaydet
-    await db.query(
-      `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3)`,
-      [user.id, tokenHash, expiresAt]
-    );
-
-    return {
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      token: accessToken, // Geriye dönük uyumluluk
-      expires_in: 900, // 15 dk (saniye cinsinden)
-    };
+function httpError(status, message, code, extra) {
+  const err = new HttpError(status, message, code);
+  if (extra && typeof extra === 'object') {
+    if (Number.isFinite(extra.retryAfter)) err.retryAfter = extra.retryAfter;
+    if (extra.expose === true) err.expose = true;
+    if (extra.body) err.extra = extra.body;
   }
+  return err;
+}
 
-  /**
-   * E-posta veya Telefon + Şifre ile Kullanıcı Girişi
-   */
-  async login(identifier, password) {
-    const cleanIdentifier = (identifier || '').trim().toLowerCase();
-    const res = await db.query(
-      `SELECT * FROM users 
-       WHERE (LOWER(email) = $1 OR phone = $2) AND is_active = TRUE`,
-      [cleanIdentifier, identifier.trim()]
-    );
+function invalidCredentials() {
+  return httpError(401, 'Geçersiz e-posta / telefon veya şifre.', 'INVALID_CREDENTIALS');
+}
 
-    if (res.rows.length === 0) {
-      throw new Error('Gecersiz e-posta / telefon veya sifre');
-    }
+// ---------------------------------------------------------------------------
+// Normalizasyon yardimcilari (diger servisler de kullanir)
+// ---------------------------------------------------------------------------
+function normalizeEmail(value) {
+  if (typeof value !== 'string') return null;
+  const s = value.trim().toLowerCase();
+  if (!s || s.length > 254 || !EMAIL_RE.test(s)) return null;
+  return s;
+}
 
-    const user = res.rows[0];
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      throw new Error('Gecersiz e-posta / telefon veya sifre');
-    }
+function normalizePhone(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const s = String(value).trim().replace(/[\s\-().]/g, '');
+  if (!/^\+?\d{10,15}$/.test(s)) return null;
+  return s;
+}
 
-    const tokens = await this.generateTokens(user);
-
-    // Kullanıcının yetkili olduğu evleri getir
-    const homesRes = await db.query(
-      `SELECT h.id, h.name, h.address, h.mqtt_username, hu.role, hu.installer_expires_at, hu.valid_from, hu.valid_until
-       FROM homes h
-       JOIN home_users hu ON h.id = hu.home_id
-       WHERE hu.user_id = $1`,
-      [user.id]
-    );
-
-    const now = new Date();
-    const homes = homesRes.rows.map(h => ({
-      ...h,
-      is_expired: h.role === 'guest' && h.valid_until && new Date(h.valid_until) < now,
-    }));
-
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        full_name: user.full_name,
-        phone: user.phone,
-        role: user.role || 'user',
-      },
-      homes: homes,
-    };
+/** E-posta ya da telefon. Gecersizse null. */
+function parseIdentifier(raw) {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (s.includes('@')) {
+    const email = normalizeEmail(s);
+    return email ? { kind: 'email', value: email } : null;
   }
+  const phone = normalizePhone(s);
+  return phone ? { kind: 'phone', value: phone } : null;
+}
 
-  /**
-   * Yeni Kullanıcı Kaydı (Register)
-   */
-  async register({ full_name, email, password, phone }) {
-    if (!full_name || !email || !password) {
-      throw new Error('Ad soyad, e-posta ve sifre alanlari zorunludur');
-    }
+function normalizeFullName(value, fallback = null) {
+  if (typeof value !== 'string') return fallback;
+  // Kontrol karakterleri temizlenir.
+  // eslint-disable-next-line no-control-regex
+  const s = value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (s.length < 2) return fallback;
+  return s.slice(0, 100);
+}
 
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPhone = phone ? phone.trim() : null;
-
-    // E-posta benzersizlik kontrolü
-    const existingEmail = await db.query('SELECT id FROM users WHERE LOWER(email) = $1', [cleanEmail]);
-    if (existingEmail.rows.length > 0) {
-      throw new Error('Bu e-posta adresi zaten kayitlidir');
-    }
-
-    // Telefon benzersizlik kontrolü (eğer girilmişse)
-    if (cleanPhone) {
-      const existingPhone = await db.query('SELECT id FROM users WHERE phone = $1', [cleanPhone]);
-      if (existingPhone.rows.length > 0) {
-        throw new Error('Bu telefon numarasi zaten kayitlidir');
-      }
-    }
-
-    // Şifre hash'leme
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    // Kullanıcıyı oluştur
-    const insertRes = await db.query(
-      `INSERT INTO users (full_name, email, password_hash, phone, is_active)
-       VALUES ($1, $2, $3, $4, TRUE)
-       RETURNING id, full_name, email, phone, created_at`,
-      [full_name.trim(), cleanEmail, passwordHash, cleanPhone]
-    );
-
-    const newUser = insertRes.rows[0];
-    const tokens = await this.generateTokens(newUser);
-
-    return {
-      ...tokens,
-      user: {
-        id: newUser.id,
-        email: newUser.email,
-        full_name: newUser.full_name,
-        phone: newUser.phone,
-      },
-      homes: [],
-    };
+function validatePassword(password) {
+  if (typeof password !== 'string' || password.length === 0) {
+    throw httpError(400, 'Şifre zorunludur.', 'VALIDATION');
   }
-
-  /**
-   * Refresh Token ile Yeni Access Token Üretme (Sessiz Oturum Tazeleme)
-   */
-  async refreshToken(refreshToken) {
-    if (!refreshToken) {
-      throw new Error('Refresh token zorunludur');
-    }
-
-    const jwtSecret = process.env.JWT_SECRET || 'ahbu_default_secret_key_2026';
-    const refreshSecret = process.env.JWT_REFRESH_SECRET || jwtSecret;
-
-    let payload;
-    try {
-      payload = jwt.verify(refreshToken, refreshSecret);
-    } catch (e) {
-      throw new Error('Gecersiz veya suresi dolmus refresh token');
-    }
-
-    const tokenHash = this._hashToken(refreshToken);
-
-    // Token veritabanında aktif mi?
-    const dbRes = await db.query(
-      `SELECT rt.*, u.email, u.full_name, u.phone, u.role, u.is_active
-       FROM refresh_tokens rt
-       JOIN users u ON rt.user_id = u.id
-       WHERE rt.token_hash = $1 
-         AND rt.revoked_at IS NULL 
-         AND rt.expires_at > NOW() 
-         AND u.is_active = TRUE`,
-      [tokenHash]
-    );
-
-    if (dbRes.rows.length === 0) {
-      throw new Error('Gecersiz veya iptal edilmis oturum');
-    }
-
-    const user = dbRes.rows[0];
-
-    // Yeni 15 dakikalık Access Token
-    const newAccessToken = jwt.sign(
-      {
-        id: user.user_id,
-        email: user.email,
-        full_name: user.full_name,
-        phone: user.phone || null,
-        role: user.role || 'user',
-      },
-      jwtSecret,
-      { expiresIn: '15m' }
-    );
-
-    return {
-      access_token: newAccessToken,
-      token: newAccessToken,
-      refresh_token: refreshToken,
-      expires_in: 900,
-    };
+  if (password.length < PASSWORD_MIN_LENGTH) {
+    throw httpError(400, `Şifre en az ${PASSWORD_MIN_LENGTH} karakter olmalıdır.`, 'VALIDATION');
   }
-
-  /**
-   * Tek Bir Refresh Token'ı İptal Et (Logout)
-   */
-  async revokeToken(refreshToken) {
-    if (!refreshToken) return;
-    const tokenHash = this._hashToken(refreshToken);
-    await db.query(
-      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1',
-      [tokenHash]
-    );
+  if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
+    throw httpError(400, `Şifre en fazla ${PASSWORD_MAX_BYTES} bayt olabilir.`, 'VALIDATION');
   }
-
-  /**
-   * Kullanıcının Tüm Aktif Oturumlarını Sonlandır (Daire Devri & Acil İptal)
-   */
-  async revokeAllUserSessions(userId) {
-    await db.query(
-      'UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL',
-      [userId]
-    );
-  }
-
-  /**
-   * Şifre Sıfırlama OTP Üretme (E-posta veya Telefon)
-   */
-  async forgotPassword(identifier) {
-    if (!identifier) {
-      throw new Error('E-posta veya telefon numarasi zorunludur');
-    }
-
-    const clean = identifier.trim().toLowerCase();
-    const userRes = await db.query(
-      `SELECT id, email, full_name, phone FROM users 
-       WHERE (LOWER(email) = $1 OR phone = $2) AND is_active = TRUE`,
-      [clean, identifier.trim()]
-    );
-
-    // Güvenlik gereği kullanıcı bulunamasa bile saldırgan bilgi toplamasın diye aynı mesaj verilir
-    if (userRes.rows.length === 0) {
-      return {
-        message: 'Eger kayitli bir hesap varsa, sifre sifirlama kodu iletildi.',
-      };
-    }
-
-    const user = userRes.rows[0];
-
-    // 6 Haneli Sayısal OTP
-    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 dakika
-
-    await db.query(
-      `INSERT INTO password_reset_tokens (user_id, otp_code, expires_at)
-       VALUES ($1, $2, $3)`,
-      [user.id, otpCode, expiresAt]
-    );
-
-    console.log(`[AUTH-OTP] Kullanıcı ${user.email} (${user.phone}) için OTP Kodu: ${otpCode}`);
-
-    return {
-      message: 'Sifre sifirlama kodu basariyla olusturuldu.',
-      otp: otpCode, // Test ve istemci kolaylığı için
-      user_id: user.id,
-    };
-  }
-
-  /**
-   * OTP Doğrulama ve Yeni Şifre Belirleme
-   */
-  async resetPassword({ identifier, otp_code, new_password }) {
-    if (!identifier || !otp_code || !new_password) {
-      throw new Error('E-posta/telefon, dogrulama kodu ve yeni sifre zorunludur');
-    }
-
-    if (new_password.length < 6) {
-      throw new Error('Yeni sifre en az 6 karakter olmalidir');
-    }
-
-    const clean = identifier.trim().toLowerCase();
-    const userRes = await db.query(
-      `SELECT id FROM users 
-       WHERE (LOWER(email) = $1 OR phone = $2) AND is_active = TRUE`,
-      [clean, identifier.trim()]
-    );
-
-    if (userRes.rows.length === 0) {
-      throw new Error('Gecersiz e-posta veya dogrulama kodu');
-    }
-
-    const userId = userRes.rows[0].id;
-
-    // En güncel ve geçerli OTP kodunu sorgula
-    const otpRes = await db.query(
-      `SELECT id FROM password_reset_tokens 
-       WHERE user_id = $1 
-         AND otp_code = $2 
-         AND used = FALSE 
-         AND expires_at > NOW()
-       ORDER BY created_at DESC 
-       LIMIT 1`,
-      [userId, otp_code.trim()]
-    );
-
-    if (otpRes.rows.length === 0) {
-      throw new Error('Gecersiz veya suresi dolmus dogrulama kodu');
-    }
-
-    // OTP'yi kullanıldı olarak işaretle
-    await db.query('UPDATE password_reset_tokens SET used = TRUE WHERE id = $1', [otpRes.rows[0].id]);
-
-    // Yeni şifreyi hashle ve kaydet
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(new_password, salt);
-
-    await db.query(
-      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
-      [passwordHash, userId]
-    );
-
-    // Güvenlik gereği kullanıcının eski tüm aktif refresh oturumlarını iptal et
-    await this.revokeAllUserSessions(userId);
-
-    return {
-      message: 'Sifreniz basariyla sifirlandi. Lutfen yeni sifrenizle giris yapiniz.',
-    };
-  }
-
-  /**
-   * Profil ve Kullanıcının Dairelerini Getir
-   */
-  async getProfile(userId) {
-    const res = await db.query('SELECT id, email, full_name, phone, role, created_at FROM users WHERE id = $1', [userId]);
-    if (res.rows.length === 0) {
-      throw new Error('Kullanici bulunamadi');
-    }
-
-    const homesRes = await db.query(
-      `SELECT h.id, h.name, h.address, h.mqtt_username, hu.role, hu.installer_expires_at, hu.valid_from, hu.valid_until
-       FROM homes h
-       JOIN home_users hu ON h.id = hu.home_id
-       WHERE hu.user_id = $1`,
-      [userId]
-    );
-
-    const now = new Date();
-    const homes = homesRes.rows.map(h => ({
-      ...h,
-      is_expired: h.role === 'guest' && h.valid_until && new Date(h.valid_until) < now,
-    }));
-
-    return {
-      user: res.rows[0],
-      homes: homes,
-    };
-  }
-
-  /**
-   * Ortak Auth Yanıtı Oluşturucu (Tokens + User + Homes)
-   */
-  async _buildUserAuthResponse(user) {
-    const tokens = await this.generateTokens(user);
-
-    const homesRes = await db.query(
-      `SELECT h.id, h.name, h.address, h.mqtt_username, hu.role, hu.installer_expires_at, hu.valid_from, hu.valid_until
-       FROM homes h
-       JOIN home_users hu ON h.id = hu.home_id
-       WHERE hu.user_id = $1`,
-      [user.id]
-    );
-
-    const now = new Date();
-    const homes = homesRes.rows.map(h => ({
-      ...h,
-      is_expired: h.role === 'guest' && h.valid_until && new Date(h.valid_until) < now,
-    }));
-
-    return {
-      ...tokens,
-      user: {
-        id: user.id,
-        email: user.email,
-        full_name: user.full_name,
-        phone: user.phone,
-        role: user.role || 'user',
-      },
-      homes: homes,
-    };
-  }
-
-  /**
-   * ADIM 18: Google Sign-In Doğrulama ve Giriş
-   */
-  async loginWithGoogle({ id_token, email, full_name, google_id }) {
-    let resolvedEmail = email ? email.trim().toLowerCase() : null;
-    let resolvedName = full_name ? full_name.trim() : 'Google Kullanıcısı';
-    let resolvedGoogleId = google_id || null;
-
-    // Eğer id_token verilmişse Google tokeninfo endpoint'i ile doğrula
-    if (id_token) {
-      try {
-        const https = require('https');
-        const tokenInfo = await new Promise((resolve, reject) => {
-          https.get(`https://oauth2.googleapis.com/tokeninfo?id_token=${id_token}`, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-              try {
-                const parsed = JSON.parse(data);
-                if (res.statusCode === 200 && parsed.email) {
-                  resolve(parsed);
-                } else {
-                  resolve(null); // Doğrulama hatasında lokal veriyi kullan
-                }
-              } catch (_) {
-                resolve(null);
-              }
-            });
-          }).on('error', () => resolve(null));
-        });
-
-        if (tokenInfo) {
-          resolvedEmail = tokenInfo.email.toLowerCase();
-          resolvedName = tokenInfo.name || resolvedName;
-          resolvedGoogleId = tokenInfo.sub || resolvedGoogleId;
-        }
-      } catch (err) {
-        console.warn('[AUTH-GOOGLE] Tokeninfo online kontrol uyarısı:', err.message);
-      }
-    }
-
-    if (!resolvedEmail && !resolvedGoogleId) {
-      throw new Error('Google hesap bilgileri doğrulanamadı');
-    }
-
-    // 1. Önce google_id veya email ile mevcut kullanıcıyı ara
-    let userRes = await db.query(
-      `SELECT * FROM users WHERE (google_id IS NOT NULL AND google_id = $1) OR (LOWER(email) = $2)`,
-      [resolvedGoogleId || 'non_existent_sub', resolvedEmail || 'non_existent@email.com']
-    );
-
-    let user;
-    if (userRes.rows.length > 0) {
-      user = userRes.rows[0];
-      // google_id henüz kayıtlı değilse güncelle
-      if (!user.google_id && resolvedGoogleId) {
-        await db.query('UPDATE users SET google_id = $1 WHERE id = $2', [resolvedGoogleId, user.id]);
-        user.google_id = resolvedGoogleId;
-      }
-    } else {
-      // 2. Yeni kullanıcı oluştur (şifresiz / rastgele hash)
-      const randomPass = crypto.randomBytes(32).toString('hex');
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(randomPass, salt);
-
-      const insertRes = await db.query(
-        `INSERT INTO users (full_name, email, google_id, password_hash, is_active)
-         VALUES ($1, $2, $3, $4, TRUE)
-         RETURNING *`,
-        [resolvedName, resolvedEmail, resolvedGoogleId, passwordHash]
-      );
-      user = insertRes.rows[0];
-    }
-
-    return this._buildUserAuthResponse(user);
-  }
-
-  /**
-   * ADIM 18: Sign in with Apple Doğrulama ve Giriş
-   */
-  async loginWithApple({ identity_token, user_id, email, full_name }) {
-    const resolvedAppleId = user_id;
-    let resolvedEmail = email ? email.trim().toLowerCase() : null;
-    let resolvedName = full_name ? full_name.trim() : 'Apple Kullanıcısı';
-
-    if (!resolvedAppleId && !resolvedEmail) {
-      throw new Error('Apple kullanıcı kimliği (user_id) gereklidir');
-    }
-
-    // 1. Önce apple_id veya e-posta ile kullanıcı ara
-    let userRes = await db.query(
-      `SELECT * FROM users WHERE (apple_id IS NOT NULL AND apple_id = $1) OR ($2::text IS NOT NULL AND LOWER(email) = $2)`,
-      [resolvedAppleId || 'non_existent_apple_id', resolvedEmail]
-    );
-
-    let user;
-    if (userRes.rows.length > 0) {
-      user = userRes.rows[0];
-      if (!user.apple_id && resolvedAppleId) {
-        await db.query('UPDATE users SET apple_id = $1 WHERE id = $2', [resolvedAppleId, user.id]);
-        user.apple_id = resolvedAppleId;
-      }
-    } else {
-      // 2. Yeni kullanıcı oluştur
-      const randomPass = crypto.randomBytes(32).toString('hex');
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(randomPass, salt);
-      const fallbackEmail = resolvedEmail || `apple_${resolvedAppleId.substring(0, 12)}@privaterelay.ahbu.com`;
-
-      const insertRes = await db.query(
-        `INSERT INTO users (full_name, email, apple_id, password_hash, is_active)
-         VALUES ($1, $2, $3, $4, TRUE)
-         RETURNING *`,
-        [resolvedName, fallbackEmail, resolvedAppleId, passwordHash]
-      );
-      user = insertRes.rows[0];
-    }
-
-    return this._buildUserAuthResponse(user);
-  }
-
-  /**
-   * ADIM 18: Telefon Numarasına 6 Haneli OTP Gönderme
-   */
-  async sendPhoneOtp(phone) {
-    if (!phone || phone.trim().length < 10) {
-      throw new Error('Geçerli bir telefon numarası giriniz (örn: 05xxxxxxxxx)');
-    }
-
-    const cleanPhone = phone.trim().replace(/\s+/g, '');
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const otpHash = crypto.createHash('sha256').update(code).digest('hex');
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 dakika geçerli
-
-    // Eski OTP'leri temizle
-    await db.query('DELETE FROM phone_otp_codes WHERE phone = $1', [cleanPhone]);
-
-    // Yeni OTP kaydet
-    await db.query(
-      `INSERT INTO phone_otp_codes (phone, otp_hash, expires_at)
-       VALUES ($1, $2, $3)`,
-      [cleanPhone, otpHash, expiresAt]
-    );
-
-    console.log(`[OTP-SERVICE] Telefon: ${cleanPhone} | Doğrulama Kodu: ${code}`);
-
-    return {
-      success: true,
-      message: 'Doğrulama kodu gönderildi',
-      expires_in: 300,
-      // Geliştirme/test kolaylığı için kod debug logunda gösterilir
-      debug_code: process.env.NODE_ENV !== 'production' ? code : undefined,
-    };
-  }
-
-  /**
-   * ADIM 18: Telefon OTP Kodu Doğrulama ve Giriş Yapma
-   */
-  async verifyPhoneOtp(phone, code) {
-    if (!phone || !code) {
-      throw new Error('Telefon numarası ve 6 haneli doğrulama kodu zorunludur');
-    }
-
-    const cleanPhone = phone.trim().replace(/\s+/g, '');
-    const cleanCode = code.trim();
-    const inputHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-
-    const otpRes = await db.query(
-      `SELECT * FROM phone_otp_codes WHERE phone = $1 AND expires_at > NOW()`,
-      [cleanPhone]
-    );
-
-    if (otpRes.rows.length === 0) {
-      throw new Error('Doğrulama kodunun süresi dolmuş veya kod talep edilmemiş');
-    }
-
-    const otpRecord = otpRes.rows[0];
-    if (otpRecord.attempts >= 5) {
-      await db.query('DELETE FROM phone_otp_codes WHERE id = $1', [otpRecord.id]);
-      throw new Error('Çok fazla hatalı deneme yapıldı. Lütfen yeni kod talep ediniz.');
-    }
-
-    if (otpRecord.otp_hash !== inputHash) {
-      await db.query('UPDATE phone_otp_codes SET attempts = attempts + 1 WHERE id = $1', [otpRecord.id]);
-      throw new Error('Hatalı doğrulama kodu');
-    }
-
-    // Kod doğru, OTP'yi sil
-    await db.query('DELETE FROM phone_otp_codes WHERE id = $1', [otpRecord.id]);
-
-    // Kullanıcıyı telefon numarası ile bul veya oluştur
-    let userRes = await db.query('SELECT * FROM users WHERE phone = $1', [cleanPhone]);
-    let user;
-
-    if (userRes.rows.length > 0) {
-      user = userRes.rows[0];
-    } else {
-      // Yeni şifresiz kullanıcı oluştur
-      const randomPass = crypto.randomBytes(32).toString('hex');
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(randomPass, salt);
-      const dummyEmail = `phone_${cleanPhone.replace(/[^0-9]/g, '')}@ahbu.local`;
-
-      const insertRes = await db.query(
-        `INSERT INTO users (full_name, phone, email, password_hash, is_active)
-         VALUES ($1, $2, $3, $4, TRUE)
-         RETURNING *`,
-        [`Sakin (${cleanPhone.slice(-4)})`, cleanPhone, dummyEmail, passwordHash]
-      );
-      user = insertRes.rows[0];
-    }
-
-    return this._buildUserAuthResponse(user);
-  }
-
-  /**
-   * ADIM 20: Şifre Sıfırlama Talebi (6 Haneli OTP & Magic Token Üretimi)
-   */
-  async requestPasswordReset(identifier) {
-    if (!identifier || !identifier.trim()) {
-      throw new Error('E-posta veya telefon numarası gereklidir');
-    }
-
-    const clean = identifier.trim();
-    const cleanLower = clean.toLowerCase();
-
-    // Kullanıcıyı e-posta veya telefon ile bul
-    const userRes = await db.query(
-      `SELECT * FROM users WHERE (LOWER(email) = $1 OR phone = $2) AND is_active = TRUE`,
-      [cleanLower, clean]
-    );
-
-    // Güvenlik gereği kullanıcı bulunamasa bile aynı mesaj dönebilir (enumeration prevention)
-    // Saha konforu için kullanıcı bulunursa sıfırlama kaydı açılır
-    let userId = null;
-    if (userRes.rows.length > 0) {
-      userId = userRes.rows[0].id;
-    }
-
-    const code = crypto.randomInt(100000, 999999).toString();
-    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
-    const magicToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 dakika
-
-    await db.query(
-      `INSERT INTO password_resets (user_id, identifier, code_hash, token, expires_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [userId, clean, codeHash, magicToken, expiresAt]
-    );
-
-    console.log(`[PASSWORD-RESET] Alıcı: ${clean} | 6 Haneli Kod: ${code} | Magic Token: ${magicToken}`);
-
-    return {
-      success: true,
-      message: 'Şifre kurtarma kodu başarıyla iletildi',
-      expires_in: 900,
-      debug_code: process.env.NODE_ENV !== 'production' ? code : undefined,
-      debug_token: process.env.NODE_ENV !== 'production' ? magicToken : undefined,
-    };
-  }
-
-  /**
-   * ADIM 20: Şifre Sıfırlama (OTP Kodu veya Magic Token ile) ve Tüm Oturumları Düşürme
-   */
-  async resetPassword({ identifier, code, token, new_password }) {
-    if (!new_password || new_password.trim().length < 6) {
-      throw new Error('Yeni şifre en az 6 karakter olmalıdır');
-    }
-
-    let resetRecord = null;
-
-    if (token && token.trim()) {
-      // Magic Link Token ile sıfırlama
-      const res = await db.query(
-        `SELECT * FROM password_resets WHERE token = $1 AND expires_at > NOW() AND used_at IS NULL`,
-        [token.trim()]
-      );
-      if (res.rows.length === 0) {
-        throw new Error('Geçersiz veya süresi dolmuş sihirli bağlantı');
-      }
-      resetRecord = res.rows[0];
-    } else if (identifier && code) {
-      // 6 Haneli OTP Kodu ile sıfırlama
-      const clean = identifier.trim();
-      const cleanCode = code.trim();
-      const codeHash = crypto.createHash('sha256').update(cleanCode).digest('hex');
-
-      const res = await db.query(
-        `SELECT * FROM password_resets 
-         WHERE identifier = $1 AND expires_at > NOW() AND used_at IS NULL 
-         ORDER BY id DESC LIMIT 1`,
-        [clean]
-      );
-
-      if (res.rows.length === 0) {
-        throw new Error('Geçersiz veya süresi dolmuş kurtarma kodu');
-      }
-
-      resetRecord = res.rows[0];
-
-      if (resetRecord.attempts >= 5) {
-        await db.query(`UPDATE password_resets SET used_at = NOW() WHERE id = $1`, [resetRecord.id]);
-        throw new Error('Çok fazla hatalı kod denemesi yapıldı. Lütfen yeni kod talep ediniz.');
-      }
-
-      if (resetRecord.code_hash !== codeHash) {
-        await db.query(`UPDATE password_resets SET attempts = attempts + 1 WHERE id = $1`, [resetRecord.id]);
-        throw new Error('Hatalı kurtarma kodu');
-      }
-    } else {
-      throw new Error('Kurtarma kodu veya sihirli bağlantı tokenı zorunludur');
-    }
-
-    if (!resetRecord.user_id) {
-      // Geçersiz kullanıcı için açılan hayalet talep
-      await db.query(`UPDATE password_resets SET used_at = NOW() WHERE id = $1`, [resetRecord.id]);
-      throw new Error('Bu kimliğe ait aktif bir kullanıcı hesabı bulunamadı');
-    }
-
-    // Kodu kullanıldı olarak işaretle
-    await db.query(`UPDATE password_resets SET used_at = NOW() WHERE id = $1`, [resetRecord.id]);
-
-    // Yeni şifreyi bcrypt ile hash'le
-    const salt = await bcrypt.genSalt(10);
-    const newPasswordHash = await bcrypt.hash(new_password.trim(), salt);
-
-    // Kullanıcı şifresini güncelle ve token_version artır (Tüm aktif oturumları anında düşür)
-    const updateRes = await db.query(
-      `UPDATE users 
-       SET password_hash = $1, token_version = COALESCE(token_version, 1) + 1 
-       WHERE id = $2 
-       RETURNING *`,
-      [newPasswordHash, resetRecord.user_id]
-    );
-
-    if (updateRes.rows.length === 0) {
-      throw new Error('Kullanıcı hesabı bulunamadı');
-    }
-
-    // Güvenlik: Eski tüm refresh token kayıtlarını sil
-    await db.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [resetRecord.user_id]);
-
-    const updatedUser = updateRes.rows[0];
-
-    // Yeni taze JWT Access ve Refresh token üretip dön (otomatik giriş konforu)
-    return this._buildUserAuthResponse(updatedUser);
-  }
-
-  /**
-   * ADIM 20: Sihirli Bağlantı (Magic Link) ile Tek Tıkla Giriş
-   */
-  async magicLogin(token) {
-    if (!token || !token.trim()) {
-      throw new Error('Sihirli bağlantı tokenı gereklidir');
-    }
-
-    const res = await db.query(
-      `SELECT * FROM password_resets WHERE token = $1 AND expires_at > NOW() AND used_at IS NULL`,
-      [token.trim()]
-    );
-
-    if (res.rows.length === 0) {
-      throw new Error('Geçersiz veya süresi dolmuş sihirli bağlantı');
-    }
-
-    const record = res.rows[0];
-    if (!record.user_id) {
-      await db.query(`UPDATE password_resets SET used_at = NOW() WHERE id = $1`, [record.id]);
-      throw new Error('Bu bağlantıya ait aktif bir kullanıcı bulunamadı');
-    }
-
-    await db.query(`UPDATE password_resets SET used_at = NOW() WHERE id = $1`, [record.id]);
-
-    const userRes = await db.query(`SELECT * FROM users WHERE id = $1 AND is_active = TRUE`, [record.user_id]);
-    if (userRes.rows.length === 0) {
-      throw new Error('Kullanıcı hesabı bulunamadı veya pasif durumda');
-    }
-
-    return this._buildUserAuthResponse(userRes.rows[0]);
+  if (!password.trim()) {
+    throw httpError(400, 'Şifre yalnızca boşluktan oluşamaz.', 'VALIDATION');
   }
 }
 
-module.exports = new AuthService();
+function isValidCodeFormat(code) {
+  return typeof code === 'string' && /^\d{6}$/.test(code.trim());
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    full_name: user.full_name,
+    phone: user.phone || null,
+    role: user.role || 'user',
+    must_change_password: Boolean(user.must_change_password),
+    email_verified: Boolean(user.email_verified),
+  };
+}
+
+function homeAccessState(row, nowMs) {
+  if (row.role === 'service_user') {
+    // Sureli teknisyen uyeligi (WP-B: kurulum sonrasi installer_expires_at).
+    const end = row.installer_expires_at ? new Date(row.installer_expires_at).getTime() : null;
+    return end !== null && nowMs >= end ? 'expired' : 'active';
+  }
+  if (row.role !== 'guest') return 'active';
+  const from = row.valid_from ? new Date(row.valid_from).getTime() : null;
+  const until = row.valid_until ? new Date(row.valid_until).getTime() : null;
+  if (from !== null && nowMs < from) return 'not_started';
+  if (until === null || nowMs > until) return 'expired';
+  return 'active';
+}
+
+// ---------------------------------------------------------------------------
+// Kimlik saglayici dogrulayicilari (varsayilan: gercek kutuphaneler; testte enjekte edilir)
+// ---------------------------------------------------------------------------
+let googleClient = null;
+let appleJwks = null;
+
+/**
+ * Google ID token dogrulama: imza (Google sertifikalari), aud (izinli istemci kimlikleri),
+ * iss, exp. `certs` verilirse (test) uzak sertifika yerine onlar kullanilir.
+ */
+async function verifyGoogleIdToken(idToken, { audiences, certs } = {}) {
+  const { OAuth2Client } = require('google-auth-library');
+  if (!googleClient) googleClient = new OAuth2Client();
+  let ticket;
+  if (certs) {
+    ticket = await googleClient.verifySignedJwtWithCertsAsync(idToken, certs, audiences, GOOGLE_ISSUERS);
+  } else {
+    ticket = await googleClient.verifyIdToken({ idToken, audience: audiences });
+  }
+  return ticket.getPayload();
+}
+
+/**
+ * Apple identity token dogrulama: JWKS imzasi (RS256), iss, aud, exp.
+ * `jwks` verilirse (test) uzak anahtar seti yerine o kullanilir.
+ */
+async function verifyAppleIdentityToken(identityToken, { audiences, jwks } = {}) {
+  const { createRemoteJWKSet, jwtVerify } = require('jose');
+  if (!jwks && !appleJwks) appleJwks = createRemoteJWKSet(new URL(APPLE_JWKS_URL));
+  const { payload } = await jwtVerify(identityToken, jwks || appleJwks, {
+    issuer: APPLE_ISSUER,
+    audience: audiences,
+    algorithms: ['RS256'],
+  });
+  return payload;
+}
+
+const defaultVerifiers = {
+  google: (token, audiences) => verifyGoogleIdToken(token, { audiences }),
+  apple: (token, audiences) => verifyAppleIdentityToken(token, { audiences }),
+};
+
+// ---------------------------------------------------------------------------
+// Servis
+// ---------------------------------------------------------------------------
+class AuthService {
+  constructor() {
+    this._verifiers = { ...defaultVerifiers };
+    this._smsSender = null;
+    this._dummyHashPromise = null;
+    // undefined: ilk kullanimda varsayilan ornek kurulur; null: bilincli devre disi (modul yok / test)
+    this._pushService = undefined;
+  }
+
+  // ----------------------------- DI / test ---------------------------------
+  setIdentityVerifiers({ google, apple } = {}) {
+    if (typeof google === 'function') this._verifiers.google = google;
+    if (typeof apple === 'function') this._verifiers.apple = apple;
+  }
+
+  resetIdentityVerifiers() {
+    this._verifiers = { ...defaultVerifiers };
+  }
+
+  /** SMS gonderici: async (phone, text) => ({ sent:boolean }) . Yoksa SMS gonderilemez. */
+  setSmsSender(fn) {
+    this._smsSender = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * Push servisi (`push_service.createPushService` ornegi; yalnizca `disableAllTokensForUser` kullanilir).
+   * server.js createApp() uygulamanin ornegini verir. `undefined` verilirse varsayilan ornek tembel kurulur,
+   * `null` verilirse push belirteci devre disi birakma ATLANIR (modul yok / test).
+   */
+  setPushService(svc) {
+    this._pushService = svc === undefined ? undefined : svc;
+  }
+
+  _getPushService() {
+    if (this._pushService !== undefined) return this._pushService;
+    try {
+      // Belirteci devre disi birakmak yalnizca veritabani islemidir: FCM yapilandirmasi GEREKTIRMEZ.
+      const { createPushService } = require('./push_service');
+      this._pushService = createPushService({ db });
+    } catch (_) {
+      this._pushService = null; // modul yuklenemedi: sessizce atla
+    }
+    return this._pushService;
+  }
+
+  // ----------------------------- Yardimcilar --------------------------------
+  _hashToken(token) {
+    return sha256Hex(token);
+  }
+
+  async hashPassword(password) {
+    validatePassword(password);
+    return bcrypt.hash(password, bcryptCost());
+  }
+
+  async _unusablePasswordHash() {
+    return bcrypt.hash(crypto.randomBytes(32).toString('hex'), bcryptCost());
+  }
+
+  _getDummyHash() {
+    if (!this._dummyHashPromise) {
+      this._dummyHashPromise = bcrypt.hash(crypto.randomBytes(16).toString('hex'), bcryptCost());
+    }
+    return this._dummyHashPromise;
+  }
+
+  /** Kullanici bulunamasa da ayni sure harcanir (zamanlama ile hesap tespiti engellenir). */
+  async _dummyCompare(password) {
+    try {
+      await bcrypt.compare(typeof password === 'string' ? password : 'x', await this._getDummyHash());
+    } catch (_) {
+      // yok sayilir
+    }
+  }
+
+  async _comparePassword(password, hash) {
+    if (typeof password !== 'string' || !password || typeof hash !== 'string' || !BCRYPT_HASH_RE.test(hash)) {
+      await this._dummyCompare(password);
+      return false;
+    }
+    try {
+      return await bcrypt.compare(password, hash);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async _findUserById(q, userId) {
+    if (!isUuid(String(userId || ''))) return null;
+    const r = await q.query(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [userId]);
+    return r.rows[0] || null;
+  }
+
+  _assertUserCanSignIn(user) {
+    // 'deleted' (hesap silme, migration 027): anonimlestirilmis hesap ASLA oturum acamaz (derinlemesine savunma;
+    // parola/kimlik zaten kullanilamaz, is_active yonetici islemiyle yanlislikla TRUE yapilsa bile).
+    if (user.is_active === false || user.account_status === 'suspended' || user.account_status === 'deleted') {
+      throw httpError(403, 'Hesabınız askıya alınmış. Destek ile iletişime geçin.', 'ACCOUNT_DISABLED');
+    }
+    if (user.account_status === 'pending_invite') {
+      throw httpError(403, 'Hesabınızı etkinleştirmeniz gerekiyor. E-postanızdaki kodu kullanın.', 'ACCOUNT_PENDING');
+    }
+  }
+
+  // ----------------------------- Oturum ------------------------------------
+  /**
+   * Access + refresh token cifti uretir; refresh token yalnizca ozetiyle saklanir.
+   * @returns {{ tokens: object, refreshId: string|null }}
+   */
+  async _issueSession(user, { tx, familyId, ip } = {}) {
+    const q = tx || db;
+    const accessToken = jwtConfig.signAccessToken({
+      id: user.id,
+      role: user.role || 'user',
+      token_version: user.token_version,
+    });
+    const refreshToken = crypto.randomBytes(32).toString('base64url');
+    const family = familyId && isUuid(String(familyId)) ? familyId : crypto.randomUUID();
+    const refreshTtl = jwtConfig.getRefreshTokenTtlSec();
+    const expiresAt = new Date(Date.now() + refreshTtl * 1000);
+    const ins = await q.query(
+      `INSERT INTO refresh_tokens (user_id, token_hash, family_id, expires_at, created_ip)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
+      [user.id, this._hashToken(refreshToken), family, expiresAt, ip ? String(ip).slice(0, 64) : null]
+    );
+    const accessTtl = jwtConfig.getAccessTokenTtlSec();
+    return {
+      refreshId: ins.rows[0] ? ins.rows[0].id : null,
+      tokens: {
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token: accessToken, // geriye donuk uyumluluk
+        token_type: 'Bearer',
+        expires_in: accessTtl,
+        refresh_expires_in: refreshTtl,
+      },
+    };
+  }
+
+  /** Eski arayuz (geriye donuk): yeni oturum uretir. */
+  async generateTokens(user) {
+    const { tokens } = await this._issueSession(user);
+    return tokens;
+  }
+
+  async listHomesForUser(userId) {
+    const r = await db.query(
+      `SELECT h.id, h.name, h.address, h.mqtt_username,
+              COALESCE(to_jsonb(h) ->> 'timezone', 'Europe/Istanbul') AS timezone,
+              hu.role, hu.valid_from, hu.valid_until, hu.installer_expires_at
+         FROM home_users hu
+         JOIN homes h ON h.id = hu.home_id
+        WHERE hu.user_id = $1
+          AND NOT (hu.role = 'service_user' AND hu.installer_expires_at IS NOT NULL AND hu.installer_expires_at <= NOW())
+        ORDER BY h.name ASC`,
+      [userId]
+    );
+    const nowMs = Date.now();
+    return r.rows.map((row) => {
+      const state = homeAccessState(row, nowMs);
+      const visibleTopic = state === 'active' ? row.mqtt_username : null;
+      const validUntil = row.role === 'service_user' ? (row.installer_expires_at || null) : (row.valid_until || null);
+      return {
+        id: row.id,
+        name: row.name,
+        address: row.address || null,
+        role: row.role,
+        timezone: row.timezone || 'Europe/Istanbul',
+        mqtt_topic_id: visibleTopic,
+        mqtt_username: visibleTopic, // gecis donemi (istemci mqtt_topic_id'ye gecene kadar)
+        valid_from: row.valid_from || null,
+        valid_until: validUntil,
+        access_state: state,
+        is_expired: state !== 'active',
+      };
+    });
+  }
+
+  async listHomesForServiceSession(homeId) {
+    const r = await db.query(
+      `SELECT h.id, h.name, h.mqtt_username,
+              COALESCE(to_jsonb(h) ->> 'timezone', 'Europe/Istanbul') AS timezone
+         FROM homes h
+        WHERE h.id = $1`,
+      [homeId]
+    );
+    return r.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      role: 'service_session',
+      timezone: row.timezone || 'Europe/Istanbul',
+      mqtt_topic_id: row.mqtt_username,
+      mqtt_username: row.mqtt_username,
+      access_state: 'active',
+      is_expired: false,
+    }));
+  }
+
+  /**
+   * GET /homes ve /auth/me icin. `principal` req.user'dir (servis oturumu dahil).
+   */
+  async getProfile(principal) {
+    if (principal && typeof principal === 'object' && principal.is_service_session) {
+      return {
+        user: { id: null, role: 'service_session', full_name: principal.technician_name || 'Yetkili Servis' },
+        homes: await this.listHomesForServiceSession(principal.home_id),
+      };
+    }
+    const userId = principal && typeof principal === 'object' ? principal.id : principal;
+    const user = await this._findUserById(db, userId);
+    if (!user) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
+    return { user: publicUser(user), homes: await this.listHomesForUser(user.id) };
+  }
+
+  async _buildUserAuthResponse(user, { ip, tx } = {}) {
+    const { tokens } = await this._issueSession(user, { ip, tx });
+    return {
+      ...tokens,
+      user: publicUser(user),
+      homes: await this.listHomesForUser(user.id),
+    };
+  }
+
+  // ----------------------------- Giris / kayit -----------------------------
+  async login(identifier, password, { ip } = {}) {
+    const id = parseIdentifier(identifier);
+    if (!id || typeof password !== 'string' || !password) {
+      await this._dummyCompare(password);
+      throw invalidCredentials();
+    }
+
+    const r = id.kind === 'email'
+      ? await db.query(`SELECT ${USER_COLS}, password_hash FROM users WHERE LOWER(email) = $1`, [id.value])
+      : await db.query(`SELECT ${USER_COLS}, password_hash FROM users WHERE phone = $1`, [id.value]);
+
+    // Ayni telefonlu birden fazla hesap -> belirsiz, giris reddedilir.
+    if (r.rows.length !== 1) {
+      await this._dummyCompare(password);
+      throw invalidCredentials();
+    }
+
+    const user = r.rows[0];
+    const ok = await this._comparePassword(password, user.password_hash);
+    if (!ok) throw invalidCredentials();
+
+    this._assertUserCanSignIn(user);
+    await db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    return this._buildUserAuthResponse(user, { ip });
+  }
+
+  async register({ full_name, email, password, phone } = {}, { ip } = {}) {
+    const name = normalizeFullName(full_name);
+    if (!name) throw httpError(400, 'Ad soyad en az 2 karakter olmalıdır.', 'VALIDATION');
+    const cleanEmail = normalizeEmail(email);
+    if (!cleanEmail) throw httpError(400, 'Geçerli bir e-posta adresi giriniz.', 'VALIDATION');
+    let cleanPhone = null;
+    if (phone !== undefined && phone !== null && String(phone).trim() !== '') {
+      cleanPhone = normalizePhone(phone);
+      if (!cleanPhone) throw httpError(400, 'Geçerli bir telefon numarası giriniz.', 'VALIDATION');
+    }
+    validatePassword(password);
+
+    const existingEmail = await db.query('SELECT id FROM users WHERE LOWER(email) = $1', [cleanEmail]);
+    if (existingEmail.rows.length > 0) {
+      throw httpError(409, 'Bu e-posta adresi zaten kayıtlı. Giriş yapın veya şifrenizi sıfırlayın.', 'CONFLICT');
+    }
+    if (cleanPhone) {
+      const existingPhone = await db.query('SELECT id FROM users WHERE phone = $1', [cleanPhone]);
+      if (existingPhone.rows.length > 0) {
+        throw httpError(409, 'Bu telefon numarası zaten kayıtlı.', 'CONFLICT');
+      }
+    }
+
+    const passwordHash = await bcrypt.hash(password, bcryptCost());
+    let user;
+    try {
+      const ins = await db.query(
+        `INSERT INTO users (full_name, email, password_hash, phone, role, is_active, account_status, password_changed_at)
+         VALUES ($1, $2, $3, $4, 'user', TRUE, 'active', NOW())
+         RETURNING ${USER_COLS}`,
+        [name, cleanEmail, passwordHash, cleanPhone]
+      );
+      user = ins.rows[0];
+    } catch (err) {
+      if (err && err.code === '23505') {
+        throw httpError(409, 'Bu e-posta veya telefon zaten kayıtlı.', 'CONFLICT');
+      }
+      throw err;
+    }
+    return this._buildUserAuthResponse(user, { ip });
+  }
+
+  // ----------------------------- Refresh rotation --------------------------
+  async refreshToken(rawToken, { ip } = {}) {
+    if (typeof rawToken !== 'string' || rawToken.length < 20 || rawToken.length > 4096) {
+      throw httpError(401, 'Geçersiz oturum. Lütfen tekrar giriş yapın.', 'INVALID_TOKEN');
+    }
+    const tokenHash = this._hashToken(rawToken);
+
+    const outcome = await db.withTransaction(async (tx) => {
+      const upd = await tx.query(
+        `UPDATE refresh_tokens
+            SET used_at = NOW()
+          WHERE token_hash = $1
+            AND used_at IS NULL
+            AND revoked_at IS NULL
+            AND expires_at > NOW()
+          RETURNING id, user_id, family_id`,
+        [tokenHash]
+      );
+
+      if (upd.rows.length === 0) {
+        const ex = await tx.query(
+          'SELECT id, user_id, family_id, used_at, revoked_at FROM refresh_tokens WHERE token_hash = $1',
+          [tokenHash]
+        );
+        const row = ex.rows[0];
+        if (row && row.used_at) {
+          // Yeniden kullanim: calinmis olabilir -> tum aile iptal (COMMIT edilmesi icin hata firlatilmaz).
+          await tx.query(
+            `UPDATE refresh_tokens
+                SET revoked_at = NOW(), revoked_reason = 'reuse_detected'
+              WHERE family_id = $1 AND revoked_at IS NULL`,
+            [row.family_id]
+          );
+          return { status: 'reuse', userId: row.user_id };
+        }
+        return { status: 'invalid' };
+      }
+
+      const row = upd.rows[0];
+      const user = await this._findUserById(tx, row.user_id);
+      if (!user || user.is_active === false || user.account_status !== 'active') {
+        await tx.query(
+          `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'inactive'
+            WHERE family_id = $1 AND revoked_at IS NULL`,
+          [row.family_id]
+        );
+        return { status: 'invalid' };
+      }
+
+      const { tokens, refreshId } = await this._issueSession(user, { tx, familyId: row.family_id, ip });
+      if (refreshId) {
+        await tx.query('UPDATE refresh_tokens SET replaced_by = $1 WHERE id = $2', [refreshId, row.id]);
+      }
+      return { status: 'ok', tokens, user };
+    });
+
+    if (outcome.status === 'reuse') {
+      console.warn(`[AUTH] Refresh token yeniden kullanimi tespit edildi; oturum ailesi iptal edildi (kullanici ${outcome.userId}).`);
+      throw httpError(401, 'Oturumunuz güvenlik nedeniyle sonlandırıldı. Lütfen tekrar giriş yapın.', 'INVALID_TOKEN');
+    }
+    if (outcome.status !== 'ok') {
+      throw httpError(401, 'Geçersiz veya süresi dolmuş oturum. Lütfen tekrar giriş yapın.', 'INVALID_TOKEN');
+    }
+    return { ...outcome.tokens, must_change_password: Boolean(outcome.user.must_change_password) };
+  }
+
+  /** Logout: bu cihazin oturum ailesini iptal eder (token sahipligi yeterli yetkidir). */
+  async revokeToken(rawToken) {
+    if (typeof rawToken !== 'string' || !rawToken || rawToken.length > 4096) return;
+    await db.query(
+      `UPDATE refresh_tokens
+          SET revoked_at = NOW(), revoked_reason = 'logout'
+        WHERE family_id IN (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)
+          AND revoked_at IS NULL`,
+      [this._hashToken(rawToken)]
+    );
+  }
+
+  /**
+   * Kullanicinin TUM oturumlarini sonlandirir: refresh token'lar iptal + token_version++
+   * (mevcut access token'lar en gec onbellek suresi icinde gecersiz olur).
+   *
+   * PUSH BELIRTECI GIZLILIGI (plan §5d-1): oturumlar kapaninca kullanicinin push belirteclerinin de devre disi
+   * kalmasi gerekir; aksi halde gece bildirimi (ev adi + acik lamba ozeti) cikis yapmis telefona duser.
+   *  - `tx` YOKSA (ornegin /auth/logout-all) iptal zaten tamamlanmistir: belirteclerin devre disi birakilmasi
+   *    burada, iptalden SONRA yapilir.
+   *  - `tx` VARSA cagiran COMMIT'ten SONRA `revokePushTokens(userId)` cagirmalidir (transaction icinde dis cagri/
+   *    ikinci baglanti yok; tx geri alinirsa belirtece dokunulmaz).
+   * @param {string} userId
+   * @param {{tx?:object, reason?:string, bumpTokenVersion?:boolean, disablePushTokens?:boolean}} [opts]
+   */
+  async revokeAllUserSessions(userId, { tx, reason = 'revoke_all', bumpTokenVersion = true, disablePushTokens } = {}) {
+    if (!userId) return;
+    const q = tx || db;
+    if (bumpTokenVersion) {
+      await q.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [userId]);
+    }
+    await q.query(
+      `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = $2
+        WHERE user_id = $1 AND revoked_at IS NULL`,
+      [userId, String(reason).slice(0, 40)]
+    );
+    invalidateUserAuthCache(userId);
+    if (disablePushTokens === undefined ? !tx : disablePushTokens === true) {
+      await this.revokePushTokens(userId, { reason });
+    }
+  }
+
+  /**
+   * Kullanicinin TUM etkin push belirteclerini devre disi birakir (plan §5d-1). COMMIT SONRASI cagrilir.
+   *
+   * Kurallar:
+   *  - ASLA firlatmaz: push hatasi oturum iptalini / yaniti bozmaz (hata yalnizca loglanir; log'a belirtec,
+   *    gövde, e-posta YAZILMAZ — yalnizca hata kodu ve kullanici kimliginin ilk 8 karakteri).
+   *  - Push modulu yoksa / `push_tokens` tablosu henuz yoksa (migration 030 uygulanmamis) SESSIZCE atlanir.
+   *  - FCM yapilandirmasina BAKILMAZ: belirtec kaydi FCM'den bagimsiz oldugu icin FCM sonradan yapilandirilinca
+   *    cikis yapmis telefonlara bildirim gitmesin diye devre disi birakma her durumda yapilir.
+   *  - Veritabani takilirsa en cok PUSH_REVOKE_TIMEOUT_MS beklenir (yanit gecikmesin; islem arka planda surer).
+   * @returns {Promise<number>} devre disi birakilan satir sayisi (hata/atlama: 0)
+   */
+  async revokePushTokens(userId, { reason = 'sessions_revoked' } = {}) {
+    if (typeof userId !== 'string' || !userId) return 0;
+    let svc;
+    try {
+      svc = this._getPushService();
+    } catch (_) {
+      return 0;
+    }
+    if (!svc || typeof svc.disableAllTokensForUser !== 'function') return 0;
+
+    const who = `${String(reason).replace(/[^A-Za-z0-9_.-]/g, '?').slice(0, 30)}, kullanici ${userId.slice(0, 8)}`;
+    const limitMs = Number.isFinite(this._pushRevokeTimeoutMs) && this._pushRevokeTimeoutMs > 0
+      ? this._pushRevokeTimeoutMs
+      : PUSH_REVOKE_TIMEOUT_MS; // alan yalnizca testlerde ezilir
+    let timer = null;
+    try {
+      const work = Promise.resolve().then(() => svc.disableAllTokensForUser(userId));
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), limitMs);
+        if (typeof timer.unref === 'function') timer.unref();
+      });
+      // Zaman asiminda `work` arka planda surer; gec gelen hata yutulur (unhandledRejection olmasin).
+      work.catch(() => {});
+      const r = await Promise.race([work, timeout]);
+      if (r === TIMED_OUT) {
+        console.warn(`[AUTH] Push belirteci devre disi birakma zaman asimina ugradi (${who}); arka planda surer.`);
+        return 0;
+      }
+      return Number.isFinite(r) ? r : 0;
+    } catch (err) {
+      if (err && err.code === '42P01') return 0; // push_tokens yok: push henuz kurulmamis
+      const kind = err && typeof err.code === 'string' && /^[A-Za-z0-9_]{1,12}$/.test(err.code) ? err.code : (err && err.name) || 'Error';
+      console.warn(`[AUTH] Push belirteci devre disi birakilamadi (${who}): ${kind}`);
+      return 0;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Parolayi ayarlar (bcrypt 12) ve tum oturumlari sonlandirir. Yonetici akislari da kullanir.
+   * @returns {Promise<object>} guncel kullanici satiri
+   */
+  async setPassword(userId, newPassword, { tx, mustChange = false, markEmailVerified = false, activate = false } = {}) {
+    validatePassword(newPassword);
+    const q = tx || db;
+    const hash = await bcrypt.hash(newPassword, bcryptCost());
+    const r = await q.query(
+      `UPDATE users
+          SET password_hash = $1,
+              must_change_password = $2,
+              password_changed_at = NOW(),
+              token_version = token_version + 1,
+              email_verified = CASE WHEN $3 THEN TRUE ELSE email_verified END,
+              account_status = CASE WHEN $4 AND account_status = 'pending_invite' THEN 'active' ELSE account_status END
+        WHERE id = $5
+        RETURNING ${USER_COLS}`,
+      [hash, Boolean(mustChange), Boolean(markEmailVerified), Boolean(activate), userId]
+    );
+    if (r.rows.length === 0) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
+    await this.revokeAllUserSessions(userId, { tx, reason: 'password_changed', bumpTokenVersion: false });
+    return r.rows[0];
+  }
+
+  async changePassword(userId, { current_password, new_password } = {}, { ip } = {}) {
+    if (typeof current_password !== 'string' || !current_password) {
+      throw httpError(400, 'Mevcut şifre zorunludur.', 'VALIDATION');
+    }
+    validatePassword(new_password);
+    if (current_password === new_password) {
+      throw httpError(400, 'Yeni şifre mevcut şifreden farklı olmalıdır.', 'VALIDATION');
+    }
+    const r = await db.query(`SELECT ${USER_COLS}, password_hash FROM users WHERE id = $1`, [userId]);
+    const user = r.rows[0];
+    if (!user) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
+    const ok = await this._comparePassword(current_password, user.password_hash);
+    if (!ok) throw httpError(400, 'Mevcut şifre hatalı.', 'INVALID_CREDENTIALS');
+
+    const updated = await db.withTransaction(async (tx) => {
+      const u = await this.setPassword(userId, new_password, { tx, mustChange: false });
+      return u;
+    });
+    invalidateUserAuthCache(userId);
+    // Push belirteci gizliligi (plan §5d-1): COMMIT sonrasi, hata/yapilandirma yoklugu akisi bozmaz.
+    // Bu cihaz oturumda KALIR ama belirteci de kapanir: istemci yeni oturumdan sonra belirtecini yeniden kaydeder
+    // (PUT /me/push-tokens; docs/FLUTTER_API_CHANGES.md).
+    await this.revokePushTokens(userId, { reason: 'password_changed' });
+    // Bu cihaz icin yeni oturum (diger tum cihazlar dusurulur).
+    return this._buildUserAuthResponse(updated, { ip });
+  }
+
+  // ----------------------------- Kod (OTP) altyapisi ------------------------
+  /**
+   * Ayni anahtar icin yeniden gonderim sinirlarini denetler (60 sn bekleme + saatte 5)
+   * ve yeni koda tasinacak deneme sayisini doner. Cagri bir transaction icinde ve
+   * anahtar bazli advisory kilit altinda yapilir.
+   */
+  async _checkResendLimits(tx, { table, keyCol, key }) {
+    const r = await tx.query(
+      `SELECT COUNT(*)::int AS sends,
+              MIN(created_at) AS first_at,
+              MAX(created_at) AS last_at,
+              COALESCE(MAX(attempts), 0)::int AS max_attempts,
+              NOW() AS db_now
+         FROM ${table}
+        WHERE ${keyCol} = $1
+          AND created_at > NOW() - INTERVAL '1 hour'`,
+      [key]
+    );
+    const row = r.rows[0] || {};
+    const sends = Number(row.sends || 0);
+    const nowMs = row.db_now ? new Date(row.db_now).getTime() : Date.now();
+    if (row.last_at) {
+      const elapsed = (nowMs - new Date(row.last_at).getTime()) / 1000;
+      if (elapsed < RESEND_COOLDOWN_SEC) {
+        const wait = Math.max(1, Math.ceil(RESEND_COOLDOWN_SEC - elapsed));
+        throw httpError(429, `Yeni kod istemek için ${wait} saniye bekleyin.`, 'RATE_LIMITED', {
+          retryAfter: wait,
+          body: { resend_after: wait },
+        });
+      }
+    }
+    if (sends >= MAX_SENDS_PER_HOUR) {
+      const firstMs = row.first_at ? new Date(row.first_at).getTime() : nowMs;
+      const wait = Math.max(1, Math.ceil((firstMs + 3600 * 1000 - nowMs) / 1000));
+      throw httpError(429, 'Bir saat içinde çok fazla kod istendi. Lütfen daha sonra tekrar deneyin.', 'RATE_LIMITED', {
+        retryAfter: wait,
+        body: { resend_after: wait },
+      });
+    }
+    return { carriedAttempts: Math.min(MAX_CODE_ATTEMPTS, Number(row.max_attempts || 0)) };
+  }
+
+  // ----------------------------- Sifre sifirlama ---------------------------
+  _resetLink(token) {
+    // Token URL parcasinda (#) tasinir; sunucu/proxy loglarina dusmez.
+    return `${appPublicUrl()}/reset-password#token=${encodeURIComponent(token)}`;
+  }
+
+  async requestPasswordReset(identifier, { ip } = {}) {
+    const id = parseIdentifier(identifier);
+    if (!id) throw httpError(400, 'Geçerli bir e-posta adresi veya telefon numarası giriniz.', 'VALIDATION');
+
+    const debug = isDebugOtpAllowed();
+    if (!debug && !mailer.isMailerConfigured()) {
+      // Herkes icin ayni yanit (hesap varligi sizmaz).
+      throw httpError(503, 'Şifre sıfırlama e-postası şu anda gönderilemiyor. Lütfen daha sonra tekrar deneyin.', 'DELIVERY_FAILED', { expose: true });
+    }
+
+    const code = generateNumericPin(6);
+    const token = crypto.randomBytes(32).toString('base64url');
+    const ttlSec = jwtConfig.getResetCodeTtlSec();
+
+    const created = await db.withTransaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`pwreset:${id.value}`]);
+      const { carriedAttempts } = await this._checkResendLimits(tx, {
+        table: 'password_resets',
+        keyCol: 'identifier',
+        key: id.value,
+      });
+
+      const userRes = id.kind === 'email'
+        ? await tx.query(
+          `SELECT ${USER_COLS} FROM users
+            WHERE LOWER(email) = $1 AND is_active = TRUE AND account_status IN ('active', 'pending_invite')`,
+          [id.value]
+        )
+        : await tx.query(
+          `SELECT ${USER_COLS} FROM users
+            WHERE phone = $1 AND is_active = TRUE AND account_status IN ('active', 'pending_invite')`,
+          [id.value]
+        );
+      const user = userRes.rows.length === 1 ? userRes.rows[0] : null;
+
+      // Onceki aktif talepler kapatilir (yeni kod gecerli tek koddur).
+      await tx.query(
+        `UPDATE password_resets SET used_at = NOW()
+          WHERE identifier = $1 AND used_at IS NULL`,
+        [id.value]
+      );
+      const ins = await tx.query(
+        `INSERT INTO password_resets (user_id, identifier, code_hash, token_hash, expires_at, attempts, purpose)
+         VALUES ($1, $2, $3, $4, NOW() + make_interval(secs => $5::int), $6, 'reset')
+         RETURNING id`,
+        [user ? user.id : null, id.value, pin.hashPin(code), this._hashToken(token), ttlSec, carriedAttempts]
+      );
+      return { user, resetId: ins.rows[0] ? ins.rows[0].id : null };
+    });
+
+    const response = {
+      message: 'Eğer kayıtlı bir hesap varsa şifre sıfırlama kodu gönderildi.',
+      expires_in: ttlSec,
+      resend_after: RESEND_COOLDOWN_SEC,
+    };
+
+    if (created.user) {
+      const result = await mailer.sendPasswordResetEmail({
+        to: created.user.email,
+        code,
+        link: this._resetLink(token),
+        expiresMinutes: Math.max(1, Math.round(ttlSec / 60)),
+      });
+      if (!result.sent && result.reason !== mailer.REASONS.INVALID_RECIPIENT && !debug) {
+        if (created.resetId) {
+          await db.query('UPDATE password_resets SET used_at = NOW() WHERE id = $1', [created.resetId]);
+        }
+        throw httpError(503, 'Şifre sıfırlama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.', 'DELIVERY_FAILED', { expose: true });
+      }
+      if (debug) {
+        response.debug_code = code;
+        response.debug_token = token;
+      }
+    }
+    return response;
+  }
+
+  /**
+   * Belirli bir kullanici icin sifre sifirlama/hesap kurulum kodu+baglantisi uretip e-postalar.
+   * Yonetici akislari (A7) ve servis kurulumunda musteri hesabi (WP-B) kullanir.
+   * @param {string} userId
+   * @param {{purpose?:'reset'|'account_setup', tx?:object, ttlSec?:number}} [opts]
+   * @returns {Promise<{sent:boolean, reason?:string, expires_at:Date, debug_code?:string, debug_token?:string}>}
+   */
+  async issueUserCode(userId, { purpose = 'reset', tx, ttlSec } = {}) {
+    if (!['reset', 'account_setup'].includes(purpose)) throw new TypeError('issueUserCode: geçersiz amaç');
+    const q = tx || db;
+    const user = await this._findUserById(q, userId);
+    if (!user) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
+    const identifier = normalizeEmail(user.email);
+    if (!identifier) throw httpError(400, 'Kullanıcının geçerli bir e-posta adresi yok.', 'VALIDATION');
+
+    const ttl = Number.isFinite(ttlSec) && ttlSec > 0
+      ? Math.floor(ttlSec)
+      : (purpose === 'account_setup' ? ACCOUNT_SETUP_TTL_SEC : ADMIN_RESET_TTL_SEC);
+    const code = generateNumericPin(6);
+    const token = crypto.randomBytes(32).toString('base64url');
+
+    await q.query(`UPDATE password_resets SET used_at = NOW() WHERE identifier = $1 AND used_at IS NULL`, [identifier]);
+    const ins = await q.query(
+      `INSERT INTO password_resets (user_id, identifier, code_hash, token_hash, expires_at, attempts, purpose)
+       VALUES ($1, $2, $3, $4, NOW() + make_interval(secs => $5::int), 0, $6)
+       RETURNING id, expires_at`,
+      [user.id, identifier, pin.hashPin(code), this._hashToken(token), ttl, purpose]
+    );
+
+    const link = this._resetLink(token);
+    const result = purpose === 'account_setup'
+      ? await mailer.sendAccountSetupEmail({ to: user.email, fullName: user.full_name, code, link, expiresHours: Math.max(1, Math.round(ttl / 3600)) })
+      : await mailer.sendPasswordResetEmail({ to: user.email, code, link, expiresMinutes: Math.max(1, Math.round(ttl / 60)) });
+
+    const out = {
+      sent: Boolean(result.sent),
+      expires_at: ins.rows[0] ? ins.rows[0].expires_at : null,
+    };
+    if (!result.sent) out.reason = result.reason;
+    if (isDebugOtpAllowed()) {
+      out.debug_code = code;
+      out.debug_token = token;
+    }
+    return out;
+  }
+
+  /**
+   * WP-B icin kisayol: servis kurulumunda acilan 'pending_invite' musteri hesabina davet.
+   * Iki cagri bicimi kabul edilir: createAccountSetupInvite(userId, { tx })
+   * veya createAccountSetupInvite({ userId, email?, fullName? }, { tx }) - e-posta/ad DB'den okunur.
+   */
+  async createAccountSetupInvite(userOrId, { tx } = {}) {
+    const userId = userOrId && typeof userOrId === 'object' ? (userOrId.userId || userOrId.id) : userOrId;
+    return this.issueUserCode(userId, { purpose: 'account_setup', tx });
+  }
+
+  /** Kod veya sihirli baglanti ile sifirlama talebini ATOMIK tuketir. @returns satir */
+  async _consumeResetRequest({ identifier, code, token, allowedPurposes = ['reset', 'account_setup'] }) {
+    if (typeof token === 'string' && token.trim()) {
+      const t = token.trim();
+      if (t.length > 512) throw httpError(400, 'Geçersiz veya süresi dolmuş bağlantı.', 'VALIDATION');
+      const r = await db.query(
+        `UPDATE password_resets
+            SET used_at = NOW()
+          WHERE token_hash = $1
+            AND used_at IS NULL
+            AND expires_at > NOW()
+            AND purpose = ANY($2::text[])
+          RETURNING id, user_id, identifier, purpose`,
+        [this._hashToken(t), allowedPurposes]
+      );
+      if (r.rows.length === 0) throw httpError(400, 'Geçersiz veya süresi dolmuş bağlantı.', 'VALIDATION');
+      return r.rows[0];
+    }
+
+    const id = parseIdentifier(identifier);
+    if (!id || !isValidCodeFormat(code)) {
+      throw httpError(400, 'Geçerli bir kimlik ve 6 haneli kod giriniz.', 'VALIDATION');
+    }
+
+    // Deneme sayaci ATOMIK artirilir (kod dogru olsa bile bir deneme sayilir).
+    const att = await db.query(
+      `UPDATE password_resets
+          SET attempts = attempts + 1
+        WHERE id = (
+                SELECT id FROM password_resets
+                 WHERE identifier = $1 AND used_at IS NULL AND expires_at > NOW()
+                 ORDER BY created_at DESC
+                 LIMIT 1
+              )
+          AND attempts < $2
+          AND purpose = ANY($3::text[])
+        RETURNING id, user_id, code_hash, attempts, purpose`,
+      [id.value, MAX_CODE_ATTEMPTS, allowedPurposes]
+    );
+    if (att.rows.length === 0) {
+      const locked = await db.query(
+        `SELECT attempts FROM password_resets
+          WHERE identifier = $1 AND used_at IS NULL AND expires_at > NOW()
+          ORDER BY created_at DESC LIMIT 1`,
+        [id.value]
+      );
+      if (locked.rows[0] && Number(locked.rows[0].attempts) >= MAX_CODE_ATTEMPTS) {
+        throw httpError(429, 'Çok fazla hatalı deneme yapıldı. Lütfen daha sonra yeni kod isteyin.', 'RATE_LIMITED', { retryAfter: 3600 });
+      }
+      throw httpError(400, 'Geçersiz veya süresi dolmuş kod.', 'VALIDATION');
+    }
+
+    const row = att.rows[0];
+    if (!pin.verifyPin(code.trim(), row.code_hash) || !row.user_id) {
+      const remaining = Math.max(0, MAX_CODE_ATTEMPTS - Number(row.attempts));
+      throw httpError(400, 'Hatalı kod.', 'VALIDATION', { body: { remaining_attempts: remaining } });
+    }
+
+    const consumed = await db.query(
+      `UPDATE password_resets SET used_at = NOW()
+        WHERE id = $1 AND used_at IS NULL
+        RETURNING id, user_id, identifier, purpose`,
+      [row.id]
+    );
+    if (consumed.rows.length === 0) throw httpError(400, 'Geçersiz veya süresi dolmuş kod.', 'VALIDATION');
+    return consumed.rows[0];
+  }
+
+  async resetPassword({ identifier, code, token, new_password } = {}, { ip } = {}) {
+    validatePassword(new_password);
+    const request = await this._consumeResetRequest({ identifier, code, token });
+    if (!request.user_id) throw httpError(400, 'Geçersiz veya süresi dolmuş kod.', 'VALIDATION');
+
+    const user = await db.withTransaction(async (tx) => {
+      const current = await this._findUserById(tx, request.user_id);
+      if (!current || current.is_active === false || current.account_status === 'suspended') {
+        throw httpError(400, 'Geçersiz veya süresi dolmuş kod.', 'VALIDATION');
+      }
+      const updated = await this.setPassword(current.id, new_password, {
+        tx,
+        mustChange: false,
+        markEmailVerified: true,
+        activate: true,
+      });
+      // Kullaniciya ait diger acik talepler kapatilir.
+      await tx.query('UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL', [current.id]);
+      return updated;
+    });
+    invalidateUserAuthCache(user.id);
+    // Push belirteci gizliligi (plan §5d-1): tum oturumlar kapandi -> COMMIT sonrasi belirteclerde de kapat.
+    // Yanit bu cihaza yeni oturum verir; istemci belirtecini yeniden kaydeder (PUT /me/push-tokens).
+    await this.revokePushTokens(user.id, { reason: 'password_reset' });
+
+    const auth = await this._buildUserAuthResponse(user, { ip });
+    return { ...auth, message: 'Şifreniz yenilendi. Diğer tüm oturumlarınız kapatıldı.' };
+  }
+
+  /** POST /auth/magic-login: tek kullanimlik baglanti ile giris (GET ile oturum ACILMAZ). */
+  async magicLogin(token, { ip } = {}) {
+    if (typeof token !== 'string' || !token.trim()) {
+      throw httpError(400, 'Bağlantı kodu zorunludur.', 'VALIDATION');
+    }
+    const request = await this._consumeResetRequest({ token, allowedPurposes: ['reset'] });
+    const user = await this._findUserById(db, request.user_id);
+    if (!user) throw httpError(400, 'Geçersiz veya süresi dolmuş bağlantı.', 'VALIDATION');
+    this._assertUserCanSignIn(user);
+    await db.query('UPDATE users SET email_verified = TRUE, last_login_at = NOW() WHERE id = $1', [user.id]);
+    return this._buildUserAuthResponse({ ...user, email_verified: true }, { ip });
+  }
+
+  // ----------------------------- Telefon OTP -------------------------------
+  async _sendSms(phone, text) {
+    if (!this._smsSender) return { sent: false, reason: 'SMS_NOT_CONFIGURED' };
+    try {
+      const r = await this._smsSender(phone, text);
+      return r && r.sent ? { sent: true } : { sent: false, reason: 'SEND_FAILED' };
+    } catch (_) {
+      return { sent: false, reason: 'SEND_FAILED' };
+    }
+  }
+
+  async sendPhoneOtp(phone, { ip } = {}) {
+    const cleanPhone = normalizePhone(phone);
+    if (!cleanPhone) throw httpError(400, 'Geçerli bir telefon numarası giriniz (örn: +905xxxxxxxxx).', 'VALIDATION');
+
+    const debug = isDebugOtpAllowed();
+    if (!this._smsSender && !debug) {
+      throw httpError(503, 'SMS doğrulama servisi şu anda kullanılamıyor.', 'DELIVERY_FAILED', { expose: true });
+    }
+
+    const code = generateNumericPin(6);
+    const ttlSec = jwtConfig.getPhoneOtpTtlSec();
+    const otpId = await db.withTransaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`phoneotp:${cleanPhone}`]);
+      const { carriedAttempts } = await this._checkResendLimits(tx, {
+        table: 'phone_otp_codes',
+        keyCol: 'phone',
+        key: cleanPhone,
+      });
+      await tx.query(
+        'UPDATE phone_otp_codes SET consumed_at = NOW() WHERE phone = $1 AND consumed_at IS NULL',
+        [cleanPhone]
+      );
+      const ins = await tx.query(
+        `INSERT INTO phone_otp_codes (phone, otp_hash, expires_at, attempts)
+         VALUES ($1, $2, NOW() + make_interval(secs => $3::int), $4)
+         RETURNING id`,
+        [cleanPhone, pin.hashPin(code), ttlSec, carriedAttempts]
+      );
+      return ins.rows[0] ? ins.rows[0].id : null;
+    });
+
+    if (this._smsSender) {
+      const sms = await this._sendSms(cleanPhone, `AHBU doğrulama kodunuz: ${code}. Kimseyle paylaşmayın.`);
+      if (!sms.sent && !debug) {
+        if (otpId) await db.query('UPDATE phone_otp_codes SET consumed_at = NOW() WHERE id = $1', [otpId]);
+        throw httpError(503, 'Doğrulama kodu gönderilemedi. Lütfen daha sonra tekrar deneyin.', 'DELIVERY_FAILED', { expose: true });
+      }
+    }
+
+    const out = {
+      message: 'Doğrulama kodu gönderildi.',
+      expires_in: ttlSec,
+      resend_after: RESEND_COOLDOWN_SEC,
+    };
+    if (debug) out.debug_code = code;
+    return out;
+  }
+
+  async verifyPhoneOtp(phone, code, { ip } = {}) {
+    const cleanPhone = normalizePhone(phone);
+    if (!cleanPhone || !isValidCodeFormat(code)) {
+      throw httpError(400, 'Telefon numarası ve 6 haneli doğrulama kodu zorunludur.', 'VALIDATION');
+    }
+
+    const att = await db.query(
+      `UPDATE phone_otp_codes
+          SET attempts = attempts + 1
+        WHERE id = (
+                SELECT id FROM phone_otp_codes
+                 WHERE phone = $1 AND consumed_at IS NULL AND expires_at > NOW()
+                 ORDER BY created_at DESC
+                 LIMIT 1
+              )
+          AND attempts < $2
+        RETURNING id, otp_hash, attempts`,
+      [cleanPhone, MAX_CODE_ATTEMPTS]
+    );
+    if (att.rows.length === 0) {
+      const locked = await db.query(
+        `SELECT attempts FROM phone_otp_codes
+          WHERE phone = $1 AND consumed_at IS NULL AND expires_at > NOW()
+          ORDER BY created_at DESC LIMIT 1`,
+        [cleanPhone]
+      );
+      if (locked.rows[0] && Number(locked.rows[0].attempts) >= MAX_CODE_ATTEMPTS) {
+        throw httpError(429, 'Çok fazla hatalı deneme yapıldı. Lütfen daha sonra yeni kod isteyin.', 'RATE_LIMITED', { retryAfter: 3600 });
+      }
+      throw httpError(401, 'Doğrulama kodunun süresi dolmuş veya kod talep edilmemiş.', 'INVALID_CREDENTIALS');
+    }
+
+    const row = att.rows[0];
+    if (!pin.verifyPin(code.trim(), row.otp_hash)) {
+      const remaining = Math.max(0, MAX_CODE_ATTEMPTS - Number(row.attempts));
+      throw httpError(401, 'Hatalı doğrulama kodu.', 'INVALID_CREDENTIALS', { body: { remaining_attempts: remaining } });
+    }
+    const consumed = await db.query(
+      'UPDATE phone_otp_codes SET consumed_at = NOW() WHERE id = $1 AND consumed_at IS NULL RETURNING id',
+      [row.id]
+    );
+    if (consumed.rows.length === 0) {
+      throw httpError(401, 'Doğrulama kodunun süresi dolmuş veya kod kullanılmış.', 'INVALID_CREDENTIALS');
+    }
+
+    const users = await db.query(`SELECT ${USER_COLS} FROM users WHERE phone = $1`, [cleanPhone]);
+    if (users.rows.length > 1) {
+      throw httpError(409, 'Bu telefon numarası birden fazla hesapta kayıtlı. Lütfen e-posta ile giriş yapın.', 'CONFLICT');
+    }
+    let user = users.rows[0];
+    if (!user) {
+      const dummyEmail = `phone_${cleanPhone.replace(/[^0-9]/g, '')}@ahbu.local`;
+      try {
+        const ins = await db.query(
+          `INSERT INTO users (full_name, phone, email, password_hash, role, is_active, account_status)
+           VALUES ($1, $2, $3, $4, 'user', TRUE, 'active')
+           RETURNING ${USER_COLS}`,
+          [`Sakin (${cleanPhone.slice(-4)})`, cleanPhone, dummyEmail, await this._unusablePasswordHash()]
+        );
+        user = ins.rows[0];
+      } catch (err) {
+        if (err && err.code === '23505') {
+          throw httpError(409, 'Hesap oluşturulamadı; lütfen tekrar deneyin.', 'CONFLICT');
+        }
+        throw err;
+      }
+    }
+    this._assertUserCanSignIn(user);
+    await db.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+    return this._buildUserAuthResponse(user, { ip });
+  }
+
+  // ----------------------------- Sosyal giris ------------------------------
+  async loginWithGoogle({ id_token } = {}, { ip } = {}) {
+    const audiences = csvEnv('GOOGLE_CLIENT_IDS');
+    if (audiences.length === 0) {
+      throw httpError(503, 'Google ile giriş şu anda kullanılamıyor.', 'SERVICE_UNAVAILABLE', { expose: true });
+    }
+    if (typeof id_token !== 'string' || id_token.length < 20 || id_token.length > 8192) {
+      throw httpError(400, 'Google kimlik jetonu (id_token) zorunludur.', 'VALIDATION');
+    }
+
+    let payload;
+    try {
+      payload = await this._verifiers.google(id_token, audiences);
+    } catch (_) {
+      throw httpError(401, 'Google kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    // Kutuphanenin denetimlerine ek olarak savunmaci kontroller.
+    if (!payload || typeof payload.sub !== 'string' || !payload.sub) {
+      throw httpError(401, 'Google kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    if (!GOOGLE_ISSUERS.includes(payload.iss)) {
+      throw httpError(401, 'Google kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!aud.some((a) => audiences.includes(a))) {
+      throw httpError(401, 'Google kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    if (typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now() - 5000) {
+      throw httpError(401, 'Google kimlik jetonunun süresi dolmuş.', 'INVALID_CREDENTIALS');
+    }
+    if (payload.email_verified !== true && payload.email_verified !== 'true') {
+      throw httpError(401, 'Google e-posta adresi doğrulanmamış.', 'INVALID_CREDENTIALS');
+    }
+    const email = normalizeEmail(payload.email);
+    if (!email) throw httpError(401, 'Google hesabında geçerli e-posta yok.', 'INVALID_CREDENTIALS');
+
+    return this._loginWithSocial(
+      { provider: 'google', subject: payload.sub, email, emailVerified: true, fullName: payload.name },
+      { ip }
+    );
+  }
+
+  async loginWithApple({ identity_token, full_name, nonce } = {}, { ip } = {}) {
+    const audiences = csvEnv('APPLE_CLIENT_IDS');
+    if (audiences.length === 0) {
+      throw httpError(503, 'Apple ile giriş şu anda kullanılamıyor.', 'SERVICE_UNAVAILABLE', { expose: true });
+    }
+    if (typeof identity_token !== 'string' || identity_token.length < 20 || identity_token.length > 8192) {
+      throw httpError(400, 'Apple kimlik jetonu (identity_token) zorunludur.', 'VALIDATION');
+    }
+
+    let payload;
+    try {
+      payload = await this._verifiers.apple(identity_token, audiences);
+    } catch (_) {
+      throw httpError(401, 'Apple kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    if (!payload || typeof payload.sub !== 'string' || !payload.sub) {
+      throw httpError(401, 'Apple kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    if (payload.iss !== APPLE_ISSUER) throw httpError(401, 'Apple kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!aud.some((a) => audiences.includes(a))) {
+      throw httpError(401, 'Apple kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+    }
+    if (typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now() - 5000) {
+      throw httpError(401, 'Apple kimlik jetonunun süresi dolmuş.', 'INVALID_CREDENTIALS');
+    }
+    // Istemci ham nonce gonderdiyse jetondaki (SHA-256) nonce ile eslesmeli (tekrar oynatma savunmasi).
+    if (typeof nonce === 'string' && nonce) {
+      const expected = sha256Hex(nonce);
+      if (payload.nonce !== expected && payload.nonce !== nonce) {
+        throw httpError(401, 'Apple kimliği doğrulanamadı.', 'INVALID_CREDENTIALS');
+      }
+    }
+
+    const emailVerified = payload.email_verified === true || payload.email_verified === 'true';
+    const email = emailVerified ? normalizeEmail(payload.email) : null;
+
+    return this._loginWithSocial(
+      { provider: 'apple', subject: payload.sub, email, emailVerified, fullName: full_name },
+      { ip }
+    );
+  }
+
+  /**
+   * Dogrulanmis sosyal kimlikle hesabi bulur / baglar / olusturur.
+   * On-hesap-ele-gecirme savunmasi: e-postasi DOGRULANMAMIS mevcut hesaba ilk kez sosyal
+   * kimlik baglanirken o hesabin parolasi ve tum oturumlari gecersiz kilinir.
+   */
+  async _loginWithSocial({ provider, subject, email, emailVerified, fullName }, { ip } = {}) {
+    const idCol = provider === 'google' ? 'google_id' : 'apple_id';
+    const fallbackName = provider === 'google' ? 'Google Kullanıcısı' : 'Apple Kullanıcısı';
+
+    let user;
+    let sessionsRevoked = false; // on-hesap-ele-gecirme savunmasi calistiysa (push belirteci gizliligi, plan §5d-1)
+    try {
+      user = await db.withTransaction(async (tx) => {
+        let r = await tx.query(`SELECT ${USER_COLS} FROM users WHERE ${idCol} = $1 FOR UPDATE`, [subject]);
+        let found = r.rows[0] || null;
+
+        if (!found && email && emailVerified) {
+          r = await tx.query(`SELECT ${USER_COLS} FROM users WHERE LOWER(email) = $1 FOR UPDATE`, [email]);
+          found = r.rows[0] || null;
+          if (found) {
+            if (found[idCol] && found[idCol] !== subject) {
+              throw httpError(409, 'Bu e-posta adresi başka bir hesapla ilişkili.', 'CONFLICT');
+            }
+            if (!found.email_verified) {
+              const unusable = await this._unusablePasswordHash();
+              const upd = await tx.query(
+                `UPDATE users
+                    SET ${idCol} = $1, email_verified = TRUE, password_hash = $2,
+                        token_version = token_version + 1,
+                        account_status = CASE WHEN account_status = 'pending_invite' THEN 'active' ELSE account_status END
+                  WHERE id = $3
+                  RETURNING ${USER_COLS}`,
+                [subject, unusable, found.id]
+              );
+              await tx.query(
+                `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'social_link'
+                  WHERE user_id = $1 AND revoked_at IS NULL`,
+                [found.id]
+              );
+              sessionsRevoked = true;
+              found = upd.rows[0];
+            } else {
+              const upd = await tx.query(
+                `UPDATE users SET ${idCol} = $1,
+                        account_status = CASE WHEN account_status = 'pending_invite' THEN 'active' ELSE account_status END
+                  WHERE id = $2
+                  RETURNING ${USER_COLS}`,
+                [subject, found.id]
+              );
+              found = upd.rows[0];
+            }
+          }
+        }
+
+        if (!found) {
+          let accountEmail = email;
+          if (!accountEmail) {
+            if (provider !== 'apple') throw httpError(401, 'Kimlik doğrulanamadı.', 'INVALID_CREDENTIALS');
+            // Apple e-posta paylasmadiysa teslim edilemeyen yer tutucu (.invalid) kullanilir.
+            accountEmail = `apple.${sha256Hex(subject).slice(0, 24)}@users.noreply.invalid`;
+          }
+          const ins = await tx.query(
+            `INSERT INTO users (full_name, email, password_hash, ${idCol}, role, is_active, account_status, email_verified)
+             VALUES ($1, $2, $3, $4, 'user', TRUE, 'active', $5)
+             RETURNING ${USER_COLS}`,
+            [normalizeFullName(fullName, fallbackName), accountEmail, await this._unusablePasswordHash(), subject, Boolean(email && emailVerified)]
+          );
+          found = ins.rows[0];
+        }
+
+        this._assertUserCanSignIn(found);
+        await tx.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [found.id]);
+        return found;
+      });
+    } catch (err) {
+      if (err && err.code === '23505') {
+        throw httpError(409, 'Hesap eşleştirilemedi; lütfen tekrar deneyin.', 'CONFLICT');
+      }
+      throw err;
+    }
+
+    invalidateUserAuthCache(user.id);
+    // Eski (dogrulanmamis) hesabin oturumlari kapandi: o hesapla kayit edilmis push belirteclerini de kapat
+    // (onceden kayit olan saldirganin telefonu ev bildirimlerini almaya devam etmesin). COMMIT sonrasi.
+    if (sessionsRevoked) await this.revokePushTokens(user.id, { reason: 'social_link' });
+    return this._buildUserAuthResponse(user, { ip });
+  }
+
+  // ----------------------------- Hesap silme (WP-B2) ------------------------
+  /**
+   * DELETE /auth/account: yumusak silme + anonimlestirme. Ayrintilar ve kurallar
+   * `account_deletion_service.js` basligindadir (sifre / "SİL" onayi, SOLE_OWNER, staff/super yasagi).
+   * @param {{userId:string, password?:string, confirm?:string, ip?:string}} params
+   */
+  async deleteAccount(params = {}) {
+    // Tembel yukleme: account_deletion_service auth_service'i (parola karsilastirma) tembel kullanir.
+    const { AccountDeletionService } = require('./account_deletion_service');
+    if (!this._accountDeletion) this._accountDeletion = new AccountDeletionService({ auth: this });
+    return this._accountDeletion.deleteAccount(params);
+  }
+}
+
+const authService = new AuthService();
+
+module.exports = authService;
+module.exports.AuthService = AuthService;
+module.exports.normalizeEmail = normalizeEmail;
+module.exports.normalizePhone = normalizePhone;
+module.exports.parseIdentifier = parseIdentifier;
+module.exports.normalizeFullName = normalizeFullName;
+module.exports.validatePassword = validatePassword;
+module.exports.verifyGoogleIdToken = verifyGoogleIdToken;
+module.exports.verifyAppleIdentityToken = verifyAppleIdentityToken;
+module.exports.PASSWORD_MIN_LENGTH = PASSWORD_MIN_LENGTH;
+module.exports.MAX_CODE_ATTEMPTS = MAX_CODE_ATTEMPTS;
+module.exports.RESEND_COOLDOWN_SEC = RESEND_COOLDOWN_SEC;
+module.exports.MAX_SENDS_PER_HOUR = MAX_SENDS_PER_HOUR;

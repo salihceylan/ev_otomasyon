@@ -1,158 +1,186 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/theme/app_theme.dart';
 import 'package:ev_otomasyon/ui/widgets/circuit_background.dart';
-import 'package:ev_otomasyon/ui/pages/device_settings_page.dart';
-import 'package:ev_otomasyon/ui/widgets/user_profile_dialog.dart';
+import 'package:ev_otomasyon/ui/widgets/settings/appearance_cards.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'ui/e1_helpers.dart';
+
+/// Tema ve devre arka planı: **okunabilirlik** (WCAG AA), tema seçiminin kalıcılığı ve arka planın
+/// içeriği engellememesi.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  /// Verilen temada bir `BuildContext` yakalar. `MaterialApp` tema değişimini kısa bir animasyonla
+  /// uygular; ölçümden önce animasyon tamamlanır (yoksa ara değer okunur).
+  Future<BuildContext> contextFor(WidgetTester tester, ThemeMode mode) async {
+    late BuildContext captured;
+    await tester.pumpWidget(
+      MaterialApp(
+        themeMode: mode,
+        theme: ThemeData.light(),
+        darkTheme: ThemeData.dark(),
+        home: Builder(builder: (context) {
+          captured = context;
+          return const SizedBox();
+        }),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return captured;
+  }
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({'saved_app_mode': 'cloud'});
+  const accents = <String, Color>{
+    'amber': AppTheme.accentAmber,
+    'green': AppTheme.accentGreen,
+    'red': AppTheme.accentRed,
+    'cyan': AppTheme.accentCyan,
+    'purple': AppTheme.accentPurple,
+    'blue': AppTheme.primaryBlue,
+    'muted': AppTheme.textMuted,
+  };
+
+  group('Okunabilirlik (WCAG AA 4.5:1)', () {
+    for (final mode in [ThemeMode.light, ThemeMode.dark]) {
+      testWidgets(
+          '${mode.name} temada tüm vurgu renklerinin okunabilir tonu kartta, sayfada ve vurgu tonlu rozet zemininde AA kontrastındadır',
+          (tester) async {
+        final context = await contextFor(tester, mode);
+        final card = AppTheme.getCardColor(context);
+        final page = AppTheme.getScaffoldBg(context);
+        for (final entry in accents.entries) {
+          final readable = AppTheme.readableAccent(context, entry.value);
+          final reason = '${entry.key} (${mode.name})';
+          expect(AppTheme.contrastRatio(readable, card), greaterThanOrEqualTo(4.5), reason: '$reason / kart');
+          expect(AppTheme.contrastRatio(readable, page), greaterThanOrEqualTo(4.5), reason: '$reason / sayfa');
+          for (final base in [card, page]) {
+            final tinted = Color.alphaBlend(entry.value.withValues(alpha: 0.2), base);
+            expect(AppTheme.contrastRatio(readable, tinted), greaterThanOrEqualTo(4.5), reason: '$reason / %20 tonlu zemin');
+          }
+        }
+      });
+
+      testWidgets('${mode.name} temada anlamsal metin renkleri ve ana/ikincil metin kart ve sayfa zemininde okunur',
+          (tester) async {
+        final context = await contextFor(tester, mode);
+        final card = AppTheme.getCardColor(context);
+        final page = AppTheme.getScaffoldBg(context);
+        final texts = <String, Color>{
+          'uyarı': AppTheme.warningText(context),
+          'başarı': AppTheme.successText(context),
+          'hata': AppTheme.dangerText(context),
+          'bilgi': AppTheme.infoText(context),
+          'ana metin': AppTheme.getTextPrimary(context),
+        };
+        for (final entry in texts.entries) {
+          expect(AppTheme.contrastRatio(entry.value, card), greaterThanOrEqualTo(4.5), reason: '${entry.key} / kart');
+          expect(AppTheme.contrastRatio(entry.value, page), greaterThanOrEqualTo(4.5), reason: '${entry.key} / sayfa');
+        }
+        // İkincil (soluk) metin hem kart hem sayfa zemininde AA.
+        expect(AppTheme.contrastRatio(AppTheme.getTextMuted(context), card), greaterThanOrEqualTo(4.5));
+        expect(AppTheme.contrastRatio(AppTheme.getTextMuted(context), page), greaterThanOrEqualTo(4.5));
+      });
+    }
+
+    testWidgets('açık temada pasif hap rengi koyu temanın soluk rengi değildir (getTextMuted tema duyarlı)', (tester) async {
+      final light = await contextFor(tester, ThemeMode.light);
+      final lightMuted = AppTheme.getTextMuted(light);
+      expect(lightMuted, AppTheme.textMutedLight);
+      final dark = await contextFor(tester, ThemeMode.dark);
+      expect(AppTheme.getTextMuted(dark), AppTheme.textMuted);
+      expect(AppTheme.contrastRatio(lightMuted, AppTheme.cardLight), greaterThan(AppTheme.contrastRatio(AppTheme.textMuted, AppTheme.cardLight)),
+          reason: 'koyu temanın soluk rengi açık zeminde yetersiz kontrastlıdır');
+    });
+
+    test('beyaz yazılı dolgulu düğme zemini tüm vurgu renklerinde AA kontrastlıdır ve ton korunur', () {
+      for (final entry in accents.entries) {
+        final fill = AppTheme.filledAccent(entry.value);
+        expect(AppTheme.contrastRatio(fill, Colors.white), greaterThanOrEqualTo(4.5), reason: entry.key);
+        // Yeterince koyu olan renk olduğu gibi kalır (gereksiz karartma yok).
+        if (AppTheme.contrastRatio(entry.value, Colors.white) >= 4.5) {
+          expect(fill, entry.value, reason: '${entry.key} zaten yeterli');
+        }
+      }
+    });
+
+    testWidgets('kart süslemesi temaya göre açık/koyu yüzey kullanır', (tester) async {
+      final light = await contextFor(tester, ThemeMode.light);
+      expect(AppTheme.cardDecoration(light).color, AppTheme.cardLight);
+      final dark = await contextFor(tester, ThemeMode.dark);
+      expect(AppTheme.cardDecoration(dark).color, AppTheme.cardDark);
+    });
   });
 
-  group('Tema & Elektronik Devre Arka Planı (CircuitBackground) Tests', () {
-    testWidgets('AppTheme defines light and dark themes with correct brightness and palettes', (tester) async {
+  group('Tema seçimi', () {
+    testWidgets('seçim duruma yazılır ve SharedPreferences\'a kalıcılaştırılır', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final h = await pumpReady(tester, scaffolded(const ThemeSelectorCard()));
+      expect(h.state.themeMode, ThemeMode.dark, reason: 'varsayılan karanlık');
+
+      await tester.tap(byKeyName('btn_theme_light'));
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump();
+      expect(h.state.themeMode, ThemeMode.light);
+      final prefs = await tester.runAsync(SharedPreferences.getInstance);
+      expect(prefs!.getString('saved_theme_mode'), 'light');
+    });
+
+    testWidgets('seçili düğme erişilebilirlik ağacında "seçili" olarak işaretlenir', (tester) async {
+      final handle = tester.ensureSemantics();
+      await pumpReady(tester, scaffolded(const ThemeSelectorCard()));
+      final dark = tester.getSemantics(find.bySemanticsLabel('Koyu tema'));
+      final light = tester.getSemantics(find.bySemanticsLabel('Açık tema'));
+      expect(dark.flagsCollection.isSelected.toBoolOrNull(), isTrue);
+      expect(light.flagsCollection.isSelected.toBoolOrNull(), isFalse);
+      handle.dispose();
+    });
+  });
+
+  group('Devre arka planı', () {
+    testWidgets('içeriği engellemez: üzerindeki düğme dokunuşu alır', (tester) async {
+      var taps = 0;
       await tester.pumpWidget(
         MaterialApp(
-          theme: AppTheme.lightTheme,
-          darkTheme: AppTheme.darkTheme,
-          home: const SizedBox(),
-        ),
-      );
-      await tester.pump();
-
-      final dark = AppTheme.darkTheme;
-      final light = AppTheme.lightTheme;
-
-      expect(dark.brightness, equals(Brightness.dark));
-      expect(light.brightness, equals(Brightness.light));
-
-      expect(dark.colorScheme.primary, equals(AppTheme.primaryBlue));
-      expect(light.colorScheme.primary, equals(AppTheme.primaryBlue));
-    });
-
-    testWidgets('AutomationState defaults to ThemeMode.dark and persists user selection', (tester) async {
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      // Varsayılan karanlık mod olmalı
-      expect(state.themeMode, equals(ThemeMode.dark));
-
-      // Aydınlık moda geç
-      await state.setThemeMode(ThemeMode.light);
-      expect(state.themeMode, equals(ThemeMode.light));
-
-      // Sistem temasına geç
-      await state.setThemeMode(ThemeMode.system);
-      expect(state.themeMode, equals(ThemeMode.system));
-
-      await tester.pump(const Duration(milliseconds: 100));
-    });
-
-    testWidgets('CircuitBackground renders custom circuit board painter without error', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
           home: Scaffold(
             body: CircuitBackground(
               child: Center(
-                child: Text('AHBU Elektronik Devre'),
+                child: ElevatedButton(onPressed: () => taps++, child: const Text('AHBU')),
               ),
             ),
           ),
         ),
       );
-
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(find.byType(CircuitBackground), findsOneWidget);
+      await tester.tap(find.text('AHBU'));
+      expect(taps, 1);
       expect(find.byType(CustomPaint), findsWidgets);
-      expect(find.text('AHBU Elektronik Devre'), findsOneWidget);
     });
 
-    testWidgets('DeviceSettingsPage displays Theme Selector card and switches modes without overflow', (tester) async {
-      tester.view.physicalSize = const Size(600, 1800);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: DeviceSettingsPage(),
+    testWidgets('zemin rengi temaya göre değişir (koyu / açık)', (tester) async {
+      Future<Color?> baseColor(ThemeMode mode) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            themeMode: mode,
+            theme: ThemeData.light(),
+            darkTheme: ThemeData.dark(),
+            home: const Scaffold(body: CircuitBackground(child: SizedBox())),
           ),
-        ),
-      );
+        );
+        await tester.pumpAndSettle();
+        final container = tester.widgetList<Container>(find.descendant(of: find.byType(CircuitBackground), matching: find.byType(Container)))
+            .firstWhere((c) => c.color != null);
+        return container.color;
+      }
 
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      // Görünüm & Tema Modu kartı görünür olmalı
-      expect(find.text('Görünüm & Tema Modu'), findsOneWidget);
-      expect(find.text('Karanlık Mod (Varsayılan)'), findsOneWidget);
-      expect(find.text('Koyu'), findsOneWidget);
-      expect(find.text('Açık'), findsOneWidget);
-      expect(find.text('Sistem'), findsOneWidget);
-
-      // 'Açık' butonuna tıkla
-      await tester.ensureVisible(find.text('Açık'));
-      await tester.tap(find.text('Açık'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      expect(state.themeMode, equals(ThemeMode.light));
-      expect(find.text('Aydınlık Mod'), findsOneWidget);
-
-      // 'Koyu' butonuna tıkla
-      await tester.ensureVisible(find.text('Koyu'));
-      await tester.tap(find.text('Koyu'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      expect(state.themeMode, equals(ThemeMode.dark));
-      expect(find.text('Karanlık Mod (Varsayılan)'), findsOneWidget);
+      expect(await baseColor(ThemeMode.dark), const Color(0xFF0B1120));
+      expect(await baseColor(ThemeMode.light), const Color(0xFFF8FAFC));
     });
 
-    testWidgets('UserProfileDialog includes quick theme switch button', (tester) async {
-      tester.view.physicalSize = const Size(600, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
+    testWidgets('görsel eksik olsa da çökmez (errorBuilder)', (tester) async {
       await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: Scaffold(
-              body: UserProfileDialog(),
-            ),
-          ),
-        ),
+        const MaterialApp(home: Scaffold(body: CircuitBackground(child: Text('içerik')))),
       );
-
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      // Hızlı tema geçiş butonu bulunmalı
-      expect(find.text('Aydınlık Moda Geç'), findsOneWidget);
-
-      // Butona dokun ve aydınlık moda geç
-      await tester.tap(find.text('Aydınlık Moda Geç'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      expect(state.themeMode, equals(ThemeMode.light));
-      expect(find.text('Karanlık Moda Geç'), findsOneWidget);
+      expect(find.text('içerik'), findsOneWidget);
+      expect(tester.takeException(), isNull);
     });
   });
 }

@@ -1,0 +1,45 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:ev_otomasyon/services/push/firebase_push_gateway.dart';
+import 'package:ev_otomasyon/services/push/push_config.dart';
+import 'package:ev_otomasyon/services/push/push_gateway.dart';
+import 'package:ev_otomasyon/services/push/push_gateway_factory.dart';
+
+// 02-firebase yamasındaki test/push/push_gateway_factory_test.dart (Firebase'siz sürümden TEK fark: ikinci test
+// ve firebase_push_gateway.dart importu). Bu dosya firebase_core/firebase_messaging paketlerine bağlıdır.
+
+const PushConfig _config = PushConfig(
+  apiKey: 'test-api-key',
+  appId: '1:111:android:aaa',
+  messagingSenderId: '111',
+  projectId: 'test-project',
+);
+
+Future<void> _expectInert(PushGateway gateway) async {
+  expect(gateway.isSupported, isFalse);
+  await gateway.initialize();
+  expect(gateway.isSupported, isFalse);
+  expect(await gateway.permissionStatus(), PushPermission.unsupported);
+  expect(await gateway.requestPermission(), PushPermission.unsupported);
+  expect(await gateway.getToken(), isNull);
+  expect(await gateway.getInitialMessage(), isNull);
+  expect(await gateway.onTokenRefresh.isEmpty, isTrue);
+  expect(await gateway.onForegroundMessage.isEmpty, isTrue);
+  expect(await gateway.onMessageOpened.isEmpty, isTrue);
+  await gateway.deleteToken();
+}
+
+void main() {
+  group('createPushGateway', () {
+    test('yapılandırma yoksa (FCM_* verilmemiş) hiçbir şey yapmayan ağ geçidi döner', () async {
+      final gateway = createPushGateway(null);
+      expect(gateway, isA<UnsupportedPushGateway>());
+      await _expectInert(gateway);
+    });
+
+    test('yapılandırma verilirse gerçek Firebase ağ geçidi döner (initialize çağrılmadığı için kanala dokunulmaz)', () {
+      final gateway = createPushGateway(_config);
+      expect(gateway, isA<FirebasePushGateway>());
+      expect((gateway as FirebasePushGateway).config, _config);
+    });
+  });
+}

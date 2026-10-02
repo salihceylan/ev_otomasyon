@@ -1,34 +1,54 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../../models/capabilities.dart';
 import '../../services/automation_state.dart';
+import '../common/confirm_dialogs.dart';
 import '../pages/device_inventory_page.dart';
+import '../pages/family/transfer_ownership_dialog.dart';
 import '../pages/replace_board_dialog.dart';
 import '../pages/service_management_page.dart';
 import '../pages/service_mode_page.dart';
+import '../pages/service_subscribers_page.dart';
 import '../pages/system_doctor_dialog.dart';
 import '../pages/wifi_recovery_dialog.dart';
-import '../pages/family/transfer_ownership_dialog.dart';
 import '../theme/app_theme.dart';
 
-/// AHBU Süper Yönetici Sandviç (Hamburger) Menüsü (Drawer)
+/// Süper yönetici / yetkili servis çekmecesi (sandviç menü).
+///
+/// Girdiler **`Capabilities`'ten** türetilir (rol adı karşılaştırması yok):
+/// * süper kullanıcı: envanter (`canManageInventory`), servis sorumluları (`canManageAdminAccounts`),
+///   tüm aboneler (`canViewInventory`), sistem doktoru;
+/// * kalıcı servis personeli (`isStaff`): servis modu, aboneler, pano değişimi, Wi-Fi kurtarma;
+///   acil sıfırlama (`canEmergencyReset`).
+///
+/// Çıkış, onaylı çıkıştır ([confirmAndLogout]; navigator yığınını temizler). Anahtarlar:
+/// `Key('nav_drawer')`, `Key('nav_drawer_<ad>')`, `Key('nav_drawer_logout')`.
 class SuperUserDrawer extends StatelessWidget {
   const SuperUserDrawer({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final state = Provider.of<AutomationState>(context);
-    final user = state.currentUser;
-    final isDark = state.themeMode == ThemeMode.dark;
+    final state = context.read<AutomationState>();
+    final caps = context.select<AutomationState, Capabilities>((s) => s.capabilities);
+    final user = context.select<AutomationState, ({String name, String email})>(
+      (s) => (name: s.currentUser?.fullName ?? '', email: s.currentUser?.email ?? ''),
+    );
+    final isDark = AppTheme.isDark(context);
 
-    final isSuper = state.isSuperUser;
-    final isService = state.isServiceUser;
+    final isSuper = caps.isSuperUser;
+    final fieldStaff = caps.isStaff && !caps.isSuperUser;
 
     final badgeColor = isSuper ? AppTheme.accentPurple : AppTheme.accentCyan;
     final badgeText = isSuper ? 'SÜPER YÖNETİCİ KONSOLU' : 'YETKİLİ SERVİS KONSOLU';
     final badgeIcon = isSuper ? Icons.verified_user : Icons.engineering_rounded;
+    final displayName = user.name.trim().isNotEmpty
+        ? user.name.trim()
+        : (isSuper ? 'Süper Yönetici' : 'Yetkili Servis Sorumlusu');
 
     return Drawer(
-      backgroundColor: AppTheme.bgDark,
+      key: const Key('nav_drawer'),
+      backgroundColor: AppTheme.getDrawerBg(context),
       child: SafeArea(
         child: Column(
           children: [
@@ -37,9 +57,9 @@ class SuperUserDrawer extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
               decoration: BoxDecoration(
-                color: AppTheme.cardDark,
-                border: const Border(
-                  bottom: BorderSide(color: AppTheme.cardBorder, width: 1),
+                color: AppTheme.getDrawerHeaderBg(context),
+                border: Border(
+                  bottom: BorderSide(color: AppTheme.getCardBorder(context), width: 1),
                 ),
               ),
               child: Column(
@@ -66,6 +86,7 @@ class SuperUserDrawer extends StatelessWidget {
                             width: 46,
                             height: 46,
                             fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Icon(badgeIcon, color: badgeColor),
                           ),
                         ),
                       ),
@@ -75,34 +96,33 @@ class SuperUserDrawer extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              user?.fullName.isNotEmpty == true
-                                  ? user!.fullName
-                                  : (isSuper ? 'Süper Yönetici' : 'Yetkili Servis Sorumlusu'),
-                              style: const TextStyle(
+                              displayName,
+                              style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary,
+                                color: AppTheme.getTextPrimary(context),
                               ),
-                              maxLines: 1,
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              user?.email.isNotEmpty == true ? user!.email : 'servis@gudeteknoloji.com.tr',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: AppTheme.textMuted,
+                            if (user.email.trim().isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                user.email.trim(),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppTheme.getTextMuted(context),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            ],
                           ],
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 14),
-                  // Süper Kullanıcı / Servis Sorumlusu Rozeti
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
@@ -113,7 +133,7 @@ class SuperUserDrawer extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(badgeIcon, color: badgeColor, size: 14),
+                        Icon(badgeIcon, color: AppTheme.readableAccent(context, badgeColor), size: 14),
                         const SizedBox(width: 6),
                         Flexible(
                           child: Text(
@@ -122,7 +142,7 @@ class SuperUserDrawer extends StatelessWidget {
                               fontSize: 10.5,
                               fontWeight: FontWeight.bold,
                               letterSpacing: 0.5,
-                              color: badgeColor,
+                              color: AppTheme.readableAccent(context, badgeColor),
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -135,64 +155,53 @@ class SuperUserDrawer extends StatelessWidget {
               ),
             ),
 
-            // 2. MENÜ ELEMANLARI (NAVİGASYON)
+            // 2. MENÜ ELEMANLARI
             Expanded(
               child: ListView(
                 padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                 children: [
-                  _buildDrawerItem(
-                    context: context,
+                  _DrawerItem(
+                    itemKey: const Key('nav_drawer_console'),
                     icon: Icons.dashboard_outlined,
-                    activeIcon: Icons.dashboard,
                     title: isSuper ? 'Yönetici Konsolu' : 'Servis Konsolu',
                     subtitle: isSuper
                         ? 'Sistem durumu & ana kontroller'
                         : 'Saha operasyonları & ana kontroller',
-                    onTap: () {
-                      Navigator.pop(context); // Menüyü kapat, zaten konsoldayız
-                    },
+                    onTap: () => Navigator.pop(context),
                   ),
-                  // =========================================================================
-                  // YALNIZCA SÜPER YÖNETİCİ MENÜLERİ (Cihaz Ekleme/Düzenleme, Sorumlu & Sağlık)
-                  // (Servis Sorumluları bu menüleri KESİNLİKLE GÖRMEZ)
-                  // =========================================================================
-                  if (isSuper) ...[
-                    _buildDrawerItem(
-                      context: context,
+                  if (caps.canManageInventory)
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_inventory'),
                       icon: Icons.inventory_2_outlined,
-                      activeIcon: Icons.inventory_2,
                       title: 'Cihaz Envanteri',
                       subtitle: 'Karekodlar, seri no & fabrika kayıtları',
                       color: AppTheme.accentAmber,
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
-                        );
-                      },
+                      onTap: () => _push(context, const DeviceInventoryPage()),
                     ),
-                    _buildDrawerItem(
-                      context: context,
+                  if (caps.canManageAdminAccounts)
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_service_managers'),
                       icon: Icons.admin_panel_settings_outlined,
-                      activeIcon: Icons.admin_panel_settings,
                       title: 'Servis Sorumluları',
                       subtitle: 'Yetkili servisleri ekle & düzenle',
                       color: AppTheme.accentCyan,
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const ServiceManagementPage(initialTabIndex: 0),
-                          ),
-                        );
-                      },
+                      onTap: () => _push(context, const ServiceManagementPage(initialTabIndex: 0)),
                     ),
-                    _buildDrawerItem(
-                      context: context,
+                  if (caps.canViewInventory)
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_subscribers'),
+                      icon: Icons.people_alt_outlined,
+                      title: isSuper ? 'Tüm Aboneler & Atamalar' : 'Abonelerim & Cihaz Atama',
+                      subtitle: isSuper
+                          ? 'Daireler, panolar & Home Admin listesi'
+                          : 'Kayıtlı panolar & Home Admin atama',
+                      color: AppTheme.accentGreen,
+                      onTap: () => _push(context, const ServiceSubscribersPage()),
+                    ),
+                  if (isSuper)
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_doctor'),
                       icon: Icons.health_and_safety_outlined,
-                      activeIcon: Icons.health_and_safety,
                       title: 'Sistem Doktoru',
                       subtitle: 'DB, MQTT ve sistem sağlığı teşhisi',
                       color: Colors.cyanAccent,
@@ -201,31 +210,18 @@ class SuperUserDrawer extends StatelessWidget {
                         SystemDoctorDialog.show(context);
                       },
                     ),
-                  ],
-                  // =========================================================================
-                  // YALNIZCA SERVİS SORUMLULARI İÇİN SAHA & MONTAJ OPERASYON ARAÇLARI
-                  // (Süper Kullanıcıda bu menüler bulunmaz; Servis Sorumlularına özgüdür)
-                  // =========================================================================
-                  if (isService) ...[
-                    _buildDrawerItem(
-                      context: context,
+                  if (fieldStaff) ...[
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_commissioning'),
                       icon: Icons.verified_outlined,
-                      activeIcon: Icons.verified,
                       title: 'Devreye Alma & Servis Modu',
                       subtitle: 'Karekod eşleme, canlı test & onay',
                       color: AppTheme.accentCyan,
-                      onTap: () {
-                        Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const ServiceModePage()),
-                        );
-                      },
+                      onTap: () => _push(context, const ServiceModePage()),
                     ),
-                    _buildDrawerItem(
-                      context: context,
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_replace_board'),
                       icon: Icons.published_with_changes_outlined,
-                      activeIcon: Icons.published_with_changes,
                       title: 'Pano Değişimi (Afet Modu)',
                       subtitle: 'Buluttan birebir pano aktarımı',
                       color: Colors.tealAccent,
@@ -234,10 +230,9 @@ class SuperUserDrawer extends StatelessWidget {
                         ReplaceBoardDialog.show(context);
                       },
                     ),
-                    _buildDrawerItem(
-                      context: context,
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_wifi_recovery'),
                       icon: Icons.wifi_find_outlined,
-                      activeIcon: Icons.wifi_find,
                       title: 'Wi-Fi Yapılandırma & Kurtarma',
                       subtitle: 'Modem değişimi & Pano Smart AP',
                       color: AppTheme.accentAmber,
@@ -246,38 +241,39 @@ class SuperUserDrawer extends StatelessWidget {
                         WifiRecoveryDialog.show(context);
                       },
                     ),
-                    _buildDrawerItem(
-                      context: context,
+                  ],
+                  if (caps.canEmergencyReset)
+                    _DrawerItem(
+                      itemKey: const Key('nav_drawer_emergency_reset'),
                       icon: Icons.sync_problem_rounded,
-                      activeIcon: Icons.sync_problem,
-                      title: 'Acil Sıfırlama & Mülk Devri',
-                      subtitle: 'Eski sahibini boşa çıkar & yeni daireye devret',
+                      title: 'Acil Sıfırlama',
+                      subtitle: 'Eski sahibine ulaşılamayan panoyu sıfırla',
                       color: Colors.redAccent,
                       onTap: () {
                         Navigator.pop(context);
-                        showDialog(
-                          context: context,
-                          builder: (_) => const TransferOwnershipDialog(),
-                        );
+                        TransferOwnershipDialog.show(context, initialTab: 1);
                       },
                     ),
-                  ],
-                  const Divider(color: AppTheme.cardBorder, height: 24, indent: 8, endIndent: 8),
-                  // Tema Geçişi
+                  Divider(
+                    color: AppTheme.getCardBorder(context),
+                    height: 24,
+                    indent: 8,
+                    endIndent: 8,
+                  ),
                   ListTile(
+                    key: const Key('nav_drawer_theme'),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    minTileHeight: 48,
                     leading: Icon(
                       isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-                      color: isDark ? AppTheme.accentAmber : AppTheme.primaryBlueLight,
+                      color: isDark ? AppTheme.accentAmber : AppTheme.primaryBlue,
                       size: 22,
                     ),
                     title: Text(
                       isDark ? 'Aydınlık Temaya Geç' : 'Karanlık Temaya Geç',
-                      style: const TextStyle(fontSize: 14, color: AppTheme.textPrimary),
+                      style: TextStyle(fontSize: 14, color: AppTheme.getTextPrimary(context)),
                     ),
-                    onTap: () {
-                      state.setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark);
-                    },
+                    onTap: () => state.setThemeMode(isDark ? ThemeMode.light : ThemeMode.dark),
                   ),
                 ],
               ),
@@ -286,25 +282,25 @@ class SuperUserDrawer extends StatelessWidget {
             // 3. ALT ÇIKIŞ BUTONU (FOOTER)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: AppTheme.cardBorder, width: 1)),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: AppTheme.getCardBorder(context), width: 1)),
               ),
               child: ListTile(
+                key: const Key('nav_drawer_logout'),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                 tileColor: AppTheme.accentRed.withValues(alpha: 0.1),
-                leading: const Icon(Icons.logout, color: AppTheme.accentRed, size: 22),
-                title: const Text(
+                minTileHeight: 48,
+                leading: Icon(Icons.logout, color: AppTheme.dangerText(context), size: 22),
+                title: Text(
                   'Güvenli Çıkış Yap',
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: AppTheme.accentRed,
+                    color: AppTheme.dangerText(context),
                   ),
                 ),
-                onTap: () async {
-                  Navigator.pop(context);
-                  await state.logout();
-                },
+                // Onay + çıkış + navigator yığınını temizleme paylaşılan yardımcıdadır.
+                onTap: () => confirmAndLogout(context, state),
               ),
             ),
           ],
@@ -313,49 +309,65 @@ class SuperUserDrawer extends StatelessWidget {
     );
   }
 
-  Widget _buildDrawerItem({
-    required BuildContext context,
-    required IconData icon,
-    required IconData activeIcon,
-    required String title,
-    required String subtitle,
-    Color? color,
-    required VoidCallback onTap,
-  }) {
-    final itemColor = color ?? AppTheme.primaryBlueLight;
+  static void _push(BuildContext context, Widget page) {
+    Navigator.pop(context);
+    Navigator.push(context, MaterialPageRoute<void>(builder: (_) => page));
+  }
+}
+
+class _DrawerItem extends StatelessWidget {
+  const _DrawerItem({
+    required this.itemKey,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.color,
+  });
+
+  final Key itemKey;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color? color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final itemColor = color ?? (AppTheme.isDark(context) ? AppTheme.primaryBlueLight : AppTheme.primaryBlue);
+    final iconColor = AppTheme.readableAccent(context, itemColor);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: ListTile(
+        key: itemKey,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        minTileHeight: 56,
         leading: Container(
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
             color: itemColor.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Icon(icon, color: itemColor, size: 20),
+          child: Icon(icon, color: iconColor, size: 20),
         ),
         title: Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             fontWeight: FontWeight.w600,
-            color: AppTheme.textPrimary,
+            color: AppTheme.getTextPrimary(context),
           ),
-          maxLines: 1,
+          maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(
           subtitle,
-          style: const TextStyle(
-            fontSize: 11.5,
-            color: AppTheme.textMuted,
-          ),
-          maxLines: 1,
+          style: TextStyle(fontSize: 11.5, color: AppTheme.getTextMuted(context)),
+          maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
-        trailing: const Icon(Icons.chevron_right, size: 18, color: AppTheme.textMuted),
+        trailing: Icon(Icons.chevron_right, size: 18, color: AppTheme.getTextMuted(context)),
         onTap: onTap,
       ),
     );

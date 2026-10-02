@@ -1,20 +1,34 @@
 #include "ConfigManager.h"
 #include <string.h>
 
+using namespace sysconfig_detail;   // isAsciiRange, copyStr, terminate (SystemConfig.h)
+
+// ---------------------------------------------------------------------------------------------
+// ConfigManager
+// ---------------------------------------------------------------------------------------------
 ConfigManager& ConfigManager::instance() {
   static ConfigManager mgr;
   return mgr;
 }
 
-ConfigManager::ConfigManager() {
-  resetToDefaults();
+ConfigManager::ConfigManager() : _mutex(nullptr), _prefsOk(false), _generation(0), _resetCount(0) {
+  _mutex = xSemaphoreCreateRecursiveMutex();
+  applyDefaults();
 }
 
-void ConfigManager::resetToDefaults() {
-  strncpy(config.device_name, "AHBU Akilli Ev Kontrol", sizeof(config.device_name) - 1);
-  config.device_name[sizeof(config.device_name) - 1] = '\0';
-  config.wifi_ssid[0] = '\0';
-  config.wifi_pass[0] = '\0';
+void ConfigManager::lock() {
+  if (_mutex) xSemaphoreTakeRecursive(_mutex, portMAX_DELAY);
+}
+
+void ConfigManager::unlock() {
+  if (_mutex) xSemaphoreGiveRecursive(_mutex);
+}
+
+// RAM'i varsayılana çeker. NVS'e DOKUNMAZ (yapıcı da kullanır). Kimlik alanları boş kalır.
+void ConfigManager::applyDefaults() {
+  memset(&config, 0, sizeof(config));
+
+  copyStr(config.device_name, "AHBU Akilli Ev Kontrol");
   config.wifi_sta_enabled = false;
   config.rs485_baud = 9600;
 
@@ -23,15 +37,12 @@ void ConfigManager::resetToDefaults() {
   config.ext_module_channels = 0;
   config.ext_module_address = 1;
 
-  // Güvenli MQTTS (Port 8884) Varsayılanları
+  // Güvenli MQTTS: sunucu/port varsayılan, KİMLİK BOŞ (provizyonla gelir)
   config.mqtt_enabled = true;
-  strncpy(config.mqtt_server, "evotomasyon.gudeteknoloji.com.tr", sizeof(config.mqtt_server) - 1);
-  config.mqtt_server[sizeof(config.mqtt_server) - 1] = '\0';
-  config.mqtt_port = 8884;
-  strncpy(config.mqtt_user, "home_101", sizeof(config.mqtt_user) - 1);
-  config.mqtt_user[sizeof(config.mqtt_user) - 1] = '\0';
-  strncpy(config.mqtt_pass, "PassHome101!Sec", sizeof(config.mqtt_pass) - 1);
-  config.mqtt_pass[sizeof(config.mqtt_pass) - 1] = '\0';
+  copyStr(config.mqtt_server, DEFAULT_MQTT_SERVER);
+  config.mqtt_port = DEFAULT_MQTT_PORT;
+
+  // local_key / ap_pass boş = provizyonsuz cihaz (memset ile sıfırlandı)
 
   // Varsayılan Röle Tanımları:
   // 1-2: Salon Panjuru (Yukarı & Aşağı)
@@ -50,14 +61,13 @@ void ConfigManager::resetToDefaults() {
 
   for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
     if (i < 8) {
-      strncpy(config.relays[i].name, defaultRelayNames[i], sizeof(config.relays[i].name) - 1);
-      config.relays[i].name[sizeof(config.relays[i].name) - 1] = '\0';
+      copyStr(config.relays[i].name, defaultRelayNames[i]);
       if (i == 0 || i == 2) {
         config.relays[i].type = RELAY_TYPE_SHUTTER_UP;
-        config.relays[i].runtime_sec = 20;
+        config.relays[i].runtime_sec = SHUTTER_RUNTIME_DEFAULT_SEC;
       } else if (i == 1 || i == 3) {
         config.relays[i].type = RELAY_TYPE_SHUTTER_DOWN;
-        config.relays[i].runtime_sec = 20;
+        config.relays[i].runtime_sec = SHUTTER_RUNTIME_DEFAULT_SEC;
       } else {
         config.relays[i].type = RELAY_TYPE_LIGHT;
         config.relays[i].runtime_sec = 0;
@@ -84,38 +94,63 @@ void ConfigManager::resetToDefaults() {
   }
 
   // Panjur çiftleri için akıllı varsayılanlar:
-  strncpy(config.dis[0].name, "Salon Panjur Butonu", sizeof(config.dis[0].name) - 1);
+  copyStr(config.dis[0].name, "Salon Panjur Butonu");
   config.dis[0].target_relay = 1;
   config.dis[0].mode = DI_MODE_SHUTTER_STEP; // Tek buton 2-kablolu panjur
 
-  strncpy(config.dis[1].name, "Giriş 2 (Boşta / Serbest)", sizeof(config.dis[1].name) - 1);
+  copyStr(config.dis[1].name, "Giriş 2 (Boşta / Serbest)");
   config.dis[1].target_relay = 0;             // Boşta / serbest
   config.dis[1].mode = DI_MODE_TOGGLE;
 
-  strncpy(config.dis[2].name, "Oda Panjur Butonu", sizeof(config.dis[2].name) - 1);
+  copyStr(config.dis[2].name, "Oda Panjur Butonu");
   config.dis[2].target_relay = 3;
   config.dis[2].mode = DI_MODE_SHUTTER_STEP; // Tek buton 2-kablolu panjur
 
-  strncpy(config.dis[3].name, "Giriş 4 (Boşta / Serbest)", sizeof(config.dis[3].name) - 1);
+  copyStr(config.dis[3].name, "Giriş 4 (Boşta / Serbest)");
   config.dis[3].target_relay = 0;             // Boşta / serbest
   config.dis[3].mode = DI_MODE_TOGGLE;
 }
 
 void ConfigManager::begin() {
-  prefs.begin("ahbu_cfg", false);
+  ConfigLock lk(*this);
+  _prefsOk = prefs.begin(NVS_NS_CFG, false);
+  if (!_prefsOk) {
+    // NVS açılamadı: yerel çalışma için RAM varsayılanlarıyla devam et, yazma denemeleri false döner.
+    printf("[CONFIG] HATA: NVS '%s' acilamadi, RAM varsayilanlariyla devam.\r\n", NVS_NS_CFG);
+    applyDefaults();
+    config.validate();
+    return;
+  }
   load();
 }
 
 void ConfigManager::load() {
-  if (!prefs.isKey("cfg_init")) {
-    resetToDefaults();
-    save();
+  ConfigLock lk(*this);
+  if (!_prefsOk) {
+    applyDefaults();
+    config.validate();
     return;
   }
 
-  prefs.getString("dev_name", config.device_name, sizeof(config.device_name));
-  prefs.getString("sta_ssid", config.wifi_ssid, sizeof(config.wifi_ssid));
-  prefs.getString("sta_pass", config.wifi_pass, sizeof(config.wifi_pass));
+  if (!prefs.isKey("cfg_init")) {
+    // İlk açılış: varsayılanları yaz
+    applyDefaults();
+    config.validate();
+    if (!save()) printf("[CONFIG] UYARI: ilk acilis varsayilanlari NVS'e yazilamadi.\r\n");
+    return;
+  }
+
+  // Eksik anahtarlar varsayılanı korusun diye varsayılandan başla.
+  applyDefaults();
+
+  // Dizgi okumaları yalnızca anahtar VARSA yapılır: Arduino getString() eksik anahtarda log_e basar
+  // (eski firmware'den yükseltilen cihazlarda "lk"/"ap_pw" yoktur). Eksikse varsayılan (boş) korunur.
+  auto readStr = [&](const char* key, char* dst, size_t cap) {
+    if (prefs.isKey(key)) prefs.getString(key, dst, cap);
+  };
+  readStr("dev_name", config.device_name, sizeof(config.device_name));
+  readStr("sta_ssid", config.wifi_ssid, sizeof(config.wifi_ssid));
+  readStr("sta_pass", config.wifi_pass, sizeof(config.wifi_pass));
   config.wifi_sta_enabled = prefs.getBool("sta_en", false);
   config.rs485_baud = prefs.getUInt("rs_baud", 9600);
 
@@ -123,30 +158,31 @@ void ConfigManager::load() {
   config.ext_module_channels = prefs.getUChar("ext_ch", 0);
   config.ext_module_address = prefs.getUChar("ext_addr", 1);
 
-  // Güvenli MQTTS Ayarları
+  // Güvenli MQTTS (kimlik yoksa BOŞ kalır; derleme içi varsayılan yok)
   config.mqtt_enabled = prefs.getBool("mq_en", true);
-  prefs.getString("mq_srv", config.mqtt_server, sizeof(config.mqtt_server));
-  if (config.mqtt_server[0] == '\0') {
-    strncpy(config.mqtt_server, "evotomasyon.gudeteknoloji.com.tr", sizeof(config.mqtt_server) - 1);
-  }
-  config.mqtt_port = prefs.getUShort("mq_port", 8884);
-  prefs.getString("mq_usr", config.mqtt_user, sizeof(config.mqtt_user));
-  if (config.mqtt_user[0] == '\0') {
-    strncpy(config.mqtt_user, "home_101", sizeof(config.mqtt_user) - 1);
-  }
-  prefs.getString("mq_pwd", config.mqtt_pass, sizeof(config.mqtt_pass));
-  if (config.mqtt_pass[0] == '\0') {
-    strncpy(config.mqtt_pass, "PassHome101!Sec", sizeof(config.mqtt_pass) - 1);
+  readStr("mq_srv", config.mqtt_server, sizeof(config.mqtt_server));
+  config.mqtt_port = prefs.getUShort("mq_port", DEFAULT_MQTT_PORT);
+  readStr("mq_usr", config.mqtt_user, sizeof(config.mqtt_user));
+  readStr("mq_pwd", config.mqtt_pass, sizeof(config.mqtt_pass));
+
+  // Yerel erişim kimliği
+  readStr("lk", config.local_key, sizeof(config.local_key));
+  readStr("ap_pw", config.ap_pass, sizeof(config.ap_pass));
+
+  // GÖÇ: eski firmware'in NVS'e yazdığı paylaşımlı "home_*" MQTT kimliği artık geçersiz/ifşa olmuş
+  // sayılır (CONTRACTS §2.2 legacy). Silinir; cihaz yeniden provizyon (POST /api/mqtt/config) bekler.
+  bool legacyPurged = false;
+  if (strncmp(config.mqtt_user, "home_", 5) == 0) {
+    memset(config.mqtt_user, 0, sizeof(config.mqtt_user));
+    memset(config.mqtt_pass, 0, sizeof(config.mqtt_pass));
+    legacyPurged = true;
+    printf("[CONFIG] Eski paylasimli MQTT kimligi silindi; yeni kimlik provizyonu gerekli.\r\n");
   }
 
   for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
     char key[16];
     snprintf(key, sizeof(key), "r_nm_%d", i);
-    if (prefs.isKey(key)) {
-      prefs.getString(key, config.relays[i].name, sizeof(config.relays[i].name));
-    } else if (i >= 8) {
-      snprintf(config.relays[i].name, sizeof(config.relays[i].name), "Ek Modül Röle %d", i - 7);
-    }
+    readStr(key, config.relays[i].name, sizeof(config.relays[i].name));
 
     snprintf(key, sizeof(key), "r_tp_%d", i);
     config.relays[i].type = prefs.getUChar(key, config.relays[i].type);
@@ -158,11 +194,7 @@ void ConfigManager::load() {
   for (int i = 0; i < MAX_TOTAL_DIS; i++) {
     char key[16];
     snprintf(key, sizeof(key), "d_nm_%d", i);
-    if (prefs.isKey(key)) {
-      prefs.getString(key, config.dis[i].name, sizeof(config.dis[i].name));
-    } else if (i >= 8) {
-      snprintf(config.dis[i].name, sizeof(config.dis[i].name), "Ek Giriş / Buton %d", i - 7);
-    }
+    readStr(key, config.dis[i].name, sizeof(config.dis[i].name));
 
     snprintf(key, sizeof(key), "d_tr_%d", i);
     config.dis[i].target_relay = prefs.getUChar(key, config.dis[i].target_relay);
@@ -170,26 +202,75 @@ void ConfigManager::load() {
     snprintf(key, sizeof(key), "d_md_%d", i);
     config.dis[i].mode = prefs.getUChar(key, config.dis[i].mode);
   }
+
+  // Bozuk/aralık dışı NVS değeri hiçbir zaman olduğu gibi kullanılmaz.
+  bool wasValid = config.validate();
+  if (!wasValid || legacyPurged) {
+    printf("[CONFIG] Yapilandirma dogrulamada onarildi, NVS'e geri yaziliyor.\r\n");
+    save();
+  }
 }
 
-void ConfigManager::save() {
-  prefs.putBool("cfg_init", true);
-  prefs.putString("dev_name", config.device_name);
-  prefs.putString("sta_ssid", config.wifi_ssid);
-  prefs.putString("sta_pass", config.wifi_pass);
-  prefs.putBool("sta_en", config.wifi_sta_enabled);
-  prefs.putUInt("rs_baud", config.rs485_baud);
+bool ConfigManager::save() {
+  ConfigLock lk(*this);
+  if (!_prefsOk) return false;
 
-  prefs.putBool("ext_en", config.ext_module_enabled);
-  prefs.putUChar("ext_ch", config.ext_module_channels);
-  prefs.putUChar("ext_addr", config.ext_module_address);
+  config.validate();   // hiçbir yazma yolu doğrulamasız NVS'e değer yazmaz
 
-  // Güvenli MQTTS Kaydet
-  prefs.putBool("mq_en", config.mqtt_enabled);
-  prefs.putString("mq_srv", config.mqtt_server);
-  prefs.putUShort("mq_port", config.mqtt_port);
-  prefs.putString("mq_usr", config.mqtt_user);
-  prefs.putString("mq_pwd", config.mqtt_pass);
+  bool ok = true;
+  // NVS AŞINMA KORUMASI: yalnızca DEĞİŞEN değerler flash'a yazılır (okuma-karşılaştırma uygulama katmanındadır).
+  auto putStr = [&](const char* key, const char* val) {
+    char cur[72];
+    if (prefs.isKey(key)) {
+      // DİKKAT: Arduino Preferences::getString(key, buf, max) NUL DAHİL uzunluk döndürür (0 = hata); bu yüzden
+      // uzunlukla değil İÇERİKLE karşılaştırılır (uzunluk karşılaştırması gerçek donanımda hiç eşleşmezdi).
+      size_t n = prefs.getString(key, cur, sizeof(cur));
+      if (n > 0 && strcmp(cur, val) == 0) return;                  // aynı: yazma
+    }
+    size_t want = strlen(val);
+    size_t got = prefs.putString(key, val);
+    if (got != want) {          // boş dizgede putString 0 döner; want==0 iken eşit
+      ok = false;
+      printf("[CONFIG] HATA: '%s' NVS'e yazilamadi.\r\n", key);
+    }
+  };
+  auto putU8 = [&](const char* key, uint8_t v) {
+    if (prefs.isKey(key) && prefs.getUChar(key, (uint8_t)(v ^ 0xFF)) == v) return;
+    if (prefs.putUChar(key, v) != sizeof(uint8_t)) { ok = false; printf("[CONFIG] HATA: '%s' NVS'e yazilamadi.\r\n", key); }
+  };
+  auto putBoolIfChanged = [&](const char* key, bool v) {
+    if (prefs.isKey(key) && prefs.getBool(key, !v) == v) return;
+    if (prefs.putBool(key, v) != sizeof(uint8_t)) { ok = false; printf("[CONFIG] HATA: '%s' NVS'e yazilamadi.\r\n", key); }
+  };
+  auto putU16 = [&](const char* key, uint16_t v) {
+    if (prefs.isKey(key) && prefs.getUShort(key, (uint16_t)(v ^ 0xFFFF)) == v) return;
+    if (prefs.putUShort(key, v) != sizeof(uint16_t)) { ok = false; printf("[CONFIG] HATA: '%s' NVS'e yazilamadi.\r\n", key); }
+  };
+  auto putU32 = [&](const char* key, uint32_t v) {
+    if (prefs.isKey(key) && prefs.getUInt(key, v ^ 0xFFFFFFFFu) == v) return;
+    if (prefs.putUInt(key, v) != sizeof(uint32_t)) { ok = false; printf("[CONFIG] HATA: '%s' NVS'e yazilamadi.\r\n", key); }
+  };
+
+  putStr("dev_name", config.device_name);
+  putStr("sta_ssid", config.wifi_ssid);
+  putStr("sta_pass", config.wifi_pass);
+  putBoolIfChanged("sta_en", config.wifi_sta_enabled);
+  putU32("rs_baud", config.rs485_baud);
+
+  putBoolIfChanged("ext_en", config.ext_module_enabled);
+  putU8("ext_ch", config.ext_module_channels);
+  putU8("ext_addr", config.ext_module_address);
+
+  // Güvenli MQTTS
+  putBoolIfChanged("mq_en", config.mqtt_enabled);
+  putStr("mq_srv", config.mqtt_server);
+  putU16("mq_port", config.mqtt_port);
+  putStr("mq_usr", config.mqtt_user);
+  putStr("mq_pwd", config.mqtt_pass);
+
+  // Yerel erişim kimliği
+  putStr("lk", config.local_key);
+  putStr("ap_pw", config.ap_pass);
 
   uint8_t totalR = config.totalRelays();
   uint8_t totalD = config.totalDIs();
@@ -197,25 +278,179 @@ void ConfigManager::save() {
   for (int i = 0; i < totalR; i++) {
     char key[16];
     snprintf(key, sizeof(key), "r_nm_%d", i);
-    prefs.putString(key, config.relays[i].name);
+    putStr(key, config.relays[i].name);
 
     snprintf(key, sizeof(key), "r_tp_%d", i);
-    prefs.putUChar(key, config.relays[i].type);
+    putU8(key, config.relays[i].type);
 
     snprintf(key, sizeof(key), "r_rt_%d", i);
-    prefs.putUShort(key, config.relays[i].runtime_sec);
+    putU16(key, config.relays[i].runtime_sec);
   }
 
   for (int i = 0; i < totalD; i++) {
     char key[16];
     snprintf(key, sizeof(key), "d_nm_%d", i);
-    prefs.putString(key, config.dis[i].name);
+    putStr(key, config.dis[i].name);
 
     snprintf(key, sizeof(key), "d_tr_%d", i);
-    prefs.putUChar(key, config.dis[i].target_relay);
+    putU8(key, config.dis[i].target_relay);
 
     snprintf(key, sizeof(key), "d_md_%d", i);
-    prefs.putUChar(key, config.dis[i].mode);
+    putU8(key, config.dis[i].mode);
   }
+
+  // "cfg_init" EN SON yazılır: yazma yarıda kalırsa (elektrik kesintisi) bir sonraki açılış
+  // varsayılanlarla yeniden başlar, yarım yapılandırma "geçerli" sayılmaz.
+  putBoolIfChanged("cfg_init", true);
+
+  _generation = _generation + 1;
+  return ok;
 }
 
+// NVS'teki uygulama anahtarlarını siler. Kimlik/provizyon anahtarları (mq_*, lk, ap_pw) KORUNUR.
+bool ConfigManager::eraseAppKeys() {
+  bool ok = true;
+  auto rm = [&](const char* key) {
+    if (prefs.isKey(key) && !prefs.remove(key)) {
+      ok = false;
+      printf("[CONFIG] HATA: '%s' silinemedi.\r\n", key);
+    }
+  };
+
+  rm("cfg_init");
+  rm("dev_name");
+  rm("sta_ssid");
+  rm("sta_pass");
+  rm("sta_en");
+  rm("rs_baud");
+  // Ek modül anahtarları (eskiden sıfırlamada NVS'te kalıp hayalet yapılandırma doğuruyordu)
+  rm("ext_en");
+  rm("ext_ch");
+  rm("ext_addr");
+
+  for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "r_nm_%d", i);  rm(key);
+    snprintf(key, sizeof(key), "r_tp_%d", i);  rm(key);
+    snprintf(key, sizeof(key), "r_rt_%d", i);  rm(key);
+  }
+  for (int i = 0; i < MAX_TOTAL_DIS; i++) {
+    char key[16];
+    snprintf(key, sizeof(key), "d_nm_%d", i);  rm(key);
+    snprintf(key, sizeof(key), "d_tr_%d", i);  rm(key);
+    snprintf(key, sizeof(key), "d_md_%d", i);  rm(key);
+  }
+  return ok;
+}
+
+static bool clearNamespace(const char* ns) {
+  Preferences p;
+  if (!p.begin(ns, false)) return true;   // ad alanı yoksa silinecek bir şey yok
+  bool r = p.clear();
+  p.end();
+  return r;
+}
+
+bool ConfigManager::resetToDefaults() {
+  ConfigLock lk(*this);
+
+  // Kimlik/provizyon alanlarını koru
+  char keepLocalKey[sizeof(config.local_key)];
+  char keepApPass[sizeof(config.ap_pass)];
+  char keepMqttServer[sizeof(config.mqtt_server)];
+  char keepMqttUser[sizeof(config.mqtt_user)];
+  char keepMqttPass[sizeof(config.mqtt_pass)];
+  uint16_t keepMqttPort = config.mqtt_port;
+  bool keepMqttEnabled = config.mqtt_enabled;
+  memcpy(keepLocalKey, config.local_key, sizeof(keepLocalKey));
+  memcpy(keepApPass, config.ap_pass, sizeof(keepApPass));
+  memcpy(keepMqttServer, config.mqtt_server, sizeof(keepMqttServer));
+  memcpy(keepMqttUser, config.mqtt_user, sizeof(keepMqttUser));
+  memcpy(keepMqttPass, config.mqtt_pass, sizeof(keepMqttPass));
+
+  applyDefaults();
+
+  memcpy(config.local_key, keepLocalKey, sizeof(keepLocalKey));
+  memcpy(config.ap_pass, keepApPass, sizeof(keepApPass));
+  memcpy(config.mqtt_server, keepMqttServer, sizeof(keepMqttServer));
+  memcpy(config.mqtt_user, keepMqttUser, sizeof(keepMqttUser));
+  memcpy(config.mqtt_pass, keepMqttPass, sizeof(keepMqttPass));
+  config.mqtt_port = keepMqttPort;
+  config.mqtt_enabled = keepMqttEnabled;
+  config.validate();
+
+  if (!_prefsOk) return false;
+
+  bool ok = eraseAppKeys();
+  if (!clearNamespace(NVS_NS_AUTO)) ok = false;   // çocuk kilidi
+  if (!clearNamespace(NVS_NS_POS)) ok = false;    // panjur konumları
+  if (!save()) ok = false;
+  _resetCount = _resetCount + 1;                  // SmartAutomation RAM'deki çocuk kilidini de sıfırlar
+  return ok;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Kimlik/provizyon yardımcıları
+// ---------------------------------------------------------------------------------------------
+// RAM + NVS BİRLİKTE değişir ya da hiçbiri: kalıcılaştırma başarısızsa RAM'deki eski değer geri yüklenir (aksi halde
+// cihaz yeniden başlayana dek "yeni anahtarla provizyonlu" görünür, NVS'te ise eski/boş durur).
+bool ConfigManager::setLocalKey(const char* key) {
+  ConfigLock lk(*this);
+  char old[sizeof(config.local_key)];
+  memcpy(old, config.local_key, sizeof(old));
+  if (!config.setLocalKey(key)) return false;
+  const bool ok = _prefsOk && (prefs.putString("lk", config.local_key) == strlen(config.local_key));
+  if (!ok) memcpy(config.local_key, old, sizeof(old));
+  memset(old, 0, sizeof(old));
+  return ok;
+}
+
+bool ConfigManager::setApPass(const char* pass) {
+  ConfigLock lk(*this);
+  char old[sizeof(config.ap_pass)];
+  memcpy(old, config.ap_pass, sizeof(old));
+  if (!config.setApPass(pass)) return false;
+  const bool ok = _prefsOk && (prefs.putString("ap_pw", config.ap_pass) == strlen(config.ap_pass));
+  if (!ok) memcpy(config.ap_pass, old, sizeof(old));
+  memset(old, 0, sizeof(old));
+  return ok;
+}
+
+bool ConfigManager::clearLocalKey() {
+  ConfigLock lk(*this);
+  memset(config.local_key, 0, sizeof(config.local_key));
+  if (!_prefsOk) return false;
+  if (!prefs.isKey("lk")) return true;
+  return prefs.remove("lk");
+}
+
+bool ConfigManager::setMqttCredentials(const char* server, uint16_t port, const char* user, const char* pass) {
+  // Sunucu: 1..63 karakter, kontrol karakteri/boşluk yok. Kimlik: 1..47 / 1..63 yazdırılabilir ASCII.
+  if (!isAsciiRange(server, 1, sizeof(config.mqtt_server) - 1, 0x21, 0x7E)) return false;
+  if (port == 0) return false;
+  if (!isAsciiRange(user, 1, sizeof(config.mqtt_user) - 1, 0x21, 0x7E)) return false;
+  if (!isAsciiRange(pass, 1, sizeof(config.mqtt_pass) - 1, 0x20, 0x7E)) return false;
+
+  ConfigLock lk(*this);
+  copyStr(config.mqtt_server, server);
+  config.mqtt_port = port;
+  copyStr(config.mqtt_user, user);
+  copyStr(config.mqtt_pass, pass);
+  if (!_prefsOk) return false;
+
+  bool ok = true;
+  ok &= (prefs.putString("mq_srv", config.mqtt_server) == strlen(config.mqtt_server));
+  ok &= (prefs.putUShort("mq_port", config.mqtt_port) == sizeof(uint16_t));
+  ok &= (prefs.putString("mq_usr", config.mqtt_user) == strlen(config.mqtt_user));
+  ok &= (prefs.putString("mq_pwd", config.mqtt_pass) == strlen(config.mqtt_pass));
+  return ok;
+}
+
+bool ConfigManager::saveRelayRuntime(uint8_t relayIndex) {
+  if (relayIndex >= MAX_TOTAL_RELAYS) return false;
+  ConfigLock lk(*this);
+  if (!_prefsOk) return false;
+  char key[16];
+  snprintf(key, sizeof(key), "r_rt_%d", relayIndex);
+  return prefs.putUShort(key, config.relays[relayIndex].runtime_sec) == sizeof(uint16_t);
+}

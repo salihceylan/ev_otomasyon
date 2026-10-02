@@ -1,0 +1,29 @@
+{
+  "name": "ev-otomasyon-qa-stack",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Yerel QA yigini: gomulu PostgreSQL + EMQX taklidi MQTT broker + firmware simulatoru (yalnizca 127.0.0.1)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=2 \"test/*.test.js\"",
+    "up": "node run.js up",
+    "down": "node run.js down",
+    "status": "node run.js status",
+    "logs": "node run.js logs"
+  },
+  "dependencies": {
+    "acorn": "^8.18.0",
+    "aedes": "^1.2.0",
+    "aedes-server-factory": "^0.2.1",
+    "bcryptjs": "^2.4.3",
+    "embedded-postgres": "^18.4.0-beta.17",
+    "mqtt": "^5.5.2",
+    "pg": "^8.11.5",
+    "selfsigned": "^5.5.0",
+    "smtp-server": "^3.19.16"
+  }
+}

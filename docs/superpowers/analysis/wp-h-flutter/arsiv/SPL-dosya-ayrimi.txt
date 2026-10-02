@@ -1,0 +1,89 @@
+ARŞİV NOTU (2026-10-02, son cila turu): Bu dosya SPL turunun anlık dosya ayrımıdır; asıl metin DEĞİŞTİRİLMEDEN saklanır
+(aşağıdaki çizgiden sonrası olduğu gibidir). Sonradan değişenler:
+  * Bölüm (c) ve metindeki "05 / 06 yamaları": platform değişiklikleri (MainActivity bildirim kanalı, AndroidManifest meta-data,
+    ic_stat_peace.xml, iOS Info.plist UIBackgroundModes) ve .gitignore push-sır satırları kullanıcı kararıyla (Firebase yok)
+    paketten ÇIKARILDI. Eski yamaları: ../yamalar/arsiv/05-platform.patch ve 06-gitignore.patch (not: ../yamalar/arsiv/OKU-BENI.md).
+  * Güncel yama seti yalnızca 01 / 03 / 04'tür (bkz. ../yamalar/README.md). pubspec.yaml'daki fake_async satırı 03'tedir
+    (metinde "01 ile" yazan yerler eskidir).
+  * Bölüm (b) Firebase seti geçerlidir: firebase_push_gateway.dart ve testinin metinleri arsiv/lib ve arsiv/test altındadır;
+    fabrikanın ve fabrika testinin Firebase'li sürümleri arsiv/ altındaki *.firebase-surumu.txt dosyalarıdır (metinde anılan
+    SPL-factory-firebase.dart.txt ve SPL-factory-test-02.dart.txt dosyalarının karşılığı).
+  * Metinde anılan SPL-rapor.md, SPL-pubspec*.diff / .nofb ve SPL-*.log dosyaları iş akışı dizinindedir (pakette yok).
+=========================================================================================================================
+
+SPL - FIREBASE'SIZ / FIREBASE'LI DOSYA AYRIMI (INTEG -> yamalar)
+==================================================================
+Kanit: INTEG'ten turetilen gecici kopyada (pubspec'ten firebase_core/firebase_messaging satirlari silindi,
+firebase_push_gateway.dart + firebase_push_gateway_test.dart silindi) `flutter pub get`, hedefli analyze (0 sorun)
+ve `flutter test test/services test/push test/ui` (1140 test, hepsi gecti) calisti; `grep -rln "package:firebase" lib test`
+bos. Ayrintilar: SPL-rapor.md. Kopya silindi.
+
+(a) FIREBASE'SIZ SET  (01 / 03 / 04 / 05 / 06 yamalarina girer; firebase paketleri OLMADAN derlenir ve testleri gecer)
+------------------------------------------------------------------------------------------------------------------
+lib (yeni/degisen; bunlar INTEG'te zaten Firebase'siz haldedir):
+  lib/services/push/push_config.dart            saf veri (firebase importu YOK; toFirebaseOptions KALDIRILDI)
+  lib/services/push/push_gateway.dart           PushPermission, PushMessage, PushGateway, UnsupportedPushGateway
+  lib/services/push/push_gateway_factory.dart   createPushGateway(config) => const UnsupportedPushGateway()  (Firebase'siz surum)
+  lib/services/push/peace_notice.dart, push_coordinator.dart            (degismedi; Firebase'siz)
+  lib/services/peace_notice_controller.dart     createPushGateway(config) kullanir (+ madde 9: kisa kismi-sonuc iletisi)
+  (diger: push_token_api_adapter.dart, ev_cloud_api_service.dart, automation_state.dart, models, ui/widgets - bu gorevde degismedi)
+test (Firebase'siz):
+  test/push/push_gateway_test.dart              yalniz UnsupportedPushGateway + PushMessage (2 test)
+  test/push/push_config_test.dart               saf PushConfig testleri (toFirebaseOptions testi cikarildi)
+  test/push/push_gateway_factory_test.dart      YENI, 2 test (Firebase'siz surum; 02'de 2. test degisir, bkz. asagi)
+  test/push/fakes.dart, peace_notice_test.dart, push_coordinator_test.dart                 (degismedi)
+  test/services/peace_notice_controller_test.dart, test/ui/peace_notice_host_test.dart     (madde 9 guncellemeleri)
+pubspec.yaml (01 ile):
+  dev_dependencies:  fake_async: ^1.3.3 # push koordinator testleri (flutter_test bunu disa aktarmaz)
+  -> Firebase'siz sette GEREKLI: test/push/push_coordinator_test.dart ve test/services/automation_state_logout_hook_test.dart
+     fake_async import eder (Firebase'siz kopyada bu testler gecti). Satir 01'de KALIR.
+pubspec.lock (01 ile):
+  fake_async "direct dev" olarak isaretlenir; baska degisiklik yok. Referans: SPL-pubspec.lock.nofb (Firebase'siz kopyanin
+  `flutter pub get` sonrasi kilidi; INTEG kilidiyle farki yalniz asagidaki 02 paketleridir).
+
+(b) FIREBASE SETI  (02-firebase yamasi; kullanici firebase paketlerini ONAYLAYINCA)
+------------------------------------------------------------------------------------------------------------------
+pubspec.yaml (02 ile; SPL-pubspec-yaml-02.diff, +3 satir, dependencies bolumu, `local_auth` satirindan sonra):
+  # Gece hatirlatmasi push (FCM). Yapilandirma (FCM_*) yoksa Firebase hic baslatilmaz.
+  firebase_core: ^4.15.0
+  firebase_messaging: ^16.7.0
+pubspec.lock (02 ile; SPL-pubspec-lock-02.diff): _flutterfire_internals 1.3.77, firebase_core 4.15.0 (direct main),
+  firebase_core_platform_interface 8.1.1, firebase_core_web 3.12.0, firebase_messaging 16.7.0 (direct main),
+  firebase_messaging_platform_interface 4.10.0, firebase_messaging_web 4.2.5.
+lib/services/push/firebase_push_gateway.dart  (YENI; firebase_core + firebase_messaging importlari yalniz burada):
+  - extension PushConfigFirebaseOptions on PushConfig { FirebaseOptions toFirebaseOptions() }
+  - boundedDeleteToken, awaitApnsToken (@visibleForTesting yardimcilar; yalniz FirebasePushGateway kullanir)
+  - class FirebasePushGateway implements PushGateway   (push_gateway.dart'tan BIREBIR tasindi)
+lib/services/push/push_gateway_factory.dart   DEGISIR: icerik = SPL-factory-firebase.dart.txt (dosya oldugu gibi kopyalanir;
+  config == null ? const UnsupportedPushGateway() : FirebasePushGateway(config: config); Firebase'siz surumun yerine gecer,
+  imza ayni; peace_notice_controller.dart DEGISMEZ). Derleme/analyze ve fabrika testi bu surumle gecici olarak dogrulandi
+  (SPL-factory-firebase-analyze2.log: 0 sorun; SPL-factory-firebase-test2.log: 2 test gecti).
+test/push/firebase_push_gateway_test.dart     (YENI, 21 test: awaitApnsToken 5, boundedDeleteToken 4,
+  FirebasePushGateway.deleteToken 3, FirebasePushGateway desteklenme karari 8, PushConfig.toFirebaseOptions 1)
+test/push/push_gateway_factory_test.dart      DEGISIR: icerik = SPL-factory-test-02.dart.txt (ikinci test
+  `isA<FirebasePushGateway>()` olur; firebase_push_gateway.dart importu eklenir).
+  Not (kesfedilen davranis): flutter_test varsayilan platformu Android'dir; bu yuzden config'li FirebasePushGateway test
+  ortaminda initialize'dan once isSupported == true gorunur; Firebase'siz test bu yuzden "config verilse bile inert" der,
+  02 testi tur kontrolu yapar (initialize cagrilmaz, kanala dokunulmaz).
+ios/Runner/AppDelegate.swift                   FLTFirebaseMessagingPlugin.configureNotificationCenterDelegate() cagrisi
+ios/Runner/Runner-Bridging-Header.h            <firebase_messaging/FLTFirebaseMessagingPlugin.h> / @import firebase_messaging
+  -> ikisi Firebase pod'una BAGLIDIR: paket yokken (pod yok) iOS DERLEMESI KIRILIR (FLTFirebaseMessagingPlugin cozulemez).
+     Bu yuzden 01'de DEGIL, 02'de uygulanir. (Firebase'siz sette bu iki dosya HEAD hallerinde kalir.)
+
+(c) FIREBASE PAKETLERI OLMADAN ZARARSIZ OLAN PLATFORM DEGISIKLIKLERI (01/03... yamalarinda kalabilir)
+------------------------------------------------------------------------------------------------------------------
+Hepsi STATIK gerekcedir (derleme/APK calistirilmadi; Windows'ta iOS/Android derlemesi yok):
+  * ios/Runner/Info.plist  UIBackgroundModes = [remote-notification]: duz bir Info.plist anahtaridir; hicbir Firebase
+    sinifina/pod'una basvurmaz. Uygulama uzak bildirim kaydi yapmadigi (Firebase yok) surece islevsizdir; push yetkisi
+    (entitlement) yoksa iOS bu modu kullanmaz. Derlemeyi etkilemez. (Kucuk uyari: Xcode'da "Push Notifications" yetkisi
+    olmadan bu mod bilgi amacli kalir; App Store gonderiminden once 02 ile birlikte yetki/entitlement ayrica ele alinmali.)
+  * android MainActivity.kt createPeaceReminderChannel() + 'peace_reminder' kanali: saf Android API'si
+    (NotificationChannel/NotificationManager, API 26 korumali); Firebase'e hic basvurmaz. Kanal bos kalir (kimse gonderim
+    yapmaz); kullanici ayarlarda gorunen bos bir "Gece hatirlatmasi" kanali olusur - zararsiz.
+  * res/drawable/ic_stat_peace.xml: duz vektor kaynak; aapt2 compile gecti (F3). Kullanilmazsa zararsiz.
+  * AndroidManifest.xml <meta-data com.google.firebase.messaging.default_notification_icon>: yalniz bir ad/deger cifti;
+    FCM kutuphanesi yoksa kimse okumaz, manifest birlestirme/derleme hatasi vermez (kaynak @drawable/ic_stat_peace mevcut).
+    default_notification_color eklenmedi (F3 karari).
+  * .gitignore (gizli dosya desenleri), docs: Firebase paketine bagli degil.
+  * lib: PushConfig/PushGateway/UnsupportedPushGateway/koordinator/denetleyici/arayuz: Firebase importu yok (bu gorevle kanitlandi).
+  Eksiklik: 02 olmadan kanal/simge/Info.plist modu "olu" kalir; ozellik kapali oldugu icin istenen davranis budur.

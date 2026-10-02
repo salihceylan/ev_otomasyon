@@ -1,10 +1,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Bulut (REST/MQTT) ve cihaz LAN erisimi icin ACIK internet izni. Yalnizca debug/profile
+         manifestlerinde olmasi release derlemede agin tamamen calismamasina yol aciyordu. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Pano kurulum agina (internetsiz Wi-Fi) surec baglama (BoardNetworkPlugin): normal izinler, calisma zamani istegi yok. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <!-- allowBackup=false: oturum belirteclerinin/yerel verilerin bulut yedegine veya adb backup'a
+         sizmasini onler. Ag guvenlik yapilandirmasi (NSC) cleartext'i yalnizca Java/Kotlin ag yiginina (WebView vb.)
+         karsi kisitlar (usesCleartextTraffic yok; yalnizca 192.168.4.1, *.local, localhost istisna; bkz.
+         res/xml/network_security_config.xml). Flutter'in dart:io HTTP istemcisi NSC'ye TABI DEGILDIR (statik
+         kanit; cihazda dogrulanmadi): release'te pano AP'si ve LAN dogrudan mod duz HTTP ile calisir; duz HTTP'nin
+         yalnizca yerel adreslere gitmesini uygulama kodu saglar (AppConfig + isAllowedDeviceHost). Debug QA icin
+         (http://10.0.2.2) src/debug'daki yapilandirma tamamen acar. -->
     <application
         android:label="ev_otomasyon"
         android:name="${applicationName}"
+        android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round">
         <!-- Impeller yerine kararlı Skia render motoru (Qualcomm Adreno Gralloc uyumu) -->
@@ -30,6 +45,21 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Derin baglanti (Flutter yerlesik destek): sifre sifirlama / sihirli giris baglantisi ve
+                 cihaz etiketi (claim) baglantisi. Yalnizca uretim sitesi ana makinesi ve https.
+                 Uygulama baglantisi dogrulamasi icin sunucuda /.well-known/assetlinks.json yayinlanmalidir;
+                 yayinlanana kadar Android baglantiyi tarayicida / secici ile acabilir. -->
+            <meta-data android:name="flutter_deeplinking_enabled" android:value="true" />
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="evotomasyon.gudeteknoloji.com.tr" />
+                <data android:pathPrefix="/reset-password" />
+                <data android:pathPrefix="/magic-login" />
+                <data android:pathPrefix="/claim" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

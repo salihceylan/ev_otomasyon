@@ -1,119 +1,228 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
+
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/pages/auth/login_page.dart';
 import 'package:ev_otomasyon/ui/pages/auth/phone_otp_dialog.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
 
+import 'support/support.dart';
+import 'ui/e2_support.dart';
+
+/// Telefon (SMS) ile şifresiz giriş: telefon doğrulama/normalizasyon, sunucudan gelen yeniden gönderim
+/// bekleme süresi, kod geçerlilik geri sayımı, kalan deneme hakkı, başarılı giriş.
+/// (Google / Apple kuralları `auth_ui_flow_test.dart` içindedir.)
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  Future<Opened<void>> open(WidgetTester tester, E2Env env) {
+    return openFromHost<void>(tester, env.state, (context) => PhoneOtpDialog.show(context));
+  }
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({'saved_app_mode': 'cloud'});
-  });
+  Future<void> sendCode(WidgetTester tester, {String phone = '0555 123 45 67'}) async {
+    await typeInto(tester, 'field_phone', phone);
+    await tapKey(tester, 'btn_otp_send');
+  }
 
-  group('ADIM 18: Sosyal & Şifresiz Giriş (Google, Apple & Telefon OTP) Tests', () {
-    testWidgets('LoginPage renders Google, Apple and Phone OTP buttons without overflow', (tester) async {
-      tester.view.physicalSize = const Size(400, 1000);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
+  group('kod isteme', () {
+    testWidgets('giriş ekranından açılır ve "İptal" ile kapanır', (tester) async {
+      final env = e2Env(authenticated: false);
+      await pumpApp(tester, state: env.state, child: const LoginPage());
 
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: LoginPage(),
-          ),
-        ),
-      );
-
-      await tester.pump(const Duration(milliseconds: 100));
-
-      // Sosyal & Şifresiz butonları bul
-      expect(find.text('Google ile Devam Et'), findsOneWidget);
-      expect(find.text('Apple ile Giriş Yap'), findsOneWidget);
-      expect(find.text('Telefon Numarası ile Şifresiz Giriş (SMS)'), findsOneWidget);
-      expect(find.text('Yetkili Servis Girişi (PIN)'), findsOneWidget);
-      expect(find.text('Yerel Ağ Modu (ESP32 Doğrudan Erişim)'), findsOneWidget);
-
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('PhoneOtpDialog renders phone number input and actions properly', (tester) async {
-      tester.view.physicalSize = const Size(500, 800);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: Scaffold(
-              body: PhoneOtpDialog(),
-            ),
-          ),
-        ),
-      );
-
-      await tester.pump(const Duration(milliseconds: 100));
-
-      expect(find.text('Şifresiz SMS Girişi'), findsOneWidget);
-      expect(find.text('Telefon Numarası'), findsOneWidget);
-      expect(find.text('Kod Gönder'), findsOneWidget);
-      expect(find.text('İptal'), findsOneWidget);
-
-      // Telefon numarası girme
-      final phoneField = find.byType(TextField).first;
-      await tester.enterText(phoneField, '05551234567');
-      await tester.pump();
-
-      expect(find.text('05551234567'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('Tapping Telefon Numarası ile Şifresiz Giriş opens PhoneOtpDialog', (tester) async {
-      tester.view.physicalSize = const Size(450, 1000);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: LoginPage(),
-          ),
-        ),
-      );
-
-      await tester.pump(const Duration(milliseconds: 100));
-
-      final otpButton = find.text('Telefon Numarası ile Şifresiz Giriş (SMS)');
-      expect(otpButton, findsOneWidget);
-
-      await tester.tap(otpButton);
-      await tester.pump(const Duration(milliseconds: 200));
-
+      await tapKey(tester, 'btn_phone_otp');
       expect(find.byType(PhoneOtpDialog), findsOneWidget);
       expect(find.text('Şifresiz SMS Girişi'), findsOneWidget);
 
-      // İptal butonuna basarak kapat
-      final cancelButton = find.text('İptal');
-      await tester.tap(cancelButton);
-      await tester.pump(const Duration(milliseconds: 200));
-
+      await tapKey(tester, 'btn_otp_cancel');
       expect(find.byType(PhoneOtpDialog), findsNothing);
-      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('geçersiz/boş telefon reddedilir; sunucuya istek gitmez', (tester) async {
+      final env = e2Env(authenticated: false);
+      await open(tester, env);
+
+      await tapKey(tester, 'btn_otp_send');
+      expect(find.text('Lütfen telefon numaranızı girin'), findsOneWidget);
+
+      await typeInto(tester, 'field_phone', '12345');
+      await tapKey(tester, 'btn_otp_send');
+      expect(find.textContaining('Geçerli bir telefon numarası girin'), findsOneWidget);
+      expect(env.cloud.otpPhones, isEmpty);
+    });
+
+    testWidgets('telefon alanı yalnızca telefon karakterlerine izin verir; numara ayırıcılardan arındırılarak gönderilir', (tester) async {
+      final env = e2Env(authenticated: false);
+      await open(tester, env);
+
+      await typeInto(tester, 'field_phone', 'tel: 0555-123 (45) 67');
+      expect(tester.widget<TextField>(find.byKey(const Key('field_phone'))).controller!.text, ' 0555-123 (45) 67');
+      await tapKey(tester, 'btn_otp_send');
+
+      expect(env.cloud.otpPhones, <String>['05551234567']);
+    });
+
+    testWidgets('kod gönderilince telefon kilitlenir, kod alanı gelir ve sunucunun iletisi gösterilir', (tester) async {
+      final env = e2Env(authenticated: false);
+      await open(tester, env);
+
+      await sendCode(tester);
+
+      expect(find.byKey(const Key('field_code')), findsOneWidget);
+      expect(tester.widget<TextField>(find.byKey(const Key('field_phone'))).enabled, isFalse);
+      expect(textOf(tester, 'otp_info'), contains('Doğrulama kodu gönderildi.'));
+      expect(textOf(tester, 'otp_info'), contains('05551234567'));
+    });
+
+    testWidgets('çift dokunuşta yalnızca BİR SMS isteği gider', (tester) async {
+      final env = e2Env(authenticated: false);
+      final gate = Completer<void>();
+      env.cloud.otpSendGate = gate;
+      await open(tester, env);
+      await typeInto(tester, 'field_phone', '05551234567');
+
+      await tester.tap(find.byKey(const Key('btn_otp_send')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('btn_otp_send')), warnIfMissed: false);
+      await tester.pump();
+
+      expect(env.cloud.otpPhones, hasLength(1));
+      gate.complete();
+      await settle(tester);
+    });
+  });
+
+  group('yeniden gönderim bekleme süresi (`resend_after`) ve geçerlilik süresi', () {
+    testWidgets('süre dolmadan "Tekrar Kod İste" kapalıdır; sunucunun 45 sn değeri geri sayılır; dolunca yeniden gönderilebilir', (tester) async {
+      final env = e2Env(authenticated: false);
+      await open(tester, env);
+      await sendCode(tester);
+
+      expect(find.text('Tekrar Kod İste (0:45)'), findsOneWidget);
+      expect(tester.widget<TextButton>(find.byKey(const Key('btn_resend_code'))).onPressed, isNull);
+
+      env.clock.advance(const Duration(seconds: 20));
+      await tester.pump();
+      expect(find.text('Tekrar Kod İste (0:25)'), findsOneWidget);
+
+      env.clock.advance(const Duration(seconds: 26));
+      await tester.pump();
+      expect(find.text('Tekrar Kod İste'), findsOneWidget);
+
+      await tapKey(tester, 'btn_resend_code');
+      expect(env.cloud.otpPhones, hasLength(2), reason: 'süre dolduktan sonra yeni kod istendi');
+      expect(find.byKey(const Key('field_code')), findsOneWidget);
+    });
+
+    testWidgets('kodun geçerlilik süresi geri sayılır; dolunca kırmızı uyarı verilir', (tester) async {
+      final env = e2Env(authenticated: false);
+      await open(tester, env);
+      await sendCode(tester);
+      expect(textOf(tester, 'otp_expiry'), 'Kod süresi: 5:00');
+
+      env.clock.advance(const Duration(minutes: 5, seconds: 1));
+      await tester.pump();
+      expect(textOf(tester, 'otp_expiry'), 'Kodun süresi doldu');
+    });
+
+    testWidgets('429: sunucunun bekleme süresi (resend_after) gösterilir ve kod gönder kapanır', (tester) async {
+      final env = e2Env(authenticated: false);
+      env.cloud.otpSendError = apiError(429, 'Çok fazla SMS isteği.', code: 'RATE_LIMITED', resendAfter: const Duration(seconds: 120));
+      await open(tester, env);
+
+      await sendCode(tester);
+
+      expect(textOf(tester, 'otp_error'), 'Çok fazla SMS isteği.');
+      expect(tester.widget<ElevatedButton>(find.byKey(const Key('btn_otp_send'))).onPressed, isNull);
+
+      env.clock.advance(const Duration(seconds: 121));
+      await tester.pump();
+      expect(tester.widget<ElevatedButton>(find.byKey(const Key('btn_otp_send'))).onPressed, isNotNull);
+    });
+
+    testWidgets('SMS gönderilemedi (503) açık mesajla gösterilir', (tester) async {
+      final env = e2Env(authenticated: false);
+      env.cloud.otpSendError = apiError(503, 'SMS gönderilemedi.', code: 'DELIVERY_FAILED');
+      await open(tester, env);
+
+      await sendCode(tester);
+
+      expect(textOf(tester, 'otp_error'), 'SMS gönderilemedi.');
+      expect(find.byKey(const Key('field_code')), findsNothing);
+    });
+  });
+
+  group('kod doğrulama', () {
+    Future<E2Env> atCodeStep(WidgetTester tester) async {
+      final env = e2Env(authenticated: false);
+      await open(tester, env);
+      await sendCode(tester);
+      return env;
+    }
+
+    testWidgets('kod yalnızca rakamdır ve 6 haneyle sınırlıdır; eksik kod gönderilmez', (tester) async {
+      final env = await atCodeStep(tester);
+      await typeInto(tester, 'field_code', '12a-45');
+      expect(tester.widget<TextField>(find.byKey(const Key('field_code'))).controller!.text, '1245');
+
+      await tapKey(tester, 'btn_otp_verify');
+      expect(textOf(tester, 'otp_error'), 'Kod tam 6 rakam olmalıdır');
+      expect(env.cloud.calls.contains('verifyPhoneOtp'), isFalse);
+    });
+
+    testWidgets('doğru kodla oturum açılır ve diyalog kapanır', (tester) async {
+      final env = await atCodeStep(tester);
+
+      await typeInto(tester, 'field_code', '123456');
+      await tapKey(tester, 'btn_otp_verify');
+      await settle(tester);
+
+      expect(env.state.authStatus, AuthStatus.authenticated);
+      expect(find.byType(PhoneOtpDialog), findsNothing);
+    });
+
+    testWidgets('hatalı kodda KALAN DENEME HAKKI gösterilir; diyalog açık kalır', (tester) async {
+      final env = await atCodeStep(tester);
+      env.cloud.otpVerifyError = apiError(401, 'Doğrulama kodu hatalı.', code: 'INVALID_CREDENTIALS', remaining: 2);
+
+      await typeInto(tester, 'field_code', '000000');
+      await tapKey(tester, 'btn_otp_verify');
+
+      expect(textOf(tester, 'otp_error'), 'Doğrulama kodu hatalı. Kalan deneme: 2.');
+      expect(textOf(tester, 'otp_remaining_attempts'), 'Kalan deneme hakkı: 2');
+      expect(find.byType(PhoneOtpDialog), findsOneWidget);
+      expect(env.state.authStatus, isNot(AuthStatus.authenticated));
+    });
+
+    testWidgets('deneme hakkı bitince (429) bekleme süresi gösterilir ve yeni kod isteği o süre kapanır', (tester) async {
+      final env = await atCodeStep(tester);
+      env.clock.advance(const Duration(seconds: 46)); // ilk bekleme bitti
+      await tester.pump();
+      env.cloud.otpVerifyError = apiError(429, 'Çok fazla deneme.', code: 'RATE_LIMITED', retryAfter: const Duration(minutes: 10));
+
+      await typeInto(tester, 'field_code', '000000');
+      await tapKey(tester, 'btn_otp_verify');
+
+      expect(textOf(tester, 'otp_error'), contains('10:00 sonra yeni kod isteyin'));
+      expect(tester.widget<TextButton>(find.byKey(const Key('btn_resend_code'))).onPressed, isNull);
+    });
+
+    testWidgets('süresi dolmuş kod (410) açık mesajla gösterilir', (tester) async {
+      final env = await atCodeStep(tester);
+      env.cloud.otpVerifyError = apiError(410, 'Süre doldu.', code: 'GONE');
+
+      await typeInto(tester, 'field_code', '123456');
+      await tapKey(tester, 'btn_otp_verify');
+
+      expect(textOf(tester, 'otp_error'), 'Kodun süresi dolmuş. Yeni bir kod isteyin.');
+    });
+
+    testWidgets('ham istisna metni gösterilmez', (tester) async {
+      final env = await atCodeStep(tester);
+      env.cloud.otpVerifyError = StateError('NullPointer at com.ahbu.Sms');
+
+      await typeInto(tester, 'field_code', '123456');
+      await tapKey(tester, 'btn_otp_verify');
+
+      expect(find.textContaining('NullPointer'), findsNothing);
+      expect(textOf(tester, 'otp_error'), 'Doğrulama tamamlanamadı. Lütfen tekrar deneyin.');
     });
   });
 }
-

@@ -55,10 +55,13 @@ void PCF85063_Init(void)      // PCF85063 initialized
   // );
 }
 
+// RTC okuması 1 Hz'dir (saniye çözünürlüğü yeter) ve I2C hattını TCA9554 röle sürücüsüyle paylaşır:
+// her okuma I2C_Read() içinde özyinelemeli I2C kilidi altındadır (I2C_Driver.cpp). 100 ms'de bir okumak
+// röle yazımlarıyla gereksiz hat çekişmesi yaratıyordu.
 void PCF85063Task(void *parameter) {
   while(1){
     PCF85063_Read_Time(&datetime);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
   vTaskDelete(NULL);
 }
@@ -146,9 +149,9 @@ void PCF85063_Set_Alarm(datetime_t time) // Set Alarm
 {
 
 	uint8_t buf[5] ={
-		decToBcd(time.second)&(~RTC_ALARM),
-		decToBcd(time.minute)&(~RTC_ALARM),
-		decToBcd(time.hour)&(~RTC_ALARM),
+		(uint8_t)(decToBcd(time.second)&(~RTC_ALARM)),
+		(uint8_t)(decToBcd(time.minute)&(~RTC_ALARM)),
+		(uint8_t)(decToBcd(time.hour)&(~RTC_ALARM)),
 		//decToBcd(time.day)&(~RTC_ALARM),
 		//decToBcd(time.dotw)&(~RTC_ALARM)
 		RTC_ALARM, 	//disalbe day

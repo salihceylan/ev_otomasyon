@@ -1,11 +1,38 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../../models/scheduled_rule_model.dart';
 import '../../services/automation_state.dart';
+import '../common/confirm_dialogs.dart';
+import '../dashboard/dashboard_states.dart';
 import '../theme/app_theme.dart';
+import '../widgets/rules/rule_dialog.dart';
+import '../widgets/rules/rule_logic.dart';
 
-/// Zamanlı Otomasyon Kuralları Sayfası
-/// Daire admini kanallara saat bazlı otomatik açma/kapama kuralları tanımlar.
+typedef _RulesVm = ({
+  String signature,
+  bool loading,
+  String? error,
+  bool canManage,
+  bool cloud,
+  String timezone,
+});
+
+/// Zamanlı Otomasyon Kuralları sayfası.
+///
+/// * Kural **yüklenemedi** ile **kural yok** ayrıdır (`scheduledRulesError`): hata durumunda
+///   "Yüklenemedi, tekrar dene" gösterilir; yalnızca başarılı boş yanıtta "Henüz kural yok".
+/// * Ekleme/düzenleme/silme `canManageRules` yetkisine bağlıdır (kapı `Capabilities`'ten).
+/// * Evin saat dilimi (`home.timezone`) gösterilir; kurallar o dilimde çalışır.
+/// * Kayıt sonrası liste yeniden yüklenemezse başarı iddia edilmez.
+/// * Hatalar `friendlyError` ile gösterilir.
+///
+/// Anahtarlar: `Key('btn_add_rule')`, `Key('nav_refresh')`, `Key('card_rule_<kimlik>')`,
+/// `Key('switch_rule_<kimlik>')`, `Key('menu_rule_<kimlik>')`, `Key('btn_rule_edit_<kimlik>')`,
+/// `Key('btn_rule_delete_<kimlik>')`, `Key('text_rules_timezone')`, `Key('view_rules_empty')`,
+/// `Key('banner_rules_stale')`.
 class ScheduledRulesPage extends StatefulWidget {
   const ScheduledRulesPage({super.key});
 
@@ -14,21 +41,163 @@ class ScheduledRulesPage extends StatefulWidget {
 }
 
 class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
+  bool _loadedOnce = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AutomationState>().fetchScheduledRules();
+      if (mounted) unawaited(_load());
     });
+  }
+
+  Future<void> _load() async {
+    final state = context.read<AutomationState>();
+    await state.fetchScheduledRules();
+    if (mounted) setState(() => _loadedOnce = true);
+  }
+
+  static String _signature(List<ScheduledRule> rules) => rules
+      .map((r) => '${r.id}|${r.enabled}|${r.action}|${r.hour}:${r.minute}|${r.daysOfWeek.join()}|${r.label}')
+      .join(';');
+
+  void _snack(String message, {SnackBarAction? action, bool warning = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: warning ? AppTheme.accentAmber : null,
+          action: action,
+          duration: Duration(seconds: action == null ? 3 : 8),
+        ),
+      );
+  }
+
+  Future<void> _openDialog({ScheduledRule? existing}) async {
+    final outcome = await showRuleDialog(context, existing: existing);
+    if (!mounted || outcome == null) return;
+    switch (outcome) {
+      case RuleSaveOutcome.saved:
+        _snack(existing == null ? 'Kural eklendi' : 'Kural güncellendi');
+      case RuleSaveOutcome.savedButListStale:
+        _snack(
+          'Kural kaydedildi ancak liste yenilenemedi. Güncel durumu görmek için yenileyin.',
+          warning: true,
+          action: SnackBarAction(label: 'Yenile', onPressed: () => unawaited(_load())),
+        );
+    }
+  }
+
+  Future<void> _toggle(ScheduledRule rule, bool enabled) async {
+    final state = context.read<AutomationState>();
+    try {
+      await state.updateScheduledRule(rule.id, <String, dynamic>{'enabled': enabled});
+    } catch (e) {
+      if (mounted) showFriendlyError(context, e, fallback: 'Kural güncellenemedi. Lütfen tekrar deneyin.');
+      return;
+    }
+    if (state.scheduledRulesError != null) {
+      _snack(
+        'Değişiklik gönderildi ancak liste yenilenemedi. Güncel durumu görmek için yenileyin.',
+        warning: true,
+        action: SnackBarAction(label: 'Yenile', onPressed: () => unawaited(_load())),
+      );
+    }
+  }
+
+  Future<void> _confirmDelete(ScheduledRule rule, String name) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const Key('dialog_delete_rule'),
+        title: const Text('Kural silinsin mi?'),
+        content: Text('$name → ${rule.actionLabel} (${rule.timeString}) kuralı silinecek.'),
+        actions: [
+          TextButton(
+            key: const Key('btn_cancel_delete_rule'),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('İptal'),
+          ),
+          TextButton(
+            key: const Key('btn_confirm_delete_rule'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.dangerText(ctx)),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final state = context.read<AutomationState>();
+    try {
+      await state.deleteScheduledRule(rule.id);
+      _snack('Kural silindi');
+    } catch (e) {
+      if (mounted) showFriendlyError(context, e, fallback: 'Kural silinemedi. Lütfen tekrar deneyin.');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final isAdmin = !state.isMember && !state.isGuest;
+    final vm = context.select<AutomationState, _RulesVm>(
+      (s) => (
+        signature: _signature(s.scheduledRules),
+        loading: s.scheduledRulesLoading,
+        error: s.scheduledRulesError,
+        canManage: s.capabilities.canManageRules,
+        cloud: s.mode == AppMode.cloud,
+        timezone: s.activeHome?.timezone ?? '',
+      ),
+    );
+    final state = context.read<AutomationState>();
+    final rules = state.scheduledRules;
+    final options = ruleChannelOptions(state.cloudEndpoints);
+
+    Widget body;
+    if (!vm.cloud) {
+      body = const InfoCard(
+        cardKey: Key('view_rules_cloud_only'),
+        icon: Icons.cloud_off_outlined,
+        title: 'Bulut modu gerekir',
+        message: 'Zamanlı kurallar sunucuda çalışır. Kuralları yönetmek için bulut moduna geçin.',
+      );
+    } else if ((!_loadedOnce || vm.loading) && rules.isEmpty && vm.error == null) {
+      body = TimedLoadingView(
+        message: 'Kurallar yükleniyor…',
+        onRetry: () => unawaited(_load()),
+      );
+    } else if (vm.error != null && rules.isEmpty) {
+      body = ErrorRetryCard(
+        title: 'Kurallar yüklenemedi',
+        message: vm.error!,
+        onRetry: () => unawaited(_load()),
+      );
+    } else if (rules.isEmpty) {
+      body = _EmptyRules(canManage: vm.canManage, onAdd: () => unawaited(_openDialog()));
+    } else {
+      body = Column(
+        children: [
+          if (vm.error != null) _StaleBanner(message: vm.error!, onRetry: () => unawaited(_load())),
+          for (final rule in rules)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _RuleCard(
+                rule: rule,
+                name: ruleChannelName(rule, options),
+                canManage: vm.canManage,
+                onToggle: (value) => unawaited(_toggle(rule, value)),
+                onEdit: () => unawaited(_openDialog(existing: rule)),
+                onDelete: () => unawaited(_confirmDelete(rule, ruleChannelName(rule, options))),
+              ),
+            ),
+        ],
+      );
+    }
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
       appBar: AppBar(
         title: Row(
           children: [
@@ -39,6 +208,7 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
                 width: 28,
                 height: 28,
                 fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const Icon(Icons.schedule, size: 24),
               ),
             ),
             const SizedBox(width: 10),
@@ -46,624 +216,323 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
               child: Text(
                 'Zamanlı Kurallar',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
         ),
         actions: [
-          if (isAdmin)
+          if (vm.canManage && vm.cloud)
             IconButton(
+              key: const Key('btn_add_rule'),
               icon: const Icon(Icons.add_circle_outline),
               tooltip: 'Yeni Kural Ekle',
-              onPressed: () => _showAddRuleDialog(context, state),
+              onPressed: () => unawaited(_openDialog()),
             ),
           IconButton(
+            key: const Key('nav_refresh'),
             icon: const Icon(Icons.refresh),
             tooltip: 'Yenile',
-            onPressed: () => state.fetchScheduledRules(),
+            onPressed: () => unawaited(_load()),
           ),
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: state.fetchScheduledRules,
+        onRefresh: _load,
         color: AppTheme.primaryBlue,
-        child: _buildBody(context, state, isAdmin),
-      ),
-    );
-  }
-
-  Widget _buildBody(BuildContext context, AutomationState state, bool isAdmin) {
-    if (state.scheduledRulesLoading && state.scheduledRules.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    if (state.scheduledRules.isEmpty) {
-      return ListView(
-        children: [
-          SizedBox(height: MediaQuery.of(context).size.height * 0.25),
-          Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.schedule, size: 64, color: AppTheme.textMuted.withValues(alpha: 0.4)),
-                const SizedBox(height: 16),
-                Text(
-                  'Henüz zamanlı kural yok',
-                  style: TextStyle(fontSize: 16, color: AppTheme.textMuted),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  isAdmin
-                      ? 'Sağ üstteki + butonuyla kural ekleyebilirsiniz.'
-                      : 'Yönetici henüz kural tanımlamamış.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 13, color: AppTheme.textMuted.withValues(alpha: 0.7)),
-                ),
-                if (isAdmin) ...[
-                  const SizedBox(height: 20),
-                  ElevatedButton.icon(
-                    onPressed: () => _showAddRuleDialog(context, state),
-                    icon: const Icon(Icons.add),
-                    label: const Text('İlk Kuralı Ekle'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.primaryBlue,
-                      foregroundColor: Colors.white,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      );
-    }
-
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: state.scheduledRules.length,
-      separatorBuilder: (context, index) => const SizedBox(height: 10),
-      itemBuilder: (ctx, i) => _buildRuleCard(ctx, state, state.scheduledRules[i], isAdmin),
-    );
-  }
-
-  Widget _buildRuleCard(BuildContext context, AutomationState state, ScheduledRule rule, bool isAdmin) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: rule.enabled
-              ? rule.actionColor.withValues(alpha: 0.4)
-              : AppTheme.getCardBorder(context),
-        ),
-        boxShadow: rule.enabled
-            ? [
-                BoxShadow(
-                  color: rule.actionColor.withValues(alpha: 0.08),
-                  blurRadius: 10,
-                  spreadRadius: 1,
-                ),
-              ]
-            : null,
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: rule.enabled
-                ? rule.actionColor.withValues(alpha: 0.15)
-                : AppTheme.getCardBorder(context).withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(
-            rule.actionIcon,
-            color: rule.enabled ? rule.actionColor : AppTheme.textMuted,
-            size: 22,
-          ),
-        ),
-        title: Row(
+        child: ListView(
+          key: const Key('view_rules'),
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(16),
           children: [
-            Flexible(
-              child: Text(
-                rule.channelLabel,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15,
-                  color: AppTheme.getTextPrimary(context),
-                ),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: rule.actionColor.withValues(alpha: rule.enabled ? 0.2 : 0.08),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                rule.actionLabel,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: rule.enabled ? rule.actionColor : AppTheme.textMuted,
-                ),
-              ),
-            ),
-          ],
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Row(
-            children: [
-              Icon(Icons.access_time, size: 13, color: AppTheme.getTextMuted(context)),
-              const SizedBox(width: 4),
-              Text(
-                rule.timeString,
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: rule.enabled ? AppTheme.primaryBlueLight : AppTheme.textMuted,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Flexible(
-                child: Text(
-                  rule.daysShortString,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppTheme.getTextMuted(context),
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Switch(
-              value: rule.enabled,
-              onChanged: isAdmin
-                  ? (val) async {
-                      try {
-                        await state.updateScheduledRule(rule.id, {'enabled': val});
-                      } catch (e) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Hata: $e'), backgroundColor: Colors.red),
-                          );
-                        }
-                      }
-                    }
-                  : null,
-              activeThumbColor: rule.actionColor,
-            ),
-            if (isAdmin)
-              PopupMenuButton<String>(
-                icon: const Icon(Icons.more_vert, size: 18),
-                onSelected: (val) async {
-                  if (val == 'edit') {
-                    _showEditRuleDialog(context, state, rule);
-                  } else if (val == 'delete') {
-                    _confirmDelete(context, state, rule);
-                  }
-                },
-                itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'edit', child: Row(children: [Icon(Icons.edit, size: 16), SizedBox(width: 8), Text('Düzenle')])),
-                  const PopupMenuItem(value: 'delete', child: Row(children: [Icon(Icons.delete_outline, size: 16, color: Colors.red), SizedBox(width: 8), Text('Sil', style: TextStyle(color: Colors.red))])),
-                ],
-              ),
+            if (vm.cloud) _TimezoneNote(timezone: vm.timezone),
+            body,
           ],
         ),
       ),
     );
   }
-
-  void _confirmDelete(BuildContext context, AutomationState state, ScheduledRule rule) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.getCardColor(context),
-        title: const Text('Kural Silinsin mi?'),
-        content: Text('${rule.channelLabel} → ${rule.actionLabel} (${rule.timeString}) kuralı silinecek.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('İptal')),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(ctx);
-              try {
-                await state.deleteScheduledRule(rule.id);
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Kural silindi'), backgroundColor: Colors.green),
-                  );
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Silinemedi: $e'), backgroundColor: Colors.red),
-                  );
-                }
-              }
-            },
-            child: const Text('Sil', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAddRuleDialog(BuildContext context, AutomationState state) {
-    _showRuleDialog(context, state, null);
-  }
-
-  void _showEditRuleDialog(BuildContext context, AutomationState state, ScheduledRule rule) {
-    _showRuleDialog(context, state, rule);
-  }
-
-  void _showRuleDialog(BuildContext context, AutomationState state, ScheduledRule? existing) {
-    showDialog(
-      context: context,
-      builder: (ctx) => _RuleDialog(state: state, existing: existing),
-    );
-  }
 }
 
-/// Kural Ekleme / Düzenleme Diyalogu
-class _RuleDialog extends StatefulWidget {
-  final AutomationState state;
-  final ScheduledRule? existing;
+class _TimezoneNote extends StatelessWidget {
+  const _TimezoneNote({required this.timezone});
 
-  const _RuleDialog({required this.state, this.existing});
-
-  @override
-  State<_RuleDialog> createState() => _RuleDialogState();
-}
-
-class _RuleDialogState extends State<_RuleDialog> {
-  late int _channel;
-  late String _channelType;
-  late String _action;
-  late TimeOfDay _time;
-  late List<int> _daysOfWeek;
-  late TextEditingController _labelCtrl;
-  bool _saving = false;
-
-  final List<_ChannelOption> _channelOptions = [
-    _ChannelOption(channel: 0, type: 'relay', label: 'Röle 1 (Işık/Prizmat)'),
-    _ChannelOption(channel: 1, type: 'relay', label: 'Röle 2'),
-    _ChannelOption(channel: 2, type: 'relay', label: 'Röle 3'),
-    _ChannelOption(channel: 3, type: 'relay', label: 'Röle 4'),
-    _ChannelOption(channel: 0, type: 'shutter', label: 'Panjur 1'),
-    _ChannelOption(channel: 1, type: 'shutter', label: 'Panjur 2'),
-    _ChannelOption(channel: 2, type: 'shutter', label: 'Panjur 3'),
-    _ChannelOption(channel: 3, type: 'shutter', label: 'Panjur 4'),
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    final e = widget.existing;
-    _channel = e?.channel ?? 0;
-    _channelType = e?.channelType ?? 'relay';
-    _action = e?.action ?? 'off';
-    _time = e != null ? TimeOfDay(hour: e.hour, minute: e.minute) : TimeOfDay.now();
-    _daysOfWeek = e?.daysOfWeek.toList() ?? [0, 1, 2, 3, 4, 5, 6];
-    _labelCtrl = TextEditingController(text: e?.label ?? '');
-  }
-
-  @override
-  void dispose() {
-    _labelCtrl.dispose();
-    super.dispose();
-  }
-
-  String get _currentChannelLabel {
-    final opt = _channelOptions.firstWhere(
-      (o) => o.channel == _channel && o.type == _channelType,
-      orElse: () => _ChannelOption(channel: _channel, type: _channelType, label: '$_channelType $_channel'),
-    );
-    return opt.label;
-  }
-
-  List<String> get _availableActions {
-    return _channelType == 'shutter' ? ['open', 'close'] : ['on', 'off'];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isEdit = widget.existing != null;
-
-    return AlertDialog(
-      backgroundColor: AppTheme.getCardColor(context),
-      title: Text(isEdit ? 'Kural Düzenle' : 'Yeni Kural Ekle'),
-      contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Kanal seçimi (sadece yeni kural için değiştirilebilir)
-              _SectionLabel('Kanal'),
-              if (!isEdit)
-                DropdownButtonFormField<String>(
-                  initialValue: '${_channelType}_$_channel',
-                  dropdownColor: AppTheme.getCardColor(context),
-                  decoration: _inputDec(),
-                  items: _channelOptions.map((o) => DropdownMenuItem(
-                    value: '${o.type}_${o.channel}',
-                    child: Text(o.label),
-                  )).toList(),
-                  onChanged: (val) {
-                    if (val == null) return;
-                    final parts = val.split('_');
-                    setState(() {
-                      _channelType = parts[0];
-                      _channel = int.parse(parts[1]);
-                      // Eylemi sıfırla
-                      _action = _channelType == 'shutter' ? 'close' : 'off';
-                    });
-                  },
-                )
-              else
-                Text(_currentChannelLabel,
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryBlueLight)),
-
-              const SizedBox(height: 12),
-
-              // Eylem
-              _SectionLabel('Eylem'),
-              Row(
-                children: _availableActions.map((a) {
-                  final label = _actionLabel(a);
-                  final color = _actionColor(a);
-                  final selected = _action == a;
-                  return Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: GestureDetector(
-                        onTap: () => setState(() => _action = a),
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: selected ? color.withValues(alpha: 0.2) : Colors.transparent,
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(color: selected ? color : AppTheme.getCardBorder(context)),
-                          ),
-                          child: Center(
-                            child: Text(
-                              label,
-                              style: TextStyle(
-                                color: selected ? color : AppTheme.getTextMuted(context),
-                                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-
-              const SizedBox(height: 12),
-
-              // Saat
-              _SectionLabel('Saat'),
-              InkWell(
-                onTap: () async {
-                  final picked = await showTimePicker(context: context, initialTime: _time);
-                  if (picked != null) setState(() => _time = picked);
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.5)),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.access_time, color: AppTheme.primaryBlue, size: 20),
-                      const SizedBox(width: 10),
-                      Text(
-                        '${_time.hour.toString().padLeft(2, '0')}:${_time.minute.toString().padLeft(2, '0')}',
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.primaryBlueLight,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text('değiştir', style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-                    ],
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 12),
-
-              // Günler
-              _SectionLabel('Günler'),
-              Wrap(
-                spacing: 6,
-                children: List.generate(7, (i) {
-                  final selected = _daysOfWeek.contains(i);
-                  const dayShort = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        if (selected) {
-                          if (_daysOfWeek.length > 1) _daysOfWeek.remove(i);
-                        } else {
-                          _daysOfWeek.add(i);
-                          _daysOfWeek.sort();
-                        }
-                      });
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      width: 40,
-                      height: 40,
-                      margin: const EdgeInsets.only(bottom: 6),
-                      decoration: BoxDecoration(
-                        color: selected ? AppTheme.primaryBlue.withValues(alpha: 0.25) : Colors.transparent,
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: selected ? AppTheme.primaryBlue : AppTheme.getCardBorder(context),
-                        ),
-                      ),
-                      child: Center(
-                        child: Text(
-                          dayShort[i],
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: selected ? AppTheme.primaryBlueLight : AppTheme.getTextMuted(context),
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-
-              const SizedBox(height: 12),
-
-              // İsteğe bağlı etiket
-              _SectionLabel('Etiket (opsiyonel)'),
-              TextField(
-                controller: _labelCtrl,
-                decoration: _inputDec(hint: 'ör. Salon Panjuru Gece Kapanışı'),
-                maxLength: 80,
-              ),
-            ],
-          ),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryBlue,
-            foregroundColor: Colors.white,
-          ),
-          onPressed: _saving ? null : () => _save(context),
-          child: _saving
-              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : Text(isEdit ? 'Güncelle' : 'Ekle'),
-        ),
-      ],
-    );
-  }
-
-  InputDecoration _inputDec({String? hint}) => InputDecoration(
-    hintText: hint,
-    isDense: true,
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-    counterText: '',
-    filled: true,
-    fillColor: AppTheme.bgDark.withValues(alpha: 0.3),
-  );
-
-  String _actionLabel(String a) {
-    switch (a) {
-      case 'on': return 'Aç';
-      case 'off': return 'Kapat';
-      case 'open': return 'Aç';
-      case 'close': return 'Kapat';
-      default: return a;
-    }
-  }
-
-  Color _actionColor(String a) {
-    switch (a) {
-      case 'on': return Colors.amber;
-      case 'off': return Colors.blueGrey;
-      case 'open': return Colors.greenAccent;
-      case 'close': return Colors.deepOrangeAccent;
-      default: return AppTheme.primaryBlue;
-    }
-  }
-
-  Future<void> _save(BuildContext context) async {
-    setState(() => _saving = true);
-    try {
-      final labelText = _labelCtrl.text.trim().isEmpty ? null : _labelCtrl.text.trim();
-
-      if (widget.existing == null) {
-        await widget.state.createScheduledRule(
-          channel: _channel,
-          channelType: _channelType,
-          action: _action,
-          hour: _time.hour,
-          minute: _time.minute,
-          daysOfWeek: _daysOfWeek,
-          label: labelText,
-        );
-      } else {
-        await widget.state.updateScheduledRule(widget.existing!.id, {
-          'action': _action,
-          'hour': _time.hour,
-          'minute': _time.minute,
-          'days_of_week': _daysOfWeek,
-          'label': labelText,
-        });
-      }
-
-      if (context.mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(widget.existing == null ? 'Kural eklendi ✓' : 'Kural güncellendi ✓'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Hata: $e'), backgroundColor: Colors.red),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-}
-
-class _ChannelOption {
-  final int channel;
-  final String type;
-  final String label;
-  const _ChannelOption({required this.channel, required this.type, required this.label});
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
+  final String timezone;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: AppTheme.getTextMuted(context),
-          letterSpacing: 0.5,
-        ),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.public, size: 16, color: AppTheme.getTextMuted(context)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Kurallar evinizin saat dilimine göre çalışır: ${homeTimezoneLabel(timezone)}',
+              key: const Key('text_rules_timezone'),
+              style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context)),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+class _StaleBanner extends StatelessWidget {
+  const _StaleBanner({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final warn = AppTheme.warningText(context);
+    return Container(
+      key: const Key('banner_rules_stale'),
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: AppTheme.cardDecoration(context, accent: AppTheme.accentAmber, radius: 12),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline, size: 18, color: warn),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Liste güncellenemedi; son bilinen kurallar gösteriliyor. $message',
+              style: TextStyle(fontSize: 12, color: warn),
+            ),
+          ),
+          TextButton(
+            key: const Key('btn_retry'),
+            style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+            onPressed: onRetry,
+            child: const Text('Tekrar dene'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyRules extends StatelessWidget {
+  const _EmptyRules({required this.canManage, required this.onAdd});
+
+  final bool canManage;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      key: const Key('view_rules_empty'),
+      padding: const EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.schedule, size: 64, color: AppTheme.getTextMuted(context).withValues(alpha: 0.5)),
+          const SizedBox(height: 16),
+          Text(
+            'Henüz zamanlı kural yok',
+            style: TextStyle(fontSize: 16, color: AppTheme.getTextMuted(context)),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            canManage
+                ? 'Sağ üstteki + düğmesiyle kural ekleyebilirsiniz.'
+                : 'Ev sahibi henüz kural tanımlamamış.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: AppTheme.getTextMuted(context)),
+          ),
+          if (canManage) ...[
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              key: const Key('btn_add_first_rule'),
+              onPressed: onAdd,
+              icon: const Icon(Icons.add),
+              label: const Text('İlk Kuralı Ekle'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                backgroundColor: AppTheme.primaryBlue,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _RuleCard extends StatelessWidget {
+  const _RuleCard({
+    required this.rule,
+    required this.name,
+    required this.canManage,
+    required this.onToggle,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final ScheduledRule rule;
+
+  /// Kanalın okunur adı (uç noktadan; yoksa "Röle N").
+  final String name;
+  final bool canManage;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = rule.actionColor;
+    final readable = AppTheme.readableAccent(context, color);
+    final title = (rule.label != null && rule.label!.isNotEmpty) ? rule.label! : name;
+    final typeName = rule.channelType == 'shutter' ? 'Panjur' : 'Röle';
+    final muted = AppTheme.getTextMuted(context);
+
+    final leading = Container(
+      width: 44,
+      height: 44,
+      decoration: BoxDecoration(
+        color: rule.enabled ? color.withValues(alpha: 0.15) : AppTheme.getInsetColor(context),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(
+        rule.actionIcon,
+        color: rule.enabled ? readable : muted,
+        size: 22,
+      ),
+    );
+
+    final texts = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 15,
+            color: AppTheme.getTextPrimary(context),
+          ),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '$typeName ${rule.channel} • ${rule.actionLabel}',
+          style: TextStyle(fontSize: 11.5, color: muted),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.access_time, size: 13, color: muted),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    rule.timeString,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: rule.enabled ? AppTheme.infoText(context) : muted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Text(rule.daysShortString, style: TextStyle(fontSize: 12, color: muted)),
+          ],
+        ),
+      ],
+    );
+
+    final actions = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Anahtarın kendi etiketi olur (ekran okuyucu "<kural> kuralı, açık/kapalı" der).
+        MergeSemantics(
+          child: Semantics(
+            label: '$title kuralı, ${rule.timeString}',
+            child: Switch(
+              key: Key('switch_rule_${rule.id}'),
+              value: rule.enabled,
+              materialTapTargetSize: MaterialTapTargetSize.padded,
+              activeThumbColor: color,
+              onChanged: canManage ? onToggle : null,
+            ),
+          ),
+        ),
+        if (canManage)
+          PopupMenuButton<String>(
+            key: Key('menu_rule_${rule.id}'),
+            tooltip: '$title kuralı işlemleri',
+            icon: const Icon(Icons.more_vert, size: 20),
+            onSelected: (value) {
+              if (value == 'edit') onEdit();
+              if (value == 'delete') onDelete();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem<String>(
+                key: Key('btn_rule_edit_${rule.id}'),
+                value: 'edit',
+                height: 48,
+                child: const Row(
+                  children: [Icon(Icons.edit, size: 18), SizedBox(width: 8), Text('Düzenle')],
+                ),
+              ),
+              PopupMenuItem<String>(
+                key: Key('btn_rule_delete_${rule.id}'),
+                value: 'delete',
+                height: 48,
+                child: Row(
+                  children: [
+                    Icon(Icons.delete_outline, size: 18, color: AppTheme.dangerText(context)),
+                    const SizedBox(width: 8),
+                    Text('Sil', style: TextStyle(color: AppTheme.dangerText(context))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+
+    return Container(
+      key: Key('card_rule_${rule.id}'),
+      decoration: AppTheme.cardDecoration(context, accent: rule.enabled ? color : null),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Dar ekran / büyük yazı: anahtar ve menü alt satıra iner (metin sütunu daralmaz).
+            final compact = constraints.maxWidth < 330 || MediaQuery.textScalerOf(context).scale(10) > 12;
+            if (compact) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [leading, const SizedBox(width: 12), Expanded(child: texts)],
+                  ),
+                  Align(alignment: AlignmentDirectional.centerEnd, child: actions),
+                ],
+              );
+            }
+            return Row(
+              children: [leading, const SizedBox(width: 12), Expanded(child: texts), actions],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}

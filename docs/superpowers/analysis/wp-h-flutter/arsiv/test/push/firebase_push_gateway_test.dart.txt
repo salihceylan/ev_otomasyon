@@ -1,0 +1,245 @@
+import 'dart:async';
+
+import 'package:fake_async/fake_async.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:ev_otomasyon/services/push/firebase_push_gateway.dart';
+import 'package:ev_otomasyon/services/push/push_config.dart';
+import 'package:ev_otomasyon/services/push/push_gateway.dart';
+
+// 02-firebase yaması: bu dosya firebase_core/firebase_messaging paketlerine bağlıdır.
+// Bu testler platform kanalına DOKUNMAZ: yalnızca desteklenme kararı ve "hiçbir şey yapmayan" dallar
+// denenir. Gerçek Firebase çağrıları (initializeApp, izin, token) yalnızca gerçek cihazda doğrulanır.
+
+const PushConfig _config = PushConfig(
+  apiKey: 'test-api-key',
+  appId: '1:111:android:aaa',
+  messagingSenderId: '111',
+  projectId: 'test-project',
+);
+
+Future<void> _expectInert(PushGateway gateway) async {
+  expect(gateway.isSupported, isFalse);
+  await gateway.initialize();
+  expect(gateway.isSupported, isFalse);
+  expect(await gateway.permissionStatus(), PushPermission.unsupported);
+  expect(await gateway.requestPermission(), PushPermission.unsupported);
+  expect(await gateway.getToken(), isNull);
+  expect(await gateway.getInitialMessage(), isNull);
+  expect(await gateway.onTokenRefresh.isEmpty, isTrue);
+  expect(await gateway.onForegroundMessage.isEmpty, isTrue);
+  expect(await gateway.onMessageOpened.isEmpty, isTrue);
+  await gateway.deleteToken(); // hareketsiz: fırlatmaz, Firebase'e dokunmaz
+}
+
+void main() {
+  _apnsTests();
+  _deleteTokenTests();
+  group('PushConfig.toFirebaseOptions', () {
+    test('alanları Firebase seçeneklerine birebir taşır', () {
+      final options = _config.toFirebaseOptions();
+      expect(options.apiKey, 'test-api-key');
+      expect(options.appId, '1:111:android:aaa');
+      expect(options.messagingSenderId, '111');
+      expect(options.projectId, 'test-project');
+      expect(options.storageBucket, isNull);
+      expect(options.iosBundleId, isNull);
+    });
+  });
+
+  group('FirebasePushGateway desteklenme kararı', () {
+    test('yapılandırma yoksa desteklenmez ve hareketsizdir', () async {
+      await _expectInert(FirebasePushGateway(config: null, platform: TargetPlatform.android, isWeb: false));
+    });
+
+    test('web desteklenmez', () async {
+      await _expectInert(FirebasePushGateway(config: _config, platform: TargetPlatform.android, isWeb: true));
+    });
+
+    for (final platform in <TargetPlatform>[
+      TargetPlatform.windows,
+      TargetPlatform.linux,
+      TargetPlatform.macOS,
+      TargetPlatform.fuchsia,
+    ]) {
+      test('${platform.name} desteklenmez', () async {
+        await _expectInert(FirebasePushGateway(config: _config, platform: platform, isWeb: false));
+      });
+    }
+
+    test('Android ve iOS + tam yapılandırma desteklenir (başlatmadan önce)', () {
+      expect(FirebasePushGateway(config: _config, platform: TargetPlatform.android, isWeb: false).isSupported, isTrue);
+      expect(FirebasePushGateway(config: _config, platform: TargetPlatform.iOS, isWeb: false).isSupported, isTrue);
+    });
+
+    test('başlatılmadan önce izin/token/akışlar kanala gitmeden boş döner', () async {
+      final gateway = FirebasePushGateway(config: _config, platform: TargetPlatform.android, isWeb: false);
+      expect(await gateway.permissionStatus(), PushPermission.unsupported);
+      expect(await gateway.requestPermission(), PushPermission.unsupported);
+      expect(await gateway.getToken(), isNull);
+      expect(await gateway.getInitialMessage(), isNull);
+      expect(await gateway.onTokenRefresh.isEmpty, isTrue);
+      expect(await gateway.onForegroundMessage.isEmpty, isTrue);
+      expect(await gateway.onMessageOpened.isEmpty, isTrue);
+    });
+  });
+}
+
+// iOS'ta eklenti, APNs belirteci henüz gelmediyse getToken'ı hemen düşürür; gateway önce bu yoklamayı yapar.
+void _apnsTests() {
+  const interval = Duration(milliseconds: 500);
+  const timeout = Duration(seconds: 10);
+
+  group('awaitApnsToken', () {
+    test('belirteç hazırsa beklemeden döner', () {
+      fakeAsync((async) {
+        var reads = 0;
+        String? result;
+        awaitApnsToken(
+          () async {
+            reads++;
+            return 'apns';
+          },
+          timeout: timeout,
+          interval: interval,
+        ).then((v) => result = v);
+        async.flushMicrotasks();
+        expect(result, 'apns');
+        expect(reads, 1);
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+
+    test('belirteç geç gelirse yoklayıp yakalar (30 sn geri çekilmeyi beklemez)', () {
+      fakeAsync((async) {
+        var reads = 0;
+        String? result;
+        awaitApnsToken(
+          () async => ++reads < 4 ? null : 'apns',
+          timeout: timeout,
+          interval: interval,
+        ).then((v) => result = v);
+        async.flushMicrotasks();
+        expect(result, isNull);
+        async.elapse(const Duration(milliseconds: 1500));
+        expect(result, 'apns');
+        expect(reads, 4);
+      });
+    });
+
+    test('boş metin "henüz yok" sayılır', () {
+      fakeAsync((async) {
+        var reads = 0;
+        String? result;
+        awaitApnsToken(
+          () async => ++reads < 2 ? '' : 'apns',
+          timeout: timeout,
+          interval: interval,
+        ).then((v) => result = v);
+        async.elapse(interval);
+        expect(result, 'apns');
+      });
+    });
+
+    test('okuma fırlatırsa o deneme "yok" sayılır ve yoklama sürer', () {
+      fakeAsync((async) {
+        var reads = 0;
+        String? result;
+        awaitApnsToken(
+          () async {
+            if (++reads < 3) throw StateError('kanal');
+            return 'apns';
+          },
+          timeout: timeout,
+          interval: interval,
+        ).then((v) => result = v);
+        async.elapse(const Duration(seconds: 1));
+        expect(result, 'apns');
+      });
+    });
+
+    test('süre dolarsa null döner ve zamanlayıcı bırakmaz', () {
+      fakeAsync((async) {
+        var reads = 0;
+        var done = false;
+        String? result = 'x';
+        awaitApnsToken(
+          () async {
+            reads++;
+            return null;
+          },
+          timeout: timeout,
+          interval: interval,
+        ).then((v) {
+          result = v;
+          done = true;
+        });
+        async.elapse(const Duration(seconds: 9, milliseconds: 999));
+        expect(done, isFalse);
+        async.elapse(const Duration(milliseconds: 1));
+        expect(done, isTrue);
+        expect(result, isNull);
+        expect(reads, 21);
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+  });
+}
+
+// F1 (B1): çıkışta yerel FCM belirtecini geçersiz kılan `deleteToken` sınırlı sürelidir ve asla fırlatmaz.
+void _deleteTokenTests() {
+  const timeout = Duration(seconds: 3);
+
+  group('boundedDeleteToken', () {
+    test('işlem tamamlanırsa tamamlanır', () async {
+      var ran = false;
+      await boundedDeleteToken(() async => ran = true, timeout: timeout);
+      expect(ran, isTrue);
+    });
+
+    test('eşzamanlı ve eşzamansız hata yutulur', () async {
+      await boundedDeleteToken(() => throw StateError('eşzamanlı'), timeout: timeout);
+      await boundedDeleteToken(() async => throw StateError('eşzamansız'), timeout: timeout);
+    });
+
+    test('işlem askıda kalırsa süre sonunda tamamlanır ve zamanlayıcı bırakmaz', () {
+      fakeAsync((async) {
+        var done = false;
+        boundedDeleteToken(() => Completer<void>().future, timeout: timeout).then((_) => done = true);
+        async.elapse(const Duration(seconds: 2, milliseconds: 999));
+        expect(done, isFalse);
+        async.elapse(const Duration(milliseconds: 1));
+        expect(done, isTrue);
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+
+    test('hızlı biten işlem zamanlayıcıyı iptal eder', () {
+      fakeAsync((async) {
+        boundedDeleteToken(() async {}, timeout: timeout);
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isEmpty);
+      });
+    });
+  });
+
+  group('FirebasePushGateway.deleteToken', () {
+    test('başlatılamayan Firebase (kanal yok) fırlatmaz', () async {
+      final gateway = FirebasePushGateway(config: _config, platform: TargetPlatform.android, isWeb: false);
+      await gateway.deleteToken();
+    });
+
+    test('yapılandırma yoksa ya da web/masaüstünde hiçbir şey yapmaz', () async {
+      await FirebasePushGateway(config: null, platform: TargetPlatform.android, isWeb: false).deleteToken();
+      await FirebasePushGateway(config: _config, platform: TargetPlatform.android, isWeb: true).deleteToken();
+      await FirebasePushGateway(config: _config, platform: TargetPlatform.windows, isWeb: false).deleteToken();
+    });
+
+    test('deleteTokenTimeout üst süresi 3 sn varsayılır', () {
+      expect(
+        FirebasePushGateway(config: _config, platform: TargetPlatform.android, isWeb: false).deleteTokenTimeout,
+        const Duration(seconds: 3),
+      );
+    });
+  });
+}

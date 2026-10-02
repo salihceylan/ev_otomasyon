@@ -1,84 +1,64 @@
 #pragma once
 #include <Arduino.h>
 #include <Preferences.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
-enum RelayType {
-  RELAY_TYPE_LIGHT = 0,       // Normal lamba / aç-kapa cihaz
-  RELAY_TYPE_SHUTTER_UP = 1,  // Panjur Yukarı (Interlock partner ile eşleşir)
-  RELAY_TYPE_SHUTTER_DOWN = 2,// Panjur Aşağı (Interlock partner ile eşleşir)
-  RELAY_TYPE_IMPULSE = 3      // Darbe rölesi (Belirli süre çekip bırakır, örn: kilit/otomatik)
-};
-
-enum DIMode {
-  DI_MODE_TOGGLE = 0,         // Her basışta röle durumunu tersine çevir
-  DI_MODE_MOMENTARY = 1,      // Butona basılıyken açık, bırakınca kapalı
-  DI_MODE_SHUTTER_STEP = 2,   // Panjur butonu: Basınca hareket ettir/durdur (Tek buton döngü)
-  DI_MODE_SHUTTER_UP = 3,     // Panjur Yukarı: Basınca Aç, basınca Durdur
-  DI_MODE_SHUTTER_DOWN = 4    // Panjur Aşağı: Basınca Kapat, basınca Durdur
-};
-
-struct RelayConfig {
-  char name[32];
-  uint8_t type;               // RelayType
-  uint16_t runtime_sec;       // Panjur için hareket süresi (sn) veya darbe süresi (ms)
-};
-
-struct DIConfig {
-  char name[32];
-  uint8_t target_relay;       // 1-8 (0 = devre dışı)
-  uint8_t mode;               // DIMode
-};
-
-#define MAX_TOTAL_RELAYS 40
-#define MAX_TOTAL_DIS    40
-
-struct SystemConfig {
-  char device_name[32];
-  char wifi_ssid[64];
-  char wifi_pass[64];
-  bool wifi_sta_enabled;
-  uint32_t rs485_baud;
-
-  // Harici Genişletme Modülü (RS485)
-  bool ext_module_enabled;       // Ek modül var mı?
-  uint8_t ext_module_channels;   // Kaç kanallı? (0, 2, 4, 8, 12, 16, 24, 32)
-  uint8_t ext_module_address;    // Modbus Slave Adresi (1..247, varsayılan 1)
-
-  // Güvenli MQTTS Yapılandırması (Port 8884)
-  bool mqtt_enabled;
-  char mqtt_server[64];
-  uint16_t mqtt_port;
-  char mqtt_user[32];
-  char mqtt_pass[32];
-
-  RelayConfig relays[MAX_TOTAL_RELAYS];
-  DIConfig dis[MAX_TOTAL_DIS];
-
-  uint8_t totalRelays() const {
-    if (!ext_module_enabled) return 8;
-    uint8_t t = 8 + ext_module_channels;
-    return (t > MAX_TOTAL_RELAYS) ? MAX_TOTAL_RELAYS : t;
-  }
-
-  uint8_t totalDIs() const {
-    if (!ext_module_enabled) return 8;
-    uint8_t t = 8 + ext_module_channels;
-    return (t > MAX_TOTAL_DIS) ? MAX_TOTAL_DIS : t;
-  }
-};
+#include "SystemConfig.h"   // RelayType, DIMode, RelayConfig, DIConfig, SystemConfig, sabitler, validate()
 
 class ConfigManager {
 public:
   static ConfigManager& instance();
   void begin();
   void load();
-  void save();
-  void resetToDefaults();
+  // Tüm alanları NVS'e yazar (önce validate()). false = en az bir yazma başarısız oldu.
+  // Değişmeyen anahtarlar NVS'e YAZILMAZ (uygulama katmanında karşılaştırılır; IDF'in özdeş değeri atlayıp atlamadığına
+  // güvenilmez): yalnızca değişen değerler flash'a yazılır. Yine de nadir değişiklikte çağırın.
+  bool save();
+  // Uygulama ayarlarını varsayılana çeker ve NVS'teki uygulama anahtarlarını (ek modül dahil) ile
+  // "ahbu_auto"/"ahbu_pos" ad alanlarını SİLER. Kimlik/provizyon alanları (local_key, ap_pass, MQTT
+  // sunucu/kimlik) KORUNUR: uzaktan "sıfırla" cihazı sahipsiz bırakmamalı (fiziksel RESETKEY ayrı).
+  bool resetToDefaults();
 
   SystemConfig config;
 
+  // ---- Kimlik/provizyon (FW-net) -------------------------------------------------------------
+  bool hasLocalKey() const { return config.hasLocalKey(); }
+  bool hasMqttCredentials() const { return config.hasMqttCredentials(); }
+  // RAM'e yazar VE NVS'e kalıcılaştırır. Geçersiz giriş => false, hiçbir şey değişmez.
+  bool setLocalKey(const char* key);
+  bool setApPass(const char* pass);
+  // Fiziksel erişimle kurtarma (seri CLI "RESETKEY"): yerel anahtarı siler.
+  bool clearLocalKey();
+  // MQTT kimliğini yazar (POST /api/mqtt/config). Alan uzunlukları doğrulanır; false = reddedildi.
+  bool setMqttCredentials(const char* server, uint16_t port, const char* user, const char* pass);
+  // Yalnız bir rölenin süresini kalıcılaştırır (SET_RUNTIME; tüm yapılandırmayı yeniden yazmaz).
+  bool saveRelayRuntime(uint8_t relayIndex);
+
+  bool validate() { ConfigLock l(*this); return config.validate(); }
+
+  // Çok görevli erişim: config'i okuyup yazan görevler tutarlılık gerekiyorsa kilit alır (özyinelemeli).
+  struct ConfigLock {
+    explicit ConfigLock(ConfigManager& m) : _m(m) { _m.lock(); }
+    ~ConfigLock() { _m.unlock(); }
+    ConfigManager& _m;
+  };
+  void lock();
+  void unlock();
+
+  // save() her çağrıda artar: tüketici (ör. SmartAutomation) yapılandırma değişimini fark edebilir.
+  uint32_t generation() const { return _generation; }
+  // resetToDefaults() her çağrıldığında artar: SmartAutomation bunu görünce RAM'deki çocuk kilidini de sıfırlar.
+  uint32_t resetCount() const { return _resetCount; }
+  bool nvsReady() const { return _prefsOk; }
+
 private:
   ConfigManager();
+  void applyDefaults();
+  bool eraseAppKeys();
   Preferences prefs;
+  SemaphoreHandle_t _mutex;
+  bool _prefsOk;
+  volatile uint32_t _generation;
+  volatile uint32_t _resetCount;
 };
-

@@ -1,5 +1,0 @@
-user_id,password,is_superuser
-backend_service,GudeBackend2026!MqttSec,true
-home_101,PassHome101!Sec,false
-home_102,PassHome102!Sec,false
-

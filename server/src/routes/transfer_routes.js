@@ -1,93 +1,104 @@
+'use strict';
+
 // ==============================================================================
-// AHBU Akıllı Ev & Bina Otomasyonu - Daire Devir API Rotaları (ADIM 13)
+// AHBU Akilli Ev - Daire devri uclari (WP-A: A10). Mount: /api/v1 ve /api
 // ==============================================================================
+// Kimlik dogrulama HER ROUTE'TA ayri (router.use YOK).
+// CONTRACTS §1.4: "Daire devri" yalnizca owner (super_user dahil degil).
+//
+//   POST /homes/:homeId/transfer-initiate   owner   { target_identifier } (ZORUNLU)
+//   POST /homes/transfer-accept             giris yapmis kullanici (hedef kimlikle eslesmeli)
+//   GET  /homes/:homeId/transfer-status     owner
+//   POST /homes/:homeId/transfer-cancel     owner
 
 const express = require('express');
-const router = express.Router();
 const TransferService = require('../services/transfer_service');
-const { authenticateToken } = require('../middlewares/auth_middleware');
-const { successResponse, errorResponse } = require('../utils/helpers');
+const {
+  authenticateToken,
+  requireHomeAccess,
+  rejectServiceSession,
+  HOME_ROLE_SETS,
+} = require('../middlewares/auth_middleware');
+const { rateLimit, clientIp } = require('../middlewares/rate_limit');
+const { asyncHandler } = require('../middlewares/error_handler');
+const { successResponse, HttpError } = require('../utils/helpers');
 
-// Tüm devir rotaları kimlik doğrulaması gerektirir
-router.use(authenticateToken);
+const router = express.Router();
+const MIN = 60 * 1000;
 
-/**
- * @route   POST /api/v1/homes/:homeId/transfer-initiate
- * @desc    Ev sahibi daire devir sürecini başlatır (48 saat geçerli AHBU-TR-XXXXXX kodu üretir)
- */
-router.post('/homes/:homeId/transfer-initiate', async (req, res) => {
-  try {
-    const { homeId } = req.params;
-    const userId = req.user.id;
-    const targetIdentifier = req.body.target_identifier || req.body.targetIdentifier;
+const initiateLimiter = rateLimit({
+  windowMs: 60 * MIN,
+  max: 10,
+  keyGenerator: (req) => `transfer-init:${req.user && req.user.id ? req.user.id : clientIp(req)}`,
+});
+const acceptLimiter = rateLimit({
+  windowMs: 15 * MIN,
+  max: 10,
+  keyGenerator: (req) => `transfer-accept:${req.user && req.user.id ? req.user.id : 'anon'}:${clientIp(req)}`,
+});
+const acceptIpLimiter = rateLimit({ windowMs: 15 * MIN, max: 30, keyGenerator: (req) => `transfer-accept-ip:${clientIp(req)}` });
 
+function pick(body, keys) {
+  if (!body || typeof body !== 'object') return undefined;
+  for (const k of keys) {
+    if (body[k] !== undefined && body[k] !== null && body[k] !== '') return body[k];
+  }
+  return undefined;
+}
+
+function noStore(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+}
+
+router.post(
+  '/homes/:homeId/transfer-initiate',
+  authenticateToken,
+  requireHomeAccess(HOME_ROLE_SETS.TRANSFER),
+  initiateLimiter,
+  asyncHandler(async (req, res) => {
     const result = await TransferService.initiateTransfer({
-      homeId,
-      fromUserId: userId,
-      targetIdentifier,
+      homeId: req.homeAccess.home_id,
+      fromUserId: req.user.id,
+      targetIdentifier: pick(req.body, ['target_identifier', 'targetIdentifier']),
     });
+    noStore(res);
+    return successResponse(res, result, 'Daire devir kodu üretildi.', 201);
+  })
+);
 
-    return successResponse(res, result.transfer, 'Daire devir kodu başarıyla üretildi.', 201);
-  } catch (err) {
-    return errorResponse(res, err.message, err.status || err.statusCode || 500);
-  }
-});
-
-/**
- * @route   POST /api/v1/homes/transfer-accept
- * @desc    Yeni kullanıcı devir kodunu onaylayarak daireyi devralır (Eski aile azledilir)
- */
-router.post('/homes/transfer-accept', async (req, res) => {
-  try {
-    const transferCode = req.body.transfer_code || req.body.transferCode || req.body.code;
-    const userId = req.user.id;
-
-    if (!transferCode) {
-      return errorResponse(res, 'Devir kodu (transfer_code) zorunludur.', 400);
-    }
-
-    const result = await TransferService.acceptTransfer({
-      transferCode,
-      newUserId: userId,
-    });
-
-    return successResponse(res, result, result.message, 200);
-  } catch (err) {
-    return errorResponse(res, err.message, err.status || err.statusCode || 500);
-  }
-});
-
-/**
- * @route   GET /api/v1/homes/:homeId/transfer-status
- * @desc    Dairenin bekleyen devir durumunu sorgular
- */
-router.get('/homes/:homeId/transfer-status', async (req, res) => {
-  try {
-    const { homeId } = req.params;
-    const userId = req.user.id;
-
-    const result = await TransferService.getTransferStatus(homeId, userId);
-    return successResponse(res, result);
-  } catch (err) {
-    return errorResponse(res, err.message, err.status || err.statusCode || 500);
-  }
-});
-
-/**
- * @route   POST /api/v1/homes/:homeId/transfer-cancel
- * @desc    Ev sahibi bekleyen devir işlemini iptal eder
- */
-router.post('/homes/:homeId/transfer-cancel', async (req, res) => {
-  try {
-    const { homeId } = req.params;
-    const userId = req.user.id;
-
-    const result = await TransferService.cancelTransfer(homeId, userId);
+router.post(
+  '/homes/transfer-accept',
+  acceptIpLimiter,
+  authenticateToken,
+  rejectServiceSession,
+  acceptLimiter,
+  asyncHandler(async (req, res) => {
+    const code = pick(req.body, ['transfer_code', 'transferCode', 'code']);
+    if (!code) throw new HttpError(400, 'Devir kodu (transfer_code) zorunludur.', 'VALIDATION');
+    const result = await TransferService.acceptTransfer({ transferCode: code, newUserId: req.user.id });
     return successResponse(res, result, result.message);
-  } catch (err) {
-    return errorResponse(res, err.message, err.status || err.statusCode || 500);
-  }
-});
+  })
+);
+
+router.get(
+  '/homes/:homeId/transfer-status',
+  authenticateToken,
+  requireHomeAccess(HOME_ROLE_SETS.TRANSFER),
+  asyncHandler(async (req, res) => {
+    const result = await TransferService.getTransferStatus(req.homeAccess.home_id);
+    return successResponse(res, result);
+  })
+);
+
+router.post(
+  '/homes/:homeId/transfer-cancel',
+  authenticateToken,
+  requireHomeAccess(HOME_ROLE_SETS.TRANSFER),
+  asyncHandler(async (req, res) => {
+    const result = await TransferService.cancelTransfer(req.homeAccess.home_id);
+    return successResponse(res, result, result.message);
+  })
+);
 
 module.exports = router;
-

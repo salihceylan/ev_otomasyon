@@ -1,100 +1,101 @@
-// test/homeless_individual_user_test.dart
-//
-// Dairesi olmayan bireysel kullanıcıya yalnızca "Kod ile Bir Eve Katıl"
-// ekranının gösterildiğini; eve katıldıktan sonra normal dashboard'a
-// geçileceğini doğrulayan widget testleri.
-
+import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/services/automation_state.dart';
+import 'package:ev_otomasyon/ui/pages/dashboard_page.dart';
+import 'package:ev_otomasyon/ui/pages/family/join_home_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
 
-import 'package:ev_otomasyon/services/automation_state.dart';
-import 'package:ev_otomasyon/models/cloud_models.dart';
-import 'package:ev_otomasyon/ui/pages/dashboard_page.dart';
+import 'support/support.dart';
+import 'ui/e1_helpers.dart';
 
-/// Minimal AutomationState alt sınıfı — gerçek network/MQTT bağlantısı yapmaz.
-class _FakeState extends AutomationState {
-  _FakeState();
-
-  @override
-  Future<void> refresh({bool silent = false}) async {}
-}
-
-Widget _wrap(_FakeState state) {
-  return ChangeNotifierProvider<AutomationState>.value(
-    value: state,
-    child: const MaterialApp(home: DashboardPage()),
-  );
-}
-
-UserModel _fakeUser() => UserModel.fromJson({
-      'id': 42,
-      'email': 'test@ahbu.test',
-      'full_name': 'Test Kullanıcı',
-      'role': 'user',
-    });
-
-HomeModel _fakeHome() => HomeModel(
-      id: 1,
-      name: 'Test Dairesi',
-      mqttUsername: 'home_1',
-      role: 'owner',
-    );
-
+/// Dairesi olmayan bireysel kullanıcı: yalnızca "eve katıl" yolları; eve katıldıktan sonra normal
+/// pano açılır. "Daire yok" yalnızca **başarılı boş** ev yanıtında söylenir (hata/yükleme "daire yok"
+/// değildir).
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  Future<StateHarness> pumpHomeless(WidgetTester tester, {Object? homesError}) async {
+    final h = StateHarness();
+    h.state
+      ..setCurrentUserForTesting(const UserModel(id: 'user-1', email: 'test@ahbu.test', fullName: 'Test Kullanıcı', role: 'user'))
+      ..setAuthStatusForTesting(AuthStatus.authenticated);
+    h.cloud.fetchHomesError = homesError;
+    h.cloud.homes = <HomeModel>[];
+    addTearDown(h.dispose);
+    await tester.runAsync(() => h.state.fetchHomes());
+    await pumpPage(tester, h.state, const DashboardPage());
+    return h;
+  }
 
-  group('Dairesi olmayan bireysel kullanıcı', () {
-    testWidgets(
-      'Yalnızca "Kod ile Bir Eve Katıl" butonu görünür; '
-      'diğer dashboard içerikleri gizlidir',
-      (tester) async {
-        final state = _FakeState();
+  testWidgets('daire yoksa yalnızca katılma yolları görünür; mod, ayar, aile ve doktor girdileri gizlidir', (tester) async {
+    await pumpHomeless(tester);
 
-        // Kullanıcı giriş yapmış ama hiçbir eve üye değil
-        state.setCurrentUserForTesting(_fakeUser());
-        state.setHomesForTesting([]);
+    expect(find.text('Kod ile Bir Eve Katıl'), findsOneWidget);
+    expect(find.text('Karekod Tara (Katıl / Cihaz Eşle)'), findsOneWidget);
+    expect(find.text('Henüz kayıtlı bir daireniz yok'), findsOneWidget);
+    expect(find.text('Hoş Geldiniz, Test!'), findsOneWidget);
 
-        await tester.pumpWidget(_wrap(state));
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 300));
+    // Daire kontrolü gerektiren AppBar girdileri yok; profil ve karekod var.
+    for (final key in ['nav_mode', 'nav_settings', 'nav_family', 'nav_doctor', 'nav_service']) {
+      expect(byKeyName(key), findsNothing, reason: key);
+    }
+    expect(byKeyName('nav_profile'), findsOneWidget);
+    expect(byKeyName('nav_qr'), findsOneWidget);
+    expect(byKeyName('card_relay_1'), findsNothing);
+    expect(byKeyName('card_scenario_leaving'), findsNothing);
+  });
 
-        // ── Gösterilmesi gerekenler ──────────────────────────────────
-        expect(find.text('Kod ile Bir Eve Katıl'), findsOneWidget,
-            reason: 'Eve katılım butonu gösterilmeli');
-        expect(find.text('Karekod ile Katıl'), findsOneWidget,
-            reason: 'QR katılım butonu gösterilmeli');
-        expect(find.text('Henüz kayıtlı bir daireniz yok'), findsOneWidget,
-            reason: 'Uyarı etiketi gösterilmeli');
+  testWidgets('"Kod ile Bir Eve Katıl" katılma diyaloğunu açar', (tester) async {
+    await pumpHomeless(tester);
+    await tester.tap(byKeyName('btn_join_code'));
+    await tester.pumpAndSettle();
+    expect(find.byType(JoinHomeDialog), findsOneWidget);
+  });
 
-        // ── Gizlenmesi gerekenler ───────────────────────────────────
-        // Normal daire ekranında bulunan widget'lar gösterilmemeli
-        expect(find.byIcon(Icons.cloud_outlined), findsNothing,
-            reason: 'Mod değiştirici dairesi olmayan kullanıcıda görünmemeli');
-        expect(find.byIcon(Icons.settings_outlined), findsNothing,
-            reason: 'Cihaz Ayarları dairesi olmayan kullanıcıda görünmemeli');
-      },
+  testWidgets('ev listesi alınamadıysa "daire yok" DENMEZ: hata kartı çıkar', (tester) async {
+    await pumpHomeless(tester, homesError: kNetworkError);
+    expect(find.text('Henüz kayıtlı bir daireniz yok'), findsNothing);
+    expect(find.text('Kod ile Bir Eve Katıl'), findsNothing);
+    expect(byKeyName('error_card'), findsOneWidget);
+    expect(find.text('Daireler yüklenemedi'), findsOneWidget);
+  });
+
+  testWidgets('daire edinilince (yenileme sonrası) normal pano açılır ve katılma ekranı kalkar', (tester) async {
+    final h = await pumpHomeless(tester);
+    expect(byKeyName('view_homeless'), findsOneWidget);
+
+    h.cloud.homes = <HomeModel>[testHome()];
+    h.cloud.endpoints[kHomeA] = testEndpoints();
+    await tester.runAsync(() => h.state.fetchHomes());
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(byKeyName('view_homeless'), findsNothing);
+    expect(find.text('Henüz kayıtlı bir daireniz yok'), findsNothing);
+    expect(byKeyName('card_relay_1'), findsOneWidget);
+    expect(byKeyName('nav_settings'), findsOneWidget);
+  });
+
+  testWidgets('dairesi olan kullanıcıda katılma ekranı hiç görünmez', (tester) async {
+    await pumpReady(tester, const DashboardPage(), role: 'owner');
+    expect(find.text('Kod ile Bir Eve Katıl'), findsNothing);
+    expect(find.text('Henüz kayıtlı bir daireniz yok'), findsNothing);
+  });
+
+  testWidgets('dar ekranda ve yazı ölçeği 1.5\'te (açık tema) taşma yok', (tester) async {
+    final h = StateHarness();
+    h.state
+      ..setCurrentUserForTesting(const UserModel(id: 'user-1', email: 'a@b.c', fullName: 'Çok Uzun İsimli Bir Kullanıcı Adı', role: 'user'))
+      ..setAuthStatusForTesting(AuthStatus.authenticated);
+    addTearDown(h.dispose);
+    await tester.runAsync(() => h.state.fetchHomes());
+    await pumpPage(
+      tester,
+      h.state,
+      const DashboardPage(),
+      size: const Size(320, 720),
+      textScale: 1.5,
+      themeMode: ThemeMode.light,
     );
-
-    testWidgets(
-      'Dairesi olan kullanıcıda normal daire dashboard\'ı açılır; '
-      'eve katılım ekranı görünmez',
-      (tester) async {
-        final state = _FakeState();
-
-        state.setCurrentUserForTesting(_fakeUser());
-        state.setHomesForTesting([_fakeHome()], activeHome: _fakeHome());
-
-        await tester.pumpWidget(_wrap(state));
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 300));
-
-        // Eve katılım butonu gösterilmemeli
-        expect(find.text('Kod ile Bir Eve Katıl'), findsNothing,
-            reason: 'Dairesi olan kullanıcıda katılım butonu olmamalı');
-        expect(find.text('Henüz kayıtlı bir daireniz yok'), findsNothing,
-            reason: 'Uyarı etiketi dairesi olan kullanıcıda olmamalı');
-      },
-    );
+    expect(tester.takeException(), isNull);
   });
 }

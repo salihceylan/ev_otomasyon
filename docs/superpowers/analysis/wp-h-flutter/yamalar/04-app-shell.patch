@@ -1,0 +1,40 @@
+diff --git a/lib/ui/app_shell.dart b/lib/ui/app_shell.dart
+index 0a601e8..371fc76 100644
+--- a/lib/ui/app_shell.dart
++++ b/lib/ui/app_shell.dart
+@@ -6,2 +6,3 @@ import 'package:provider/provider.dart';
+ import '../services/automation_state.dart';
++import '../services/peace_notice_controller.dart';
+ import 'common/deep_links.dart';
+@@ -10,2 +11,3 @@ import 'theme/app_theme.dart';
+ import 'widgets/circuit_background.dart';
++import 'widgets/peace_notice_host.dart';
+ 
+@@ -52,2 +54,5 @@ class _AppShellState extends State<AppShell> {
+   AutomationState? _state;
++
++  /// Gece hatırlatması (push + afiş) mantığı: sayfalara/AutomationState'e değil kabuğa bağlıdır.
++  late final PeaceNoticeController _peace;
+   StreamSubscription<CommandFailure>? _failureSub;
+@@ -65,2 +70,3 @@ class _AppShellState extends State<AppShell> {
+     _state = state;
++    _peace = PeaceNoticeController(state: state);
+     _failureSub = state.commandFailures.listen(_onFailure);
+@@ -76,2 +82,3 @@ class _AppShellState extends State<AppShell> {
+     _retry.clear();
++    _peace.dispose();
+     super.dispose();
+@@ -228,4 +235,11 @@ class _AppShellState extends State<AppShell> {
+         builder: (context, child) {
+-          return CircuitBackground(
+-            child: child ?? const SizedBox.shrink(),
++          // Sağlayıcı ve afiş köprüsü Navigator'ın ÜSTÜNDE: tüm sayfalar/diyaloglar denetleyiciyi okuyabilir; afiş
++          // ScaffoldMessenger üzerinden (MaterialBanner/SnackBar) gösterilir, köprü kendisi bir şey çizmez.
++          return ChangeNotifierProvider<PeaceNoticeController>.value(
++            value: _peace,
++            child: PeaceNoticeHost(
++              child: CircuitBackground(
++                child: child ?? const SizedBox.shrink(),
++              ),
++            ),
+           );

@@ -1,18 +1,65 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+
+import '../../models/automation_models.dart';
+import '../../services/automation_api_service.dart';
 import '../../services/automation_state.dart';
+import '../../services/board_network_binding.dart';
+import '../../utils/qr_claim_parser.dart';
+import '../common/wifi_provision_panel.dart';
 import '../theme/app_theme.dart';
 
+/// Wi-Fi kurulum & kurtarma sihirbazı: ev Wi-Fi bilgileri değiştiğinde (ya da servis kurulumunda)
+/// panoya yenisini yükler. **Giriş yapmış olmak ve internet GEREKMEZ** (canlı test listesi Aşama 16).
+///
+/// * **Yetki kapısı yoktur** (misafir ve girişsiz kullanıcı dahil): cihaz zaten korunur. Pano, yalnızca
+///   kendi WPA2 kurulum ağından (SoftAP) gelen isteklere anahtarsız Wi-Fi uçlarını açar (CONTRACTS §3d);
+///   cihaza özel ağ parolasını bilmek = fiziksel erişim. `Capabilities.canOpenWifiRecovery` yalnızca
+///   giriş yapmış alanlardaki **giriş noktalarını** (pano / ayarlar kartı) gizlemek içindir.
+/// * Sunucuya **hiç istek atılmaz**; cihaz anahtarı sunucudan alınmaz/kaydedilmez. Telefonda önbellekte
+///   (güvenli depo), bağlanılan panonun kimliğine ait bir anahtar zaten varsa cihaza gönderilir; yoksa
+///   gönderilmez.
+/// * Panoya **kendi** [AutomationApiService] örneğiyle (`AppConfig.deviceApHost`, varsayılan
+///   `192.168.4.1`; QA'da `10.0.2.2:8081`) bağlanır; ana durumun cihaz adresine dokunulmaz.
+/// * Kurulum ağının (AP) adı `AHBU-<MAC son 6>`, parolası **cihaza özeldir** ve pano etiketinde (metin ve
+///   ikinci karekod) yazar; sabit ad/parola metni yoktur. Başarı yalnızca pano ev ağına bağlandığında
+///   ([WifiProvisionPanel]: `wifi_connect_state == success`) gösterilir.
 class WifiRecoveryDialog extends StatefulWidget {
-  const WifiRecoveryDialog({super.key});
+  const WifiRecoveryDialog({super.key, this.api, this.deviceUuid, this.qrScanner});
 
-  static Future<void> show(BuildContext context) {
+  /// Yalnızca testlerde/özel akışlarda: hazır cihaz istemcisi (sahipliği çağırandadır).
+  final AutomationApiService? api;
+
+  /// Beklenen pano (biliniyorsa): bağlanılan pano farklıysa uyarılır ve kurulum ağı adı ipucu gösterilir.
+  final String? deviceUuid;
+
+  /// Yalnızca testlerde: Wi-Fi karekodunu okuyan işlev (varsayılan: kamera tarayıcısı).
+  final Future<String?> Function(BuildContext context)? qrScanner;
+
+  /// Sihirbaz rotasının adı: `AuthGate` biyometrik yeniden kilitte itilmiş tüm rotaları kapatırken sihirbazın
+  /// açık olduğunu bu adla anlar ve kilit açılınca yeniden açar (kullanıcı telefonun Wi-Fi ayarlarına gidip
+  /// 30 sn'den uzun kalmış olabilir).
+  static const String routeName = '/wifi-setup';
+
+  static Future<void> show(
+    BuildContext context, {
+    AutomationApiService? api,
+    String? deviceUuid,
+    Future<String?> Function(BuildContext context)? qrScanner,
+  }) {
     final state = context.read<AutomationState>();
-    return showDialog(
+    return showDialog<void>(
       context: context,
+      routeSettings: const RouteSettings(name: routeName),
+      // Yanlışlıkla dışarı dokunmak yazılan Wi-Fi bilgilerini / bekleyen bağlantıyı kaybettirmesin:
+      // kapatmak için "Kapat" düğmesi (ya da geri tuşu) kullanılır.
+      barrierDismissible: false,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
-        child: const WifiRecoveryDialog(),
+        child: WifiRecoveryDialog(api: api, deviceUuid: deviceUuid, qrScanner: qrScanner),
       ),
     );
   }
@@ -22,123 +69,84 @@ class WifiRecoveryDialog extends StatefulWidget {
 }
 
 class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
-  final _ssidController = TextEditingController();
-  final _passController = TextEditingController();
+  late final AutomationState _state;
+  late final AutomationApiService _api;
+  late final bool _ownsApi;
+  late final String? _expectedUid;
+  final TextEditingController _apPassword = TextEditingController();
 
-  bool _isObscure = true;
-  bool _isCheckingConnection = false;
-  bool _isConnectedToPanel = false;
-  bool _isScanning = false;
-  bool _isSubmitting = false;
-  bool _isSuccess = false;
+  bool _apObscure = true;
+  bool _done = false;
 
-  String? _errorMessage;
-  List<Map<String, dynamic>> _scannedNetworks = [];
+  @override
+  void initState() {
+    super.initState();
+    _state = context.read<AutomationState>();
+    _ownsApi = widget.api == null;
+    _api = widget.api ?? AutomationApiService.recoveryAp(clock: _state.clock);
+    _expectedUid = QrClaimParser.normalizeUid(widget.deviceUuid);
+  }
 
   @override
   void dispose() {
-    _ssidController.dispose();
-    _passController.dispose();
+    _apPassword.dispose();
+    if (_ownsApi) _api.dispose();
     super.dispose();
   }
 
-  Future<void> _checkPanelConnection() async {
-    final state = context.read<AutomationState>();
-    setState(() {
-      _isCheckingConnection = true;
-      _errorMessage = null;
-    });
-
+  /// Bağlantı testi sonucu: kimliği doğrulanmış panonun önbellekteki anahtarı (varsa) cihaza gönderilir.
+  /// Yalnızca **yerel** okuma yapılır (ağ yok); anahtar yoksa istekler anahtarsız (AP kaynaklı) gider.
+  /// [status] `null` ise (pano bulunamadı) önceki panoya ait anahtar bırakılmaz.
+  Future<void> _onDeviceChecked(DeviceStatus? status) async {
+    if (!_ownsApi) return; // çağıranın verdiği istemciye dokunulmaz
+    _api.localKey = null;
+    final uid = QrClaimParser.normalizeUid(status?.uid);
+    if (uid == null) return;
+    String? key;
     try {
-      final status = await state.api.fetchStatus();
-      if (mounted) {
-        setState(() {
-          _isConnectedToPanel = true;
-          _isCheckingConnection = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Pano ile bağlantı kuruldu (${status.deviceName})!'),
-            backgroundColor: AppTheme.accentGreen,
-          ),
-        );
-        _scanWifi();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isConnectedToPanel = false;
-          _isCheckingConnection = false;
-          _errorMessage =
-              'Pano bulunamadı. Lütfen telefonunuzun Wi-Fi ayarlarına girip "AHBU-Kurtarma-..." ağına bağlı olduğunuzdan emin olun (Şifre: ahbu1234).';
-        });
-      }
-    }
-  }
-
-  Future<void> _scanWifi() async {
-    final state = context.read<AutomationState>();
-    setState(() {
-      _isScanning = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final networks = await state.scanRecoveryWifiNetworks();
-      if (mounted) {
-        setState(() {
-          _scannedNetworks = networks;
-          _isScanning = false;
-        });
-      }
+      key = await _state.secureStorage.getLocalKey(uid);
     } catch (_) {
-      if (mounted) {
-        setState(() => _isScanning = false);
-      }
+      key = null; // depo okunamadı: anahtarsız devam
     }
+    if (!mounted) return;
+    if (AutomationApiService.isValidLocalKey(key)) _api.localKey = key;
   }
 
-  Future<void> _sendNewCredentials() async {
-    final ssid = _ssidController.text.trim();
-    final pass = _passController.text.trim();
+  /// Adım 4'ün sonu: Android'de uygulama pano ağını kendisi seçer (mobil veri açık kalabilir); diğer
+  /// platformlarda eski yönerge.
+  static String _mobileDataNote() => BoardNetworkBinding.instance.isSupported
+      ? '. ${BoardNetworkBinding.mobileDataAdvice}'
+      : ' (gerekirse mobil veriyi geçici olarak kapatın).';
 
-    if (ssid.isEmpty) {
-      setState(() => _errorMessage = 'Lütfen yeni Wi-Fi ağ adını (SSID) girin.');
-      return;
-    }
+  /// `AHBU-S3-1A2B3C` -> `AHBU-1A2B3C` (kurulum ağının adı).
+  String? _apSsidHint(String? uuid) {
+    if (uuid == null) return null;
+    final match = RegExp(r'^AHBU-S3-([0-9A-F]{6})$').firstMatch(uuid);
+    return match == null ? null : 'AHBU-${match.group(1)}';
+  }
 
-    final state = context.read<AutomationState>();
-    setState(() {
-      _isSubmitting = true;
-      _errorMessage = null;
-    });
-
-    try {
-      await state.sendRecoveryWifiCredentials(ssid, pass);
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-          _isSuccess = true;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-          _errorMessage = 'Şifre gönderilemedi: ${e.toString().replaceAll('Exception: ', '')}';
-        });
-      }
-    }
+  Future<void> _copyApPassword() async {
+    final text = _apPassword.text;
+    if (text.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('Ağ parolası panoya kopyalandı.'), behavior: SnackBarBehavior.floating),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final cardBorder = AppTheme.getCardBorder(context);
+    final textPrimary = AppTheme.getTextPrimary(context);
+    final textMuted = AppTheme.getTextMuted(context);
+
     return Dialog(
-      backgroundColor: AppTheme.surfaceDark,
+      backgroundColor: AppTheme.getSurfaceColor(context),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: const BorderSide(color: AppTheme.cardBorder),
+        side: BorderSide(color: cardBorder),
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
@@ -148,7 +156,6 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Başlık
               Row(
                 children: [
                   Container(
@@ -160,37 +167,72 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
                     child: const Icon(Icons.wifi_find, color: AppTheme.primaryBlueLight, size: 22),
                   ),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Wi-Fi Kurtarma Modu',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          'Wi-Fi Kurulum & Kurtarma Sihirbazı',
+                          key: const Key('wifi_dialog_title'),
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textPrimary),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          'Smart AP Fallback / Şifre Yenileme',
-                          style: TextStyle(fontSize: 11.5, color: AppTheme.textMuted),
+                          'Modem veya şifre değiştiğinde panoyu yeniden bağlayın. İnternet ve giriş gerekmez.',
+                          style: TextStyle(fontSize: 11.5, color: textMuted),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: AppTheme.textMuted, size: 20),
+                    key: const Key('btn_close'),
+                    tooltip: 'Kapat',
+                    icon: Icon(Icons.close, color: textMuted, size: 20),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
-              const Divider(height: 24, color: AppTheme.cardBorder),
-
-              if (_isSuccess) ...[
-                _buildSuccessView(),
-              ] else ...[
-                _buildInstructionsStep(),
+              Divider(height: 24, color: cardBorder),
+              if (!_done) ...[
+                _buildApStep(textPrimary, textMuted),
                 const SizedBox(height: 16),
-                _buildCredentialsForm(),
+              ],
+              // Panel her zaman ağaçtadır: başarı görünümü (ve sonuç durumu) panelin içindedir.
+              WifiProvisionPanel(
+                key: const Key('wifi_provision_panel'),
+                api: _api,
+                clock: _state.clock,
+                expectedUid: _expectedUid,
+                numberedSteps: true,
+                qrScanner: widget.qrScanner,
+                onDeviceChecked: _onDeviceChecked,
+                onResult: (result) {
+                  if (result.isSuccess && mounted) setState(() => _done = true);
+                },
+              ),
+              if (_done) ...[
+                const SizedBox(height: 14),
+                Text(
+                  'Pano bulut bağlantısını birkaç saniye içinde yeniden kurar; uygulamada çevrimiçi '
+                  'görünene kadar bekleyin.',
+                  key: const Key('wifi_done_text'),
+                  style: TextStyle(fontSize: 12.5, color: textMuted, height: 1.4),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 14),
+                ElevatedButton(
+                  key: const Key('btn_wifi_done'),
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.accentGreen,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  child: const Text('Tamam'),
+                ),
               ],
             ],
           ),
@@ -199,65 +241,68 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
     );
   }
 
-  Widget _buildInstructionsStep() {
+  /// Adım 1: telefonu panonun kurulum ağına bağlama yönergesi (parola etiketten; sabit parola yok).
+  Widget _buildApStep(Color textPrimary, Color textMuted) {
+    final hint = _apSsidHint(_expectedUid);
     return Container(
-      padding: const EdgeInsets.all(14),
+      key: const Key('wifi_step_ap'),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppTheme.cardDark,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: _isConnectedToPanel
-              ? AppTheme.accentGreen.withValues(alpha: 0.5)
-              : AppTheme.primaryBlue.withValues(alpha: 0.3),
-        ),
+        color: AppTheme.getCardColor(context),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(
-                _isConnectedToPanel ? Icons.check_circle : Icons.info_outline,
-                color: _isConnectedToPanel ? AppTheme.accentGreen : AppTheme.primaryBlueLight,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  _isConnectedToPanel
-                      ? 'Pano ile Bağlantı Kuruldu (192.168.4.1)'
-                      : 'Adım 1: Panonun Kurtarma Ağına Bağlanın',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                    color: _isConnectedToPanel ? AppTheme.accentGreen : AppTheme.primaryBlueLight,
+          Text(
+            'Adım 1: Telefonu panonun kurulum ağına bağlayın',
+            key: const Key('wifi_step_ap_title'),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryBlueLight),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Pano kendi kurulum ağını yayınlar; bu işlem için internet ve hesap girişi gerekmez.\n'
+            '1. Telefonunuzun Wi-Fi ayarlarını açın.\n'
+            '2. ${hint == null ? 'Pano etiketindeki "KURULUM Wi-Fi AĞI" (AHBU-XXXXXX biçiminde)' : '"$hint"'} ağına bağlanın.\n'
+            '3. Ağ parolası cihaza özeldir: pano etiketindeki "AĞ PAROLASI (AP)" değerini girin. '
+            'Kolay yol: etiketteki ikinci karekodu (Wi-Fi karekodu) telefonunuzun kamerasıyla okutup çıkan '
+            '"Ağa bağlan" önerisine dokunun.\n'
+            '4. Telefon "internet yok" uyarısı verirse bağlantıyı koruyun${_mobileDataNote()}\n'
+            '5. Bağlandıktan sonra bu ekrana dönüp "Pano Bağlantısını Test Et"e dokunun.',
+            key: const Key('wifi_step_ap_text'),
+            style: TextStyle(fontSize: 12, color: textMuted, height: 1.4),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const Key('field_ap_password'),
+            controller: _apPassword,
+            obscureText: _apObscure,
+            autocorrect: false,
+            enableSuggestions: false,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              isDense: true,
+              labelText: 'Etiketteki ağ parolası (isteğe bağlı)',
+              helperText: 'Yalnızca kopyalamak içindir; kaydedilmez, hiçbir yere gönderilmez.',
+              helperMaxLines: 2,
+              prefixIcon: const Icon(Icons.vpn_key_outlined, size: 18),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: const Key('btn_ap_password_toggle'),
+                    tooltip: _apObscure ? 'Göster' : 'Gizle',
+                    icon: Icon(_apObscure ? Icons.visibility_off : Icons.visibility, size: 18),
+                    onPressed: () => setState(() => _apObscure = !_apObscure),
                   ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Modeminiz veya şifreniz değiştiğinde panonuz 3 dakika sonra otomatik olarak acil kurtarma ağı açar.\n\n'
-            '1. Telefonunuzun Wi-Fi ayarlarına gidin.\n'
-            '2. "AHBU-Kurtarma-..." ağına bağlanın (Şifre: ahbu1234).\n'
-            '3. Bağlandıktan sonra aşağıdaki butona tıklayın.',
-            style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.35),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: _isCheckingConnection ? null : _checkPanelConnection,
-              icon: _isCheckingConnection
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh, size: 16),
-              label: Text(_isConnectedToPanel ? 'Bağlantıyı Yeniden Kontrol Et' : 'Pano Bağlantısını Test Et'),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: _isConnectedToPanel ? AppTheme.accentGreen : AppTheme.primaryBlueLight),
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  IconButton(
+                    key: const Key('btn_copy_ap_password'),
+                    tooltip: 'Kopyala',
+                    icon: const Icon(Icons.copy_rounded, size: 18),
+                    onPressed: _apPassword.text.isEmpty ? null : _copyApPassword,
+                  ),
+                ],
               ),
             ),
           ),
@@ -265,189 +310,4 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
       ),
     );
   }
-
-  Widget _buildCredentialsForm() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Flexible(
-              child: Text(
-                'Adım 2: Yeni Ev Wi-Fi Bilgileri',
-                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            if (_isConnectedToPanel)
-              TextButton.icon(
-                onPressed: _isScanning ? null : _scanWifi,
-                icon: _isScanning
-                    ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.wifi_tethering, size: 16),
-                label: const Text('Ağları Tara', style: TextStyle(fontSize: 12)),
-              ),
-          ],
-        ),
-        const SizedBox(height: 10),
-
-        if (_scannedNetworks.isNotEmpty) ...[
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            decoration: BoxDecoration(
-              color: AppTheme.cardDark,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppTheme.cardBorder),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                hint: const Text('Çevredeki bir Wi-Fi ağını seçin', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
-                isExpanded: true,
-                dropdownColor: AppTheme.cardDark,
-                items: _scannedNetworks.map((net) {
-                  final ssid = (net['ssid'] ?? '').toString();
-                  final rssi = net['rssi']?.toString() ?? '';
-                  return DropdownMenuItem<String>(
-                    value: ssid,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Flexible(
-                          child: Text(
-                            ssid,
-                            style: const TextStyle(fontSize: 13),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Text('$rssi dBm', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
-                      ],
-                    ),
-                  );
-                }).toList(),
-                onChanged: (val) {
-                  if (val != null) {
-                    setState(() => _ssidController.text = val);
-                  }
-                },
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-        ],
-
-        // SSID
-        TextField(
-          controller: _ssidController,
-          decoration: InputDecoration(
-            labelText: 'Yeni Wi-Fi Ağ Adı (SSID)',
-            hintText: 'Ev Wi-Fi ağınızın adı',
-            labelStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-            prefixIcon: const Icon(Icons.wifi, size: 20),
-            filled: true,
-            fillColor: AppTheme.cardDark,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-        const SizedBox(height: 12),
-
-        // Şifre
-        TextField(
-          controller: _passController,
-          obscureText: _isObscure,
-          decoration: InputDecoration(
-            labelText: 'Yeni Wi-Fi Şifresi',
-            hintText: 'Wi-Fi şifrenizi girin',
-            labelStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-            hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-            prefixIcon: const Icon(Icons.lock_outline, size: 20),
-            suffixIcon: IconButton(
-              icon: Icon(_isObscure ? Icons.visibility_off : Icons.visibility, size: 18),
-              onPressed: () => setState(() => _isObscure = !_isObscure),
-            ),
-            filled: true,
-            fillColor: AppTheme.cardDark,
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        if (_errorMessage != null) ...[
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: AppTheme.accentRed.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: AppTheme.accentRed.withValues(alpha: 0.3)),
-            ),
-            child: Text(
-              _errorMessage!,
-              style: const TextStyle(color: AppTheme.accentRed, fontSize: 12),
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
-
-        ElevatedButton.icon(
-          onPressed: _isSubmitting ? null : _sendNewCredentials,
-          icon: _isSubmitting
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Icon(Icons.send_rounded, size: 18),
-          label: const Text('Yeni Wi-Fi Şifresini Panoya Yükle'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryBlue,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            textStyle: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSuccessView() {
-    return Column(
-      children: [
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppTheme.accentGreen.withValues(alpha: 0.15),
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(Icons.check_circle_outline, color: AppTheme.accentGreen, size: 48),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'Wi-Fi Bilgileri Başarıyla Aktarıldı!',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.accentGreen),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          'Pano yeni Wi-Fi şifrenizi kaydetti ve ev ağınıza bağlanıyor. Kurtarma modu otomatik olarak sonlandırılacaktır.\n\n'
-          '👉 Şimdi telefonunuzu tekrar ev Wi-Fi ağınıza veya mobil veriye bağlayabilirsiniz.',
-          style: TextStyle(fontSize: 12.5, color: AppTheme.textMuted, height: 1.4),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 20),
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.accentGreen,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            child: const Text('Tamam'),
-          ),
-        ),
-      ],
-    );
-  }
 }
-

@@ -1,70 +1,213 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+
 import '../../models/cloud_models.dart';
+import '../../models/json_utils.dart';
 import '../../services/automation_state.dart';
+import '../../utils/friendly_error.dart';
+import '../common/confirm_dialogs.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circuit_background.dart';
+import 'service_setup/panel/label_reissue_dialog.dart';
+import 'service_setup/secret_clipboard.dart';
+import 'service_setup/setup_style.dart';
 
 /// AHBU Akıllı Ev & Bina Otomasyonu
 /// Cihaz Envanteri ve Karekod Yönetim Paneli (Süper Yönetici & Yetkili Servis)
+///
+/// * Liste **sayfalı** ve aramada 300 ms gecikmelidir; yenileme hatası görünür kalır (bayat liste
+///   uyarılır, sessizce eski veri gösterilmez).
+/// * Durum geçişleri kısıtlıdır: yalnızca **Stokta <-> Askıda**. Devrede (CLAIMED) cihaz için
+///   "Askıya Al" ve "Sil" gösterilmez; iptal edilmiş cihaz yalnızca **UID yazarak** silinir.
+/// * Silme ve etiket yeniden üretimi **cihaz seri numarasını yazarak** onaylanır.
+/// * Panoya kopyalanan her değer 45 sn sonra silinir.
+/// * Hiçbir PIN / QR / e-posta bilgisi loglanmaz.
 class DeviceInventoryPage extends StatefulWidget {
+  /// [autoLoad] `false` ise sunucudan otomatik yüklenmez; durumda hâlihazırda bulunan envanter
+  /// gösterilir (yenile ile yüklenir).
+  const DeviceInventoryPage({super.key, this.autoLoad = true, this.pageSize = 50});
+
   final bool autoLoad;
-  const DeviceInventoryPage({super.key, this.autoLoad = true});
+  final int pageSize;
 
   @override
   State<DeviceInventoryPage> createState() => _DeviceInventoryPageState();
 }
 
 class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
-  final TextEditingController _searchController = TextEditingController();
-  String _selectedStatusFilter = 'ALL';
+  static const Duration _searchDebounce = Duration(milliseconds: 300);
+  static const Duration _requestTimeout = Duration(seconds: 25);
+
+  final TextEditingController _search = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+
+  String _statusFilter = 'ALL';
+  String _query = '';
+  List<InventoryDeviceModel> _items = const <InventoryDeviceModel>[];
+  Map<String, int> _stats = const <String, int>{};
+  int? _total;
+  bool _loading = false;
+  bool _loadingMore = false;
+  bool _loaded = false;
+  String? _error;
+  int _requestSeq = 0;
+  Timer? _debounce;
+  final Set<String> _busyDevices = <String>{};
+
+  /// Etiket yeniden üretimi sürüyor: tek seferlik PIN/anahtar gelene kadar sayfadan çıkılamaz.
+  bool _reissuing = false;
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_onScroll);
+    final state = context.read<AutomationState>();
+    _items = state.inventoryDevices;
+    _stats = state.inventoryStats;
     if (widget.autoLoad) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _loadInventory();
+        if (mounted) unawaited(_load(reset: true));
       });
+    } else {
+      _loaded = true;
     }
   }
 
   @override
   void dispose() {
-    _searchController.dispose();
+    _debounce?.cancel();
+    _search.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
-  Future<void> _loadInventory() async {
-    final state = Provider.of<AutomationState>(context, listen: false);
-    debugPrint('[DeviceInventoryPage] _loadInventory filter: $_selectedStatusFilter, search: ${_searchController.text}');
-    await state.fetchInventory(
-      status: _selectedStatusFilter == 'ALL' ? null : _selectedStatusFilter,
-      search: _searchController.text.trim().isEmpty ? null : _searchController.text.trim(),
-    );
-    debugPrint('[DeviceInventoryPage] _loadInventory finished, items: ${state.inventoryDevices.length}, stats: ${state.inventoryStats}, error: ${state.inventoryError}');
+  bool get _hasMore {
+    final total = _total;
+    if (total != null) return _items.length < total;
+    return _items.isNotEmpty && _items.length % widget.pageSize == 0;
+  }
+
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (pos.pixels >= pos.maxScrollExtent - 200 && _hasMore && !_loading && !_loadingMore && _error == null) {
+      unawaited(_load(reset: false));
+    }
+  }
+
+  Future<void> _load({required bool reset}) async {
+    final state = context.read<AutomationState>();
+    if (!state.capabilities.canViewInventory) {
+      setState(() {
+        _error = 'Cihaz envanteri yalnızca süper yönetici ve servis personeli içindir.';
+        _loaded = true;
+      });
+      return;
+    }
+    final seq = ++_requestSeq;
+    setState(() {
+      if (reset) {
+        _loading = true;
+      } else {
+        _loadingMore = true;
+      }
+      _error = null;
+    });
+    try {
+      final res = await state.cloudApi
+          .fetchDeviceInventory(
+            status: _statusFilter == 'ALL' ? null : _statusFilter,
+            search: _query.isEmpty ? null : _query,
+            limit: widget.pageSize,
+            offset: reset ? 0 : _items.length,
+          )
+          .timeout(_requestTimeout);
+      if (!mounted || seq != _requestSeq) return;
+      final parsed = parseList(res['items'], InventoryDeviceModel.fromJson, label: 'Inventory');
+      final stats = asMap(res['stats']);
+      setState(() {
+        _items = reset ? parsed : <InventoryDeviceModel>[..._items, ...parsed];
+        _total = asInt(res['total']);
+        if (stats != null) {
+          _stats = <String, int>{
+            'total': asInt(stats['total']) ?? _items.length,
+            'in_stock': asInt(stats['in_stock']) ?? 0,
+            'claimed': asInt(stats['claimed']) ?? 0,
+            'suspended': asInt(stats['suspended']) ?? 0,
+            'revoked': asInt(stats['revoked']) ?? 0,
+          };
+        }
+        _loading = false;
+        _loadingMore = false;
+        _loaded = true;
+      });
+    } catch (e) {
+      if (!mounted || seq != _requestSeq) return;
+      setState(() {
+        _error = friendlyError(e, fallback: 'Envanter yüklenemedi. Lütfen tekrar deneyin.');
+        _loading = false;
+        _loadingMore = false;
+        _loaded = true;
+      });
+    }
   }
 
   void _onFilterChanged(String status) {
-    setState(() {
-      _selectedStatusFilter = status;
-    });
-    _loadInventory();
+    if (status == _statusFilter) return;
+    setState(() => _statusFilter = status);
+    unawaited(_load(reset: true));
   }
 
-  void _onSearchSubmitted(String _) {
-    _loadInventory();
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    final clock = context.read<AutomationState>().clock;
+    _debounce = clock.timer(_searchDebounce, () {
+      if (!mounted) return;
+      final next = value.trim();
+      if (next == _query) return;
+      _query = next;
+      unawaited(_load(reset: true));
+    });
+    setState(() {});
   }
+
+  // ---------------------------------------------------------------------------
+  // Yetkiler (durum geçiş matrisi)
+  // ---------------------------------------------------------------------------
+
+  static bool canSuspend(InventoryDeviceModel d) => d.isInStock;
+  /// Askıdaki ya da iptal edilmiş cihaz stoğa alınabilir (sunucu geçişleri: SUSPENDED/REVOKED -> IN_STOCK).
+  static bool canRestore(InventoryDeviceModel d) => d.isSuspended || d.isRevoked;
+
+  /// Devrede (CLAIMED/INSTALLED) cihaz silinemez.
+  static bool canDelete(InventoryDeviceModel d) => !d.isClaimed;
+
+  /// Etiket yeniden üretimi yalnızca **stoktaki** (IN_STOCK), henüz hiçbir daireye bağlı olmayan cihaz için
+  /// (sunucu askıdaki/devredeki cihazda 409 döner).
+  static bool canReissue(InventoryDeviceModel d) => d.isInStock;
 
   @override
   Widget build(BuildContext context) {
-    final state = Provider.of<AutomationState>(context);
-    final isSuper = state.isSuperUser;
+    final state = context.watch<AutomationState>();
+    final manage = state.capabilities.canManageInventory;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
+    return PopScope(
+      canPop: !_reissuing,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _reissuing) {
+          _snack('Yeni etiket bilgileri alınıyor. Bu bilgiler yalnızca bir kez gösterilir: işlem bitene kadar sayfadan çıkılamaz.');
+        }
+      },
+      child: _scaffold(context, manage, isDark),
+    );
+  }
+
+  Widget _scaffold(BuildContext context, bool manage, bool isDark) {
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0B1120) : const Color(0xFFF1F5F9),
       appBar: AppBar(
@@ -72,40 +215,28 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              'Cihaz Envanteri',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            Text(
-              'Karekodlar, Seri No & Donanım Takibi',
-              style: TextStyle(fontSize: 11, color: AppTheme.accentCyan),
-            ),
+            Text('Cihaz Envanteri', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text('Karekodlar, Seri No & Donanım Takibi', style: TextStyle(fontSize: 11, color: AppTheme.accentCyan)),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+            key: const Key('btn_refresh'),
+            icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Yenile',
-            onPressed: _loadInventory,
+            onPressed: _loading ? null : () => _load(reset: true),
           ),
         ],
       ),
       body: CircuitBackground(
         child: RefreshIndicator(
-          onRefresh: _loadInventory,
+          onRefresh: () => _load(reset: true),
           color: AppTheme.accentCyan,
           child: Column(
             children: [
-              // 1. Özet Sayaçlar (Metrics Overview)
-              _buildStatsHeader(state.inventoryStats),
-
-              // 2. Arama & Filtreleme Çubuğu
-              _buildSearchAndFilterBar(),
-
-              // 3. Envanter Cihaz Listesi
-              Expanded(
-                child: _buildDeviceList(state, isSuper),
-              ),
+              _statsHeader(context),
+              _searchAndFilters(context),
+              Expanded(child: _list(context, manage)),
             ],
           ),
         ),
@@ -113,129 +244,92 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     );
   }
 
-  // ===========================================================================
-  // 1. İSTATİSTİK ÖZET SAYAÇLARI
-  // ===========================================================================
-  Widget _buildStatsHeader(Map<String, int> stats) {
-    final total = stats['total'] ?? 0;
-    final inStock = stats['in_stock'] ?? 0;
-    final claimed = stats['claimed'] ?? 0;
-    final suspended = stats['suspended'] ?? 0;
-
+  Widget _statsHeader(BuildContext context) {
+    final total = _stats['total'] ?? _items.length;
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: AppTheme.cardDark,
+        color: AppTheme.getCardColor(context),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.cardBorder),
+        border: Border.all(color: AppTheme.getCardBorder(context)),
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final itemWidth = (constraints.maxWidth - 24) / 4;
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              _buildStatItem('Toplam', '$total', AppTheme.primaryBlueLight, itemWidth),
-              _buildStatItem('Stokta', '$inStock', AppTheme.accentGreen, itemWidth),
-              _buildStatItem('Devrede', '$claimed', AppTheme.accentCyan, itemWidth),
-              _buildStatItem('Askıda', '$suspended', AppTheme.accentAmber, itemWidth),
-            ],
-          );
-        },
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          _statItem(context, 'Toplam', '$total', AppTheme.primaryBlueLight),
+          _statItem(context, 'Stokta', '${_stats['in_stock'] ?? 0}', AppTheme.accentGreen),
+          _statItem(context, 'Devrede', '${_stats['claimed'] ?? 0}', AppTheme.accentCyan),
+          _statItem(context, 'Askıda', '${_stats['suspended'] ?? 0}', AppTheme.accentAmber),
+        ],
       ),
     );
   }
 
-  Widget _buildStatItem(String label, String value, Color color, double width) {
-    return SizedBox(
-      width: width,
+  Widget _statItem(BuildContext context, String label, String value, Color color) {
+    return Expanded(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
+          Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color)),
           const SizedBox(height: 2),
           Text(
             label,
-            style: const TextStyle(
-              fontSize: 11,
-              color: AppTheme.textMuted,
-            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 11, color: AppTheme.getTextMuted(context)),
           ),
         ],
       ),
     );
   }
 
-  // ===========================================================================
-  // 2. ARAMA VE FİLTRELEME ÇUBUĞU
-  // ===========================================================================
-  Widget _buildSearchAndFilterBar() {
+  Widget _searchAndFilters(BuildContext context) {
+    final primary = AppTheme.getTextPrimary(context);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: Column(
         children: [
-          // Arama Girişi
           TextField(
-            controller: _searchController,
-            onSubmitted: _onSearchSubmitted,
-            style: const TextStyle(color: Colors.white, fontSize: 13.5),
+            key: const Key('field_search'),
+            controller: _search,
+            onChanged: _onSearchChanged,
+            style: TextStyle(color: primary, fontSize: 13.5),
             decoration: InputDecoration(
               hintText: 'UUID, MAC, Seri No veya Daire Ara...',
-              hintStyle: const TextStyle(color: Colors.white54, fontSize: 13),
+              hintStyle: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13),
               prefixIcon: const Icon(Icons.search, color: AppTheme.accentCyan, size: 20),
-              suffixIcon: _searchController.text.isNotEmpty
+              suffixIcon: _search.text.isNotEmpty
                   ? IconButton(
-                      icon: const Icon(Icons.clear, color: Colors.white70, size: 18),
+                      tooltip: 'Aramayı temizle',
+                      icon: const Icon(Icons.clear, size: 18),
                       onPressed: () {
-                        _searchController.clear();
-                        _loadInventory();
+                        _search.clear();
+                        _onSearchChanged('');
                       },
                     )
-                  : IconButton(
-                      icon: const Icon(Icons.arrow_forward, color: AppTheme.accentCyan, size: 18),
-                      onPressed: () => _onSearchSubmitted(_searchController.text),
-                    ),
+                  : null,
               contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
               filled: true,
-              fillColor: AppTheme.cardDark,
+              fillColor: AppTheme.getCardColor(context),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppTheme.cardBorder),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppTheme.cardBorder),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppTheme.accentCyan, width: 1.5),
+                borderSide: BorderSide(color: AppTheme.getCardBorder(context)),
               ),
             ),
           ),
           const SizedBox(height: 10),
-
-          // Filtre Butonları (SingleChildScrollView ile taşma engelli)
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _buildFilterChip('ALL', 'Tümü'),
+                _filterChip('ALL', 'Tümü'),
                 const SizedBox(width: 8),
-                _buildFilterChip('IN_STOCK', 'Stokta Hazır'),
+                _filterChip('IN_STOCK', 'Stokta Hazır'),
                 const SizedBox(width: 8),
-                _buildFilterChip('CLAIMED', 'Devrede / Aktif'),
+                _filterChip('CLAIMED', 'Devrede / Aktif'),
                 const SizedBox(width: 8),
-                _buildFilterChip('SUSPENDED', 'Askıya Alınan'),
+                _filterChip('SUSPENDED', 'Askıya Alınan'),
               ],
             ),
           ),
@@ -244,103 +338,99 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     );
   }
 
-  Widget _buildFilterChip(String value, String label) {
-    final isSelected = _selectedStatusFilter == value;
+  Widget _filterChip(String value, String label) {
+    final selected = _statusFilter == value;
     return ChoiceChip(
+      key: Key('chip_filter_$value'),
       label: Text(
         label,
         style: TextStyle(
           fontSize: 11.5,
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-          color: isSelected ? Colors.black : Colors.white70,
+          fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+          color: selected ? Colors.black : AppTheme.getTextPrimary(context),
         ),
       ),
-      selected: isSelected,
+      selected: selected,
       onSelected: (_) => _onFilterChanged(value),
       selectedColor: AppTheme.accentCyan,
-      backgroundColor: AppTheme.cardDark,
-      side: BorderSide(
-        color: isSelected ? AppTheme.accentCyan : AppTheme.cardBorder,
-      ),
+      backgroundColor: AppTheme.getCardColor(context),
+      side: BorderSide(color: selected ? AppTheme.accentCyan : AppTheme.getCardBorder(context)),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
     );
   }
 
-  // ===========================================================================
-  // 3. CİHAZ LİSTESİ & KARTLARI
-  // ===========================================================================
-  Widget _buildDeviceList(AutomationState state, bool isSuper) {
-    if (state.inventoryLoading && state.inventoryDevices.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppTheme.accentCyan),
+  Widget _list(BuildContext context, bool manage) {
+    if (_loading && _items.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 120),
+          Center(child: CircularProgressIndicator(key: Key('inventory_loading'), color: AppTheme.accentCyan)),
+        ],
       );
     }
-
-    if (state.inventoryError != null && state.inventoryDevices.isEmpty) {
-      return Center(
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+    if (_error != null && _items.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(24),
+        children: [
+          const SizedBox(height: 40),
+          Column(
+            key: const Key('inventory_error'),
             children: [
               const Icon(Icons.error_outline_rounded, color: AppTheme.accentRed, size: 48),
               const SizedBox(height: 12),
               Text(
                 'Envanter Yüklenemedi',
-                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                style: TextStyle(color: AppTheme.getTextPrimary(context), fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 6),
               Text(
-                state.inventoryError!,
+                _error!,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13),
               ),
               const SizedBox(height: 16),
               ElevatedButton.icon(
-                onPressed: _loadInventory,
+                key: const Key('btn_retry'),
+                onPressed: () => _load(reset: true),
                 icon: const Icon(Icons.refresh, size: 18),
                 label: const Text('Tekrar Dene'),
                 style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentCyan),
               ),
             ],
           ),
-        ),
+        ],
       );
     }
-
-    final devices = state.inventoryDevices;
-    if (devices.isEmpty) {
-      return Center(
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+    if (_loaded && _items.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(32),
+        children: [
+          Column(
+            key: const Key('inventory_empty'),
             children: [
               Container(
                 padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppTheme.accentCyan.withValues(alpha: 0.1),
-                ),
+                decoration: BoxDecoration(shape: BoxShape.circle, color: AppTheme.accentCyan.withValues(alpha: 0.1)),
                 child: const Icon(Icons.inventory_2_outlined, color: AppTheme.accentCyan, size: 54),
               ),
               const SizedBox(height: 16),
-              const Text(
+              Text(
                 'Envanterde Cihaz Bulunmuyor',
-                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                style: TextStyle(color: AppTheme.getTextPrimary(context), fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Masaüstü servis yazılımından "Karekod Üret & Etiket Bas" sekmesiyle cihaza etiket basıp kaydettiğinizde burada tüm detaylarıyla listelenecektir.',
+              Text(
+                'Masaüstü servis yazılımından "Karekod Üret & Etiket Bas" sekmesiyle cihaza etiket basıp '
+                'kaydettiğinizde burada tüm detaylarıyla listelenecektir.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 12.5),
+                style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 12.5),
               ),
               const SizedBox(height: 18),
               OutlinedButton.icon(
-                onPressed: _loadInventory,
+                onPressed: () => _load(reset: true),
                 icon: const Icon(Icons.refresh, size: 18),
                 label: const Text('Yenile'),
                 style: OutlinedButton.styleFrom(
@@ -350,24 +440,75 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
               ),
             ],
           ),
-        ),
+        ],
       );
     }
-
+    final offset = _error != null ? 1 : 0;
     return ListView.builder(
+      controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-      itemCount: devices.length,
+      itemCount: offset + _items.length + 1,
       itemBuilder: (context, index) {
-        final device = devices[index];
-        return _buildDeviceCard(device, isSuper);
+        if (index < offset) return _staleBanner(context);
+        final i = index - offset;
+        if (i < _items.length) return _card(context, _items[i], manage);
+        return _footer(context);
       },
     );
   }
 
-  Widget _buildDeviceCard(InventoryDeviceModel device, bool isSuper) {
-    Color statusColor;
-    IconData statusIcon;
+  Widget _staleBanner(BuildContext context) {
+    return Container(
+      key: const Key('inventory_stale'),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppTheme.accentAmber.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: AppTheme.accentAmber),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
+              style: TextStyle(fontSize: 12.5, color: AppTheme.getTextPrimary(context)),
+            ),
+          ),
+          TextButton(key: const Key('btn_retry'), onPressed: () => _load(reset: true), child: const Text('Tekrar dene')),
+        ],
+      ),
+    );
+  }
 
+  Widget _footer(BuildContext context) {
+    if (_loadingMore) {
+      return const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
+    }
+    if (_hasMore && _error == null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: OutlinedButton.icon(
+          key: const Key('btn_load_more'),
+          onPressed: () => _load(reset: false),
+          icon: const Icon(Icons.expand_more_rounded),
+          label: const Text('Daha fazla yükle'),
+        ),
+      );
+    }
+    return const SizedBox(height: 24);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Kart
+  // ---------------------------------------------------------------------------
+
+  Widget _card(BuildContext context, InventoryDeviceModel device, bool manage) {
+    final Color statusColor;
+    final IconData statusIcon;
     if (device.isInStock) {
       statusColor = AppTheme.accentGreen;
       statusIcon = Icons.inventory;
@@ -381,33 +522,26 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       statusColor = AppTheme.accentRed;
       statusIcon = Icons.cancel_outlined;
     }
-
-    final dateFormatted = DateFormat('dd.MM.yyyy HH:mm').format(device.createdAt.toLocal());
+    final dateText = DateFormat('dd.MM.yyyy HH:mm').format(device.createdAt.toLocal());
+    final busy = _busyDevices.contains(device.deviceUuid);
+    final primary = AppTheme.getTextPrimary(context);
+    final muted = AppTheme.getTextMuted(context);
 
     return Container(
+      key: Key('card_inventory_${device.deviceUuid}'),
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: AppTheme.cardDark,
+        color: AppTheme.getCardColor(context),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: device.isSuspended
-              ? AppTheme.accentAmber.withValues(alpha: 0.5)
-              : AppTheme.cardBorder,
+          color: device.isSuspended ? AppTheme.accentAmber.withValues(alpha: 0.5) : AppTheme.getCardBorder(context),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.25),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
-          ),
-        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Üst Satır: Sıra No, Model & Durum Rozeti (Taşma korumalı)
             Row(
               children: [
                 Expanded(
@@ -422,10 +556,10 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                         ),
                         child: Text(
                           device.formattedSerial,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: AppTheme.accentAmber,
+                            color: SetupColors.readable(context, AppTheme.accentAmber),
                             letterSpacing: 0.5,
                           ),
                         ),
@@ -433,14 +567,10 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          device.model,
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
+                          device.model.isEmpty ? 'Model bilgisi yok' : device.model,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, color: primary),
                         ),
                       ),
                     ],
@@ -464,7 +594,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                         style: TextStyle(
                           fontSize: 10.5,
                           fontWeight: FontWeight.bold,
-                          color: statusColor,
+                          color: SetupColors.readable(context, statusColor),
                           letterSpacing: 0.5,
                         ),
                       ),
@@ -473,47 +603,17 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                 ),
               ],
             ),
-            const Divider(color: AppTheme.cardBorder, height: 18),
-
-            // UUID Bilgisi (Kopyalanabilir)
-            _buildCopyableRow(
-              icon: Icons.fingerprint,
-              label: 'Cihaz UUID',
-              value: device.deviceUuid,
-              color: AppTheme.primaryBlueLight,
-            ),
+            Divider(color: AppTheme.getCardBorder(context), height: 18),
+            _copyRow(context, Icons.fingerprint, 'Cihaz UUID', device.deviceUuid, AppTheme.primaryBlueLight),
             const SizedBox(height: 8),
-
-            // MAC Adresi (Kopyalanabilir)
-            _buildCopyableRow(
-              icon: Icons.memory,
-              label: 'MAC Adresi',
-              value: device.macAddress,
-              color: AppTheme.accentCyan,
-            ),
+            _copyRow(context, Icons.memory, 'MAC Adresi', device.macAddress, AppTheme.accentCyan),
             const SizedBox(height: 8),
-
-            // Parti No & Tarih
             Row(
               children: [
-                Expanded(
-                  child: _buildInfoItem(
-                    icon: Icons.tag,
-                    label: 'Parti No',
-                    value: device.batchNo,
-                  ),
-                ),
-                Expanded(
-                  child: _buildInfoItem(
-                    icon: Icons.calendar_today_outlined,
-                    label: 'Kayıt Tarihi',
-                    value: dateFormatted,
-                  ),
-                ),
+                Expanded(child: _infoItem(context, Icons.tag, 'Parti No', device.batchNo.isEmpty ? '-' : device.batchNo)),
+                Expanded(child: _infoItem(context, Icons.calendar_today_outlined, 'Kayıt Tarihi', dateText)),
               ],
             ),
-
-            // Sahiplenme (Claim) Bilgisi varsa
             if (device.claimedHomeName != null || device.claimedUserEmail != null) ...[
               const SizedBox(height: 8),
               Container(
@@ -530,20 +630,17 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Sahipli: ${device.claimedHomeName ?? "Bilinmeyen Daire"} (${device.claimedUserEmail ?? "Sahipsiz"})',
-                        style: const TextStyle(fontSize: 11.5, color: Colors.white70),
-                        maxLines: 1,
+                        'Sahipli: ${device.claimedHomeName ?? 'Bilinmeyen Daire'} (${device.claimedUserEmail ?? 'Sahipsiz'})',
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 11.5, color: muted),
                       ),
                     ),
                   ],
                 ),
               ),
             ],
-
             const SizedBox(height: 12),
-
-            // Eylem Butonları (Karekod Gör, Askıya Al / Aktif Et, Sil - Wrap ile esnek)
             Align(
               alignment: Alignment.centerRight,
               child: Wrap(
@@ -552,12 +649,13 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 alignment: WrapAlignment.end,
                 children: [
-                  // Karekod Göster Butonu
                   ElevatedButton.icon(
+                    key: Key('btn_qr_${device.deviceUuid}'),
                     onPressed: () => _showQrDialog(device),
                     icon: const Icon(Icons.qr_code, size: 16),
                     label: const Text('Karekod Gör'),
                     style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(48, 44),
                       backgroundColor: AppTheme.primaryBlue,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -565,120 +663,114 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                       textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                   ),
-
-                  // Askıya Al / Aktif Et Butonu
-                  if (isSuper)
+                  if (manage && canSuspend(device))
                     OutlinedButton.icon(
-                      onPressed: () => _toggleDeviceStatus(device),
-                      icon: Icon(
-                        device.isSuspended ? Icons.play_arrow_rounded : Icons.pause_rounded,
-                        size: 16,
-                        color: device.isSuspended ? AppTheme.accentGreen : AppTheme.accentAmber,
-                      ),
-                      label: Text(
-                        device.isSuspended ? 'Aktif Et' : 'Askıya Al',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: device.isSuspended ? AppTheme.accentGreen : AppTheme.accentAmber,
-                        ),
-                      ),
+                      key: Key('btn_suspend_${device.deviceUuid}'),
+                      onPressed: busy ? null : () => _changeStatus(device, 'SUSPENDED'),
+                      icon: const Icon(Icons.pause_rounded, size: 16, color: AppTheme.accentAmber),
+                      label: const Text('Askıya Al', style: TextStyle(fontSize: 12, color: AppTheme.accentAmber)),
                       style: OutlinedButton.styleFrom(
-                        side: BorderSide(
-                          color: device.isSuspended ? AppTheme.accentGreen : AppTheme.accentAmber,
-                        ),
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        minimumSize: const Size(48, 44),
+                        side: const BorderSide(color: AppTheme.accentAmber),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                     ),
-
-                  // Sil Butonu
-                  if (isSuper)
+                  if (manage && canRestore(device))
+                    OutlinedButton.icon(
+                      key: Key('btn_restore_${device.deviceUuid}'),
+                      onPressed: busy ? null : () => _changeStatus(device, 'IN_STOCK'),
+                      icon: const Icon(Icons.play_arrow_rounded, size: 16, color: AppTheme.accentGreen),
+                      label: const Text('Stoğa Al', style: TextStyle(fontSize: 12, color: AppTheme.accentGreen)),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(48, 44),
+                        side: const BorderSide(color: AppTheme.accentGreen),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  if (manage && canReissue(device))
+                    OutlinedButton.icon(
+                      key: Key('btn_reissue_label_${device.deviceUuid}'),
+                      onPressed: busy ? null : () => _reissueLabel(device),
+                      icon: const Icon(Icons.print_rounded, size: 16),
+                      label: const Text('Etiketi Yeniden Üret', style: TextStyle(fontSize: 12)),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(48, 44),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  if (manage && canDelete(device))
                     IconButton(
-                      icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.accentRed, size: 20),
+                      key: Key('btn_delete_${device.deviceUuid}'),
+                      icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.accentRed, size: 22),
                       tooltip: 'Envanterden Sil',
-                      onPressed: () => _confirmDeleteDevice(device),
+                      onPressed: busy ? null : () => _confirmDelete(device),
                     ),
                 ],
               ),
             ),
+            if (manage && device.isClaimed)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Devredeki cihaz askıya alınamaz veya silinemez. Daire değişikliği için acil sıfırlama kullanın.',
+                  key: Key('note_claimed_${device.deviceUuid}'),
+                  style: TextStyle(fontSize: 11.5, color: muted),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCopyableRow({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-  }) {
+  Widget _copyRow(BuildContext context, IconData icon, String label, String value, Color color) {
     return InkWell(
-      onTap: () {
-        Clipboard.setData(ClipboardData(text: value));
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$label kopyalandı: $value'),
-            duration: const Duration(seconds: 2),
-            backgroundColor: AppTheme.cardDark,
-          ),
-        );
-      },
+      onTap: () => _copy(label, value),
       borderRadius: BorderRadius.circular(6),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
+        padding: const EdgeInsets.symmetric(vertical: 4),
         child: Row(
           children: [
             Icon(icon, color: color, size: 16),
             const SizedBox(width: 8),
-            Text(
-              '$label: ',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-            ),
+            Text('$label: ', style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context))),
             Expanded(
               child: Text(
                 value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   fontFamily: 'monospace',
-                  color: color,
+                  color: SetupColors.readable(context, color),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
               ),
             ),
             const SizedBox(width: 4),
-            const Icon(Icons.copy_rounded, color: Colors.white38, size: 14),
+            Icon(Icons.copy_rounded, color: AppTheme.getTextMuted(context), size: 14),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildInfoItem({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
+  Widget _infoItem(BuildContext context, IconData icon, String label, String value) {
     return Row(
       children: [
-        Icon(icon, color: Colors.white38, size: 14),
+        Icon(icon, color: AppTheme.getTextMuted(context), size: 14),
         const SizedBox(width: 6),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                label,
-                style: const TextStyle(fontSize: 10.5, color: AppTheme.textMuted),
-              ),
+              Text(label, style: TextStyle(fontSize: 10.5, color: AppTheme.getTextMuted(context))),
               Text(
                 value,
-                style: const TextStyle(fontSize: 11.5, color: Colors.white, fontWeight: FontWeight.w500),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: AppTheme.getTextPrimary(context), fontWeight: FontWeight.w500),
               ),
             ],
           ),
@@ -687,15 +779,158 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     );
   }
 
-  // ===========================================================================
-  // 4. KAREKOD (QR) GÖRÜNTÜLEME DİYALOĞU
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
+  // Eylemler
+  // ---------------------------------------------------------------------------
+
+  void _snack(String message, {Color? color}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message), backgroundColor: color, behavior: SnackBarBehavior.floating));
+  }
+
+  Future<void> _copy(String label, String value) async {
+    final clock = context.read<AutomationState>().clock;
+    await SecretClipboard.copy(value, clock: clock);
+    _snack('$label panoya kopyalandı (45 sn sonra silinir).');
+  }
+
+  Future<void> _changeStatus(InventoryDeviceModel device, String next) async {
+    final suspending = next == 'SUSPENDED';
+    final bool confirm;
+    if (!suspending && device.isRevoked) {
+      // İptal edilmiş (arıza / iade / güvenlik) cihazı stoğa geri almak, askıdakini geri almaktan çok daha
+      // risklidir: tekrar saha kurulumuna açılır. Basit onay yetmez, cihaz kimliği yazılarak onaylanır.
+      confirm = await ConfirmDestructiveDialog.show(
+        context,
+        title: 'İptal edilmiş cihaz stoğa alınsın mı?',
+        message: '${device.deviceUuid} cihazı arıza, iade ya da güvenlik gerekçesiyle İPTAL EDİLMİŞTİ. Stoğa '
+            'alınırsa yeniden saha kurulumuna açılır. Devam etmeden önce iptal gerekçesini kontrol edin.',
+        confirmPhrase: device.deviceUuid,
+        confirmLabel: 'Evet, Stoğa Al',
+      );
+    } else {
+      confirm = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text(suspending ? 'Cihaz askıya alınsın mı?' : 'Cihaz stoğa alınsın mı?'),
+              content: Text(
+                suspending
+                    ? '${device.deviceUuid} cihazı askıya alınacak; eşleştirme ve yetkilendirme durdurulacak.'
+                    : '${device.deviceUuid} cihazı tekrar stoğa alınacak ve saha kurulumuna açılacak.',
+              ),
+              actions: [
+                TextButton(
+                  key: const Key('btn_status_cancel'),
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Vazgeç'),
+                ),
+                ElevatedButton(
+                  key: const Key('btn_status_confirm'),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  style: ElevatedButton.styleFrom(backgroundColor: suspending ? AppTheme.accentAmber : AppTheme.accentGreen),
+                  child: Text(suspending ? 'Askıya Al' : 'Stoğa Al'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+    }
+    if (!confirm || !mounted) return;
+    final state = context.read<AutomationState>();
+    setState(() => _busyDevices.add(device.deviceUuid));
+    try {
+      await state.updateInventoryStatus(device.deviceUuid, next);
+      if (!mounted) return;
+      setState(() {
+        _items = <InventoryDeviceModel>[
+          for (final d in _items) d.deviceUuid == device.deviceUuid ? d.copyWith(status: next) : d,
+        ];
+      });
+      _snack('${device.deviceUuid} durumu güncellendi: ${suspending ? 'Askıda' : 'Stokta'}.');
+      unawaited(_load(reset: true));
+    } catch (e) {
+      _snack(friendlyError(e), color: AppTheme.accentRed);
+    } finally {
+      if (mounted) setState(() => _busyDevices.remove(device.deviceUuid));
+    }
+  }
+
+  Future<void> _confirmDelete(InventoryDeviceModel device) async {
+    final ok = await ConfirmDestructiveDialog.show(
+      context,
+      title: 'Cihaz envanterden silinsin mi?',
+      message: '${device.deviceUuid} (${device.formattedSerial}) envanterden tamamen silinecek. Bu işlem geri alınamaz.',
+      confirmPhrase: device.deviceUuid,
+      confirmLabel: 'Evet, Sil',
+    );
+    if (!ok || !mounted) return;
+    final state = context.read<AutomationState>();
+    setState(() => _busyDevices.add(device.deviceUuid));
+    try {
+      await state.deleteDeviceFromInventory(device.deviceUuid);
+      if (!mounted) return;
+      setState(() {
+        _items = _items.where((d) => d.deviceUuid != device.deviceUuid).toList();
+        _total = _total == null ? null : (_total! > 0 ? _total! - 1 : 0);
+      });
+      _snack('${device.deviceUuid} envanterden silindi.');
+      unawaited(_load(reset: true));
+    } catch (e) {
+      _snack(friendlyError(e), color: AppTheme.accentRed);
+    } finally {
+      if (mounted) setState(() => _busyDevices.remove(device.deviceUuid));
+    }
+  }
+
+  Future<void> _reissueLabel(InventoryDeviceModel device) async {
+    final ok = await ConfirmDestructiveDialog.show(
+      context,
+      title: 'Etiket yeniden üretilsin mi?',
+      message: '${device.deviceUuid} için yeni kurulum PIN\'i ve yerel anahtar üretilecek. ESKİ ETİKET GEÇERSİZ olur; '
+          'yeni bilgiler yalnızca bir kez gösterilir.',
+      confirmPhrase: device.deviceUuid,
+      confirmLabel: 'Yeniden Üret',
+    );
+    if (!ok || !mounted || _reissuing) return;
+    final state = context.read<AutomationState>();
+    // Yeni PIN ve anahtar yalnızca BU yanıtta gelir (eski etiket sunucuda zaten geçersiz): istek sürerken sayfadan
+    // çıkılırsa değerler hiç gösterilmeden kaybolurdu. Bu yüzden istek bitene kadar geri dönüş engellenir
+    // ([PopScope]); yine de sayfa başka bir yolla kapanırsa (oturum bitişi ...) diyalog kök gezginde gösterilir.
+    final rootContext = Navigator.of(context, rootNavigator: true).context;
+    setState(() {
+      _busyDevices.add(device.deviceUuid);
+      _reissuing = true;
+    });
+    try {
+      final res = await state.cloudApi.reissueInventoryLabel(device.deviceUuid);
+      final result = LabelReissueResult.fromJson(res);
+      if (result.isEmpty) {
+        _snack('Sunucu yeni etiket bilgisini vermedi. Lütfen tekrar deneyin.', color: AppTheme.accentRed);
+      } else if (mounted) {
+        await LabelReissueDialog.show(context, deviceUuid: device.deviceUuid, result: result);
+      } else if (rootContext.mounted) {
+        await LabelReissueDialog.show(rootContext, deviceUuid: device.deviceUuid, result: result);
+      }
+    } catch (e) {
+      _snack(friendlyError(e), color: AppTheme.accentRed);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyDevices.remove(device.deviceUuid);
+          _reissuing = false;
+        });
+      }
+    }
+  }
+
   void _showQrDialog(InventoryDeviceModel device) {
-    showDialog(
+    showDialog<void>(
       context: context,
       builder: (ctx) {
         return Dialog(
-          backgroundColor: AppTheme.cardDark,
+          backgroundColor: AppTheme.getCardColor(context),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           child: Padding(
             padding: const EdgeInsets.all(20),
@@ -709,81 +944,61 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                     Expanded(
                       child: Text(
                         'Cihaz Karekodu (${device.formattedSerial})',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
                       ),
                     ),
                     IconButton(
-                      constraints: const BoxConstraints(),
-                      padding: const EdgeInsets.all(4),
-                      icon: const Icon(Icons.close, color: Colors.white70, size: 20),
+                      tooltip: 'Kapat',
+                      icon: const Icon(Icons.close, size: 20),
                       onPressed: () => Navigator.pop(ctx),
                     ),
                   ],
                 ),
                 const SizedBox(height: 16),
-
-                // QR Kod Çerçevesi (Beyaz zemin termal etiket gibi net)
                 Container(
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: QrImageView(
-                    data: device.qrClaimUrl,
-                    version: QrVersions.auto,
-                    size: 200,
-                    backgroundColor: Colors.white,
-                  ),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+                  child: QrImageView(data: device.qrClaimUrl, version: QrVersions.auto, size: 200, backgroundColor: Colors.white),
                 ),
                 const SizedBox(height: 16),
-
-                // Cihaz Detay Bilgisi
                 Text(
                   device.deviceUuid,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.accentCyan,
-                  ),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.accentCyan),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   'MAC: ${device.macAddress} • ${device.model}',
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
                   textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 11, color: AppTheme.getTextMuted(context)),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  device.qrClaimUrl.toLowerCase().contains('pin=')
+                      ? 'DİKKAT: Bu karekod kurulum PIN\'ini içerir. Ekranı başkalarına göstermeyin, bağlantıyı paylaşmayın.'
+                      : 'Bu bağlantı PIN içermez (PIN yalnızca fiziksel etiketteki karekod ve yazıdadır).',
+                  key: const Key('qr_pin_note'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 11, color: AppTheme.getTextMuted(context)),
                 ),
                 const SizedBox(height: 16),
-
-                // Bağlantıyı Kopyala Butonu
                 OutlinedButton.icon(
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: device.qrClaimUrl));
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Karekod bağlantısı panoya kopyalandı.'),
-                        backgroundColor: AppTheme.cardDark,
-                      ),
+                  key: const Key('btn_copy_qr_link'),
+                  onPressed: () async {
+                    final clock = context.read<AutomationState>().clock;
+                    final messenger = ScaffoldMessenger.of(context);
+                    final navigator = Navigator.of(ctx);
+                    await SecretClipboard.copy(device.qrClaimUrl, clock: clock);
+                    navigator.pop();
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Karekod bağlantısı panoya kopyalandı (45 sn sonra silinir).')),
                     );
                   },
                   icon: const Icon(Icons.copy_rounded, size: 16),
                   label: const Text('Karekod Bağlantısını Kopyala'),
                   style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(48, 44),
                     foregroundColor: AppTheme.accentCyan,
                     side: const BorderSide(color: AppTheme.accentCyan),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -795,116 +1010,5 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
         );
       },
     );
-  }
-
-  // ===========================================================================
-  // 5. DURUM GÜNCELLEME (ASKIYA AL / AKTİF ET)
-  // ===========================================================================
-  Future<void> _toggleDeviceStatus(InventoryDeviceModel device) async {
-    final newStatus = device.isSuspended ? 'IN_STOCK' : 'SUSPENDED';
-    final actionLabel = device.isSuspended ? 'Aktif Etmek' : 'Askıya Almak';
-
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.cardDark,
-        title: Text('$actionLabel İstiyor musunuz?'),
-        content: Text(
-          device.isSuspended
-              ? '${device.deviceUuid} cihazı tekrar stoğa alınacak ve saha aktivasyonuna açılacaktır.'
-              : '${device.deviceUuid} cihazı askıya alınacak ve eşleştirme/yetkilendirme durdurulacaktır.',
-          style: const TextStyle(color: Colors.white70, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Vazgeç', style: TextStyle(color: Colors.white70)),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: device.isSuspended ? AppTheme.accentGreen : AppTheme.accentAmber,
-            ),
-            child: Text(device.isSuspended ? 'Aktif Et' : 'Askıya Al'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true || !mounted) return;
-
-    final state = Provider.of<AutomationState>(context, listen: false);
-    try {
-      await state.updateInventoryStatus(device.deviceUuid, newStatus);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${device.deviceUuid} durumu güncellendi: $newStatus'),
-            backgroundColor: AppTheme.cardDark,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Hata: $e'),
-            backgroundColor: AppTheme.accentRed,
-          ),
-        );
-      }
-    }
-  }
-
-  // ===========================================================================
-  // 6. CİHAZ SİLME ONAYI
-  // ===========================================================================
-  Future<void> _confirmDeleteDevice(InventoryDeviceModel device) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.cardDark,
-        title: const Text('Cihazı Silmek İstiyor musunuz?'),
-        content: Text(
-          '${device.deviceUuid} (${device.formattedSerial}) cihazı envanterden tamamen silinecektir. Bu işlem geri alınamaz.',
-          style: const TextStyle(color: Colors.white70, fontSize: 13),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Vazgeç', style: TextStyle(color: Colors.white70)),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentRed),
-            child: const Text('Evet, Sil'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true || !mounted) return;
-
-    final state = Provider.of<AutomationState>(context, listen: false);
-    try {
-      await state.deleteDeviceFromInventory(device.deviceUuid);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${device.deviceUuid} envanterden silindi.'),
-            backgroundColor: AppTheme.cardDark,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Silme hatası: $e'),
-            backgroundColor: AppTheme.accentRed,
-          ),
-        );
-      }
-    }
   }
 }

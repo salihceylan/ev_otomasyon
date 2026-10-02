@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AĞ GÜVENLİK YAPILANDIRMASI (release dahil tüm derlemeler).
+
+  Varsayılan: düz HTTP (cleartext) KAPALI; yalnızca sistem sertifika otoriteleri güvenilir.
+  Bulut (REST) ve MQTT trafiği TLS ile yapılır.
+
+  İstisna (yalnızca bu adresler): pano yerel API'si TLS konuşmaz (düz HTTP). Wi-Fi kurtarma / servis
+  kurulum sihirbazı panonun kurtarma erişim noktasına (AP, sabit 192.168.4.1) bağlanır; yerel ağdaki
+  pano ise `*.local` (mDNS) adıyla bulunabilir. Android bu dosyada IP aralığı (CIDR) desteklemez; bu
+  yüzden ham LAN IP adresleri bu listede yoktur. NOT: bu yapılandırma yalnızca Java/Kotlin ağ yığınını
+  (WebView vb.) kısıtlar; Flutter'ın dart:io HTTP istemcisi NSC'ye TABİ DEĞİLDİR (statik kanıt: flutter.jar'da NSC
+  ayrıştırıcısı yok; cihazda doğrulanmadı), yani release'te pano AP'si ve LAN doğrudan mod düz HTTP ile çalışır.
+  Düz HTTP'nin yalnızca yerel adreslere gitmesini uygulama kodu sağlar (AppConfig + isAllowedDeviceHost).
+  Debug derlemesi `src/debug/res/xml` ile bu dosyayı geçersiz kılar.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.4.1</domain>
+        <domain includeSubdomains="true">local</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

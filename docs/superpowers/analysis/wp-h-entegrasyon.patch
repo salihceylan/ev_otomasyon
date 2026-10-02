@@ -1,0 +1,678 @@
+diff --git a/docs/CONTRACTS.md b/docs/CONTRACTS.md
+index 5fb89bd..0c61835 100644
+--- a/docs/CONTRACTS.md
++++ b/docs/CONTRACTS.md
+@@ -152,6 +152,10 @@ Tüm uçlar `/api/v1/...` altındadır (eski `/api/...` takma adı korunur).
+ | `POST /devices/claim` | `{ device_uuid, setup_pin, home_name?, target_owner?, otp_code? }`. `home_id` kabul edilmez. `target_owner` varsa OTP zorunlu ve yalnızca staff/super. Yanıt `{ home_id, home_name, device_uuid }`. |
+ | `POST /devices/emergency-reset` | `{ device_uuid, confirm_uid, reason, new_owner_identifier? }` (bkz. matris). Yanıt, yeni kurulum PIN'ini **bir kez** döner. |
+ | `GET/POST/PUT/DELETE /homes/:homeId/scheduled-rules` | Gövde snake_case: `{ channel, channel_type: "relay"\|"shutter", action, hour, minute, days_of_week, device_id?, label?, enabled }`; `channel` 1 tabanlı. |
++| `PUT /me/push-tokens` gövde `{ token, platform, app_version? }` | Cihazın FCM/APNs belirtecini **oturumdaki kullanıcıya** bağlar (ev bağımsız: alıcılar gönderim anında `home_users`'tan hesaplanır). `token` 20–512 görünür ASCII (boşluk yok), `platform` `android`\|`ios`, `app_version` ≤ 32 karakter. Yanıt `200 {registered:true}`. Aynı belirteç başka kullanıcıya yeniden bağlanabilir (paylaşılan telefon). Kullanıcı başına en çok 10 etkin belirteç (fazlasının en eskisi silinir). **Servis oturumu `403 FORBIDDEN`.** Kullanıcı başına 20/dk (`429`). Hata: `400 VALIDATION`. `Cache-Control: no-store`. |
++| `DELETE /me/push-tokens` gövde `{ token }` | Yalnızca **çağıranın kendi** belirtecini devre dışı bırakır; belirteç yoksa da `200 {registered:false}` (idempotent; varlığı sızmaz). Çıkışta çağrılır. Aynı kimlik/hız kuralları. |
++
++Push belirteci uçları (`/me/push-tokens`) hem `/api/v1/me/push-tokens` hem eski `/api/me/push-tokens` altındadır (router yol öneki eklemez).
+ 
+ ### 1.5b Cihaz / claim / sıfırlama uçlarının gerçekleşmiş şekilleri (B paketi)
+ 
+@@ -170,6 +174,34 @@ Tüm uçlar `/api/v1/...` altındadır (eski `/api/...` takma adı korunur).
+ - **Endpoint JSON takma adları:** `channel`, `endpoint_type`, `shutter_position`, `online`.
+ - **Hata gövdesi ek alanları:** `retry_after`, `remaining_attempts`, `device_online`, `offline_devices`.
+ - Huzur/diagnostic uçları `child_lock` yetenek kümesindedir (misafir yok). `command_id` = 12 karakter rastgele `[A-Za-z0-9_-]`; istemcinin verdiği id de `^[A-Za-z0-9._:-]{1,24}$` olmalıdır (aksi `400`).
++- **Davranış (sunucu, zamanlayıcı):** her ev için, `homes.peace_notification_time` (HH:MM; boş/bozuk ⇒ `23:30`) saatinde ve `homes.timezone`
++  yerel saatiyle, her yerel gece **en çok bir** bildirim kaydı (`peace_notification_logs`, `UNIQUE (home_id, local_date)`) ve en çok bir push.
++  Pencere: hedef saat + `PEACE_CATCHUP_MIN` (varsayılan 60 dk; yeniden başlatma/kesinti telafisi). `peace_notification_enabled = FALSE` ise hiç değerlendirilmez.
++  Açık = canlı cihazlarda `type='light' AND current_state` ya da panjur çifti `current_position >= 1`.
++  **Canlı** = `devices.is_online IS TRUE` **ve** `last_seen_at` son **120 sn** içinde (veritabanı saatiyle). Bayat veriyle **asla** bildirilmez
++  (`skipped_offline`, pencere bitene kadar 1-1-2-2-5 dk aralıkla yeniden denenir). Evin yalnız bir kısmı canlıysa ve canlı kısımda açık yoksa
++  "temiz" yazılmaz (çevrimdışı panonun durumu bilinmiyor). Alıcılar: **yalnızca `owner` ve `resident`** (misafir/servis/staff yok), kullanıcı başına en çok 3, ev başına en çok 100 belirteç.
++  Değerlendirici **MQTT'ye yayın yapmaz** ve **`endpoints` tablosuna yazmaz** (komutlar yalnızca REST'ten gider).
++- **`peace_notification_logs.status` değerleri** (CHECK): `manual` (kullanıcı tıklama günlüğü, `local_date` NULL), `claimed`, `sending`,
++  `clear` (açık bir şey yok), `sent`, `no_recipients` (push yok → uygulama içi yedek), `skipped_offline`, `failed`, `resolved` (kullanıcı kapattı).
++  Kullanıcı kapatması yalnızca `sent`, `no_recipients`, `sending` satırını çözer; `claimed/failed/skipped_offline/clear` satırlarına **dokunmaz**.
++- **`GET /devices/peace-notification/:home_id` yanıtı (v2; v1 anahtarları KALIR):**
++  `{ home_id, enabled, time, peace_notification_enabled, peace_notification_time, timezone, devices_total, devices_online, stale,
++  open_lights_count, open_shutters_count, open_lights:[{id, channel_index, name, room}], open_shutters:[{pair, room, position}],
++  summary_text, last_notice }`. `last_notice` = `null` ya da `{ id, local_date:"YYYY-MM-DD", status:"sent"|"no_recipients"|"resolved", summary_text,
++  open_lights_count, open_shutters_count, created_at, resolved_at }` (yalnız bu üç durum görünür; en yenisi). `stale:true` ⇒ canlı cihaz yok: sayılar `0`, listeler boş
++  ve `summary_text` "Cihaz çevrimdışı…" (bilinmiyor; "hepsi kapalı" **DEMEZ**). Yanıt canlı anlık görüntüdür: `Cache-Control: no-store` olmalıdır (entegrasyonda route'a `noStore(res)` eklenir).
++- **`POST /devices/peace-notification/close-all` (v2)** gövde `{ home_id, notice_id?, include_shutters? }` (`notice_id` pozitif tam sayı ya da rakam metni; `include_shutters` boolean, varsayılan `true`):
++  yalnızca **canlı** cihaz verisine göre komut üretir. Evde priz (`type='plug'`) yoksa lambalar için tek `{cmd:"all_lights_off"}`, varsa yalnız açık ışık röleleri için
++  `{relay:N, state:false}` (priz kapanmasın). Her açık panjur çifti için `{shutter:P, cmd:"down"}` (`all_shutters_down` **kullanılmaz**). Komutlar sırayla ve PUBACK
++  beklenerek yayınlanır (16'lık gruplar arası 150 ms). **`endpoints.current_state`'e iyimser yazım YOKTUR**: gerçek durum cihazın `state` yankısıyla gelir.
++  Yanıt: `{ closed_lights, closed_shutters, closed_count (=closed_lights), skipped_count, nothing_to_do, delivered:true, device_online:true, command_ids[], command_id|null,
++  notice_id|null, resolved, message }`. `resolved:true` ⇒ bildirim kaydı çözüldü. `nothing_to_do:true` ⇒ sunucu kayıtlarına göre kapatılacak şey yoktu ve **hiç komut gönderilmedi**
++  (kayıtlar bayat olabilir: istemci "kapatıldı" **göstermemeli**). `skipped_count > 0` ⇒ çok panolu evde ev konusu tüm panolara gittiği için ortak kanal numarası nedeniyle
++  güvenle kapatılamayan öğeler var (bildirim çözülmez, `message` elle kontrolü söyler). Hatalar: `400 VALIDATION`, `404 NOT_FOUND` (ev yok / pano yok), `409 DEVICE_OFFLINE`
++  (`device_online:false`), `502 BROKER_UNAVAILABLE` (hiçbir kayıt yazılmaz). Yetki `group` (misafir yok). Kayıt yazımı hatası komutları geri almaz: yanıt başarılı, `resolved:false`.
++- **Kimlik istisnası:** §0 "kimlikler UUID dizesidir" kuralının **tek** istisnası `notice_id`'dir: `peace_notification_logs.id` `SERIAL` (**tam sayı**). FCM `data` içinde metin olarak,
++  REST gövdesinde sayı (ya da rakam metni) olarak gider; kimlik bilinmiyorsa FCM `data.notice_id` boş metindir.
+ 
+ ## 2. MQTT sözleşmesi
+ 
+@@ -234,6 +266,27 @@ Kural: bilinmeyen alan/komut, tip uyuşmazlığı, aralık dışı değer → ko
+ ```
+ `dir`: `0` durdu, `1` yukarı, `2` aşağı. `target`: `255` = hedef yok. Büyük kurulumlarda (≥ 16 röle) JSON havuzu ölçülerek ayrılır ve taşma durumunda yayın yapılmaz, hata loglanır.
+ 
++### 2.5 Push (FCM) bildirimi (sunucu → uygulama, WP-H)
++
++Sunucu FCM HTTP v1 (`https://fcm.googleapis.com/v1/projects/{FCM_PROJECT_ID}/messages:send`) çağırır; erişim belirteci `google-auth-library` ile (kapsam `firebase.messaging`), istek
++global `fetch` ile yapılır (yeni bağımlılık yok). Her **belirteç için ayrı** mesaj gönderilir. `data` yalnızca **string** değerler taşır:
++
++| `data` anahtarı | Değer |
++|---|---|
++| `type` | sabit `peace_open_devices` |
++| `home_id` | ev UUID'si (`[A-Za-z0-9_-]`, ≤ 64) |
++| `notice_id` | `peace_notification_logs.id` (rakam metni) ya da `""` |
++| `open_lights`, `open_shutters` | rakam metni (en az biri > 0) |
++| `action` | sabit `close_all` |
++| `v` | sabit `1` (bilinmeyen sürüm istemcide yok sayılır) |
++
++`notification.title` = ev adı, `notification.body` = Türkçe özet (ör. "Salonda 2 lamba, 1 panjur açık."). **Android:** `priority=HIGH`, `ttl=3600s`, `collapse_key=peace_<home_id>`,
++`notification.channel_id=peace_reminder` (**uygulama bu kanalı oluşturmalıdır**), `tag=peace_<home_id>`. **iOS (APNs):** `apns-priority=10`, `apns-collapse-id=peace_<home_id>`,
++`apns-expiration=+3600s`, `aps.category=PEACE_CLOSE_ALL`, `aps.thread-id=<home_id>`, `sound=default`. FCM yanıtı `UNREGISTERED` ya da belirteçle ilgili `INVALID_ARGUMENT` ise o belirteç `disabled_at` ile kapatılır; kanıtsız `404` (yanlış `FCM_PROJECT_ID`/API kapalı) yapılandırma
++hatası sayılır ve belirteçlere **dokunulmaz** (operatör düzeltince sonraki denemede gider); 401/403/429/5xx/ağ hataları geçicidir (yeniden denenir).
++**İstemci kuralları:** `data` güvenilmeyen girdidir (sıkı doğrulama; geçersizse yok sayılır); aynı `notice_id` 10 dk içinde tek afiş üretir; uygulama ön plandayken sistem bildirimi gösterilmez,
++uygulama kendi afişini çıkarır; "Hepsini kapat" mevcut `POST …/close-all` ucunu `notice_id` ile çağırır (bildirimin kendisi komut taşımaz).
++
+ ## 3. Firmware yerel HTTP API (LAN / AP)
+ 
+ - Kimlik: `X-Device-Key: <local_key>`. `local_key` 8–32 karakter, NVS'te saklanır. Sunucuda şifreli tutulur (`devices.local_key_enc`, AES-256-GCM, `LOCAL_KEY_SECRET`).
+@@ -328,6 +381,12 @@ yön değişiminde en az 500 ms ölü zaman. Bu kural sürücü seviyesinde (`wr
+ | `BIND_HOST` (varsayılan `127.0.0.1`) | – | server.js |
+ | `ALLOW_DEBUG_OTP` (`true` yalnız geliştirmede) | – | OTP'yi yanıtta döndürür; üretimde asla |
+ | `SMTP_*` | ✔* | mailer |
++| `FCM_PROJECT_ID` | – | push_service (yoksa push **kapalı**, değerlendirme `no_recipients`/uygulama içi yedekle sürer) |
++| `FCM_SERVICE_ACCOUNT_FILE` veya `GOOGLE_APPLICATION_CREDENTIALS` | – | push_service: servis hesabı anahtarının **dosya yolu** (anahtarı ortam değişkenine gömme seçeneği bilerek YOKTUR). Dosya git'e/imaja girmez, salt okunur bağlanır |
++| `PEACE_REMINDER_ENABLED` (`true`\|`false`, varsayılan `true`) | – | peace_reminder: kapatma anahtarı. Tanınmayan değer ⇒ **KAPALI** (uyarı loglanır) |
++| `PEACE_REMINDER_DRY_RUN` (`true`\|`false`, varsayılan `false`) | – | `true` ise kayıt tutulur ama **push gitmez**. Tanınmayan değer ⇒ **AÇIK** (güvenli taraf). İlk gece bununla doğrulanır |
++| `PEACE_REMINDER_HOME_ALLOWLIST` (virgüllü ev UUID'leri) | – | doluysa yalnızca bu evler (kademeli açılış). Dolu ama hiçbiri geçerli UUID değilse **kimse** |
++| `PEACE_CATCHUP_MIN` (1–720, varsayılan 60) | – | hedef saatten sonra kaç dakika boyunca (yeniden başlatma/çevrimdışı telafisi) denenir |
+ 
+ Ek (A paketi): isteğe bağlı `TRUST_PROXY` (varsayılan loopback), `APP_PUBLIC_URL`, `JWT_ISSUER`, `AUTH_CACHE_TTL_MS` (en fazla 30000),
+ ve **yalnızca `NODE_ENV !== 'production'`** iken dikkate alınan süre override'ları `ACCESS_TOKEN_TTL_SEC`, `SERVICE_SESSION_TTL_SEC`,
+@@ -352,7 +411,7 @@ Bir dosyaya yalnızca sahibi yazar. Başkasının dosyasında değişiklik gerek
+ |---|---|
+ | **A — Backend güvenlik/kimlik** | `server/src/server.js`, `src/middlewares/**`, `src/routes/{auth,admin,service,invitation,transfer,inventory}_routes.js`, `src/services/{auth,admin_user,invitation,transfer,inventory,service_token}_service.js`, `src/utils/{mailer,pin}.js`, `server/package.json`, `server/package-lock.json`, `server/.env.example`, kök `.gitignore`, `server/migrations/018–019_*`, `server/test/auth/**` |
+ | **B — Backend cihaz/komut/MQTT kimlik** | `src/services/{device,mqtt_credential,endpoint}_service.js`, `src/routes/{device,endpoint,mqtt}_routes.js`, `src/utils/{secret_box,command_schema}.js`, `server/migrations/020–021_*`, `server/test/devices/**` |
+-| **H — Gece hatırlatması (başka oturum)** | `server/src/peace_reminder.js`, `src/services/{peace_snapshot,peace_text,push_service}.js`, `src/routes/push_routes.js`, `server/migrations/030_peace_reminder.sql` (**uygulandıktan sonra yerinde değiştirilmez; gerekirse 031+**), `server/test/peace/**` — entegrasyon (server.js/device_service/Flutter) bu planın sahiplerinin onayıyla |
++| **H — Gece hatırlatması (başka oturum)** | `server/src/peace_reminder.js`, `src/services/peace_snapshot.js`, `src/services/peace_text.js`, `src/services/push_service.js`, `src/services/peace_service.js`, `src/routes/push_routes.js`, `server/migrations/030_peace_reminder.sql` (**uygulandıktan sonra yerinde değiştirilmez; gerekirse 031+**), `server/test/peace/**` (PostgreSQL'e bağlanan testler `EV_PG_TEST_URL` ile açılır) — entegrasyon (`server.js`, `device_service.js`, `device_routes.js`, Flutter) bu planın sahiplerinin onayıyla |
+ | **C — Köprü/zamanlayıcı/altyapı** (gerçekleşen migration'lar: `010b`, `022`–`026`) | `src/mqtt_bridge.js`, `src/scheduler.js`, `src/services/scheduled_rules_service.js`, `src/routes/scheduled_rules_routes.js`, `server/migrations/022+_*`, `server/migrations/dev_seeds/**`, `server/scripts/**`, `server/docker-compose.yml`, `server/emqx_config/**`, `server/nginx/**`, `server/init_mqtt_users.sql`, `server/run_*.js`, `server/migrations/run_*.js`, `server/test/bridge/**` |
+ | **FW-core** | `src/{SmartAutomation,WS_Relay,WS_DIN,WS_RS485,WS_TCA9554PWR,I2C_Driver,ConfigManager,main}.*`, `src/DeviceCommand.h` (arayüz değişikliği önerisi raporlanır), `platformio.ini`, `test/**` |
+ | **FW-net** | `src/{MqttManager,WiFiManager,WebPortal,WS_WIFI,WS_ETH,WS_MQTT}.*`, `src/CaCerts.h` |
+diff --git a/server/.env.example b/server/.env.example
+index 810456d..9929edc 100644
+--- a/server/.env.example
++++ b/server/.env.example
+@@ -107,3 +107,17 @@ EMQX_NODE_COOKIE=
+ #   ALLOW_DEV_SEEDS=true DEV_SEED_PASSWORD=... DEV_SEED_PIN=...   scripts/seed_dev.js (NODE_ENV=production'da reddeder)
+ #   SUPER_USER_EMAIL=... SUPER_USER_PASSWORD=...  scripts/create_super_user.js (ilk yonetici; parola >= 12 karakter)
+ #   LEGACY_MQTT_USER=... LEGACY_MQTT_PASS=...     scripts/upgrade_legacy_mqtt_user.js (eski paylasilan kimligi bcrypt'e yukseltir)
++
++# --- Gece hatirlatmasi (push) -------------------------------------------------
++# FCM (HTTP v1): proje kimligi + servis hesabi anahtarinin DOSYA YOLU (anahtari ortam degiskenine gommeyin;
++# dosya git'e / imaja girmez, salt okunur baglanir). Ikisi de yoksa push KAPALI, uygulama ici yedek calisir.
++# FCM_PROJECT_ID=
++# FCM_SERVICE_ACCOUNT_FILE=/run/secrets/fcm_service_account.json
++# Kapatma anahtari (taninmayan deger = KAPALI). Varsayilan: true
++# PEACE_REMINDER_ENABLED=true
++# true ise kayit tutulur ama push GITMEZ (ilk gece bununla dogrulayin; taninmayan deger = ACIK). Varsayilan: false
++# PEACE_REMINDER_DRY_RUN=true
++# Virgullu ev UUID'leri: doluysa yalnizca bu evler (kademeli acilis). Bos = hepsi
++# PEACE_REMINDER_HOME_ALLOWLIST=
++# Hedef saatten sonra kac dakika boyunca denenir (1-720). Varsayilan: 60
++# PEACE_CATCHUP_MIN=60
+diff --git a/server/src/routes/device_routes.js b/server/src/routes/device_routes.js
+index 6aef900..b9da970 100644
+--- a/server/src/routes/device_routes.js
++++ b/server/src/routes/device_routes.js
+@@ -241,6 +241,7 @@ function createRouter(deps = {}) {
+     requireHomeAccess(rolesFor('view')),
+     handle(async (req, res) => {
+       const result = await deviceService.getPeaceNotificationSettings({ homeId: req.homeAccess.home_id });
++      noStore(res); // canli anlik goruntu: ara onbellek bayat "acik lamba" gostermesin
+       return successResponse(res, result);
+     })
+   );
+@@ -272,6 +273,8 @@ function createRouter(deps = {}) {
+       const result = await deviceService.closeAllOpenLights({
+         actor: actorOf(req),
+         homeId: req.homeAccess.home_id,
++        noticeId: pick(req.body, 'notice_id', 'noticeId'), // bildirimden gelen tiklama: o kaydi cozer (WP-H)
++        includeShutters: pick(req.body, 'include_shutters', 'includeShutters'),
+       });
+       return successResponse(res, result, result.message, 200);
+     })
+diff --git a/server/src/server.js b/server/src/server.js
+index cd2fb14..6e42abb 100644
+--- a/server/src/server.js
++++ b/server/src/server.js
+@@ -187,6 +187,16 @@ function createApp(deps = {}) {
+   app.use('/api/v1', transferRoutes);
+   app.use('/api', transferRoutes);
+ 
++  // --- WP-H: push belirteci (PUT|DELETE /me/push-tokens). Router yol oneki eklemez; kimlik her route'ta ayri.
++  //     pushService app.locals'ta tutulur: start() ayni ornegi gece hatirlatmasina verir.
++  const { createPushService } = require('./services/push_service');
++  const { createPushRouter } = require('./routes/push_routes');
++  const pushService = deps.pushService || createPushService({ db });
++  app.locals.pushService = pushService;
++  const pushRouter = createPushRouter({ pushService, authenticateToken });
++  app.use('/api/v1', pushRouter);
++  app.use('/api', pushRouter);
++
+   // --- WP-B: cihaz / komut / MQTT kimlik -----------------------------------
+   // mqtt_routes ve home_device_routes yollari '/:homeId/...' bicimindedir -> '/api/v1/homes' altina
+   // baglanir (CONTRACTS §1.5: POST /api/v1/homes/:homeId/mqtt-credentials). Modul `mountPaths`
+@@ -283,6 +293,17 @@ function start() {
+     scheduler = null;
+   }
+ 
++  // Gece hatirlatmasi (WP-H): KENDI try/catch'i icinde; migration 030 henuz uygulanmadiysa ya da push
++  // yapilandirmasi yoksa sunucu etkilenmez (hatirlatma kendini kapatir/yeniden dener, uygulama ici yedek calisir).
++  let peaceReminder = null;
++  const peaceOptions = { db, push: app.locals.pushService };
++  try {
++    peaceReminder = require('./peace_reminder').start(peaceOptions);
++  } catch (err) {
++    console.error('  [UYARI] Gece hatirlatmasi baslatilamadi (hatirlatma PASIF):', err && err.message);
++    peaceReminder = null;
++  }
++
+   let shuttingDown = false;
+   async function shutdown(signal, exitCode = 0) {
+     if (shuttingDown) return;
+@@ -300,6 +321,7 @@ function start() {
+     });
+     const steps = [
+       ['scheduler', async () => { if (scheduler && typeof scheduler.stop === 'function') await scheduler.stop(); }],
++      ['peace-reminder', async () => { if (peaceReminder && typeof peaceReminder.stop === 'function') await peaceReminder.stop(); }],
+       ['mqtt-cred-cleanup', async () => { if (mqttCredentialService && typeof mqttCredentialService.stopCleanup === 'function') mqttCredentialService.stopCleanup(); }],
+       ['mqtt', async () => { if (typeof mqttBridge.end === 'function') await mqttBridge.end(); }],
+       ['db', async () => { if (db.pool && typeof db.pool.end === 'function') await db.pool.end(); }],
+diff --git a/server/src/services/device_service.js b/server/src/services/device_service.js
+index 94d34e2..910171e 100644
+--- a/server/src/services/device_service.js
++++ b/server/src/services/device_service.js
+@@ -167,6 +167,25 @@ class DeviceService {
+   get env() {
+     return this._deps.env || process.env;
+   }
++  /**
++   * Gece huzur v2 (WP-H): ayar GET + "Hepsini kapat" ayri modulde; yardimcilar ENJEKTE edilir.
++   * Tembel: this.db getter'i db.js'i (DATABASE_URL ister) ancak ilk kullanimda yukler.
++   */
++  get peace() {
++    if (this._deps.peace) return this._deps.peace;
++    if (!this._peace) {
++      const { createPeaceService } = require('./peace_service');
++      this._peace = createPeaceService({
++        db: this.db,
++        publishCommand: (topicId, payload) => this._publishCommand(topicId, payload),
++        newCommandId: () => this._newCommandId(),
++        audit: (q, args) => this._audit(q, args),
++        httpError,
++        now: () => this._now(),
++      });
++    }
++    return this._peace;
++  }
+   _now() {
+     return this._deps.now ? this._deps.now() : new Date();
+   }
+@@ -1919,54 +1938,9 @@ class DeviceService {
+     };
+   }
+ 
++  /** v2 (WP-H): canli anlik goruntu, panjur, saat dilimi, son bildirim. Ayrintisi peace_service.js'te. */
+   async getPeaceNotificationSettings({ homeId }) {
+-    const homeRes = await this.db.query(
+-      `SELECT id, name, peace_notification_enabled, peace_notification_time FROM homes WHERE id = $1`,
+-      [homeId]
+-    );
+-    if (homeRes.rows.length === 0) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
+-    const home = homeRes.rows[0];
+-
+-    // Gercek sutunlar: endpoints.current_state (BOOLEAN), endpoints.current_position (0..100)
+-    const lights = await this.db.query(
+-      `SELECT e.id, e.channel_index, e.name, e.room, e.current_state
+-         FROM endpoints e
+-        WHERE e.home_id = $1 AND e.type = 'light' AND e.current_state = TRUE
+-        ORDER BY e.channel_index ASC`,
+-      [homeId]
+-    );
+-    const shutters = await this.db.query(
+-      `SELECT e.id, e.channel_index, e.name, e.room, e.current_position
+-         FROM endpoints e
+-        WHERE e.home_id = $1 AND e.type = 'shutter' AND e.shutter_pair_index IS NOT NULL
+-          AND e.channel_index % 2 = 1 AND e.current_position > 0
+-        ORDER BY e.channel_index ASC`,
+-      [homeId]
+-    );
+-
+-    const openLights = lights.rows;
+-    let summary = 'Tüm lambalar kapalı, eviniz huzur modunda.';
+-    if (openLights.length > 0) {
+-      const roomCounts = {};
+-      for (const l of openLights) {
+-        const room = l.room || 'Genel';
+-        roomCounts[room] = (roomCounts[room] || 0) + 1;
+-      }
+-      const details = Object.entries(roomCounts)
+-        .map(([room, count]) => `${room}: ${count} lamba`)
+-        .join(', ');
+-      summary = `Açık lamba tespit edildi (${openLights.length} adet - ${details}).`;
+-    }
+-
+-    return {
+-      home_id: home.id,
+-      peace_notification_enabled: home.peace_notification_enabled !== false,
+-      peace_notification_time: home.peace_notification_time || '23:30',
+-      open_lights_count: openLights.length,
+-      open_shutters_count: shutters.rows.length,
+-      summary_text: summary,
+-      open_lights: openLights,
+-    };
++    return this.peace.getSettings({ homeId });
+   }
+ 
+   async updatePeaceNotificationSettings({ actor, homeId, enabled, notificationTime }) {
+@@ -1996,52 +1970,14 @@ class DeviceService {
+   }
+ 
+   /**
+-   * "Hepsini kapat": firmware sozlugunde `{cmd:'all_lights_off'}` yayinlanir (toplu komut; misafir YOK).
+-   * Cevrimdisi -> 409. DB yalnizca yayin basarili olduktan sonra guncellenir (gercek durum cihazin
+-   * `state` mesajiyla dogrulanir). Yanitlanan sayi, kapatilmasi hedeflenen GERCEK acik lamba sayisidir.
++   * "Hepsini kapat" v2 (WP-H): yalniz CANLI cihaz verisine gore komut uretir (priz varsa tek tek role, panjur asagi),
++   * bildirim kaydini cozer, DB'ye iyimser yazmaz. Yetki burada denetlenir; mantik peace_service.js'tedir.
+    */
+-  async closeAllOpenLights({ actor, homeId }) {
++  async closeAllOpenLights({ actor, homeId, noticeId, includeShutters }) {
+     if (!can('group', actor && actor.access)) {
+       throw httpError(403, 'Toplu komut için yetkiniz yok.', 'FORBIDDEN');
+     }
+-    const topicId = await this._homeTopicId(homeId);
+-    const states = await this._homeDeviceStates(homeId);
+-    if (states.total === 0) throw httpError(404, 'Daireye bağlı pano bulunamadı.', 'NOT_FOUND');
+-    if (states.online === 0) {
+-      throw httpError(409, 'Cihaz çevrimdışı; lambalar kapatılamadı.', 'DEVICE_OFFLINE', { device_online: false });
+-    }
+-
+-    const openRes = await this.db.query(
+-      `SELECT e.id FROM endpoints e WHERE e.home_id = $1 AND e.type = 'light' AND e.current_state = TRUE`,
+-      [homeId]
+-    );
+-    const count = openRes.rows.length;
+-
+-    const commandId = this._newCommandId();
+-    await this._publishCommand(topicId, { cmd: 'all_lights_off', id: commandId });
+-
+-    // Yayin basarili: DB'yi guncelle (cihazin state mesaji gercegi dogrular) ve gunluge yaz.
+-    await this.db.query(
+-      `UPDATE endpoints SET current_state = FALSE, updated_at = CURRENT_TIMESTAMP
+-        WHERE home_id = $1 AND type = 'light' AND current_state IS DISTINCT FROM FALSE`,
+-      [homeId]
+-    );
+-    await this.db.query(
+-      `INSERT INTO peace_notification_logs (home_id, open_lights_count, summary_text, resolved_by_user, resolved_at)
+-       VALUES ($1, $2, $3, TRUE, CURRENT_TIMESTAMP)`,
+-      [homeId, count, `${count} açık lamba tek tıkla kapatıldı.`]
+-    );
+-
+-    return {
+-      closed_count: count,
+-      delivered: true,
+-      device_online: true,
+-      command_id: commandId,
+-      message:
+-        count > 0
+-          ? `Huzur modu: açık olan ${count} lamba kapatma komutu cihaza iletildi.`
+-          : 'Kayıtlara göre tüm lambalar zaten kapalıydı; kapatma komutu yine de iletildi.',
+-    };
++    return this.peace.closeAll({ actor, homeId, noticeId, includeShutters });
+   }
+ 
+   // ===========================================================================
+diff --git a/server/test/devices/_world.js b/server/test/devices/_world.js
+index 4bb4a13..71c1284 100644
+--- a/server/test/devices/_world.js
++++ b/server/test/devices/_world.js
+@@ -653,14 +653,82 @@ function createWorld({ clock = createClock() } = {}) {
+       )
+     )
+   );
+-  db.on("UPDATE endpoints SET current_state = FALSE, updated_at = CURRENT_TIMESTAMP WHERE home_id = $1 AND type = 'light'", (ctx) => {
+-    const rows = state.endpoints.filter((e) => e.home_id === ctx.params[0] && e.type === 'light' && e.current_state !== false);
+-    for (const r of rows) patch(ctx, r, { current_state: false });
+-    return { rows: [], rowCount: rows.length };
++  // --- Gece huzur v2 (WP-H): DeviceService peace_service.js'e devreder; canli anlik goruntu peace_snapshot.js'tedir.
++  //     Gercek SQL metinleri GERCEK PostgreSQL'e karsi test/peace/peace_service_pg.test.js'te calisir; burada JS ile taklit edilir.
++  db.on('SELECT id, name, peace_notification_enabled, peace_notification_time, timezone FROM homes WHERE id = $1', ({ params }) =>
++    copies(state.homes.filter((h) => h.id === params[0]))
++  );
++  db.on('SELECT d.id AS device_id, COALESCE(d.is_online IS TRUE AND d.last_seen_at', ({ params }) => {
++    const [homeId, liveSec, minPos] = params;
++    const rows = [];
++    for (const d of state.devices.filter((x) => x.home_id === homeId)) {
++      // sahte dunyada last_seen_at izlenmeyebilir: yoksa cevrimici cihaz canli sayilir
++      const seenMs = d.last_seen_at ? new Date(d.last_seen_at).getTime() : null;
++      const fresh = seenMs === null ? true : now().getTime() - seenMs <= liveSec * 1000;
++      const base = { device_id: d.id, live: d.is_online === true && fresh };
++      const open = state.endpoints.filter(
++        (e) => e.device_id === d.id && ((e.type === 'light' && e.current_state === true) || (e.type === 'shutter' && e.current_position >= minPos))
++      );
++      if (open.length === 0) {
++        rows.push({ ...base, endpoint_id: null, type: null, channel_index: null, pair: null, name: null, room: null, current_state: null, current_position: null });
++      }
++      for (const e of open) {
++        rows.push({
++          ...base,
++          endpoint_id: e.id,
++          type: e.type,
++          channel_index: e.channel_index,
++          pair: e.shutter_pair_index === null || e.shutter_pair_index === undefined ? Math.floor((e.channel_index + 1) / 2) : e.shutter_pair_index,
++          name: e.name,
++          room: e.room || 'Genel',
++          current_state: e.current_state,
++          current_position: e.current_position,
++        });
++      }
++    }
++    return rows;
++  });
++  db.on("SELECT EXISTS (SELECT 1 FROM endpoints WHERE home_id = $1 AND type = 'plug') AS has_plug", ({ params }) => [
++    { has_plug: state.endpoints.some((e) => e.home_id === params[0] && e.type === 'plug') },
++  ]);
++  db.on('SELECT device_id, type, channel_index, shutter_pair_index, current_position FROM endpoints WHERE home_id = $1', ({ params }) =>
++    copies(state.endpoints.filter((e) => e.home_id === params[0]))
++  );
++  db.on("SELECT id, to_char(local_date, 'YYYY-MM-DD') AS local_date, status, summary_text", ({ params }) =>
++    copies(
++      state.peace_notification_logs
++        .filter((r) => r.home_id === params[0] && r.local_date && ['sent', 'no_recipients', 'resolved'].includes(r.status))
++        .sort((a, b) => (a.local_date < b.local_date ? 1 : -1))
++        .slice(0, 1)
++    )
++  );
++  db.on("UPDATE peace_notification_logs SET status = 'resolved'", (ctx) => {
++    const [actorId, commandId, noticeId, homeId] = ctx.params;
++    const resolvable = (r) => r.home_id === homeId && !r.resolved_at && ['sent', 'no_recipients', 'sending'].includes(r.status);
++    const row =
++      noticeId !== null && noticeId !== undefined
++        ? state.peace_notification_logs.find((r) => r.id === noticeId && resolvable(r))
++        : state.peace_notification_logs.filter((r) => r.local_date && resolvable(r)).sort((a, b) => (a.local_date < b.local_date ? 1 : -1))[0];
++    if (!row) return { rows: [], rowCount: 0 };
++    patch(ctx, row, { status: 'resolved', resolved_by_user: true, resolved_at: now(), resolved_by_user_id: actorId, resolved_via: 'close_all', command_id: commandId });
++    return { rows: [{ id: row.id }], rowCount: 1 };
+   });
+   db.on('INSERT INTO peace_notification_logs', (ctx) => {
+-    const [homeId, count, summary] = ctx.params;
+-    insert(ctx, state.peace_notification_logs, { home_id: homeId, open_lights_count: count, summary_text: summary, resolved_by_user: true });
++    const [homeId, lights, shutters, summary, actorId, commandId] = ctx.params;
++    insert(ctx, state.peace_notification_logs, {
++      id: state.peace_notification_logs.length + 1,
++      home_id: homeId,
++      local_date: null,
++      status: 'manual',
++      open_lights_count: lights,
++      open_shutters_count: shutters,
++      summary_text: summary,
++      resolved_by_user: true,
++      resolved_by_user_id: actorId,
++      resolved_via: 'close_all',
++      command_id: commandId,
++      resolved_at: now(),
++    });
+     return { rows: [], rowCount: 1 };
+   });
+   db.on('UPDATE homes SET peace_notification_enabled = COALESCE($1, peace_notification_enabled)', (ctx) => {
+diff --git a/server/test/devices/b13_firmware_contract.test.js b/server/test/devices/b13_firmware_contract.test.js
+index dbec1f1..ed2e287 100644
+--- a/server/test/devices/b13_firmware_contract.test.js
++++ b/server/test/devices/b13_firmware_contract.test.js
+@@ -110,6 +110,8 @@ test('komut id: TUM yayin yollarinda (genel komut, cocuk kilidi, toplu lamba, se
+   await ctx.deviceService.sendCommand({ actor: ctx.access('owner'), homeId: ctx.home.id, deviceRef: UID, command: { relay: 6, state: false, id: 'istemci.id:1-a_b' } });
+   // cocuk kilidi + toplu lamba
+   await ctx.deviceService.setChildLock({ actor: ctx.access('owner'), homeId: ctx.home.id, enabled: true });
++  // v2: kayitlara gore acik lamba yoksa komut gonderilmez; acik bir lamba kurulur (priz yok -> all_lights_off)
++  ctx.eps.find((e) => e.channel_index === 5).current_state = true;
+   await ctx.deviceService.closeAllOpenLights({ actor: ctx.access('owner'), homeId: ctx.home.id });
+   // set_runtime
+   const shutterEp = ctx.eps.find((e) => e.channel_index === 1);
+diff --git a/server/test/devices/commands.test.js b/server/test/devices/commands.test.js
+index 8c9eb1b..280bcc7 100644
+--- a/server/test/devices/commands.test.js
++++ b/server/test/devices/commands.test.js
+@@ -171,24 +171,91 @@ test('panjur kanallari role komutuyla surulemez (cift yon riski); panjur komutu
+ // Toplu kapatma (huzur bildirimi)
+ // ------------------------------------------------------------------------------------------------
+ 
+-test('hepsini kapat: {cmd:"all_lights_off"} yayinlanir, GERCEK acik lamba sayisi doner, DB yayindan sonra guncellenir', async () => {
++// v2 (WP-H): mantik peace_service.js'te (test/peace/**, gercek PostgreSQL: test/peace/peace_service_pg.test.js); burada
++// DeviceService'in payi + uctan uca baglanti sinanir: yetki, canli veriye gore komut uretimi, "iyimser DB yazimi YOK", bildirim cozme.
++
++test('hepsini kapat (v2): priz YOKSA tek {cmd:"all_lights_off"}; GERCEK acik lamba sayisi doner; DB iyimser yazilmaz, elle kayit satiri eklenir', async () => {
+   const ctx = setup();
+-  ctx.eps.find((e) => e.channel_index === 5).current_state = true;
+-  ctx.eps.find((e) => e.channel_index === 6).current_state = true;
+-  ctx.eps.find((e) => e.channel_index === 7).current_state = true;
+-  ctx.eps.find((e) => e.channel_index === 8).type = 'plug'; // priz: lamba degil
+-  ctx.eps.find((e) => e.channel_index === 8).current_state = true;
++  const ep = (n) => ctx.eps.find((e) => e.channel_index === n);
++  ep(5).current_state = true;
++  ep(6).current_state = true;
++  ep(7).current_state = true;
+ 
+   const r = await ctx.deviceService.closeAllOpenLights({ actor: ctx.actor('owner'), homeId: ctx.home.id });
+-  assert.strictEqual(r.closed_count, 3, 'yalniz acik LAMBA sayisi (priz ve panjur sayilmaz)');
++  assert.strictEqual(r.closed_count, 3, 'yalniz acik LAMBA sayisi (panjur sayilmaz)');
+   assert.strictEqual(r.delivered, true);
++  assert.strictEqual(r.nothing_to_do, false);
++  assert.strictEqual(ctx.bridge.commands.length, 1);
+   assert.deepStrictEqual(ctx.bridge.commands[0].obj, { cmd: 'all_lights_off', id: r.command_id });
+   assert.ok(!('channels' in ctx.bridge.commands[0].obj) && !('timestamp' in ctx.bridge.commands[0].obj));
+ 
+-  assert.ok(ctx.eps.filter((e) => e.type === 'light').every((e) => e.current_state === false));
+-  assert.strictEqual(ctx.eps.find((e) => e.channel_index === 8).current_state, true, 'priz dokunulmamali');
+-  assert.strictEqual(ctx.world.state.peace_notification_logs.length, 1);
+-  assert.strictEqual(ctx.world.state.peace_notification_logs[0].open_lights_count, 3);
++  // gercek durum cihazin state yankisiyla gelir: sunucu endpoints'e IYIMSER yazmaz (v1 yaziyordu)
++  assert.ok([5, 6, 7].every((n) => ep(n).current_state === true));
++  const logs = ctx.world.state.peace_notification_logs;
++  assert.strictEqual(logs.length, 1);
++  assert.strictEqual(logs[0].status, 'manual');
++  assert.strictEqual(logs[0].open_lights_count, 3);
++  assert.strictEqual(logs[0].resolved_by_user, true);
++});
++
++test('hepsini kapat (v2): evde priz VARSA yalniz acik isik roleleri tek tek kapanir (priz dokunulmaz)', async () => {
++  const ctx = setup();
++  const ep = (n) => ctx.eps.find((e) => e.channel_index === n);
++  ep(5).current_state = true;
++  ep(6).current_state = true;
++  ep(7).current_state = true;
++  ep(8).type = 'plug'; // priz: lamba degil, kapatilmamali
++  ep(8).current_state = true;
++
++  const r = await ctx.deviceService.closeAllOpenLights({ actor: ctx.actor('owner'), homeId: ctx.home.id });
++  assert.strictEqual(r.closed_count, 3);
++  assert.deepStrictEqual(
++    ctx.bridge.commands.map((c) => c.obj),
++    [5, 6, 7].map((n, i) => ({ relay: n, state: false, id: r.command_ids[i] }))
++  );
++  assert.ok(!ctx.bridge.commands.some((c) => c.obj.cmd === 'all_lights_off'), 'priz varken toplu komut YOK');
++});
++
++test('hepsini kapat (v2): acik panjur cifti icin {shutter:P, cmd:"down"}; include_shutters:false ise panjura dokunulmaz', async () => {
++  const ctx = setup();
++  ctx.eps.find((e) => e.channel_index === 5).current_state = true;
++  ctx.eps.find((e) => e.channel_index === 1).current_position = 100; // panjur 1 (iki rolenin ikisi de konum tasir)
++  ctx.eps.find((e) => e.channel_index === 2).current_position = 100;
++
++  const r = await ctx.deviceService.closeAllOpenLights({ actor: ctx.actor('owner'), homeId: ctx.home.id });
++  assert.strictEqual(r.closed_shutters, 1);
++  assert.deepStrictEqual(
++    ctx.bridge.commands.map((c) => c.obj),
++    [{ cmd: 'all_lights_off', id: r.command_ids[0] }, { shutter: 1, cmd: 'down', id: r.command_ids[1] }]
++  );
++
++  const ctx2 = setup();
++  ctx2.eps.find((e) => e.channel_index === 5).current_state = true;
++  ctx2.eps.find((e) => e.channel_index === 1).current_position = 100;
++  const r2 = await ctx2.deviceService.closeAllOpenLights({ actor: ctx2.actor('owner'), homeId: ctx2.home.id, includeShutters: false });
++  assert.strictEqual(r2.closed_shutters, 0);
++  assert.deepStrictEqual(ctx2.bridge.commands.map((c) => c.obj.cmd), ['all_lights_off']);
++});
++
++test('hepsini kapat (v2): notice_id verilirse O bildirim cozulur ve kayit komut kimligine baglanir; baska evin bildirimi cozulmez', async () => {
++  const ctx = setup();
++  ctx.eps.find((e) => e.channel_index === 5).current_state = true;
++  const logs = ctx.world.state.peace_notification_logs;
++  logs.push({ id: 41, home_id: ctx.home.id, local_date: '2026-10-01', status: 'sent', resolved_at: null });
++  logs.push({ id: 42, home_id: ctx.otherHome.id, local_date: '2026-10-01', status: 'sent', resolved_at: null });
++
++  const r = await ctx.deviceService.closeAllOpenLights({ actor: ctx.actor('owner'), homeId: ctx.home.id, noticeId: 42 });
++  assert.strictEqual(r.resolved, false, 'baska evin bildirimi cozulemez');
++  assert.strictEqual(logs.find((l) => l.id === 42).status, 'sent');
++
++  const ok = await ctx.deviceService.closeAllOpenLights({ actor: ctx.actor('owner'), homeId: ctx.home.id, noticeId: 41 });
++  assert.strictEqual(ok.resolved, true);
++  assert.strictEqual(ok.notice_id, 41);
++  const row = logs.find((l) => l.id === 41);
++  assert.strictEqual(row.status, 'resolved');
++  assert.strictEqual(row.resolved_via, 'close_all');
++  assert.strictEqual(row.command_id, ok.command_id);
++  assert.strictEqual(row.resolved_by_user_id, ctx.owner.id);
+ });
+ 
+ test('hepsini kapat: yayin hatasi 502 ve DB/gunluk DEGISMEZ (eski kod DB\'yi yayindan once yaziyordu)', async () => {
+@@ -200,7 +267,7 @@ test('hepsini kapat: yayin hatasi 502 ve DB/gunluk DEGISMEZ (eski kod DB\'yi yay
+   assert.strictEqual(ctx.world.state.peace_notification_logs.length, 0);
+ });
+ 
+-test('hepsini kapat: cevrimdisi 409, pano yok 404, misafir 403; 0 acik lambada yine de komut iletilir', async () => {
++test('hepsini kapat: cevrimdisi 409, pano yok 404, misafir 403; kayitlara gore ACIK BIR SEY YOKSA v2 komut GONDERMEZ (nothing_to_do)', async () => {
+   const off = setup({ online: false });
+   await expectHttp(off.deviceService.closeAllOpenLights({ actor: off.actor('owner'), homeId: off.home.id }), 409, 'DEVICE_OFFLINE');
+ 
+@@ -212,7 +279,9 @@ test('hepsini kapat: cevrimdisi 409, pano yok 404, misafir 403; 0 acik lambada y
+   const none = await ctx.deviceService.closeAllOpenLights({ actor: ctx.actor('resident'), homeId: ctx.home.id });
+   assert.strictEqual(none.closed_count, 0);
+   assert.strictEqual(none.delivered, true);
+-  assert.strictEqual(ctx.bridge.commands.length, 1);
++  assert.strictEqual(none.nothing_to_do, true, 'sunucu kayitlarina gore kapatilacak sey yok; istemci "kapatildi" gostermemeli');
++  assert.strictEqual(none.command_id, null);
++  assert.strictEqual(ctx.bridge.commands.length, 0, 'komut gonderilmez (v1 yine de gonderiyordu)');
+ });
+ 
+ // ------------------------------------------------------------------------------------------------
+diff --git a/server/test/devices/peace_diagnostic.test.js b/server/test/devices/peace_diagnostic.test.js
+index ef4964f..cc7070d 100644
+--- a/server/test/devices/peace_diagnostic.test.js
++++ b/server/test/devices/peace_diagnostic.test.js
+@@ -30,11 +30,14 @@ test('huzur bildirimi: SEMADA OLAN sutunlar kullanilir (current_state / current_
+   assert.ok(!/\be\.state\b/.test(text), 'endpoints.state sutunu yok');
+   assert.ok(!/is_active/.test(text), 'endpoints.is_active sutunu yok');
+   assert.ok(!/e\.shutter_position/.test(text), 'endpoints.shutter_position sutunu yok');
+-  assert.ok(/e\.current_state = TRUE/.test(text));
+-  assert.ok(/e\.current_position > 0/.test(text));
++  // v2: sorgu peace_snapshot.js'te (canli anlik goruntu); sema sutunlari ayni
++  assert.ok(/e\.current_state IS TRUE/.test(text));
++  assert.ok(/e\.current_position >= \$3/.test(text));
+ 
+-  const src = require('fs').readFileSync(require.resolve('../../src/services/device_service'), 'utf8');
+-  assert.ok(!/e\.state\b|e\.is_active|e\.shutter_position/.test(src));
++  for (const file of ['device_service', 'peace_service', 'peace_snapshot']) {
++    const src = require('fs').readFileSync(require.resolve('../../src/services/' + file), 'utf8');
++    assert.ok(!/e\.state\b|e\.is_active|e\.shutter_position/.test(src), file);
++  }
+ });
+ 
+ test('huzur bildirimi: acik lamba listesi/sayisi ve acik panjur sayisi (cift satirli panjur bir kez sayilir)', async () => {
+@@ -54,13 +57,22 @@ test('huzur bildirimi: acik lamba listesi/sayisi ve acik panjur sayisi (cift sat
+   assert.strictEqual(r.open_shutters_count, 1);
+   assert.strictEqual(r.peace_notification_enabled, true);
+   assert.strictEqual(r.peace_notification_time, '23:30');
+-  assert.match(r.summary_text, /3 adet/);
+-  assert.match(r.summary_text, /Salon: 1 lamba/);
+-  assert.match(r.summary_text, /Mutfak: 1 lamba/);
++  // v2 (WP-H): ozet metni peace_text.js'ten gelir (oda adlari ek alir: "Salonda ...")
++  assert.match(r.summary_text, /Salon/);
++  assert.match(r.summary_text, /Mutfak/);
++  assert.match(r.summary_text, /Koridor/);
++  assert.match(r.summary_text, /panjur/);
++  assert.strictEqual(r.stale, false);
++  assert.strictEqual(r.devices_online, 1);
++  assert.strictEqual(r.timezone, 'Europe/Istanbul');
++  assert.strictEqual(r.last_notice, null);
++  assert.deepStrictEqual(r.open_shutters, [{ pair: 1, room: 'Salon', position: 50 }]);
+ 
+   ep(5).current_state = ep(6).current_state = ep(7).current_state = false;
++  ep(1).current_position = ep(2).current_position = 0;
+   const calm = await ctx.deviceService.getPeaceNotificationSettings({ homeId: ctx.home.id });
+   assert.strictEqual(calm.open_lights_count, 0);
++  assert.strictEqual(calm.open_shutters_count, 0);
+   assert.match(calm.summary_text, /huzur modunda/);
+ });
+ 
+diff --git a/server/test/devices/pg_live.test.js b/server/test/devices/pg_live.test.js
+index ae30fee..2cce059 100644
+--- a/server/test/devices/pg_live.test.js
++++ b/server/test/devices/pg_live.test.js
+@@ -539,6 +539,8 @@ test('PG huzur bildirimi + toplu lamba kapatma + teshis + yerel anahtar + cihaz
+   const t = await makeHome(c);
+   await c.q('UPDATE endpoints SET current_state = TRUE WHERE device_id = $1 AND channel_index IN (5, 6)', [t.dev.id]);
+   await c.q('UPDATE endpoints SET current_position = 40 WHERE device_id = $1 AND channel_index IN (1, 2)', [t.dev.id]);
++  // v2 (WP-H): yalniz CANLI cihaza guvenilir: is_online + son 120 sn icinde last_seen_at (veritabani saatiyle)
++  await c.q('UPDATE devices SET last_seen_at = CURRENT_TIMESTAMP WHERE id = $1', [t.dev.id]);
+   const s = await svc.getPeaceNotificationSettings({ homeId: t.home.id });
+   assert.equal(s.open_lights_count, 2);
+   assert.equal(s.open_shutters_count, 1);
+@@ -552,7 +554,8 @@ test('PG huzur bildirimi + toplu lamba kapatma + teshis + yerel anahtar + cihaz
+   clearBridge(c);
+   const closed = await svc.closeAllOpenLights({ actor: t.access('owner'), homeId: t.home.id });
+   assert.equal(closed.closed_count, 2);
+-  assert.deepEqual(c.bridge.commands.map((x) => x.obj.cmd), ['all_lights_off']);
++  assert.equal(closed.closed_shutters, 1, 'acik panjur cifti de asagi iner (v2)');
++  assert.deepEqual(c.bridge.commands.map((x) => x.obj.cmd), ['all_lights_off', 'down']);
+   assert.match(closed.command_id, FIRMWARE_ID);
+   assert.equal((await h.one('SELECT status FROM peace_notification_logs WHERE home_id = $1', [t.home.id])).status, 'manual');
+   await rejects(svc.closeAllOpenLights({ actor: t.access('guest'), homeId: t.home.id }), 403, 'FORBIDDEN');
+diff --git a/server/test/peace/peace_integration.test.js b/server/test/peace/peace_integration.test.js
+index fb3478a..775b4ee 100644
+--- a/server/test/peace/peace_integration.test.js
++++ b/server/test/peace/peace_integration.test.js
+@@ -1311,7 +1311,7 @@ const TODO_INTEGRATION = 'WP-H entegrasyonu bekliyor (kilitli dosya); yapilinca
+ const has = (text, re, message) => assert.ok(re.test(text), message);
+ const readRepo = (...parts) => fs.readFileSync(path.join(ROOT, '..', ...parts), 'utf8');
+ 
+-test('entegrasyon: CONTRACTS - /me/push-tokens, FCM/PEACE degiskenleri, dosya sahipligi, notice_id tam sayi istisnasi', { todo: TODO_INTEGRATION }, () => {
++test('entegrasyon: CONTRACTS - /me/push-tokens, FCM/PEACE degiskenleri, dosya sahipligi, notice_id tam sayi istisnasi', {}, () => {
+   const contracts = readRepo('docs', 'CONTRACTS.md');
+   assert.ok(/PUT[^\n]*\/me\/push-tokens/.test(contracts), 'PUT /me/push-tokens (bolum 1.5)');
+   assert.ok(/DELETE[^\n]*\/me\/push-tokens/.test(contracts), 'DELETE /me/push-tokens (bolum 1.5)');
+@@ -1323,14 +1323,14 @@ test('entegrasyon: CONTRACTS - /me/push-tokens, FCM/PEACE degiskenleri, dosya sa
+   assert.ok(/notice_id[^\n]*(tam ?sayı|tam ?sayi|integer|SERIAL)/i.test(contracts), 'notice_id UUID DEGIL, tam sayidir');
+ });
+ 
+-test('entegrasyon: server/.env.example FCM ve PEACE yer tutucularini icerir (gercek deger YOK)', { todo: TODO_INTEGRATION }, () => {
++test('entegrasyon: server/.env.example FCM ve PEACE yer tutucularini icerir (gercek deger YOK)', {}, () => {
+   const example = fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8');
+   for (const name of ['FCM_PROJECT_ID', 'FCM_SERVICE_ACCOUNT_FILE', 'PEACE_REMINDER_ENABLED', 'PEACE_REMINDER_DRY_RUN', 'PEACE_REMINDER_HOME_ALLOWLIST', 'PEACE_CATCHUP_MIN']) {
+     assert.ok(new RegExp(`^#?\\s*${name}=`, 'm').test(example), `.env.example: ${name}`);
+   }
+ });
+ 
+-test('entegrasyon: server.js - push router /api/v1 ve /api altinda, peace_reminder KENDI try/catch\'inde, kapanista mqtt ve db\'den ONCE durur', { todo: TODO_INTEGRATION }, () => {
++test('entegrasyon: server.js - push router /api/v1 ve /api altinda, peace_reminder KENDI try/catch\'inde, kapanista mqtt ve db\'den ONCE durur', {}, () => {
+   const src = fs.readFileSync(path.join(ROOT, 'src', 'server.js'), 'utf8');
+   has(src, /push_routes/, 'push router baglanmali');
+   has(src, /createPushRouter/, 'createPushRouter kullanilmali');
+@@ -1344,7 +1344,7 @@ test('entegrasyon: server.js - push router /api/v1 ve /api altinda, peace_remind
+   assert.ok(idx("'peace-reminder'") < idx("['db'"), 'db kapanmadan once');
+ });
+ 
+-test("entegrasyon: device_service - 'Hepsini kapat' peace_service'e devredilir (noticeId iletilir); route notice_id/include_shutters okur", { todo: TODO_INTEGRATION }, () => {
++test("entegrasyon: device_service - 'Hepsini kapat' peace_service'e devredilir (noticeId iletilir); route notice_id/include_shutters okur", {}, () => {
+   const svc = fs.readFileSync(path.join(ROOT, 'src', 'services', 'device_service.js'), 'utf8');
+   const fn = svc.slice(svc.indexOf('async closeAllOpenLights'));
+   has(fn, /noticeId/, 'closeAllOpenLights({ actor, homeId, noticeId, includeShutters })');

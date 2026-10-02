@@ -4,4 +4,10 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- YALNIZCA DEBUG: QA yerel arka ucu duz HTTP ile calisir (http://10.0.2.2:5000/api) ve cihaz
+         LAN/AP API'si de duz HTTP'dir. Release (ana manifest) Java/Kotlin ag yiginda cleartext'i KAPALI birakir
+         (yalnizca pano AP adresi icin dar istisna; dart:io NSC'ye tabi degildir); bu bayrak release'e ASLA tasinmamalidir.
+         Not: networkSecurityConfig tanimliyken Android bu bayragi yok sayar; gecerli kural
+         src/debug/res/xml/network_security_config.xml dosyasindadir (burasi belgeleme/uyumluluk). -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>

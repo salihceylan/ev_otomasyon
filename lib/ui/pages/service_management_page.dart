@@ -1,483 +1,688 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
+import '../../models/capabilities.dart';
+import '../../models/json_utils.dart';
 import '../../services/automation_state.dart';
 import '../../services/ev_cloud_api_service.dart';
+import '../../utils/friendly_error.dart';
+import '../common/confirm_dialogs.dart';
 import '../theme/app_theme.dart';
 import '../widgets/circuit_background.dart';
-import 'device_inventory_page.dart';
-import 'replace_board_dialog.dart';
-import 'service_mode_page.dart';
-import 'system_doctor_dialog.dart';
-import 'family/transfer_ownership_dialog.dart';
+import 'service_setup/panel/admin_account.dart';
+import 'service_setup/panel/admin_account_dialogs.dart';
+import 'service_setup/panel/service_tool_cards.dart';
+import 'service_setup/setup_style.dart';
+import 'service_setup/setup_widgets.dart';
 
-/// AHBU Akıllı Ev & Bina Otomasyonu
-/// Süper Yönetici & Servis Sorumlusu Yönetim Paneli (ADIM 19)
+/// Süper yönetici ve servis sorumlusu hesap yönetim paneli.
+///
+/// * **Hesaplar** sekmesi: sayfalı + gecikmeli aramalı liste; hata görünür kalır (hata -> boş liste
+///   gösterilmez); oluşturma/düzenleme diyalogları yalnızca API başarısından sonra kapanır.
+/// * Süper yönetici kendi hesabını ve **son aktif süper yöneticiyi donduramaz**; dondurma onaylanır.
+///   Başka bir süper yöneticinin parolası için kendi mevcut parolası istenir.
+/// * Servis sorumlusu hesap oluştururken **parola veremez**: hesap `pending_invite` olur ve
+///   etkinleştirme / sıfırlama bağlantısı e-postayla gider.
+/// * **Görevler ve Araçlar** sekmesi: servis araçlarına kısayollar.
 class ServiceManagementPage extends StatefulWidget {
-  final bool autoLoad;
-  final int initialTabIndex;
   const ServiceManagementPage({
     super.key,
     this.autoLoad = true,
     this.initialTabIndex = 0,
+    this.pageSize = 30,
   });
+
+  /// `false` ise açılışta sunucudan yüklenmez (yenile ile yüklenir).
+  final bool autoLoad;
+
+  /// 0: Hesaplar, 1: Görevler ve Araçlar (sınır dışı değerler sığdırılır).
+  final int initialTabIndex;
+  final int pageSize;
 
   @override
   State<ServiceManagementPage> createState() => _ServiceManagementPageState();
 }
 
-class _ServiceManagementPageState extends State<ServiceManagementPage>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
-  EvCloudApiService get _api => Provider.of<AutomationState>(context, listen: false).cloudApi;
+class _ServiceManagementPageState extends State<ServiceManagementPage> with SingleTickerProviderStateMixin {
+  static const Duration _searchDebounce = Duration(milliseconds: 300);
+  static const Duration _requestTimeout = Duration(seconds: 25);
 
-  bool _isLoading = true;
-  String? _errorMessage;
+  late final TabController _tabs;
+  final TextEditingController _search = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+
+  List<AdminAccount> _items = const <AdminAccount>[];
+  int? _total;
+  bool _loading = false;
+  bool _loadingMore = false;
+  bool _loaded = false;
+  String? _error;
+  int _seq = 0;
+  Timer? _debounce;
+  GlobalRole? _roleFilter;
+  String _query = '';
+
   Map<String, dynamic>? _summary;
+  String? _summaryError;
+  bool _summaryLoading = false;
 
-  List<dynamic> _superAndServiceUsers = [];
+  final Set<String> _busyIds = <String>{};
+
+  EvCloudApiService get _api => context.read<AutomationState>().cloudApi;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(
-      length: 2,
-      vsync: this,
-      initialIndex: widget.initialTabIndex.clamp(0, 1),
-    );
-    _tabController.addListener(() {
-      if (mounted) setState(() {});
-    });
+    _tabs = TabController(length: 2, vsync: this, initialIndex: widget.initialTabIndex.clamp(0, 1));
+    _scroll.addListener(_onScroll);
     if (widget.autoLoad) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _loadAllData();
+        if (!mounted) return;
+        unawaited(_loadAccounts(reset: true));
+        unawaited(_loadSummary());
       });
     } else {
-      _isLoading = false;
+      _loaded = true;
     }
   }
 
   @override
   void dispose() {
-    _tabController.dispose();
+    _debounce?.cancel();
+    _tabs.dispose();
+    _search.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
-  Future<void> _loadAllData() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  bool get _hasMore {
+    final total = _total;
+    if (total != null) return _items.length < total;
+    return _items.isNotEmpty && _items.length % widget.pageSize == 0;
+  }
 
-    try {
-      final state = Provider.of<AutomationState>(context, listen: false);
-      final api = state.cloudApi;
-      final isSuper = state.isSuperUser;
-
-      // Paralel ve hataya dayanıklı istekler
-      final summaryFuture = api.getServiceSummary().catchError((_) => <String, dynamic>{});
-      final superUsersFuture = isSuper
-          ? api.listAdminUsers(role: 'super_user').catchError((_) => <String, dynamic>{'users': []})
-          : Future.value(<String, dynamic>{'users': []});
-      final serviceUsersFuture = api.listAdminUsers(role: 'service_user').catchError((_) => <String, dynamic>{'users': []});
-
-      final results = await Future.wait([
-        summaryFuture,
-        superUsersFuture,
-        serviceUsersFuture,
-      ]);
-
-      final summaryData = results[0];
-      final superUsersRes = results[1];
-      final serviceUsersRes = results[2];
-
-      final List<dynamic> combinedManagers = [
-        ...(superUsersRes['users'] as List? ?? []),
-        ...(serviceUsersRes['users'] as List? ?? []),
-      ];
-
-      if (mounted) {
-        setState(() {
-          _summary = summaryData;
-          _superAndServiceUsers = combinedManagers;
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _errorMessage = e.toString().replaceAll('Exception: ', '');
-          _isLoading = false;
-        });
-      }
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    if (pos.pixels >= pos.maxScrollExtent - 200 && _hasMore && !_loading && !_loadingMore && _error == null) {
+      unawaited(_loadAccounts(reset: false));
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Yükleme
+  // ---------------------------------------------------------------------------
+
+  Future<void> _loadAccounts({required bool reset}) async {
+    final state = context.read<AutomationState>();
+    if (!state.capabilities.canOpenServiceManagement) return;
+    final seq = ++_seq;
+    setState(() {
+      if (reset) {
+        _loading = true;
+      } else {
+        _loadingMore = true;
+      }
+      _error = null;
+    });
+    try {
+      final res = await _api
+          .listAdminUsers(
+            role: _roleFilter?.wire,
+            search: _query.isEmpty ? null : _query,
+            limit: widget.pageSize,
+            offset: reset ? 0 : _items.length,
+          )
+          .timeout(_requestTimeout);
+      if (!mounted || seq != _seq) return;
+      final parsed = <AdminAccount>[
+        for (final raw in asList(res['users']) ?? const <dynamic>[]) ?AdminAccount.tryParse(raw),
+      ];
+      setState(() {
+        _items = reset ? parsed : <AdminAccount>[..._items, ...parsed];
+        _total = asInt(res['total']);
+        _loading = false;
+        _loadingMore = false;
+        _loaded = true;
+      });
+    } catch (e) {
+      if (!mounted || seq != _seq) return;
+      setState(() {
+        _error = friendlyError(e, fallback: 'Hesap listesi yüklenemedi. Lütfen tekrar deneyin.');
+        _loading = false;
+        _loadingMore = false;
+        _loaded = true;
+      });
+    }
+  }
+
+  Future<void> _loadSummary() async {
+    final state = context.read<AutomationState>();
+    if (!state.capabilities.canManageAdminAccounts) return; // özet yalnızca süper yönetici içindir
+    setState(() {
+      _summaryLoading = true;
+      _summaryError = null;
+    });
+    try {
+      final res = await _api.getServiceSummary().timeout(_requestTimeout);
+      if (!mounted) return;
+      setState(() {
+        _summary = res;
+        _summaryLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _summaryLoading = false;
+        _summaryError = friendlyError(e, fallback: 'Özet bilgiler alınamadı.');
+      });
+    }
+  }
+
+  Future<void> _refreshAll() async {
+    await Future.wait<void>(<Future<void>>[_loadAccounts(reset: true), _loadSummary()]);
+  }
+
+  void _setFilter(GlobalRole? role) {
+    if (_roleFilter == role) return;
+    setState(() => _roleFilter = role);
+    unawaited(_loadAccounts(reset: true));
+  }
+
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    final clock = context.read<AutomationState>().clock;
+    _debounce = clock.timer(_searchDebounce, () {
+      if (!mounted) return;
+      final next = value.trim();
+      if (next == _query) return;
+      _query = next;
+      unawaited(_loadAccounts(reset: true));
+    });
+    setState(() {});
+  }
+
+  // ---------------------------------------------------------------------------
+  // Eylemler
+  // ---------------------------------------------------------------------------
+
+  void _snack(String message, {bool error = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          key: Key(error ? 'snack_account_error' : 'snack_account_info'),
+          content: Text(message),
+          backgroundColor: error ? SetupColors.error : null,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  Future<void> _create() async {
+    final state = context.read<AutomationState>();
+    final isSuper = state.capabilities.canManageAdminAccounts;
+    final outcome = await CreateAccountDialog.show(context, actorIsSuper: isSuper);
+    if (outcome == null || !mounted) return;
+    if (outcome.withPassword) {
+      _snack('${outcome.fullName} hesabı oluşturuldu. İlk girişte parolasını değiştirmesi istenecek.');
+    } else if (outcome.inviteSent == false) {
+      _snack(
+        'Hesap oluşturuldu ama etkinleştirme e-postası gönderilemedi. Karttaki "Bağlantı gönder" ile tekrar deneyin.'
+        '${outcome.inviteWarning == null ? '' : ' (${outcome.inviteWarning})'}',
+        error: true,
+      );
+    } else {
+      _snack('${outcome.fullName} hesabı oluşturuldu; etkinleştirme bağlantısı ${outcome.email} adresine gönderildi.');
+    }
+    unawaited(_refreshAll());
+  }
+
+  Future<void> _edit(AdminAccount account, {required bool isSelf}) async {
+    final state = context.read<AutomationState>();
+    final ok = await EditAccountDialog.show(
+      context,
+      account: account,
+      actorIsSuper: state.capabilities.canManageAdminAccounts,
+      isSelf: isSelf,
+    );
+    if (ok != true || !mounted) return;
+    _snack('${account.fullName} hesabı güncellendi.');
+    unawaited(_loadAccounts(reset: true));
+  }
+
+  bool get _allSupersLoaded {
+    if (_roleFilter != null && _roleFilter != GlobalRole.superUser) return false;
+    if (_query.isNotEmpty) return false;
+    final total = _total;
+    return total != null && _items.length >= total;
+  }
+
+  Future<void> _freeze(AdminAccount account) async {
+    if (_busyIds.contains(account.id)) return;
+    final me = context.read<AutomationState>().currentUser;
+    final block = AccountRules.freezeBlock(
+      target: account,
+      currentUserId: me?.id,
+      loaded: _items,
+      allSupersLoaded: _allSupersLoaded,
+    );
+    if (block != null) {
+      _snack(AccountRules.freezeBlockText(block), error: true);
+      return;
+    }
+    final ok = await showSimpleConfirm(
+      context,
+      title: 'Hesap dondurulsun mu?',
+      message: '${account.fullName} (${account.email}) hesabı dondurulacak: tüm oturumları kapanır, uygulamaya '
+          'giriş yapamaz ve evlerdeki cihaz erişimi durur. Daha sonra yeniden aktifleştirebilirsiniz.',
+      confirmLabel: 'Dondur',
+      destructive: true,
+    );
+    if (!ok || !mounted) return;
+    await _setActive(account, active: false);
+  }
+
+  Future<void> _activate(AdminAccount account) async {
+    if (_busyIds.contains(account.id)) return;
+    await _setActive(account, active: true);
+  }
+
+  Future<void> _setActive(AdminAccount account, {required bool active}) async {
+    setState(() => _busyIds.add(account.id));
+    try {
+      await _api.updateAdminUser(account.id, isActive: active).timeout(_requestTimeout);
+      if (!mounted) return;
+      setState(() {
+        _items = <AdminAccount>[
+          for (final a in _items)
+            a.id == account.id
+                ? a.copyWith(
+                    isActive: active,
+                    status: active
+                        ? (a.status == AccountStatus.suspended ? AccountStatus.active : a.status)
+                        : AccountStatus.suspended,
+                  )
+                : a,
+        ];
+      });
+      _snack(active ? '${account.fullName} hesabı aktifleştirildi.' : '${account.fullName} hesabı donduruldu.');
+      unawaited(_loadSummary());
+    } catch (e) {
+      if (!mounted) return;
+      showFriendlyError(context, e, fallback: 'İşlem tamamlanamadı. Lütfen tekrar deneyin.');
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(account.id));
+    }
+  }
+
+  Future<void> _sendReset(AdminAccount account) async {
+    if (_busyIds.contains(account.id)) return;
+    setState(() => _busyIds.add(account.id));
+    try {
+      final res = await _api.sendAdminUserReset(account.id).timeout(_requestTimeout);
+      if (!mounted) return;
+      final purpose = asNonEmptyString(res['purpose']);
+      final sent = asBool(res['sent']);
+      if (sent == false) {
+        _snack('Bağlantı gönderilemedi. E-posta sağlayıcısı yanıt vermedi; biraz sonra tekrar deneyin.', error: true);
+      } else {
+        _snack(
+          purpose == 'account_setup'
+              ? 'Hesap etkinleştirme bağlantısı ${account.email} adresine gönderildi.'
+              : 'Parola sıfırlama bağlantısı ${account.email} adresine gönderildi.',
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showFriendlyError(context, e, fallback: 'Bağlantı gönderilemedi. Lütfen tekrar deneyin.');
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(account.id));
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Arayüz
+  // ---------------------------------------------------------------------------
+
   @override
   Widget build(BuildContext context) {
-    final state = Provider.of<AutomationState>(context);
-    final isSuper = state.isSuperUser;
+    final state = context.watch<AutomationState>();
+    final caps = state.capabilities;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: isDark ? const Color(0xFF0B1120) : const Color(0xFFF1F5F9),
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              isSuper ? 'Servis Sorumluları Yönetimi' : 'Servis & Saha Konsolu',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: isDark ? Colors.white : AppTheme.textPrimaryLight,
-              ),
+              caps.canManageAdminAccounts ? 'Servis Yönetimi' : 'Servis ve Saha Konsolu',
+              key: const Key('nav_service_management_title'),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 2),
             Text(
-              isSuper
-                  ? 'Yetkili Servis Ağı & Personel Denetimi'
-                  : 'Güde Teknoloji • Yetkili Servis Ağı',
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppTheme.accentCyan,
-                fontWeight: FontWeight.w500,
-              ),
+              caps.canManageAdminAccounts ? 'Yöneticiler, servis sorumluları, müşteriler' : 'Müşteri hesapları ve araçlar',
+              style: const TextStyle(fontSize: 11, color: AppTheme.accentCyan),
             ),
           ],
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: AppTheme.accentCyan),
+            key: const Key('btn_refresh'),
+            icon: const Icon(Icons.refresh_rounded),
             tooltip: 'Yenile',
-            onPressed: _loadAllData,
+            onPressed: _loading ? null : _refreshAll,
           ),
         ],
-        bottom: isSuper
-            ? null // Süper kullanıcıda saha/araç sekmeleri olmaz, doğrudan sorumlu listesi gösterilir
-            : TabBar(
-                controller: _tabController,
-                indicatorColor: AppTheme.accentCyan,
-                indicatorWeight: 3,
-                labelColor: Colors.white,
-                unselectedLabelColor: AppTheme.textMuted,
-                labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                tabs: const [
-                  Tab(
-                    icon: Icon(Icons.shield_outlined, size: 18),
-                    text: 'Sorumlular',
-                  ),
-                  Tab(
-                    icon: Icon(Icons.task_alt_rounded, size: 18),
-                    text: 'Görevler & Araçlar',
-                  ),
-                ],
-              ),
+        bottom: TabBar(
+          controller: _tabs,
+          tabs: const [
+            Tab(key: Key('tab_accounts'), icon: Icon(Icons.shield_outlined, size: 18), text: 'Hesaplar'),
+            Tab(key: Key('tab_tools'), icon: Icon(Icons.task_alt_rounded, size: 18), text: 'Görevler ve Araçlar'),
+          ],
+        ),
       ),
+      floatingActionButton: caps.canOpenServiceManagement
+          ? FloatingActionButton.extended(
+              key: const Key('btn_add_account'),
+              onPressed: _create,
+              icon: const Icon(Icons.person_add_alt_1_rounded),
+              label: Text(caps.canManageAdminAccounts ? 'Hesap Ekle' : 'Müşteri Ekle'),
+            )
+          : null,
       body: CircuitBackground(
         child: SafeArea(
-          child: _isLoading
-              ? const Center(
-                  child: CircularProgressIndicator(color: AppTheme.accentCyan),
-                )
-              : _errorMessage != null
-                  ? _buildErrorView()
-                  : isSuper
-                      ? _buildManagersTab(isSuper)
-                      : TabBarView(
-                          controller: _tabController,
-                          children: [
-                            _buildManagersTab(isSuper),
-                            _buildTasksAndToolsTab(context),
-                          ],
-                        ),
-        ),
-      ),
-      floatingActionButton: _buildFloatingActionButton(isSuper),
-    );
-  }
-
-  Widget? _buildFloatingActionButton(bool isSuper) {
-    if (!isSuper) return null; // Servis sorumlusu sorumlu ekleyemez!
-    // Süper kullanıcı için tab indeksi fark etmeksizin her zaman Sorumlu Ekle butonu aktiftir
-    return FloatingActionButton.extended(
-      onPressed: () => _openCreateUserDialog(context, isSuper, defaultRole: 'service_user'),
-      backgroundColor: AppTheme.accentCyan,
-      icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.black),
-      label: const Text(
-        'Sorumlu Ekle',
-        style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
-  Widget _buildErrorView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline_rounded, color: Colors.redAccent, size: 48),
-            const SizedBox(height: 12),
-            Text(
-              _errorMessage ?? 'Bilinmeyen bir hata oluştu',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70, fontSize: 14),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _loadAllData,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('Tekrar Dene'),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentCyan),
-            ),
-          ],
+          child: !caps.canOpenServiceManagement
+              ? const _Denied()
+              : TabBarView(
+                  controller: _tabs,
+                  children: [
+                    _accountsTab(context, state),
+                    ListView(
+                      key: const Key('management_tools'),
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+                      children: const [ServiceToolCards(includeManagement: false, includeSetup: true)],
+                    ),
+                  ],
+                ),
         ),
       ),
     );
   }
 
-  // ===========================================================================
-  // TAB 1: SÜPER VE SERVİS SORUMLULARI
-  // ===========================================================================
-  Widget _buildManagersTab(bool isSuper) {
+  Widget _accountsTab(BuildContext context, AutomationState state) {
+    final caps = state.capabilities;
+    final isSuper = caps.canManageAdminAccounts;
     return RefreshIndicator(
-      onRefresh: _loadAllData,
+      onRefresh: _refreshAll,
       color: AppTheme.accentCyan,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+        key: const Key('accounts_list'),
+        controller: _scroll,
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
         children: [
-          _buildMetricsOverview(),
-          const SizedBox(height: 16),
-          if (!isSuper) ...[
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.accentCyan.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppTheme.accentCyan.withValues(alpha: 0.3)),
-              ),
-              child: const Row(
-                children: [
-                  Icon(Icons.info_outline_rounded, color: AppTheme.accentCyan, size: 20),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Servis sorumlusu ve yönetici hesapları yalnızca Süper Yönetici tarafından tanımlanabilir ve yönetilebilir.',
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ),
-                ],
+          if (isSuper) _summaryCard(context),
+          if (!isSuper)
+            const SetupCard(
+              margin: EdgeInsets.only(bottom: 4),
+              child: SetupInfoRow(
+                icon: Icons.info_outline_rounded,
+                color: SetupColors.info,
+                text: 'Servis sorumlusu ve yönetici hesaplarını yalnızca süper yönetici tanımlayabilir. Burada '
+                    'oluşturduğunuz müşteri hesaplarını görür ve yönetirsiniz.',
               ),
             ),
-            const SizedBox(height: 12),
-          ],
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'Süper Yöneticiler & Servis Sorumluları',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.surfaceDark,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white10),
-                ),
-                child: Text(
-                  '${_superAndServiceUsers.length} Yetkili',
-                  style: const TextStyle(color: AppTheme.accentCyan, fontSize: 12, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          if (_superAndServiceUsers.isEmpty)
-            _buildEmptyState('Kayıtlı servis sorumlusu veya süper kullanıcı bulunamadı.')
-          else
-            ..._superAndServiceUsers.map((u) => _buildUserCard(u, isSuper)),
+          _filters(context, isSuper),
+          ..._listBody(context, state, isSuper),
         ],
       ),
     );
   }
 
-  // ===========================================================================
-  // TAB 2: SERVİS GÖREVLERİ & ARAÇLARI
-  // ===========================================================================
-  Widget _buildTasksAndToolsTab(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+  Widget _summaryCard(BuildContext context) {
+    final users = asMap(_summary?['users']);
+    final devices = asMap(_summary?['devices']);
+    String n(Object? v) => (asInt(v)?.toString()) ?? '-';
+    return SetupCard(
+      key: const Key('management_summary'),
+      margin: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Sistem özeti',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: SetupColors.muted(context)),
+          ),
+          const SizedBox(height: 10),
+          if (_summaryLoading && _summary == null)
+            const Center(child: Padding(padding: EdgeInsets.all(8), child: CircularProgressIndicator(strokeWidth: 2)))
+          else if (_summary != null)
+            Row(
+              children: [
+                _MiniStat(label: 'Süper', value: n(users?['super_users']), color: AppTheme.accentPurple),
+                const SizedBox(width: 8),
+                _MiniStat(label: 'Servis', value: n(users?['service_users']), color: AppTheme.accentCyan),
+                const SizedBox(width: 8),
+                _MiniStat(label: 'Müşteri', value: n(users?['regular_users']), color: AppTheme.accentAmber),
+                const SizedBox(width: 8),
+                _MiniStat(label: 'Pano', value: n(devices?['total_devices']), color: AppTheme.accentGreen),
+              ],
+            ),
+          if (_summaryError != null)
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _summaryError!,
+                    key: const Key('summary_error'),
+                    style: const TextStyle(fontSize: 12.5, color: SetupColors.error),
+                  ),
+                ),
+                TextButton(key: const Key('btn_summary_retry'), onPressed: _loadSummary, child: const Text('Tekrar dene')),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _filters(BuildContext context, bool isSuper) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Tanımlı Servis Görevleri & Eylemleri',
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
+        TextField(
+          key: const Key('field_search'),
+          controller: _search,
+          onChanged: _onSearchChanged,
+          decoration: InputDecoration(
+            hintText: 'Ad, e-posta veya telefon ara',
+            prefixIcon: const Icon(Icons.search, size: 20),
+            suffixIcon: _search.text.isEmpty
+                ? null
+                : IconButton(
+                    key: const Key('btn_search_clear'),
+                    tooltip: 'Aramayı temizle',
+                    icon: const Icon(Icons.clear, size: 18),
+                    onPressed: () {
+                      _search.clear();
+                      _onSearchChanged('');
+                    },
+                  ),
+            filled: true,
+            fillColor: SetupColors.card(context),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           ),
         ),
-        const SizedBox(height: 6),
-        const Text(
-          'Yetkili servis sorumlularının sahada yürüteceği görevler aşağıda gruplanmıştır:',
-          style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
-        ),
-        const SizedBox(height: 16),
-
-        _buildTaskCard(
-          icon: Icons.inventory_2_outlined,
-          color: Colors.amberAccent,
-          title: '1. Cihaz Envanteri & Fabrika Kaydı',
-          description:
-              'Üretimden çıkan ESP32-S3 panolarının UUID, Setup PIN ve model bilgilerini sistem envanterine işleyin.',
-          buttonLabel: 'Envanter İşlemleri',
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const DeviceInventoryPage()),
-            );
-          },
-        ),
-
-        const SizedBox(height: 12),
-        _buildTaskCard(
-          icon: Icons.verified_outlined,
-          color: AppTheme.accentCyan,
-          title: '2. Devreye Alma (Commissioning) Onayı',
-          description:
-              'Daireye montajı biten panonun tüm lamba, panjur ve opto-izole DI girişlerini test edip devreye alma raporunu onaylayın.',
-          buttonLabel: 'Devreye Alma Sihirbazı',
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ServiceModePage()),
-            );
-          },
-        ),
-
-        const SizedBox(height: 12),
-        _buildTaskCard(
-          icon: Icons.sync_problem_rounded,
-          color: Colors.redAccent,
-          title: '3. Acil Servis Sıfırlaması & Daire Devri',
-          description:
-              'Eski kiracı veya ev sahibine ulaşılamadığında; fiziksel mülk doğrulamasıyla panoyu güvenle boşa çıkarıp yeni daireye atayın.',
-          buttonLabel: 'Acil Sıfırlama & Devir',
-          onTap: () {
-            showDialog(
-              context: context,
-              builder: (_) => const TransferOwnershipDialog(),
-            );
-          },
-        ),
-
-        const SizedBox(height: 12),
-        _buildTaskCard(
-          icon: Icons.medical_services_outlined,
-          color: Colors.tealAccent,
-          title: '4. Buluttan Tek Tıkla Pano Değişimi (Disaster Recovery)',
-          description:
-              'Yıldırım veya arıza sebebiyle değişen panonun tüm 40 röle, isim ve kalibrasyon yedeğini 5 saniyede yeni panoya aktarın.',
-          buttonLabel: 'Pano Değişimi Aç',
-          onTap: () {
-            showDialog(
-              context: context,
-              builder: (_) => const ReplaceBoardDialog(),
-            );
-          },
-        ),
-
-        const SizedBox(height: 12),
-        _buildTaskCard(
-          icon: Icons.health_and_safety_outlined,
-          color: Colors.blueAccent,
-          title: '5. Sistem Doktoru (Otomatik Donanım Teşhisi)',
-          description:
-              'MQTTS bulut, yerel Wi-Fi ve pano güç katmanlarını tek tıkla test ederek arıza kaynağını milisaniyede belirleyin.',
-          buttonLabel: 'Sistem Doktorunu Çalıştır',
-          onTap: () {
-            showDialog(
-              context: context,
-              builder: (_) => const SystemDoctorDialog(),
-            );
-          },
-        ),
+        if (isSuper)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                _chip('chip_filter_all', 'Tümü', null),
+                _chip('chip_filter_super', 'Süper', GlobalRole.superUser),
+                _chip('chip_filter_service', 'Servis', GlobalRole.serviceUser),
+                _chip('chip_filter_user', 'Müşteri', GlobalRole.user),
+              ],
+            ),
+          ),
+        const SizedBox(height: 10),
       ],
     );
   }
 
-  // ===========================================================================
-  // WIDGET HELPER METODLARI
-  // ===========================================================================
-
-  Widget _buildMetricsOverview() {
-    final users = _summary?['users'] as Map<String, dynamic>?;
-    final devices = _summary?['devices'] as Map<String, dynamic>?;
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceDark.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Sistem & Servis Genel Durumu',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white70),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              _buildMiniStat(
-                label: 'Süper',
-                value: '${users?['super_users'] ?? 0}',
-                color: AppTheme.accentPurple,
-                icon: Icons.shield_rounded,
-              ),
-              const SizedBox(width: 8),
-              _buildMiniStat(
-                label: 'Servis',
-                value: '${users?['service_users'] ?? 0}',
-                color: AppTheme.accentCyan,
-                icon: Icons.verified_user_rounded,
-              ),
-              const SizedBox(width: 8),
-              _buildMiniStat(
-                label: 'Daire',
-                value: '${users?['regular_users'] ?? users?['users'] ?? 0}',
-                color: Colors.amberAccent,
-                icon: Icons.home_rounded,
-              ),
-              const SizedBox(width: 8),
-              _buildMiniStat(
-                label: 'Pano',
-                value: '${devices?['total_devices'] ?? 0}',
-                color: Colors.greenAccent,
-                icon: Icons.router_rounded,
-              ),
-            ],
-          ),
-        ],
-      ),
+  Widget _chip(String key, String label, GlobalRole? role) {
+    return ChoiceChip(
+      key: Key(key),
+      label: Text(label),
+      selected: _roleFilter == role,
+      onSelected: (_) => _setFilter(role),
     );
   }
 
-  Widget _buildMiniStat({
-    required String label,
-    required String value,
-    required Color color,
-    required IconData icon,
-  }) {
+  List<Widget> _listBody(BuildContext context, AutomationState state, bool isSuper) {
+    if (_loading && _items.isEmpty) {
+      return const [
+        SizedBox(height: 60),
+        Center(child: CircularProgressIndicator(key: Key('accounts_loading'), color: AppTheme.accentCyan)),
+      ];
+    }
+    if (_error != null && _items.isEmpty) {
+      return [
+        const SizedBox(height: 24),
+        SetupCard(
+          key: const Key('accounts_error'),
+          accent: SetupColors.error,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SetupInfoRow(
+                icon: Icons.error_outline_rounded,
+                color: SetupColors.error,
+                bold: true,
+                text: 'Hesap listesi yüklenemedi',
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 26, top: 2),
+                child: Text(_error!, style: TextStyle(color: SetupColors.text(context))),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton.icon(
+                key: const Key('btn_retry'),
+                onPressed: () => _loadAccounts(reset: true),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Tekrar Dene'),
+              ),
+            ],
+          ),
+        ),
+      ];
+    }
+    if (_loaded && _items.isEmpty) {
+      return [
+        SetupCard(
+          key: const Key('accounts_empty'),
+          child: Text(
+            _query.isNotEmpty || _roleFilter != null
+                ? 'Aramanızla eşleşen hesap bulunamadı.'
+                : 'Henüz hesap yok. "${isSuper ? 'Hesap Ekle' : 'Müşteri Ekle'}" ile başlayın.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: SetupColors.muted(context)),
+          ),
+        ),
+      ];
+    }
+    final me = state.currentUser;
+    return [
+      if (_error != null)
+        SetupCard(
+          key: const Key('accounts_stale'),
+          accent: SetupColors.warn,
+          margin: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            children: [
+              Expanded(child: Text('Liste güncellenemedi (eski veriler gösteriliyor): $_error')),
+              TextButton(
+                key: const Key('btn_retry'),
+                onPressed: () => _loadAccounts(reset: true),
+                child: const Text('Tekrar dene'),
+              ),
+            ],
+          ),
+        ),
+      for (final account in _items)
+        _AccountCard(
+          account: account,
+          isSelf: me != null && me.id == account.id,
+          actorIsSuper: isSuper,
+          busy: _busyIds.contains(account.id),
+          freezeBlock: AccountRules.freezeBlock(
+            target: account,
+            currentUserId: me?.id,
+            loaded: _items,
+            allSupersLoaded: _allSupersLoaded,
+          ),
+          onEdit: () => _edit(account, isSelf: me != null && me.id == account.id),
+          onFreeze: () => _freeze(account),
+          onActivate: () => _activate(account),
+          onSendReset: () => _sendReset(account),
+        ),
+      if (_loadingMore)
+        const Padding(padding: EdgeInsets.all(16), child: Center(child: CircularProgressIndicator(strokeWidth: 2)))
+      else if (_hasMore && _error == null)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: OutlinedButton.icon(
+            key: const Key('btn_load_more'),
+            onPressed: () => _loadAccounts(reset: false),
+            icon: const Icon(Icons.expand_more_rounded),
+            label: const Text('Daha fazla yükle'),
+          ),
+        ),
+    ];
+  }
+}
+
+class _Denied extends StatelessWidget {
+  const _Denied();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
+        child: SetupCard(
+          key: Key('management_denied'),
+          accent: SetupColors.warn,
+          child: SetupInfoRow(
+            icon: Icons.lock_outline_rounded,
+            color: SetupColors.warn,
+            bold: true,
+            text: 'Servis yönetimi yalnızca süper yönetici ve servis personeli içindir.',
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniStat extends StatelessWidget {
+  const _MiniStat({required this.label, required this.value, required this.color});
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
@@ -488,668 +693,224 @@ class _ServiceManagementPageState extends State<ServiceManagementPage>
         ),
         child: Column(
           children: [
-            Icon(icon, color: color, size: 18),
-            const SizedBox(height: 4),
             Text(
               value,
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: SetupColors.readable(context, color)),
             ),
             const SizedBox(height: 2),
             Text(
               label,
-              style: const TextStyle(fontSize: 10, color: Colors.white70),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, color: SetupColors.muted(context)),
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildUserCard(Map<String, dynamic> user, bool isSuper) {
-    final role = user['role']?.toString() ?? 'user';
-    final isActive = user['is_active'] == true;
-    final fullName = user['full_name']?.toString() ?? 'İsimsiz';
-    final email = user['email']?.toString() ?? '';
-    final phone = user['phone']?.toString() ?? '';
-    final adminNotes = user['admin_notes']?.toString();
-    final userId = user['id']?.toString() ?? '';
+class _AccountCard extends StatelessWidget {
+  const _AccountCard({
+    required this.account,
+    required this.isSelf,
+    required this.actorIsSuper,
+    required this.busy,
+    required this.freezeBlock,
+    required this.onEdit,
+    required this.onFreeze,
+    required this.onActivate,
+    required this.onSendReset,
+  });
 
-    Color badgeColor;
-    String badgeText;
-    IconData badgeIcon;
+  final AdminAccount account;
+  final bool isSelf;
+  final bool actorIsSuper;
+  final bool busy;
+  final FreezeBlock? freezeBlock;
+  final VoidCallback onEdit;
+  final VoidCallback onFreeze;
+  final VoidCallback onActivate;
+  final VoidCallback onSendReset;
 
-    switch (role) {
-      case 'super_user':
-        badgeColor = AppTheme.accentPurple;
-        badgeText = 'SÜPER YÖNETİCİ';
-        badgeIcon = Icons.shield_rounded;
-        break;
-      case 'service_user':
-        badgeColor = AppTheme.accentCyan;
-        badgeText = 'SERVİS SORUMLUSU';
-        badgeIcon = Icons.verified_user_rounded;
-        break;
+  Color get _roleColor {
+    switch (account.role) {
+      case GlobalRole.superUser:
+        return AppTheme.accentPurple;
+      case GlobalRole.serviceUser:
+        return AppTheme.accentCyan;
       default:
-        badgeColor = Colors.grey;
-        badgeText = 'STANDART KULLANICI';
-        badgeIcon = Icons.person_rounded;
+        return AppTheme.accentAmber;
     }
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      color: AppTheme.surfaceDark.withValues(alpha: 0.85),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: isActive ? badgeColor.withValues(alpha: 0.3) : Colors.redAccent.withValues(alpha: 0.3),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  radius: 20,
-                  backgroundColor: badgeColor.withValues(alpha: 0.2),
-                  child: Icon(badgeIcon, color: badgeColor, size: 22),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        fullName,
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        email,
-                        style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: badgeColor.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: badgeColor.withValues(alpha: 0.4)),
-                  ),
-                  child: Text(
-                    badgeText,
-                    style: TextStyle(
-                      color: badgeColor,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (phone.isNotEmpty || (adminNotes != null && adminNotes.isNotEmpty)) ...[
-              const SizedBox(height: 10),
-              Divider(color: Colors.white.withValues(alpha: 0.08), height: 1),
-              const SizedBox(height: 8),
-              if (phone.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.phone_outlined, size: 14, color: AppTheme.textMuted),
-                      const SizedBox(width: 6),
-                      Text(phone, style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                    ],
-                  ),
-                ),
-              if (adminNotes != null && adminNotes.isNotEmpty)
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Icon(Icons.sticky_note_2_outlined, size: 14, color: AppTheme.textMuted),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        adminNotes,
-                        style: const TextStyle(color: Colors.white54, fontSize: 11, fontStyle: FontStyle.italic),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isActive ? Colors.greenAccent : Colors.redAccent,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      isActive ? 'Aktif Hesap' : 'Pasife Alınmış',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: isActive ? Colors.greenAccent : Colors.redAccent,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-                if (isSuper || (role != 'super_user' && role != 'service_user'))
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit_outlined, size: 18, color: AppTheme.textMuted),
-                        tooltip: 'Düzenle & Şifre Değiştir',
-                        onPressed: () => _openEditUserDialog(context, user, isSuper),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          isActive ? Icons.block_outlined : Icons.check_circle_outline,
-                          size: 18,
-                          color: isActive ? Colors.amberAccent : Colors.greenAccent,
-                        ),
-                        tooltip: isActive ? 'Hesabı Dondur' : 'Hesabı Aktifleştir',
-                        onPressed: () => _toggleUserStatus(userId, role, !isActive, isSuper),
-                      ),
-                    ],
-                  )
-                else
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.white10,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Text(
-                      'Salt Okunur',
-                      style: TextStyle(fontSize: 10, color: Colors.white54, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
-  Widget _buildTaskCard({
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String description,
-    required String buttonLabel,
-    required VoidCallback onTap,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceDark.withValues(alpha: 0.8),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
+  @override
+  Widget build(BuildContext context) {
+    final text = SetupColors.text(context);
+    final muted = SetupColors.muted(context);
+    final roleColor = _roleColor;
+    final frozen = account.isFrozen;
+    final statusColor = frozen ? SetupColors.error : (account.isPendingInvite ? SetupColors.warn : SetupColors.ok);
+    // Düzenleme/dondurma yetkisi: süper yönetici herkes için; servis personeli yalnızca müşteri hesapları için.
+    final canManage = actorIsSuper || account.role == GlobalRole.user;
+    final canSendReset = canManage && !frozen && !isSelf;
+    return SetupCard(
+      key: Key('card_account_${account.id}'),
+      accent: frozen ? SetupColors.error : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: color, size: 24),
-              ),
-              const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isSelf ? '${account.fullName} (siz)' : account.fullName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: text),
+                    ),
+                    Text(
+                      account.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12.5, color: muted),
+                    ),
+                  ],
                 ),
               ),
+              const SizedBox(width: 8),
+              _Badge(
+                key: Key('role_${account.id}'),
+                text: account.roleLabel,
+                color: roleColor,
+              ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            description,
-            style: const TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.4),
-          ),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerRight,
-            child: ElevatedButton.icon(
-              onPressed: onTap,
-              icon: Icon(Icons.arrow_forward_rounded, size: 16, color: Colors.black),
-              label: Text(
-                buttonLabel,
-                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: color,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          if (account.phone.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(account.phone, style: TextStyle(fontSize: 12.5, color: muted)),
+            ),
+          if (account.notes.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                account.notes,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: muted),
               ),
             ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _Badge(key: Key('status_${account.id}'), text: account.statusLabel, color: statusColor),
+              if (account.createdByName != null) ...[
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Oluşturan: ${account.createdByName}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11.5, color: muted),
+                  ),
+                ),
+              ],
+            ],
           ),
+          if (canManage || isSelf) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (canManage || isSelf)
+                  OutlinedButton.icon(
+                    key: Key('btn_edit_${account.id}'),
+                    onPressed: busy ? null : onEdit,
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('Düzenle'),
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(48, 44)),
+                  ),
+                if (canSendReset)
+                  OutlinedButton.icon(
+                    key: Key('btn_send_reset_${account.id}'),
+                    onPressed: busy ? null : onSendReset,
+                    icon: const Icon(Icons.mark_email_read_outlined, size: 18),
+                    label: Text(account.isPendingInvite ? 'Daveti yeniden gönder' : 'Bağlantı gönder'),
+                    style: OutlinedButton.styleFrom(minimumSize: const Size(48, 44)),
+                  ),
+                if (canManage && !frozen)
+                  OutlinedButton.icon(
+                    key: Key('btn_freeze_${account.id}'),
+                    onPressed: (busy || freezeBlock != null) ? null : onFreeze,
+                    icon: const Icon(Icons.block_outlined, size: 18),
+                    label: const Text('Dondur'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(48, 44),
+                      foregroundColor: SetupColors.readable(context, SetupColors.warn),
+                    ),
+                  ),
+                if (canManage && frozen)
+                  OutlinedButton.icon(
+                    key: Key('btn_activate_${account.id}'),
+                    onPressed: busy ? null : onActivate,
+                    icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+                    label: const Text('Aktifleştir'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(48, 44),
+                      foregroundColor: SetupColors.readable(context, SetupColors.ok),
+                    ),
+                  ),
+              ],
+            ),
+            if (canManage && !frozen && freezeBlock != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  AccountRules.freezeBlockText(freezeBlock!),
+                  key: Key('note_freeze_block_${account.id}'),
+                  style: TextStyle(fontSize: 12, color: muted),
+                ),
+              ),
+          ] else
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Salt okunur: bu hesabı yalnızca süper yönetici yönetebilir.',
+                key: Key('note_readonly_${account.id}'),
+                style: TextStyle(fontSize: 12, color: muted),
+              ),
+            ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildEmptyState(String text) {
+class _Badge extends StatelessWidget {
+  const _Badge({super.key, required this.text, required this.color});
+
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 16),
-      alignment: Alignment.center,
-      child: Column(
-        children: [
-          const Icon(Icons.groups_outlined, size: 40, color: Colors.white24),
-          const SizedBox(height: 12),
-          Text(
-            text,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.white54, fontSize: 13),
-          ),
-        ],
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: SetupColors.readable(context, color)),
       ),
     );
-  }
-
-  // ===========================================================================
-  // DİYALOGLAR (EKLEME / DÜZENLEME)
-  // ===========================================================================
-
-  void _openCreateUserDialog(BuildContext context, bool isSuper, {String? defaultRole}) {
-    final nameCtrl = TextEditingController();
-    final emailCtrl = TextEditingController();
-    final passCtrl = TextEditingController();
-    final phoneCtrl = TextEditingController();
-    final notesCtrl = TextEditingController();
-
-    // Sorumlu ekleme yetkisi sadece Süper Kullanıcıya aittir.
-    // Servis sorumlusu sadece daire kullanıcısı ekleyebilir.
-    String selectedRole = defaultRole ?? (isSuper ? 'service_user' : 'user');
-    if (!isSuper && (selectedRole == 'super_user' || selectedRole == 'service_user')) {
-      selectedRole = 'user';
-    }
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) {
-          return AlertDialog(
-            backgroundColor: AppTheme.surfaceDark,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: const BorderSide(color: AppTheme.accentCyan, width: 1.5),
-            ),
-            title: Text(
-              isSuper
-                  ? (selectedRole == 'service_user' || selectedRole == 'super_user'
-                      ? 'Yeni Servis Sorumlusu / Yönetici Ekle'
-                      : 'Yeni Daire Sakini / Müşteri Ekle')
-                  : 'Yeni Daire Sakini / Müşteri Ekle',
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Rol / Yetki Tipi:', style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.black26,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: selectedRole,
-                        dropdownColor: AppTheme.surfaceDark,
-                        isExpanded: true,
-                        items: [
-                          if (isSuper) ...[
-                            const DropdownMenuItem(
-                              value: 'super_user',
-                              child: Text('👑 Süper Yönetici (super_user)', style: TextStyle(color: AppTheme.accentPurple)),
-                            ),
-                            const DropdownMenuItem(
-                              value: 'service_user',
-                              child: Text('🛠️ Servis Sorumlusu (service_user)', style: TextStyle(color: AppTheme.accentCyan)),
-                            ),
-                          ],
-                          const DropdownMenuItem(
-                            value: 'user',
-                            child: Text('👤 Daire Sakini / Müşteri (user)', style: TextStyle(color: Colors.white70)),
-                          ),
-                        ],
-                        onChanged: (val) {
-                          if (val != null) setDialogState(() => selectedRole = val);
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: nameCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Ad Soyad',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.person_outline, color: AppTheme.accentCyan, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: emailCtrl,
-                    keyboardType: TextInputType.emailAddress,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'E-posta Adresi',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.email_outlined, color: AppTheme.accentCyan, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: passCtrl,
-                    obscureText: true,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Şifre (En az 6 karakter)',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.lock_outline, color: AppTheme.accentCyan, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: phoneCtrl,
-                    keyboardType: TextInputType.phone,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Telefon Numarası (Opsiyonel)',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.phone_outlined, color: AppTheme.accentCyan, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: notesCtrl,
-                    maxLines: 2,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Görev / Bölge Notu (Opsiyonel)',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.notes_rounded, color: AppTheme.accentCyan, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('İptal', style: TextStyle(color: Colors.white60)),
-              ),
-              ElevatedButton(
-                onPressed: () async {
-                  if (nameCtrl.text.trim().isEmpty ||
-                      emailCtrl.text.trim().isEmpty ||
-                      passCtrl.text.trim().isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Lütfen ad soyad, e-posta ve şifre alanlarını doldurun.')),
-                    );
-                    return;
-                  }
-
-                  if (!isSuper && (selectedRole == 'super_user' || selectedRole == 'service_user')) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Servis sorumluları veya süper kullanıcılar yalnızca Süper Yönetici tarafından tanımlanabilir.')),
-                    );
-                    return;
-                  }
-
-                  final messenger = ScaffoldMessenger.of(context);
-                  Navigator.pop(ctx);
-                  try {
-                    await _api.createAdminUser(
-                      fullName: nameCtrl.text.trim(),
-                      email: emailCtrl.text.trim(),
-                      password: passCtrl.text.trim(),
-                      phone: phoneCtrl.text.trim().isNotEmpty ? phoneCtrl.text.trim() : null,
-                      role: selectedRole,
-                      adminNotes: notesCtrl.text.trim().isNotEmpty ? notesCtrl.text.trim() : null,
-                    );
-                    if (mounted) {
-                      messenger.showSnackBar(
-                        SnackBar(content: Text('${nameCtrl.text.trim()} başarıyla sisteme eklendi.')),
-                      );
-                    }
-                    _loadAllData();
-                  } catch (e) {
-                    if (mounted) {
-                      messenger.showSnackBar(
-                        SnackBar(content: Text('Hata: ${e.toString().replaceAll("Exception: ", "")}')),
-                      );
-                    }
-                  }
-                },
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentCyan),
-                child: const Text('Kaydet', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  void _openEditUserDialog(BuildContext context, Map<String, dynamic> user, bool isSuper) {
-    final role = user['role']?.toString() ?? 'user';
-    if (!isSuper && (role == 'super_user' || role == 'service_user')) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Servis sorumlusu hesapları yalnızca Süper Yönetici tarafından düzenlenebilir.')),
-      );
-      return;
-    }
-
-    final userId = user['id']?.toString() ?? '';
-    final nameCtrl = TextEditingController(text: user['full_name']?.toString() ?? '');
-    final phoneCtrl = TextEditingController(text: user['phone']?.toString() ?? '');
-    final notesCtrl = TextEditingController(text: user['admin_notes']?.toString() ?? '');
-    final newPassCtrl = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) {
-          return AlertDialog(
-            backgroundColor: AppTheme.surfaceDark,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(20),
-              side: const BorderSide(color: AppTheme.accentPurple, width: 1.5),
-            ),
-            title: Text(
-              '${user['full_name']} Düzenle',
-              style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameCtrl,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Ad Soyad',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.person_outline, color: AppTheme.accentPurple, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: phoneCtrl,
-                    keyboardType: TextInputType.phone,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Telefon Numarası',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.phone_outlined, color: AppTheme.accentPurple, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: newPassCtrl,
-                    obscureText: true,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Yeni Şifre (Değiştirmeyecekseniz boş bırakın)',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.key_outlined, color: AppTheme.accentPurple, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: notesCtrl,
-                    maxLines: 2,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: 'Görev / Bölge Notu',
-                      labelStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.notes_rounded, color: AppTheme.accentPurple, size: 20),
-                      filled: true,
-                      fillColor: Colors.black26,
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('İptal', style: TextStyle(color: Colors.white60)),
-              ),
-              ElevatedButton(
-                onPressed: () async {
-                  final messenger = ScaffoldMessenger.of(context);
-                  Navigator.pop(ctx);
-                  try {
-                    await _api.updateAdminUser(
-                      userId,
-                      fullName: nameCtrl.text.trim(),
-                      phone: phoneCtrl.text.trim().isNotEmpty ? phoneCtrl.text.trim() : null,
-                      adminNotes: notesCtrl.text.trim().isNotEmpty ? notesCtrl.text.trim() : null,
-                      password: newPassCtrl.text.trim().isNotEmpty ? newPassCtrl.text.trim() : null,
-                    );
-                    if (mounted) {
-                      messenger.showSnackBar(
-                        const SnackBar(content: Text('Kullanıcı bilgileri başarıyla güncellendi.')),
-                      );
-                    }
-                    _loadAllData();
-                  } catch (e) {
-                    if (mounted) {
-                      messenger.showSnackBar(
-                        SnackBar(content: Text('Hata: ${e.toString().replaceAll("Exception: ", "")}')),
-                      );
-                    }
-                  }
-                },
-                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentPurple),
-                child: const Text('Güncelle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _toggleUserStatus(String userId, String userRole, bool newStatus, bool isSuper) async {
-    if (!isSuper && (userRole == 'super_user' || userRole == 'service_user')) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Servis sorumlusu hesapları yalnızca Süper Yönetici tarafından dondurulabilir veya aktifleştirilebilir.')),
-        );
-      }
-      return;
-    }
-    try {
-      await _api.updateAdminUser(userId, isActive: newStatus);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(newStatus ? 'Kullanıcı hesabı aktif edildi.' : 'Kullanıcı hesabı donduruldu/pasife alındı.'),
-          ),
-        );
-      }
-      _loadAllData();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Hata: ${e.toString().replaceAll("Exception: ", "")}')),
-        );
-      }
-    }
   }
 }

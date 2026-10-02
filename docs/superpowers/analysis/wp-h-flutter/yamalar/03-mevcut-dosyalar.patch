@@ -1,0 +1,278 @@
+diff --git a/lib/models/api_models.dart b/lib/models/api_models.dart
+index 5faf88c..84780a4 100644
+--- a/lib/models/api_models.dart
++++ b/lib/models/api_models.dart
+@@ -689,2 +689,7 @@ class PeaceNotificationSettings {
+     this.raw = const <String, dynamic>{},
++    this.stale,
++    this.devicesTotal,
++    this.devicesOnline,
++    this.openShutters,
++    this.lastNotice,
+   });
+@@ -704,2 +709,15 @@ class PeaceNotificationSettings {
+ 
++  /// v2: canlı cihaz yok, sayılar bilinmiyor (`true` iken "hepsi kapalı" DENMEZ). `null` = v1 sunucu.
++  final bool? stale;
++
++  /// v2: evdeki / canlı (çevrimiçi) cihaz sayıları; yoksa `null`.
++  final int? devicesTotal;
++  final int? devicesOnline;
++
++  /// v2: açık panjur çifti sayısı (`open_shutters` liste ya da sayı gelebilir; yoksa `open_shutters_count`).
++  final int? openShutters;
++
++  /// v2: en yeni gece bildirim kaydı (yoksa `null`).
++  final PeaceLastNotice? lastNotice;
++
+   static final RegExp _timePattern = RegExp(r'^(\d{1,2}):(\d{2})(?::\d{2})?$');
+@@ -730,2 +748,71 @@ class PeaceNotificationSettings {
+       raw: json,
++      stale: asBool(json['stale']),
++      devicesTotal: asInt(json['devices_total']),
++      devicesOnline: asInt(json['devices_online']),
++      openShutters: _openShutters(json),
++      lastNotice: _lastNotice(json['last_notice']),
++    );
++  }
++
++  /// `open_shutters`: v2 sunucuda panjur listesi, bazı yanıtlarda sayı; yoksa `open_shutters_count`.
++  static int? _openShutters(Map<String, dynamic> json) {
++    final raw = json['open_shutters'];
++    if (raw is List) return raw.length;
++    return asInt(raw) ?? asInt(json['open_shutters_count'] ?? json['openShuttersCount']);
++  }
++
++  static PeaceLastNotice? _lastNotice(Object? raw) {
++    final map = asMap(raw);
++    if (map == null) return null;
++    try {
++      return PeaceLastNotice.fromJson(map);
++    } catch (_) {
++      // Bozuk `last_notice` ayar ekranını düşürmez; yok sayılır.
++      return null;
++    }
++  }
++}
++
++/// `GET /devices/peace-notification/:home_id` yanıtındaki `last_notice` (en yeni gece bildirim kaydı).
++/// Yalnızca `sent` | `no_recipients` | `resolved` durumları görünür.
++class PeaceLastNotice {
++  const PeaceLastNotice({
++    required this.id,
++    this.localDate,
++    this.status,
++    this.summaryText = '',
++    this.openLightsCount,
++    this.openShuttersCount,
++    this.createdAt,
++    this.resolvedAt,
++  });
++
++  /// `peace_notification_logs.id` (CONTRACTS: kimliklerin tek istisnası, tam sayı).
++  final int id;
++
++  /// Yerel gece tarihi (`YYYY-MM-DD`).
++  final String? localDate;
++  final String? status;
++  final String summaryText;
++  final int? openLightsCount;
++  final int? openShuttersCount;
++  final DateTime? createdAt;
++
++  /// Kullanıcı kapattıysa (ya da "Hepsini kapat" çözdüyse) dolu.
++  final DateTime? resolvedAt;
++
++  bool get isResolved => resolvedAt != null || status == 'resolved';
++
++  factory PeaceLastNotice.fromJson(Map<String, dynamic> json) {
++    final id = asInt(json['id']);
++    if (id == null) throw const FormatException('Bildirim kimliği yok');
++    return PeaceLastNotice(
++      id: id,
++      localDate: asNonEmptyString(json['local_date']),
++      status: asNonEmptyString(json['status']),
++      summaryText: asString(json['summary_text']) ?? '',
++      openLightsCount: asInt(json['open_lights_count']),
++      openShuttersCount: asInt(json['open_shutters_count']),
++      createdAt: asDate(json['created_at']),
++      resolvedAt: asDate(json['resolved_at']),
+     );
+@@ -742,2 +829,7 @@ class CloseAllResult {
+     this.message = '',
++    this.closedShutters,
++    this.skippedCount = 0,
++    this.nothingToDo = false,
++    this.resolved = false,
++    this.noticeId,
+   });
+@@ -753,2 +845,18 @@ class CloseAllResult {
+ 
++  /// v2: indirilmesi hedeflenen açık panjur çifti sayısı (v1 sunucuda `null`).
++  final int? closedShutters;
++
++  /// v2: çok panolu evde ortak kanal numarası yüzünden güvenle kapatılamayanlar; `> 0` ise
++  /// [message] elle kontrolü söyler ve bildirim çözülmez.
++  final int skippedCount;
++
++  /// v2: sunucu kayıtlarına göre kapatılacak şey YOKTU, cihaza komut gitmedi: "kapatıldı" denmemeli.
++  final bool nothingToDo;
++
++  /// v2: bildirim kaydı çözüldü.
++  final bool resolved;
++
++  /// v2: çözülen/ilgili bildirim kaydı (`peace_notification_logs.id`).
++  final int? noticeId;
++
+   factory CloseAllResult.fromJson(Map<String, dynamic> json) => CloseAllResult(
+@@ -759,2 +867,7 @@ class CloseAllResult {
+         message: asString(json['message']) ?? '',
++        closedShutters: asInt(json['closed_shutters']),
++        skippedCount: asInt(json['skipped_count']) ?? 0,
++        nothingToDo: asBool(json['nothing_to_do']) ?? false,
++        resolved: asBool(json['resolved']) ?? false,
++        noticeId: asInt(json['notice_id']),
+       );
+diff --git a/lib/services/automation_state.dart b/lib/services/automation_state.dart
+index 82af84c..8e826ba 100644
+--- a/lib/services/automation_state.dart
++++ b/lib/services/automation_state.dart
+@@ -1264,2 +1264,56 @@ class AutomationState extends ChangeNotifier {
+ 
++  final List<Future<void> Function()> _beforeLogoutHooks = <Future<void> Function()>[];
++
++  /// Çıkış kancalarının yerel temizliği en çok bekleteceği süre. Kancalar (ör. push belirtecini sunucudan
++  /// silme isteği) `logout()` BAŞINDA eşzamanlı başlatılır: istek henüz geçerli oturum belirteciyle gönderilmiş
++  /// olur. Ağ kötüyken (çıkışın en çok istendiği an) oturum ekranda açık ve kullanılabilir kalmasın diye bu
++  /// süre dolunca yerel temizlik HEMEN yapılır; kancalar arka planda tamamlanmaya devam eder.
++  static const Duration _logoutHookGrace = Duration(seconds: 1);
++
++  /// Tek bir kancanın üst süresi (arka planda da geçerli); dolunca hata gibi yutulur.
++  static const Duration _logoutHookLimit = Duration(seconds: 3);
++
++  // Başlatılmış kanca çalıştırması ve ait olduğu oturum nesli: aynı oturumda eşzamanlı ikinci `logout()`
++  // aynı çalıştırmayı paylaşır (kancalar ikinci kez çalışmaz); yeni oturumun çıkışı yenisini başlatır.
++  Future<void>? _logoutHooksFlight;
++  int _logoutHooksEpoch = -1;
++
++  /// `logout()` başında (oturum belirteci henüz geçerliyken) çalışacak geri çağrı ekler (ör. push belirtecini
++  /// silmek). Kancalar EŞZAMANLI başlatılır; çıkış yalnızca en çok 1 sn bekler, süre dolsa da yerel temizlik
++  /// hemen yapılır ve kancalar arka planda sürer (her biri en çok 3 sn). Hata ve zaman aşımı yutulur, çıkışı
++  /// ENGELLEMEZ. Kancalar YALNIZCA `logout()`'ta çalışır ([logoutAll] sunucuda başarısız olursa kullanıcı
++  /// oturumda kalır). Döndürülen geri çağrı kancayı kaldırır.
++  void Function() addBeforeLogoutHook(Future<void> Function() hook) {
++    _beforeLogoutHooks.add(hook);
++    return () => _beforeLogoutHooks.remove(hook);
++  }
++
++  /// Kancaları (bu oturum için zaten başlatılmadıysa) eşzamanlı başlatır; tek çalıştırmayı döndürür.
++  Future<void> _startBeforeLogoutHooks() {
++    final existing = _logoutHooksFlight;
++    if (existing != null && _logoutHooksEpoch == _sessionEpoch) return existing;
++    final flight = Future.wait(<Future<void>>[
++      for (final hook in List<Future<void> Function()>.of(_beforeLogoutHooks))
++        Future<void>.sync(hook).timeout(_logoutHookLimit).then((_) {}, onError: (Object _) {}),
++    ]).then((_) {});
++    _logoutHooksFlight = flight;
++    _logoutHooksEpoch = _sessionEpoch;
++    return flight;
++  }
++
++  /// [flight]'ı en çok [_logoutHookGrace] bekler; bitince beklemeyi hemen keser (zamanlayıcı iptal edilir).
++  Future<void> _awaitLogoutHooksBriefly(Future<void> flight) {
++    final gate = Completer<void>();
++    final timer = Timer(_logoutHookGrace, () {
++      if (!gate.isCompleted) gate.complete();
++    });
++    unawaited(
++      flight.then((_) {
++        timer.cancel();
++        if (!gate.isCompleted) gate.complete();
++      }),
++    );
++    return gate.future;
++  }
++
+   /// **Tüm cihazlardaki** oturumları sonlandırır ve bu cihazdan da çıkar (`POST /auth/logout-all`).
+@@ -1267,2 +1321,6 @@ class AutomationState extends ChangeNotifier {
+   /// gerçekleşmediğini görür ve yeniden dener. Servis PIN oturumunda yalnızca yerel çıkıştır.
++  ///
++  /// Çıkış kancaları burada ÇALIŞMAZ: sunucuda başarısız olursa oturum (ve push) sürmelidir. Başarılıysa
++  /// [logout]'a düşülür ve kancalar orada çalışır (API istemcisi belirteçleri silmiş olabilir: sunucuya
++  /// silme isteği başarısız olabilir, yerel işlemler bundan bağımsızdır).
+   Future<void> logoutAll() async {
+@@ -1374,6 +1432,10 @@ class AutomationState extends ChangeNotifier {
+ 
+-  /// Çıkış: **önce yerel temizlik** (tüm kullanıcı kapsamlı alanlar, abonelikler, zamanlayıcılar,
+-  /// servis PIN, MQTT, güvenli depolama, `saved_service_device_*`), **sonra** sunucuda refresh
+-  /// token iptali (en iyi çaba; ağ hatası çıkışı engellemez).
++  /// Çıkış. Sıra: (1) varsa çıkış kancaları (ör. push belirtecini silme) oturum belirteci HÂLÂ geçerliyken
++  /// EŞZAMANLI başlatılır ve en çok 1 sn beklenir (süre dolsa da sonraki adımlara geçilir, kancalar arka
++  /// planda sürer; aynı oturumda eşzamanlı ikinci `logout()` kancaları yeniden çalıştırmaz); (2) **yerel
++  /// temizlik** (tüm kullanıcı kapsamlı alanlar, abonelikler, zamanlayıcılar, servis PIN, MQTT, güvenli
++  /// depolama, `saved_service_device_*`); (3) sunucuda refresh token iptali (en iyi çaba; ağ hatası çıkışı
++  /// engellemez). Kanca yoksa hiçbir `await` olmadan doğrudan (2)'ye geçilir.
+   Future<void> logout() async {
++    if (_beforeLogoutHooks.isNotEmpty) await _awaitLogoutHooksBriefly(_startBeforeLogoutHooks());
+     final refresh = cloudApi.currentRefreshToken;
+diff --git a/lib/services/ev_cloud_api_service.dart b/lib/services/ev_cloud_api_service.dart
+index 06d0d74..4f7dee5 100644
+--- a/lib/services/ev_cloud_api_service.dart
++++ b/lib/services/ev_cloud_api_service.dart
+@@ -1114,2 +1114,7 @@ class EvCloudApiService {
+   /// Açık lambaları tek tıkla kapat; yanıt gerçek kapatılan sayıyı taşır.
++  ///
++  /// İmza bilerek tek konumsal parametredir (test yardımcılarındaki sahteler bu imzayla geçersiz kılar).
++  /// Sunucu v2'de `include_shutters` alanı YOKSA varsayılan olarak panjurlar da iner; pano düğmesi yalnızca
++  /// lambaları kapatmalıdır, bu yüzden `include_shutters: false` HER ZAMAN açıkça gönderilir.
++  /// Bildirim afişinden kapatma için [closeAllForNotice] kullanılır.
+   Future<Map<String, dynamic>> closeAllOpenLights(String homeId) async {
+@@ -1118,3 +1123,25 @@ class EvCloudApiService {
+       '/v1/devices/peace-notification/close-all',
+-      body: <String, dynamic>{'home_id': homeId},
++      body: <String, dynamic>{'home_id': homeId, 'include_shutters': false},
++      homeId: homeId,
++    );
++    return _data(body);
++  }
++
++  /// Gece hatırlatması afişinden "Hepsini kapat" (sunucu v2): aynı uç.
++  ///
++  /// [noticeId] verilirse o bildirim kaydı çözülsün diye iletilir. [includeShutters] HER ZAMAN açıkça
++  /// gönderilir (sunucu varsayılanına güvenilmez); varsayılan `true`'dur (afiş açık panjurları da sayar).
++  Future<Map<String, dynamic>> closeAllForNotice(
++    String homeId, {
++    int? noticeId,
++    bool includeShutters = true,
++  }) async {
++    final body = await _call(
++      'POST',
++      '/v1/devices/peace-notification/close-all',
++      body: <String, dynamic>{
++        'home_id': homeId,
++        'notice_id': ?noticeId,
++        'include_shutters': includeShutters,
++      },
+       homeId: homeId,
+diff --git a/lib/ui/widgets/settings/peace_notification_card.dart b/lib/ui/widgets/settings/peace_notification_card.dart
+index 6099895..5987849 100644
+--- a/lib/ui/widgets/settings/peace_notification_card.dart
++++ b/lib/ui/widgets/settings/peace_notification_card.dart
+@@ -9,2 +9,4 @@ import '../../dashboard/close_all_lights_button.dart';
+ import '../../theme/app_theme.dart';
++import '../peace_reminder_details.dart';
++import '../push_status_tile.dart';
+ import 'settings_card.dart';
+@@ -184,2 +186,4 @@ class _PeaceNotificationCardState extends State<PeaceNotificationCard> {
+           ),
++          const PeaceReminderDetails(),
++          const PushStatusTile(),
+           if (known && vm.enabled == true) ...[
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 7f46ff0..0077842 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -59,2 +59,3 @@ dev_dependencies:
+   flutter_lints: ^6.0.0
++  fake_async: ^1.3.3 # push koordinatör testleri (flutter_test bunu dışa aktarmaz)
+ 

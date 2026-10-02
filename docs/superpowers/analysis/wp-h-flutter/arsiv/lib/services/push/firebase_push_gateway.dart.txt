@@ -1,0 +1,266 @@
+import 'dart:async';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
+
+import 'push_config.dart';
+import 'push_gateway.dart';
+
+/// [PushConfig] -> `Firebase.initializeApp` seçenekleri.
+///
+/// `PushConfig` saf veridir (Firebase'e bağımlı değildir); dönüşüm yalnızca bu dosyada, yani
+/// `firebase_core` paketinin bulunduğu yerde yaşar.
+extension PushConfigFirebaseOptions on PushConfig {
+  /// `Firebase.initializeApp(options: ...)` için seçenekler.
+  ///
+  /// Bilerek yalnızca dört zorunlu alan taşınır: bildirim için depolama/analitik/giriş
+  /// alanlarına gerek yoktur ve fazladan alan, yerel `google-services.json` ile "kaba eşleşme"
+  /// denetiminde gereksiz uyuşmazlık riski doğurur.
+  FirebaseOptions toFirebaseOptions() =>
+      FirebaseOptions(apiKey: apiKey, appId: appId, messagingSenderId: messagingSenderId, projectId: projectId);
+}
+
+/// [action]'ı en çok [timeout] bekler ve hatasını yutar (`deleteToken` "asla fırlatmaz, sonsuza dek
+/// beklemez" sözleşmesi). Zaman aşımında çağrı arka planda sürebilir ama çağıran bekletilmez.
+///
+/// Süre `Future.timeout` ile sınırlandığından testlerde `fakeAsync` ile deterministik denenir.
+@visibleForTesting
+Future<void> boundedDeleteToken(Future<void> Function() action, {required Duration timeout}) async {
+  try {
+    await Future<void>.sync(action).timeout(timeout);
+  } catch (_) {
+    // Çevrimdışı / platform hatası / zaman aşımı: yutulur (çıkış engellenmez).
+  }
+}
+
+/// APNs belirteci gelene kadar [interval] aralıkla [read]'i yoklar; en çok [timeout] bekler, gelmezse `null`.
+///
+/// [read] fırlatırsa (platform kanalı hatası) o deneme "henüz yok" sayılır. Gecikme `Future.delayed` ile
+/// yapıldığından testlerde `fakeAsync` ile deterministik ilerletilir.
+@visibleForTesting
+Future<String?> awaitApnsToken(
+  Future<String?> Function() read, {
+  required Duration timeout,
+  required Duration interval,
+}) async {
+  var waited = Duration.zero;
+  while (true) {
+    String? token;
+    try {
+      token = await read();
+    } catch (_) {
+      token = null;
+    }
+    if (token != null && token.isNotEmpty) return token;
+    if (waited >= timeout) return null;
+    await Future<void>.delayed(interval);
+    waited += interval;
+  }
+}
+
+/// `firebase_core` + `firebase_messaging` (16.x) üzerinden gerçek uygulama.
+///
+/// Bilinçli tasarım kararları (paket kaynakları okunarak doğrulandı):
+/// * `FirebaseMessaging.onMessage` / `onMessageOpenedApp` statiktir ve broadcast'tir; `onTokenRefresh`
+///   ve diğer yöntemler `FirebaseMessaging.instance` ister, o da `Firebase.app()`'i çağırır ve
+///   Firebase başlatılmamışsa fırlatır. Bu yüzden her şey [initialize] sonrasına bağlıdır.
+/// * Arka plan (kapalı uygulama) işleyicisi (`onBackgroundMessage`) KAYIT EDİLMEZ: sunucu `notification`
+///   bloğu gönderdiği için Android sistemi bildirimi kendisi gösterir ve eklentinin arka plan servisi,
+///   kayıtlı Dart işleyicisi yoksa hiçbir Dart izolatı başlatmaz.
+/// * Android'de `requestPermission` yalnızca API 33+ sistem izin penceresini açar; API 32 ve altında
+///   izin sorulamaz, mevcut durum döner (kullanıcı ayarlardan açmalıdır).
+class FirebasePushGateway implements PushGateway {
+  /// [config] `null` ise (derlemede `FCM_*` verilmemiş) bu uygulama [UnsupportedPushGateway] gibi davranır.
+  ///
+  /// [platform] ve [isWeb] yalnızca testlerde desteklenme kararını platform kanalına dokunmadan
+  /// denemek içindir; üretimde varsayılanlar kullanılır.
+  FirebasePushGateway({
+    required this.config,
+    TargetPlatform? platform,
+    this.isWeb = kIsWeb,
+    this.tokenTimeout = const Duration(seconds: 20),
+    this.apnsWait = const Duration(seconds: 10),
+    this.apnsPollInterval = const Duration(milliseconds: 500),
+    this.deleteTokenTimeout = const Duration(seconds: 3),
+  }) : _platform = platform ?? defaultTargetPlatform;
+
+  /// Derlemede verilen Firebase yapılandırması; `null` ise push kapalıdır.
+  final PushConfig? config;
+
+  /// Web'de push desteklenmez (bu uygulama yalnızca Android/iOS bildirimi hedefler).
+  final bool isWeb;
+
+  /// `getToken` için üst süre: ağ yokken çağrı sonsuza dek beklemesin.
+  final Duration tokenTimeout;
+
+  /// iOS'ta APNs belirtecinin gelmesi için en çok beklenecek süre ([tokenTimeout]'un içinde kalmalıdır).
+  final Duration apnsWait;
+
+  /// iOS'ta APNs belirtecinin yoklanma aralığı.
+  final Duration apnsPollInterval;
+
+  /// [deleteToken] için üst süre (Firebase başlatma + FCM silme isteği toplamı).
+  final Duration deleteTokenTimeout;
+
+  final TargetPlatform _platform;
+
+  Future<void>? _initFuture;
+  FirebaseMessaging? _messaging;
+  bool _initFailed = false;
+
+  bool get _platformSupported => !isWeb && (_platform == TargetPlatform.android || _platform == TargetPlatform.iOS);
+
+  @override
+  bool get isSupported => _platformSupported && config != null && !_initFailed;
+
+  /// Başlatma tek uçuşludur ve sonucu (başarı ya da başarısızlık) süreç boyunca saklanır:
+  /// yarım yapılandırılmış bir Firebase'i her çağrıda yeniden denemek hem pahalı hem gürültülüdür.
+  @override
+  Future<void> initialize() => _initFuture ??= _initialize();
+
+  Future<void> _initialize() async {
+    final config = this.config;
+    if (!_platformSupported || config == null) return;
+    try {
+      // Yerel `google-services.json`/plist ile zaten başlatılmış bir varsayılan uygulama varsa
+      // yeniden başlatmayız. (Firebase.apps çekirdek hazır olmadan boş görünebilir; o durumda
+      // initializeApp zaten var olan uygulamayı döndürür, seçenekler çelişirse duplicate-app
+      // fırlatır ve aşağıda "desteklenmiyor" sayılır.)
+      if (Firebase.apps.isEmpty) {
+        await Firebase.initializeApp(options: config.toFirebaseOptions());
+      }
+      _messaging = FirebaseMessaging.instance;
+    } catch (_) {
+      _messaging = null;
+      _initFailed = true;
+      return;
+    }
+
+    if (_platform == TargetPlatform.iOS) {
+      try {
+        // Ön plandayken iOS sistem afişi bastırılır: uygulama kendi (Türkçe, eylemli) afişini
+        // gösterir. Varsayılan zaten kapalıdır; açık seçenekler kalıcı olduğu için yine de açıkça yazılır.
+        await _messaging?.setForegroundNotificationPresentationOptions(alert: false, badge: false, sound: false);
+      } catch (_) {
+        // Kritik değil: push yine çalışır, yalnızca ön plan sunumu varsayılanda kalır.
+      }
+    }
+  }
+
+  @override
+  Future<PushPermission> permissionStatus() async {
+    final messaging = _readyMessaging;
+    if (messaging == null) return PushPermission.unsupported;
+    try {
+      final settings = await messaging.getNotificationSettings();
+      return _mapStatus(settings.authorizationStatus);
+    } catch (_) {
+      // Durum okunamadı: "sorulmadı" saymak güvenli taraftır; kullanıcı ayardan yeniden deneyebilir.
+      return PushPermission.notDetermined;
+    }
+  }
+
+  @override
+  Future<PushPermission> requestPermission() async {
+    final messaging = _readyMessaging;
+    if (messaging == null) return PushPermission.unsupported;
+    try {
+      // Rozet istenmez (uygulama rozet kullanmaz); uyarı + ses gece hatırlatması için gerekir.
+      final settings = await messaging.requestPermission(alert: true, badge: false, sound: true);
+      return _mapStatus(settings.authorizationStatus);
+    } catch (_) {
+      return PushPermission.notDetermined;
+    }
+  }
+
+  @override
+  Future<String?> getToken() async {
+    final messaging = _readyMessaging;
+    if (messaging == null) return null;
+    try {
+      // Android'de ağ yokken çağrı uzun süre bekleyebilir; iOS'ta APNs bekleme süresi de bu üst sürenin
+      // içindedir. Hepsi "belirteç yok" sayılır, koordinatör geri çekilerek yeniden dener.
+      final token = await _fetchToken(messaging).timeout(tokenTimeout);
+      return (token == null || token.isEmpty) ? null : token;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _fetchToken(FirebaseMessaging messaging) async {
+    if (_platform == TargetPlatform.iOS) {
+      // Eklenti, APNs belirteci henüz gelmediyse `getToken`ı hemen 'apns-token-not-set' ile düşürür.
+      // Soğuk açılışta Firebase başlatıldıktan hemen sonra APNs yanıtı henüz gelmemiş olur; bu yüzden
+      // `getToken`dan önce kısa aralıklarla beklenir (aksi halde her açılışta 24-36 sn'lik geri çekilme yenir).
+      final apns = await awaitApnsToken(messaging.getAPNSToken, timeout: apnsWait, interval: apnsPollInterval);
+      if (apns == null) return null;
+    }
+    return messaging.getToken();
+  }
+
+  @override
+  Stream<String> get onTokenRefresh {
+    final messaging = _readyMessaging;
+    return messaging == null ? const Stream<String>.empty() : messaging.onTokenRefresh;
+  }
+
+  @override
+  Stream<PushMessage> get onForegroundMessage =>
+      _readyMessaging == null ? const Stream<PushMessage>.empty() : FirebaseMessaging.onMessage.map(_toMessage);
+
+  @override
+  Stream<PushMessage> get onMessageOpened => _readyMessaging == null
+      ? const Stream<PushMessage>.empty()
+      : FirebaseMessaging.onMessageOpenedApp.map(_toMessage);
+
+  @override
+  Future<PushMessage?> getInitialMessage() async {
+    final messaging = _readyMessaging;
+    if (messaging == null) return null;
+    try {
+      final message = await messaging.getInitialMessage();
+      return message == null ? null : _toMessage(message);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Yapılandırma/platform desteklenmiyorsa hiçbir şey yapmaz (Firebase'e dokunulmaz). Aksi halde
+  /// Firebase'i (idempotent) başlatır — soğuk açılışta oturum bitmişse önceki oturumdan kalma belirteç
+  /// bu çalışmada hiç başlatılmamış Firebase'de de silinebilsin diye — ve belirteci siler.
+  @override
+  Future<void> deleteToken() {
+    if (!_platformSupported || config == null) return Future<void>.value();
+    return boundedDeleteToken(() async {
+      await initialize();
+      await _readyMessaging?.deleteToken();
+    }, timeout: deleteTokenTimeout);
+  }
+
+  /// Yalnızca desteklenen VE başarıyla başlatılmış durumda dolu.
+  FirebaseMessaging? get _readyMessaging => isSupported ? _messaging : null;
+
+  static PushMessage _toMessage(RemoteMessage message) => PushMessage(
+    // Eklentinin haritasını kopyalarız: mesaj nesnesi başka yerde değiştirilirse bizi etkilemesin.
+    data: Map<String, dynamic>.of(message.data),
+    title: message.notification?.title,
+    body: message.notification?.body,
+  );
+
+  /// `provisional` (iOS sessiz izin) token alınabildiği için `granted` sayılır.
+  /// `deniedPermanently` (Android 13+) arayüz açısından `denied` ile aynı yönlendirmeyi gerektirir
+  /// (sistem ayarları); bu ayrım `PushPermission` sözleşmesinde yoktur.
+  static PushPermission _mapStatus(AuthorizationStatus status) {
+    switch (status) {
+      case AuthorizationStatus.authorized:
+      case AuthorizationStatus.provisional:
+        return PushPermission.granted;
+      case AuthorizationStatus.denied:
+      case AuthorizationStatus.deniedPermanently:
+        return PushPermission.denied;
+      case AuthorizationStatus.notDetermined:
+        return PushPermission.notDetermined;
+    }
+  }
+}

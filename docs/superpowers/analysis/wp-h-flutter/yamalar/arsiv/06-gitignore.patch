@@ -1,0 +1,14 @@
+diff --git a/.gitignore b/.gitignore
+index 63f9c0b..6868621 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -77 +77,9 @@ id_rsa*
+ id_ed25519*
++
++# Push (FCM/APNs) sırları: istemci yapılandırması ve sunucu servis hesabı ASLA depoya girmez.
++*.p8
++fcm*.local.json
++google-services.json
++GoogleService-Info.plist
++*service-account*.json
++*firebase-adminsdk*.json

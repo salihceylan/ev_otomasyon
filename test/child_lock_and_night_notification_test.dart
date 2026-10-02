@@ -1,205 +1,430 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:ev_otomasyon/models/automation_models.dart';
-import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:ev_otomasyon/services/automation_state.dart';
-import 'package:ev_otomasyon/ui/pages/device_settings_page.dart';
-import 'package:ev_otomasyon/ui/pages/dashboard_page.dart';
+import 'package:ev_otomasyon/ui/dashboard/peace_banner.dart';
+import 'package:ev_otomasyon/ui/dashboard/status_pills.dart';
+import 'package:ev_otomasyon/ui/theme/app_theme.dart';
+import 'package:ev_otomasyon/ui/widgets/settings/child_lock_card.dart';
+import 'package:ev_otomasyon/ui/widgets/settings/peace_notification_card.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
 
+import 'support/support.dart';
+import 'ui/e1_helpers.dart';
+
+/// Çocuk kilidi ve gece huzur bildirimi: **davranış** testleri. Gerçek `AutomationState` (sahte
+/// REST/MQTT/saat) üzerinde arayüz dokunuşları, komut gönderimi, cihaz doğrulaması, bilinçli
+/// kapatma, yetki kapısı ve erişilebilirlik sınanır.
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  double contrast(Color a, Color b) {
+    final la = a.computeLuminance();
+    final lb = b.computeLuminance();
+    return (math.max(la, lb) + 0.05) / (math.min(la, lb) + 0.05);
+  }
 
-  setUp(() {
-    SharedPreferences.setMockInitialValues({'saved_app_mode': 'cloud'});
+  Future<void> settle(WidgetTester tester) async {
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+
+  Future<void> emitLock(WidgetTester tester, StateHarness h, bool locked) async {
+    h.mqtt.emitStateJson(stateJson(childLock: locked));
+    await settle(tester);
+  }
+
+  Future<void> openSheet(WidgetTester tester) async {
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
+  group('Çocuk kilidi kartı: üç durumlu gösterim', () {
+    testWidgets('bilinmeyen durum "kilit kapalı" gösterilmez; süre dolunca "alınamadı" ve yeniden dene çıkar',
+        (tester) async {
+      final h = await pumpReady(
+        tester,
+        scaffolded(const ChildLockCard()),
+        configure: (h) => h.e1.childLockError = kServerError,
+      );
+
+      expect(h.state.childLockStatus, ChildLockStatus.unknown);
+      expect(find.text('Durum alınıyor…'), findsOneWidget);
+      expect(find.textContaining('Kilit kapalı'), findsNothing);
+      expect(tester.widget<Switch>(byKeyName('switch_child_lock')).onChanged, isNull,
+          reason: 'durum bilinmeden kilit değiştirilemez');
+
+      h.clock.advance(const Duration(seconds: 9));
+      await tester.pump();
+      expect(find.textContaining('Durum alınamadı'), findsOneWidget);
+      expect(byKeyName('btn_child_lock_retry'), findsOneWidget);
+
+      final before = h.e1.count('getChildLock');
+      await tester.tap(byKeyName('btn_child_lock_retry'));
+      await settle(tester);
+      expect(h.e1.count('getChildLock'), greaterThan(before), reason: 'yeniden dene durumu yeniden sorgular');
+    });
+
+    testWidgets('cihaz kilitli bildirince "Kilitli", kapalı bildirince "Kilit kapalı" görünür', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
+      expect(find.text('Kilit kapalı: duvar anahtarları serbest'), findsOneWidget);
+
+      await emitLock(tester, h, true);
+      expect(find.text('Kilitli: duvar anahtarları devre dışı'), findsOneWidget);
+      expect(tester.widget<Switch>(byKeyName('switch_child_lock')).value, isTrue);
+
+      await emitLock(tester, h, false);
+      expect(find.text('Kilit kapalı: duvar anahtarları serbest'), findsOneWidget);
+      expect(tester.widget<Switch>(byKeyName('switch_child_lock')).value, isFalse);
+    });
+
+    testWidgets('pano çevrimdışıyken değer "Son bilinen" olarak işaretlenir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
+      await emitLock(tester, h, true);
+      h.mqtt.emitPresence(false);
+      await settle(tester);
+      expect(find.textContaining('Son bilinen: Kilitli'), findsOneWidget);
+    });
+
+    testWidgets('kartın başlığı "Çocuk Kilidi"dir; "Yazılımsal" jargonu yoktur', (tester) async {
+      await pumpReady(tester, scaffolded(const ChildLockCard()));
+      expect(find.text('Çocuk Kilidi'), findsOneWidget);
+      expect(find.textContaining('Yazılımsal'), findsNothing);
+    });
   });
 
-  group('ADIM 17: Gece Bildirimi & Yazılımsal Çocuk Kilidi Tests', () {
-    test('DeviceStatus.fromJson parses child_lock correctly', () {
-      final jsonWithLock = {
-        'device_name': 'AHBU-ESP32S3-TEST',
-        'ip': '192.168.1.100',
-        'wifi_connected': true,
-        'wifi_sta_ssid': 'HomeNet',
-        'wifi_sta_ip': '192.168.1.100',
-        'wifi_sta_rssi': -55,
-        'uptime_sec': 3600,
-        'relays': [
-          {'index': 0, 'name': 'Mutfak Spot', 'state': true, 'is_light': true},
-          {'index': 1, 'name': 'Kombi', 'state': false, 'is_light': false},
-        ],
-        'dis': [
-          {'index': 0, 'raw_state': 0, 'is_inverted': true},
-        ],
-        'shutters': [],
-        'child_lock': true,
-      };
+  group('Çocuk kilidi: kilitlemek tek dokunuş, kaldırmak bilinçli eylem', () {
+    testWidgets('kilitlemek tek dokunuştur; cihaz doğrulayana kadar "Uygulanıyor…" görünür', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
 
-      final statusLocked = DeviceStatus.fromJson(jsonWithLock);
-      expect(statusLocked.childLock, isTrue);
+      await tester.tap(byKeyName('switch_child_lock'));
+      await settle(tester);
 
-      final jsonWithoutLock = Map<String, dynamic>.from(jsonWithLock)..['child_lock'] = false;
-      final statusUnlocked = DeviceStatus.fromJson(jsonWithoutLock);
-      expect(statusUnlocked.childLock, isFalse);
+      expect(h.e1.calls, contains('setChildLock:true'));
+      expect(h.state.childLockPending, isTrue);
+      expect(find.text('Uygulanıyor…'), findsOneWidget);
+
+      await emitLock(tester, h, true);
+      expect(h.state.childLockPending, isFalse);
+      expect(find.text('Kilitli: duvar anahtarları devre dışı'), findsOneWidget);
     });
 
-    testWidgets('AutomationState childLock and openLightsCount defaults and setters', (tester) async {
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
+    testWidgets('kilidi kapatmak tek dokunuşla olmaz: doğrulama sayfası açılır, vazgeçilirse komut gitmez',
+        (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
+      await emitLock(tester, h, true);
 
-      expect(state.childLock, isFalse);
-      expect(state.openLightsCount, equals(0));
+      await tester.tap(byKeyName('switch_child_lock'));
+      await openSheet(tester);
 
-      await state.toggleChildLock(true);
-      expect(state.childLock, isTrue);
+      expect(byKeyName('child_lock_disable_sheet'), findsOneWidget);
+      expect(h.e1.calls.where((c) => c.startsWith('setChildLock')), isEmpty,
+          reason: 'sayfa açıkken kilit kaldırılmaz');
 
-      await state.toggleChildLock(false);
-      expect(state.childLock, isFalse);
-
-      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(byKeyName('btn_child_lock_cancel'));
+      await openSheet(tester);
+      expect(byKeyName('child_lock_disable_sheet'), findsNothing);
+      expect(h.e1.calls.where((c) => c.startsWith('setChildLock')), isEmpty);
+      expect(h.state.childLockStatus, ChildLockStatus.locked);
     });
 
-    testWidgets('DeviceSettingsPage renders Child Lock and Peace Notification cards without overflow', (tester) async {
-      tester.view.physicalSize = const Size(600, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
+    testWidgets('biyometrik destekleniyorsa kimlik doğrulaması ister; doğrulanınca kilit kaldırılır', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()), biometricSupported: true);
+      await emitLock(tester, h, true);
 
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
+      await tester.tap(byKeyName('switch_child_lock'));
+      await openSheet(tester);
+      expect(byKeyName('btn_child_lock_verify'), findsOneWidget);
+      expect(byKeyName('btn_child_lock_hold'), findsNothing, reason: 'biyometrik varken basılı tutma yolu yoktur');
 
-      await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: DeviceSettingsPage(),
-          ),
-        ),
+      await tester.tap(byKeyName('btn_child_lock_verify'));
+      await openSheet(tester);
+
+      expect(h.biometric.authenticateCalls, 1);
+      expect(h.e1.calls, contains('setChildLock:false'));
+    });
+
+    testWidgets('kimlik doğrulanamazsa kilit kalkmaz ve açıklama gösterilir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()), biometricSupported: true);
+      h.biometric.authResult = false;
+      await emitLock(tester, h, true);
+
+      await tester.tap(byKeyName('switch_child_lock'));
+      await openSheet(tester);
+      await tester.tap(byKeyName('btn_child_lock_verify'));
+      await openSheet(tester);
+
+      expect(find.text('Kimlik doğrulanamadı. Çocuk kilidi kaldırılmadı.'), findsOneWidget);
+      expect(h.e1.calls.where((c) => c.startsWith('setChildLock')), isEmpty);
+      expect(h.state.childLockStatus, ChildLockStatus.locked);
+    });
+
+    testWidgets('biyometrik yoksa 1,2 sn basılı tutmak gerekir; erken bırakınca kilit kalkmaz', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
+      await emitLock(tester, h, true);
+
+      await tester.tap(byKeyName('switch_child_lock'));
+      await openSheet(tester);
+      expect(byKeyName('btn_child_lock_hold'), findsOneWidget);
+      expect(byKeyName('btn_child_lock_verify'), findsNothing);
+
+      // Erken bırakma.
+      final early = await tester.startGesture(tester.getCenter(byKeyName('btn_child_lock_hold')));
+      await tester.pump(); // ilk kare: animasyon saati başlar
+      await tester.pump(const Duration(milliseconds: 500));
+      await early.up();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(h.e1.calls.where((c) => c.startsWith('setChildLock')), isEmpty);
+      expect(byKeyName('child_lock_disable_sheet'), findsOneWidget);
+
+      // Tam süre basılı tutma.
+      final hold = await tester.startGesture(tester.getCenter(byKeyName('btn_child_lock_hold')));
+      await tester.pump(); // ilk kare: animasyon saati başlar
+      await tester.pump(const Duration(milliseconds: 1300));
+      await hold.up();
+      await openSheet(tester);
+
+      expect(h.e1.calls, contains('setChildLock:false'));
+      expect(byKeyName('child_lock_disable_sheet'), findsNothing);
+    });
+  });
+
+  group('Çocuk kilidi: yetki kapısı (Capabilities.canChangeChildLock)', () {
+    testWidgets('geçerli misafir durumu salt-okunur görür; anahtar pasif, açıklama gösterilir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()), home: guestHome());
+      await emitLock(tester, h, true);
+
+      expect(find.text('Kilitli: duvar anahtarları devre dışı'), findsOneWidget,
+          reason: 'misafir kilidin durumunu görür');
+      expect(tester.widget<Switch>(byKeyName('switch_child_lock')).onChanged, isNull);
+      expect(byKeyName('text_child_lock_readonly'), findsOneWidget);
+    });
+
+    testWidgets('aile üyesi kilidi değiştirebilir (eski "isMember" kara listesi resident\'ı engelliyordu)',
+        (tester) async {
+      await pumpReady(tester, scaffolded(const ChildLockCard()), role: 'resident');
+      expect(tester.widget<Switch>(byKeyName('switch_child_lock')).onChanged, isNotNull);
+      expect(byKeyName('text_child_lock_readonly'), findsNothing);
+    });
+
+    testWidgets('komut hatası kartta ayrı snackbar çıkarmaz (hata kabuktaki tek aboneye gider)', (tester) async {
+      final h = await pumpReady(
+        tester,
+        scaffolded(const ChildLockCard()),
+        configure: (h) => h.e1.setChildLockError = kNetworkError,
       );
+      await tester.tap(byKeyName('switch_child_lock'));
+      await settle(tester);
+      expect(h.state.childLockPending, isFalse, reason: 'ağ hatasında anında geri alınır');
+      expect(find.byType(SnackBar), findsNothing, reason: 'widget başına snackbar yok');
+    });
+  });
 
+  group('Çocuk kilidi: erişilebilirlik ve tema', () {
+    testWidgets('durum değişimi ekran okuyucuya duyurulur', (tester) async {
+      final announcements = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockDecodedMessageHandler<dynamic>(
+        SystemChannels.accessibility,
+        (dynamic message) async {
+          if (message is Map && message['type'] == 'announce') {
+            final data = message['data'];
+            if (data is Map) announcements.add('${data['message']}');
+          }
+          return null;
+        },
+      );
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockDecodedMessageHandler<dynamic>(SystemChannels.accessibility, null));
+
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
+      await emitLock(tester, h, true);
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
 
-      // Çocuk kilidi kartı ve metinleri bulunmalı
-      expect(find.text('Yazılımsal Çocuk Kilidi'), findsOneWidget);
-      expect(find.textContaining('fiziksel yaylı anahtarlara basılsa dahi'), findsOneWidget);
-      expect(find.text('Devre Dışı (Anahtarlar Serbest)'), findsOneWidget);
-
-      // Gece Huzur Bildirimi kartı ve metinleri bulunmalı
-      expect(find.text('Gece Huzur Bildirimi'), findsOneWidget);
-      expect(find.textContaining('Her gece belirlenen saatte açık kalan lamba'), findsOneWidget);
-      expect(find.text('Bildirim Saati:'), findsOneWidget);
-      expect(find.text('Saat Seç'), findsOneWidget);
+      expect(announcements.any((m) => m.contains('Çocuk kilidi etkin')), isTrue,
+          reason: 'duyurular: $announcements');
     });
 
-    testWidgets('DeviceSettingsPage Child Lock toggles and updates UI state', (tester) async {
-      tester.view.physicalSize = const Size(600, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
+    testWidgets('anahtar tek bir birleşik erişilebilirlik düğümünde "Çocuk kilidi" etiketi ve durum taşır',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()));
+      await emitLock(tester, h, true);
 
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      await tester.pumpWidget(
-        ChangeNotifierProvider<AutomationState>.value(
-          value: state,
-          child: const MaterialApp(
-            home: DeviceSettingsPage(),
-          ),
-        ),
-      );
-
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      // Switch'i bul ve tıkla
-      final switches = find.byType(Switch);
-      expect(switches, findsAtLeastNWidgets(2));
-
-      // Çocuk kilidi switch'ini aç
-      await tester.tap(switches.first);
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
-
-      expect(state.childLock, isTrue);
-      expect(find.text('Aktif (Duvardaki Anahtarlar Kilitli)'), findsOneWidget);
+      final node = tester.getSemantics(find.descendant(
+        of: byKeyName('card_child_lock'),
+        matching: find.byType(MergeSemantics),
+      ).first);
+      expect(node.label, contains('Çocuk kilidi'));
+      expect(node.label, contains('Kilitli'));
+      handle.dispose();
     });
 
-    testWidgets('DashboardPage displays Child Lock pill when active', (tester) async {
-      tester.view.physicalSize = const Size(600, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
+    testWidgets('açık temada başlık, durum ve kart AA kontrastındadır (kart rengi koyu sabit değil)', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const ChildLockCard()), themeMode: ThemeMode.light);
+      await emitLock(tester, h, true);
 
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
+      final card = tester.widget<Container>(byKeyName('card_child_lock'));
+      final cardColor = (card.decoration! as BoxDecoration).color!;
+      expect(cardColor, AppTheme.cardLight, reason: 'açık temada kart beyaz olmalı');
 
-      await state.toggleChildLock(true);
+      final title = tester.widget<Text>(find.text('Çocuk Kilidi'));
+      expect(contrast(title.style!.color!, cardColor), greaterThanOrEqualTo(4.5));
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChangeNotifierProvider<AutomationState>.value(
-            value: state,
-            child: const DashboardPage(),
-          ),
-        ),
+      final status = tester.widget<Text>(byKeyName('text_child_lock_status'));
+      expect(contrast(status.style!.color!, cardColor), greaterThanOrEqualTo(4.5),
+          reason: 'kilitli durum metni açık temada okunur olmalı');
+    });
+
+    testWidgets('yazı ölçeği 1.5 ve dar ekranda kart taşmaz', (tester) async {
+      final h = await pumpReady(
+        tester,
+        scaffolded(const ChildLockCard()),
+        size: const Size(320, 640),
+        textScale: 1.5,
       );
+      await emitLock(tester, h, true);
+      expect(tester.takeException(), isNull);
+    });
+  });
 
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+  group('Çocuk kilidi rozeti (pano)', () {
+    testWidgets('yalnızca kilitliyken görünür; dokununca açıklayıcı bilgi sayfası açılır', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const DashboardStatusBar()));
+      expect(byKeyName('chip_child_lock'), findsNothing, reason: 'kilit kapalıyken rozet yok');
 
-      // Çocuk kilidi hapı görünmeli
+      await emitLock(tester, h, true);
+      expect(byKeyName('chip_child_lock'), findsOneWidget);
       expect(find.text('Çocuk Kilidi Aktif'), findsOneWidget);
+
+      await tester.tap(byKeyName('chip_child_lock'));
+      await openSheet(tester);
+
+      expect(byKeyName('child_lock_info_sheet'), findsOneWidget);
+      for (final title in ['Neyi kilitler?', 'Neyi kilitlemez?', 'Elektrik kesintisinde', 'Kapsamı', 'Kim değiştirebilir?']) {
+        expect(find.text(title), findsOneWidget, reason: title);
+      }
+      expect(find.textContaining('elektrik kesilip gelse de sürer'), findsOneWidget);
+      expect(find.textContaining('tüm duvar anahtarlarını'), findsOneWidget);
+
+      await tester.tap(byKeyName('btn_child_lock_info_close'));
+      await openSheet(tester);
+      expect(byKeyName('child_lock_info_sheet'), findsNothing);
     });
 
-    testWidgets('DashboardPage displays Peace Banner when lights are open', (tester) async {
-      tester.view.physicalSize = const Size(600, 1200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-
-      final state = AutomationState();
-      addTearDown(() => state.dispose());
-
-      await tester.pump(const Duration(milliseconds: 100));
-
-      // Bulut modunda iki açık lamba tanımla
-      state.setModeForTesting(AppMode.cloud);
-      state.setCloudEndpointsForTesting([
-        EndpointModel(
-          id: 1,
-          homeId: 1,
-          name: 'Salon Avize',
-          room: 'Salon',
-          endpointType: 'light',
-          currentState: true,
-          channel: 0,
-        ),
-        EndpointModel(
-          id: 2,
-          homeId: 1,
-          name: 'Koridor Spot',
-          room: 'Antre',
-          endpointType: 'light',
-          currentState: true,
-          channel: 1,
-        ),
-      ]);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ChangeNotifierProvider<AutomationState>.value(
-            value: state,
-            child: const DashboardPage(),
-          ),
-        ),
+    testWidgets('durum bilinmiyorsa rozet "kilitli" iddiası yapmaz', (tester) async {
+      final h = await pumpReady(
+        tester,
+        scaffolded(const DashboardStatusBar()),
+        configure: (h) => h.e1.childLockError = kServerError,
       );
+      expect(h.state.childLockStatus, ChildLockStatus.unknown);
+      expect(byKeyName('chip_child_lock'), findsNothing);
+    });
 
+    testWidgets('misafir de kilit rozetini görür (ölü duvar anahtarlarına şaşırmasın)', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const DashboardStatusBar()), home: guestHome());
+      await emitLock(tester, h, true);
+      expect(byKeyName('chip_child_lock'), findsOneWidget);
+    });
+  });
+
+  group('Gece huzur bildirimi kartı', () {
+    testWidgets('sunucunun uzun anahtarları (peace_notification_enabled/_time) doğru okunur', (tester) async {
+      await pumpReady(tester, scaffolded(const PeaceNotificationCard()));
+      expect(find.text('Açık • saat 23:30'), findsOneWidget);
+      expect(tester.widget<Switch>(byKeyName('switch_peace')).value, isTrue);
+    });
+
+    testWidgets('durum alınamazsa "Aktif" gösterilmez; yeniden deneyince doğru durum gelir', (tester) async {
+      final h = await pumpReady(
+        tester,
+        scaffolded(const PeaceNotificationCard()),
+        configure: (h) => h.e1.peaceGetError = kServerError,
+      );
+      await settle(tester);
+      expect(find.text('Durum alınamadı'), findsOneWidget);
+      expect(find.textContaining('Açık'), findsNothing);
+      expect(tester.widget<Switch>(byKeyName('switch_peace')).onChanged, isNull);
+
+      h.e1.peaceGetError = null;
+      await tester.tap(byKeyName('btn_peace_retry'));
+      await settle(tester);
+      expect(find.text('Açık • saat 23:30'), findsOneWidget);
+    });
+
+    testWidgets('kapatma isteği sunucuya gider ve karta yansır', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const PeaceNotificationCard()));
+      await tester.tap(byKeyName('switch_peace'));
+      await settle(tester);
+      expect(h.e1.peaceUpdates.last['enabled'], isFalse);
+      expect(find.text('Kapalı'), findsOneWidget);
+    });
+
+    testWidgets('kaydetme hatası yakalanır; ham istisna değil Türkçe mesaj gösterilir', (tester) async {
+      final h = await pumpReady(
+        tester,
+        scaffolded(const PeaceNotificationCard()),
+        configure: (h) => h.e1.peaceUpdateError = kServerError,
+      );
+      await tester.tap(byKeyName('switch_peace'));
+      await settle(tester);
+      expect(find.text(kServerError.message), findsOneWidget);
+      expect(find.textContaining('Exception'), findsNothing);
+      expect(tester.takeException(), isNull);
+      expect(h.e1.peaceUpdates, isEmpty);
+    });
+
+    testWidgets('açık lamba varsa "Hepsini Kapat" gerçek sonuç sayısını bildirir ve çalışırken pasiftir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const PeaceNotificationCard()), endpoints: litEndpoints());
+      h.e1.closeAllGate = Completer<void>();
+      expect(find.text('Şu an evde 3 lamba açık'), findsOneWidget);
+
+      await tester.tap(byKeyName('btn_close_all_lights'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('Kapatılıyor…'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(byKeyName('btn_close_all_lights')).onPressed, isNull);
 
-      // Huzur Modu bannerı ve Hepsini Kapat butonu görünmeli
+      h.e1.closeAllResponse = <String, dynamic>{'closed_count': 3};
+      h.e1.closeAllGate!.complete();
+      await settle(tester);
+      expect(find.text('3 açık lamba için kapatma komutu gönderildi.'), findsOneWidget);
+      expect(find.text('Kapatılıyor…'), findsNothing);
+    });
+
+    testWidgets('"Hepsini Kapat" hatası yakalanır; düğme yeniden etkinleşir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const PeaceNotificationCard()), endpoints: litEndpoints());
+      h.e1.closeAllError = kNetworkError;
+      await tester.tap(byKeyName('btn_close_all_lights'));
+      await settle(tester);
+      expect(find.text(kNetworkError.message), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(byKeyName('btn_close_all_lights')).onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('Pano huzur bandı', () {
+    testWidgets('açık lamba sayısını gösterir; "Hepsini Kapat" kapatılan gerçek sayıyı bildirir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const PeaceBanner()), endpoints: litEndpoints());
       expect(find.text('Huzur Modu / Gece Kontrolü'), findsOneWidget);
-      expect(find.text('2 lamba açık kaldı.'), findsOneWidget);
-      expect(find.text('Hepsini Kapat'), findsOneWidget);
+      expect(find.text('3 lamba açık kaldı.'), findsOneWidget);
+
+      h.e1.closeAllResponse = <String, dynamic>{'closed_count': 2};
+      await tester.tap(byKeyName('btn_close_all_lights'));
+      await settle(tester);
+      expect(find.text('2 açık lamba için kapatma komutu gönderildi.'), findsOneWidget);
+    });
+
+    testWidgets('açık lamba yoksa band görünmez', (tester) async {
+      await pumpReady(tester, scaffolded(const PeaceBanner()));
+      expect(byKeyName('banner_peace'), findsNothing);
+    });
+
+    testWidgets('sunucu 0 kapatılan derse "açık lamba bulunamadı" denir', (tester) async {
+      final h = await pumpReady(tester, scaffolded(const PeaceBanner()), endpoints: litEndpoints());
+      h.e1.closeAllResponse = <String, dynamic>{'closed_count': 0};
+      await tester.tap(byKeyName('btn_close_all_lights'));
+      await settle(tester);
+      expect(find.text('Kapatılacak açık lamba bulunamadı.'), findsOneWidget);
     });
   });
 }
