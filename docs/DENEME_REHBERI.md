@@ -382,7 +382,7 @@ Web yalnız bulut modunda çalışır; Chrome için `--public-host` gerekmez (MQ
 
 ### 4.1 Durum
 
-**ÖNEMLİ:** Canlı sunucu dağıtımı **henüz yapılmamıştır** (`docs/DEPLOY_RUNBOOK.md` uygulanmadı; sunucuya SSH erişimi yok). Aşağıdakiler dağıtımdan sonraki hedef düzendir:
+**Durum:** Canlı sunucu 2026-10-04'te `docs/DEPLOY_RUNBOOK.md`'ye göre dağıtıldı (migration 001–032 uygulandı, `/health` OK); canlı maddeler bu rehberle henüz denenmedi. Canlı düzen:
 
 - **API:** `https://evotomasyon.gudeteknoloji.com.tr/api` (nginx → `127.0.0.1:5000`; sunucu `BIND_HOST=127.0.0.1` ile dinler, ham IP:5000 dışarıdan erişilemez)
 - **Sağlık:** `https://evotomasyon.gudeteknoloji.com.tr/ready` → `{"status":"ready","components":{"database":"up","mqtt_bridge":"up"},…}`
@@ -393,14 +393,14 @@ Web yalnız bulut modunda çalışır; Chrome için `--public-host` gerekmez (MQ
 
 Canlı sunucuda deneme yapabilmek için:
 
-1. Yeni sunucu kodu dağıtılmış ve **migration'ların tamamı** (001–031) uygulanmış olmalı. Kontrol komutu salt okunurdur ve `MIGRATE_CONFIRM` istemez. Komutu canlı sunucuda, sunucu kodunun `server/` klasöründe çalıştırın (klasör: `docs/DEPLOY_RUNBOOK.md` §5).
+1. Yeni sunucu kodu dağıtılmış ve **migration'ların tamamı** (001–032) uygulanmış olmalı. Kontrol komutu salt okunurdur ve `MIGRATE_CONFIRM` istemez. Komutu canlı sunucuda, sunucu kodunun `server/` klasöründe çalıştırın (klasör: `docs/DEPLOY_RUNBOOK.md` §5).
 
    ```bash
    # sunucuda, bash
    node scripts/migrate.js --status
    ```
 
-   Beklenen: ilk satır `Hedef: …` hedef veritabanını gösterir (kullanıcı@sunucu:port/veritabanı); bunun ev otomasyonu veritabanı olduğunu doğrulayın, kapı sistemininki değil. Ardından dosyalar `[uygulandi]` olarak listelenir. Eski şema `--baseline 17` ile işaretlendiyse ilk dosyalar `[baseline ]` görünür. Hiçbir satır `[bekliyor ]` ya da `!! ICERIK DEGISMIS` olmamalı. Son dosya `031_endpoint_layout_sync.sql` olur (Aşama 33 / WP-L için gerekir: `devices.reported_layout`) ve özet `Ozet: 31 uygulanmis, 0 bekliyor.` der.
+   Beklenen: ilk satır `Hedef: …` hedef veritabanını gösterir (kullanıcı@sunucu:port/veritabanı); bunun ev otomasyonu veritabanı olduğunu doğrulayın, kapı sistemininki değil. Ardından dosyalar `[uygulandi]` olarak listelenir. Eski şema `--baseline 17` ile işaretlendiyse ilk dosyalar `[baseline ]` görünür. Hiçbir satır `[bekliyor ]` ya da `!! ICERIK DEGISMIS` olmamalı. Son dosya `032_local_key_pending.sql` olur (acil sıfırlamada bekleyen yerel anahtar için gerekir: `devices.local_key_pending_enc`; Aşama 33 / WP-L için gereken `031_endpoint_layout_sync.sql` [`devices.reported_layout`] ondan bir önceki dosyadır) ve özet `Ozet: 32 uygulanmis, 0 bekliyor.` der.
 2. EMQX yapılandırması hazırlık kapsayıcısında doğrulanmış (`docs/DEPLOY_RUNBOOK.md`)
 3. Süper yönetici hesabı hazır; parolası `docs/SECRET_ROTATION.md` madde 2'ye göre döndürülmüş (parola belgelere yazılmaz)
 4. `/ready` → `database: "up"`, `mqtt_bridge: "up"`
@@ -424,6 +424,7 @@ Release APK da (`flutter build apk --release`) her zaman bu değerleri kullanır
 
 **Beklenen davranışlar:**
 - Giriş canlı veritabanına karşı doğrulanır.
+- Giriş ekranında "Telefon Numarası ile Şifresiz Giriş (SMS)" görünmez: SMS ile giriş seçeneği yalnız sunucuda SMS sağlayıcı yapılandırılmışsa görünür (canlıda bugün yok; denetim: `curl.exe -s https://evotomasyon.gudeteknoloji.com.tr/api/v1/auth/capabilities` → `"sms_otp":false`). QA'da (`ALLOW_DEBUG_OTP=true`) görünür. Canlıda satır görünüyorsa kurulum akış denetimi düzeltmelerinden (`519406e`) önceki derlemedir (kontrol listesi 1.1 Not).
 - MQTT TLS bağlantısı (8884) sertifika doğrulamasıyla kurulur.
 - Ev listesi canlı veritabanından yüklenir.
 
@@ -433,7 +434,7 @@ Release APK da (`flutter build apk --release`) her zaman bu değerleri kullanır
 
 ### 5.1 Firmware Sürümü
 
-**DONANIMDA YALNIZ YAZMA VE AÇILIŞ DOĞRULANDI (v1.1.2):** güncel imaj v1.1.2 dosya düzeyinde doğrulandı (`v1.1.2/SURUM_NOTLARI.md`) ve 2026-10-04 14:30'da test kartına esptool ile 0x0 adresine yazıldı: yazım hash'i doğrulandı, karttan geri okunan bootloader, bölüm tablosu ve uygulama bölgesi imajla bayt bayt aynı (NVS bölgesi firmware ilk açılışta doldurduğu için farklı: beklenen) ve seri `STATUS` yanıt verdi (kart provizyonsuz, kurulum ağı açık). Bir önceki sürüm v1.1.1, 2026-10-04'te bir test kartına esptool ile yazıldı, yazım hash'i doğrulandı ve seri çıkışta açılışı görüldü (`v1.1.1/SURUM_NOTLARI.md`'nin üst notu da bunu söyler); aynı kart sonra v1.1.2 ile yeniden yazıldı. v1.1.2'nin bootloader'ı, bölüm tablosu ve `boot_app0`'ı (birleşik imajın 0x0000-0xFFFF bölgesi) v1.1.1 ile bayt bayt aynıdır; farklar gömülü web sayfasındaki üç metin (iki anahtar ipucu ve provizyon formundaki yeni uyarı: §5.5 madde 6; kontrol listesi 16.6, 16.8(c), 16.12), provizyon yolu düzeltmeleri (`factory/init` ve `auth/rekey` kalıcı belleğe yazılamazsa `503` `{"error":"storage"}` döner ve sayfa "Ayarlar cihaz hafızasına yazılamadı." der; provizyon kilit altında tek seferde yapılır; seri `RESETKEY` çıktısı yeni metinle) ve sürüm numarasıdır (birleşik sürüm; ayrıntı `v1.1.2/SURUM_NOTLARI.md`). Cihaz web sayfası (görünüm, giriş hatırlama, "Çıkış", yeni metinler), Wi-Fi sihirbazı ve sonrası kartta ve hiçbir tarayıcıda/telefonda denenmedi. Toplu üretimden önce tek bir test kartında deneyin. v1.1.1, v1.1.0'dan; v1.1.2 de v1.1.1'den yalnız gömülü web arayüzü (`src/WebPortalPage.h`) ve sürüm numarasıyla ayrılır: Wi-Fi/MQTT/panjur/röle emniyet davranışı, API sözleşmesi ve AP kaynaklı anahtarsız Wi-Fi servis akışı aynıdır (`SURUM_NOTLARI.md`).
+**DONANIMDA YALNIZ YAZMA VE AÇILIŞ DOĞRULANDI (v1.1.2):** güncel imaj v1.1.2 dosya düzeyinde doğrulandı (`v1.1.2/SURUM_NOTLARI.md`) ve 2026-10-04 14:30'da test kartına esptool ile 0x0 adresine yazıldı: yazım hash'i doğrulandı, karttan geri okunan bootloader, bölüm tablosu ve uygulama bölgesi imajla bayt bayt aynı (NVS bölgesi firmware ilk açılışta doldurduğu için farklı: beklenen) ve seri `STATUS` yanıt verdi (kart provizyonsuz, kurulum ağı açık). Bir önceki sürüm v1.1.1, 2026-10-04'te bir test kartına esptool ile yazıldı, yazım hash'i doğrulandı ve seri çıkışta açılışı görüldü (`v1.1.1/SURUM_NOTLARI.md`'nin üst notu da bunu söyler); aynı kart sonra v1.1.2 ile yeniden yazıldı. v1.1.2'nin bootloader'ı, bölüm tablosu ve `boot_app0`'ı (birleşik imajın 0x0000-0xFFFF bölgesi) v1.1.1 ile bayt bayt aynıdır; farklar gömülü web sayfasındaki üç metin (iki anahtar ipucu ve provizyon formundaki yeni uyarı: §5.5 madde 6; kontrol listesi 16.6, 16.8(c), 16.12), provizyon yolu düzeltmeleri (`factory/init` ve `auth/rekey` kalıcı belleğe yazılamazsa `503` `{"error":"storage"}` döner ve sayfa "Ayarlar cihaz hafızasına yazılamadı." der; provizyon kilit altında tek seferde yapılır; seri `RESETKEY` çıktısı yeni metinle) ve sürüm numarasıdır (birleşik sürüm; ayrıntı `v1.1.2/SURUM_NOTLARI.md`). Cihaz web sayfası (görünüm, giriş hatırlama, "Çıkış", yeni metinler), Wi-Fi sihirbazı ve sonrası kartta ve hiçbir tarayıcıda/telefonda denenmedi. Toplu üretimden önce tek bir test kartında deneyin. v1.1.1, v1.1.0'dan yalnız gömülü web arayüzü (`src/WebPortalPage.h`) ve sürüm numarasıyla ayrılır; v1.1.2 ise v1.1.1'den bunlara ek olarak yukarıdaki provizyon yolu düzeltmeleriyle ayrılır. Wi-Fi/MQTT/panjur/röle emniyet davranışı ve AP kaynaklı anahtarsız Wi-Fi servis akışı üç sürümde aynıdır; API sözleşmesindeki fark, v1.1.2'de `factory/init` ve `auth/rekey`'in kalıcı belleğe yazamayınca döndürdüğü `503` `{"error":"storage"}` yanıtıdır (`SURUM_NOTLARI.md`).
 
 | Dosya | SHA-256 | Durum |
 |-------|---------|-------|
@@ -503,7 +504,7 @@ Provizyonlu kart kendi Wi-Fi erişim noktasını (WPA2) açar:
 
 Ağ ne zaman açık (süreli pencere; firmware `ApPolicy`): kurulum ağı sürekli yayında değildir. Ev Wi-Fi'si tanımlı değilken ya da ev Wi-Fi'si 3 dk koptuğunda 10 dk'lık bir pencere açılır; telefon bağlıyken pencere 2'şer dk uzar ve açılıştan sonra en çok 30 dk açık kalır. Pencere kapanınca (kesinti ya da tanımsız ev Wi-Fi'si sürüyorsa) 15 dk boyunca yeniden açılmaz. Ev Wi-Fi'sine bağlanan (kontrol listesi 16.5) pano bağlantı 30 sn kararlı kalınca ağı kapatır ve kendiliğinden açmaz: yeniden açmak için ev Wi-Fi'sini 3 dk kesin ya da seri konsolda `AP ON` yazın (10 dk; §5.5). Telefon bu ağa bağlanınca uygulamada ekran **kendiliğinden açılmaz**: giriş ekranında "Pano Wi-Fi Kurulumu (İnternet Gerekmez)" ya da servis sihirbazı Adım 5 ile sihirbazı elle açın (kontrol listesi Aşama 16).
 
-### 5.5 Açılış Kontrolü (v1.1.1'de yalnız açılış görüldü; v1.1.2 hiçbir kartta denenmedi)
+### 5.5 Açılış Kontrolü (v1.1.1 ve v1.1.2'de yalnız yazım ve açılış görüldü; provizyon ve sonrası kartta denenmedi)
 
 **ÖNEMLİ NOT:** v1.1.1 imajı 2026-10-04'te bir test kartına esptool ile yazıldı, yazım hash'i doğrulandı ve seri çıkışta açılışı görüldü; aşağıdaki kontrollerin geri kalanı bu rehberle denenmedi. Güncel imaj v1.1.2 de aynı karta yazıldı: 2026-10-04 14:30'da test kartına esptool ile 0x0 adresine yazıldı: yazım hash'i doğrulandı, karttan geri okunan bootloader, bölüm tablosu ve uygulama bölgesi imajla bayt bayt aynı (NVS bölgesi firmware ilk açılışta doldurduğu için farklı: beklenen) ve seri `STATUS` yanıt verdi (kart provizyonsuz, kurulum ağı açık); bootloader'ı, bölüm tablosu ve `boot_app0`'ı v1.1.1 (ve v1.1.0) ile bayt bayt aynıdır (`v1.1.2/SURUM_NOTLARI.md`). Aşağıdaki kontrollerin geri kalanı (provizyon, web sayfası, Wi-Fi) v1.1.2 ile kartta denenmedi. v1.1.1'in bootloader'ı, bölüm tablosu ve `boot_app0`'ı v1.1.0 ile bayt bayt aynıdır; v1.1.0'ın (ve dolayısıyla v1.1.1'in) bootloader'ı PlatformIO / IDF 4.4.7 bootloader'ıdır ve v1.0.1'inkinden (satıcı bootloader'ı) farklıdır (`v1.1.0/SURUM_NOTLARI.md`; v1.1.1 ile bayt bayt eşitlik: `v1.1.1/SURUM_NOTLARI.md`). Bu bootloader'ın açılışı bir test kartında (v1.1.1 ve v1.1.2 ile) görüldü; kendi kartınızda da ilk açılışı doğrulayın.
 
@@ -562,11 +563,11 @@ Ağ ne zaman açık (süreli pencere; firmware `ApPolicy`): kurulum ağı sürek
 | **20** | Süreli misafir | QA | Canlı | 20.4 için gerçek telefon; 20.3 gerçek bekleme ister |
 | **21** | Üye yönetimi & rol matrisi | QA | Canlı | İkinci cihaz/hesap |
 | **22** | Daire devri | QA | Canlı | İkinci hesap |
-| **23** | Çocuk kilidi | QA (`home1`): 23.1, 23.3, 23.4 | Gerçek pano + canlı; 23.2 (iki pano) yalnız burada | 23.4 için gerçek telefon (biyometrik) |
+| **23** | Çocuk kilidi | QA (`home1`): 23.1, 23.3, 23.4 | Gerçek pano + canlı; 23.2 (iki pano) hiçbir ortamda yapılamaz (iki panolu daire oluşturulamaz: "yapılamadı") | 23.4 için gerçek telefon (biyometrik) |
 | **24** | Gece huzur bildirimi | QA | Canlı | — |
 | **25** | Zamanlı kurallar | QA | Canlı | — |
-| **26** | Hesap güvenliği | QA (26.2 yeni açılan hesapla, §2.3) | Canlı | İkinci cihaz |
-| **27** | Biyometrik kilit | Gerçek Android telefon (QA'ya USB ile; 27.6 kalıcı oturum dahil); 27.1'in telefon kodu (SMS) yolu uygulamadan tamamlanamaz (kod ekranda gösterilmez; QA'da API yanıtındaki `debug_code` ile elle denenebilir) | Canlı | Gerçek Android telefon (ekran kilidi + kayıtlı parmak izi); uygulama sürümü: biyometrik düzeltmesini içeren derleme ("Kullanılsın mı?" penceresinde "(200 ms)" yazıyorsa eski kurulum; "hızlıca" yazıyorsa sistem penceresinin başlığı Türkçe "Kimlik doğrulama" olmalı, İngilizce "Authentication required" ise düzeltmesiz derlemedir: aşağıdaki "Biyometrik Giriş İstemi: Ne Beklemeli") |
+| **26** | Hesap güvenliği | QA (26.2 yeni açılan hesapla, §2.3; 26.6–26.7 telefon kodu: SMS satırı QA'da görünür, kod uygulamada gösterilmez, API yanıtındaki `debug_code`'dan alınır) | Canlı (26.6: SMS ile giriş seçeneği yalnız sunucuda SMS sağlayıcı yapılandırılmışsa görünür; bugün canlıda görünmez: beklenen) | İkinci cihaz (26.1 / 26.5'in canlı durum kontrolü için MQTT'li: emülatör, Windows ya da USB'li telefon; Chrome MQTT kullanmaz) |
+| **27** | Biyometrik kilit | Gerçek Android telefon (QA'ya USB ile; 27.6 kalıcı oturum dahil); 27.1'in telefon kodu (SMS) yolu: kod ekranda gösterilmez, QA'da 26.6'daki API komutuyla alınır; canlıda SMS satırı görünmez (beklenen) | Canlı | Gerçek Android telefon (ekran kilidi + kayıtlı parmak izi); uygulama sürümü: biyometrik düzeltmesini içeren derleme ("Kullanılsın mı?" penceresinde "(200 ms)" yazıyorsa eski kurulum; "hızlıca" yazıyorsa sistem penceresinin başlığı Türkçe "Kimlik doğrulama" olmalı, İngilizce "Authentication required" ise düzeltmesiz derlemedir: aşağıdaki "Biyometrik Giriş İstemi: Ne Beklemeli") |
 | **28** | Hesap silme | QA | Canlı | — |
 | **29** | Yerel ağ (LAN) doğrudan mod | QA (`home1`) | Gerçek pano + canlı (telefon ve pano aynı ev Wi-Fi'sinde) | — |
 | **30** | Derin bağlantı & karekod yönlendirme | QA: 30.2 ve kopyala-yapıştır yolu ("E-postadaki Bağlantım Var"); 30.3 gerçek telefonla | Canlı: 30.1 bağlantıya dokunma | Gerçek Android telefon |
@@ -880,7 +881,7 @@ Bir adım başarısızsa [8. Sorun Giderme](#8-sorun-giderme) bölümüne bakın
 
 ### S: Kodları (doğrulama, etkinleştirme, şifre sıfırlama) nerede bulurum?
 
-**C:** `node run.js mails` (liste) ve `node run.js mails N` (N numaralı e-postanın ham gövdesi; §2.3). Aile/misafir davet kodu ve daire devir kodu e-postayla gitmez: ev sahibinin ekranında gösterilir.
+**C:** `node run.js mails` (liste) ve `node run.js mails N` (N numaralı e-postanın ham gövdesi; §2.3). Aile/misafir davet kodu ve daire devir kodu e-postayla gitmez: ev sahibinin ekranında gösterilir. Telefon (SMS) kodu e-postayla gitmez ve uygulamada gösterilmez: QA'da `POST /api/v1/auth/otp/send` yanıtındaki `debug_code`'dadır (kontrol listesi 26.6). SMS ile giriş seçeneği yalnız sunucuda SMS sağlayıcı yapılandırılmışsa görünür (QA'da `ALLOW_DEBUG_OTP` nedeniyle görünür; canlıda bugün görünmez).
 
 ### S: Release derlemesi neden yerel QA sunucusuna bağlanmıyor?
 
@@ -938,7 +939,7 @@ Bir adım başarısızsa [8. Sorun Giderme](#8-sorun-giderme) bölümüne bakın
 | `docs/DEPLOY_RUNBOOK.md` | Canlı sunucu dağıtımı (henüz uygulanmadı) |
 | `docs/SECRET_ROTATION.md` | Sır ve parola yenileme adımları |
 | `ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md` | Fabrika aracı (kayıt, etiket, flash, provizyon) |
-| `ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.1.2/SURUM_NOTLARI.md` | Firmware v1.1.2 (güncel imaj) sürüm notları, imajları ve SHA-256 özetleri (`SHA256SUMS.txt`); v1.1.1'den farklar (üç sayfa metni) ve donanımda doğrulanmadığı notu |
+| `ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.1.2/SURUM_NOTLARI.md` | Firmware v1.1.2 (güncel imaj) sürüm notları, imajları ve SHA-256 özetleri (`SHA256SUMS.txt`); v1.1.1'den farklar (provizyon yolu düzeltmeleri ve üç sayfa metni) ve donanımda doğrulanmadığı notu |
 | `ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.1.1/SURUM_NOTLARI.md` | Firmware v1.1.1 (önceki sürüm; test kartına yazılıp açılışı görüldü) notları: kalıcı giriş, "Çıkış", tema ve güvenlik notu; v1.1.0 klasörü eski sürüm olarak durur |
 | `docs/superpowers/analysis/biyometrik-ilk-kullanim-ve-kalici-oturum.md` | Aşama 27: oturum geri yüklenirken istem ve kalıcı oturum (WP-BIO2) analizi (salt okunur kaynak) |
 

@@ -289,7 +289,6 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | `Failed to connect to ESP32-S3` (logda) | Kart yükleme moduna girmedi. | **BOOT** düğmesini basılı tutun, **RESET**'e bir kez basıp bırakın, sonra BOOT'u bırakın; tekrar deneyin. |
 | Dosya Sorunu: … | Firmware dosyası yok/bozuk. | **Gözat** ile doğru `.bin` dosyasını seçin veya "Bizim Geliştirdiğimiz Yazılım"ı yeniden seçin. |
 | Firmware Uyarısı: …BİRLEŞİK imaj gibi görünmüyor | Yanlış dosya (yalnızca uygulama imajı). | **Hayır** deyin; doğru (birleşik) dosyayı seçin. |
-| Cihaz anahtarı kalıcı belleğe yazamadı (storage). / Kart anahtarı kalıcı belleğe yazamadı (persist_failed). | Kart, provizyon anahtarını kendi kalıcı belleğine (NVS) yazamadı (firmware v1.1.2 bunu açıkça bildirir). | Kartı yeniden başlatıp tekrar deneyin; sürerse **Hafızayı Sil (Erase Flash)** ile firmware'i yeniden yükleyin. |
 | Firmware Uyarısı: …USB (seri) provizyon komutu (FACTORYINIT) bulunamadı… ESKİ firmware | İmaj eski sürüm: kart USB ile provizyonlanamaz. | **Hayır** deyin; IT'den güncel imajı isteyin (Teknik Ek E). Yine de **Evet** derseniz kartı provizyonlayamazsınız. |
 | esptool Bulunamadı | Yükleme programı kurulu değil. | IT'ye bildirin. |
 | Meşgul: Kartla başka bir işlem sürüyor | Başka bir işlem bitmedi. | Bitmesini bekleyin. |
@@ -333,7 +332,8 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Cihaza ulaşılamadı. | Bilgisayar kartın Wi-Fi ağında değil. | Bilgisayarı `AHBU-XXXXXX` ağına bağlayın; ağ görünmüyorsa kartı USB'den çıkarıp takın; kart daha önce bir Wi-Fi'ye kaydedildiyse önce **Hafızayı Sil**. |
 | Bu adres bir AHBU cihazı gibi yanıt vermedi (HTTP …). | Başka bir cihaza (örn. modem) bağlanıldı. | Doğru ağda olduğunuzdan emin olun. |
 | Bağlanılan cihaz bu kayıtla eşleşmiyor (cihaz UID'si: …). | Yanlış kart. | Doğru kartın ağına bağlanın. |
-| Cihaz zaten provizyonlu (başka bir anahtarla kurulmuş). | Kartta eski anahtar var. | USB ile bağlanıp **Seri (USB) ile Provizyonla** → "Anahtarı sıfırla" onayını verin. |
+| Cihaz zaten provizyonlu (başka bir anahtarla kurulmuş). | Kartta başka (eski) bir anahtar var. | Kayıt hâlâ provizyon bekliyorsa kartı USB ile bağlayıp **Seri (USB) ile Provizyonla** → "Kartta Eski Anahtar Var" sorusuna **Evet** (USB tablosu, yukarıda). Ya da aracın önerdiği gibi seri terminalden (115200 baud) `RESETKEY` gönderin (kurulum ağı açılmazsa ardından `AP ON`) ve tekrar deneyin. |
+| Cihaz anahtarı kalıcı belleğe yazamadı (storage). | Kart, anahtarı kendi kalıcı belleğine (NVS) yazamadı (firmware v1.1.2 bunu `503 storage` ile açıkça bildirir). | Kartı yeniden başlatıp tekrar deneyin; sürerse **Hafızayı Sil (Erase Flash)** ile firmware'i yeniden yükleyin. |
 | Cihaz meşgul. / Cihaz geçici olarak kilitli. | Kart yoğun / çok deneme. | Belirtilen süre bekleyip tekrar deneyin. |
 
 ### Diğer
@@ -495,7 +495,7 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 
 ### E. Firmware derleme ve sürüm klasörü
 
-> **DİKKAT:** `firmware_releases` altındaki ESKİ imajlar (`v1.0.0`, `v1.0.1`; klasörlerinde `KULLANILMAZ.txt` vardır) **USB provizyon komutunu (`FACTORYINIT`) ve `RESETKEY`'i içermez** (imaj içinde bu metinler aranıp bulunamadı). Bu imajlarla yüklenen kart USB ile provizyonlanamaz; araç bu durumu yüklemeden önce "Firmware Uyarısı" ile bildirir. Güncel imaj `v1.1.2`'dir (`version_info.json` onu gösterir; araç üst şeridinde "Firmware v1.1.2" rozeti görünür; bu komutları içerir; v1.1.1'den yalnız kartın web sayfasındaki metinler ve sürüm numarasıyla ayrılır: Bölüm 11). Yeni bir sürüm üretilince aşağıdaki gibi sürüm klasörüne konmalıdır.
+> **DİKKAT:** `firmware_releases` altındaki ESKİ imajlar (`v1.0.0`, `v1.0.1`; klasörlerinde `KULLANILMAZ.txt` vardır) **USB provizyon komutunu (`FACTORYINIT`) ve `RESETKEY`'i içermez** (imaj içinde bu metinler aranıp bulunamadı). Bu imajlarla yüklenen kart USB ile provizyonlanamaz; araç bu durumu yüklemeden önce "Firmware Uyarısı" ile bildirir. Güncel imaj `v1.1.2`'dir (`version_info.json` onu gösterir; araç üst şeridinde "Firmware v1.1.2" rozeti görünür; bu komutları içerir; v1.1.1'den kartın web sayfasındaki üç metin, provizyon yolu düzeltmeleri (`factory/init` / `rekey` kalıcı belleğe yazamazsa `503 storage`, provizyon tek kilit altında, yeni `RESETKEY` metni) ve sürüm numarasıyla ayrılır: Bölüm 11, Teknik Ek C, `v1.1.2/SURUM_NOTLARI.md`). Yeni bir sürüm üretilince aşağıdaki gibi sürüm klasörüne konmalıdır.
 
 1. Derleme (PlatformIO; makineye özel çekirdek dizini `waveshare_s3_demo\platformio_local.ini` içindedir, depoya girmez):
 
