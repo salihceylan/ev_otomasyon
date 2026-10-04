@@ -18,7 +18,7 @@ function makeManager({ timing = {}, t0 = 5000 } = {}) {
   const wifi = { getDeviceUid: () => 'AHBU-S3-0A0001', isConnected: () => true, isTimeSynced: () => true, getLocalIP: () => '192.168.1.40', applyApConfigChange() {} };
   const posted = [];
   const m = new MqttManager({
-    config: rig.cm, wifi, automation: rig.a, clock, uptimeSec: () => 1, mac: '02:A5:00:0A:00:01', fw: '1.1.0',
+    config: rig.cm, wifi, automation: rig.a, clock, uptimeSec: () => 1, mac: '02:A5:00:0A:00:01', fw: '1.1.1',
     post: (c) => { posted.push(c); return true; }, hooks: { event: (type, f) => events.push({ type, ...f }) }, timing,
   });
   m.begin();

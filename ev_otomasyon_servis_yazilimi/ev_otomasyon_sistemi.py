@@ -70,6 +70,7 @@ except ImportError as _import_error:  # pragma: no cover - ortam sorunu
 from factory_client import (  # noqa: E402
     DEFAULT_DEVICE_HOST,
     DEFAULT_SERVER_URL,
+    ENV_SERVER_URL,
     LABEL_TEXT_PATTERN,
     PIN_PATTERN,
     UID_PATTERN,
@@ -107,6 +108,15 @@ from tool_theme import (  # noqa: E402 - görsel tema: belirteçler/ttk stili/wi
     load_theme_preference,
     log_line_tag,
     theme_of,
+)
+from session_store import (  # noqa: E402 - "Beni hatırla": DPAPI şifreli refresh token + kimlik (parola ASLA saklanmaz)
+    EXPIRED as RESTORE_EXPIRED,
+    FORBIDDEN as RESTORE_FORBIDDEN,
+    MISMATCH as RESTORE_MISMATCH,
+    NETWORK as RESTORE_NETWORK,
+    RESTORED as RESTORE_OK,
+    SessionKeeper,
+    SessionStore,
 )
 
 DEMO_DIR = os.path.join(BASE_DIR, "waveshare_s3_demo")
@@ -556,12 +566,14 @@ class LoginRequest:
     server_url: str
     email: str = ""
     password: str = field(default="", repr=False)
+    remember: bool = True  # "Beni hatırla": şifreli oturum anahtarı + kimlik saklansın mı (parola ASLA saklanmaz)
 
 
 class ServerLoginDialog(tk.Toplevel):
     """Süper kullanıcı e-posta + parola (veya ADMIN_API_KEY ortam değişkeni) soran modal diyalog.
 
-    Parola yalnızca bu diyalogda tutulur; diske/loga yazılmaz ve oturum için saklanmaz."""
+    Parola yalnızca bu diyalogda tutulur; diske/loga yazılmaz. "Beni hatırla" işaretliyse yalnızca ŞİFRELİ oturum anahtarı
+    (DPAPI, bu Windows kullanıcısına bağlı) ve kimlik (sunucu adresi + e-posta) saklanır."""
 
     def __init__(
         self,
@@ -571,6 +583,8 @@ class ServerLoginDialog(tk.Toplevel):
         email: str = "",
         api_key_available: bool = False,
         note: str = "",
+        remember_default: bool = True,
+        can_remember: bool = True,
     ) -> None:
         super().__init__(parent)
         theme = theme_of(parent)  # ana pencerenin teması (koyu/açık) diyalogda da geçerlidir
@@ -589,7 +603,7 @@ class ServerLoginDialog(tk.Toplevel):
         theme.label(
             body,
             "label.muted",
-            text=intro + "\nParola kaydedilmez; yalnızca bu oturum için kullanılır.",
+            text=intro + "\nParola saklanmaz. 'Beni hatırla' işaretliyse yalnızca şifreli oturum anahtarı saklanır.",
             size=9,
             wraplength=400,
             justify="left",
@@ -613,6 +627,20 @@ class ServerLoginDialog(tk.Toplevel):
         self._show_pwd = False
         self.toggle_btn = theme.button(form, role="ghost", size="sm", text="👁️", width=3, command=self._toggle_pwd)
         self.toggle_btn.grid(row=2, column=2, padx=(6, 0))
+
+        # "Beni hatırla": işaretliyse şifreli oturum anahtarı (DPAPI) + sunucu adresi/e-posta saklanır, bir sonraki açılışta
+        # araç sessizce girer. DPAPI yoksa (Windows dışı) kutu pasif: yalnız kimlik hatırlanır, parola ASLA saklanmaz.
+        self.remember_var = tk.BooleanVar(value=bool(remember_default and can_remember))
+        self.chk_remember = theme.check(
+            form,
+            text="Beni hatırla (şifreli oturum anahtarı bu bilgisayarda saklanır; ortak bilgisayarda işareti kaldırın)"
+            if can_remember
+            else "Beni hatırla (bu bilgisayarda kullanılamıyor)",
+            variable=self.remember_var,
+            size=9,
+            state=tk.NORMAL if can_remember else tk.DISABLED,
+        )
+        self.chk_remember.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         btn_box = theme.frame(body, "frame.surface")
         btn_box.pack(fill=tk.X, pady=(16, 0))
@@ -670,14 +698,14 @@ class ServerLoginDialog(tk.Toplevel):
         if not email or not password:
             messagebox.showwarning("Eksik Bilgi", "Lütfen e-posta ve parolayı girin.", parent=self)
             return
-        self.result = LoginRequest("password", url, email, password)
+        self.result = LoginRequest("password", url, email, password, remember=bool(self.remember_var.get()))
         self.destroy()
 
     def _on_api_key(self) -> None:
         url = self._read_url()
         if url is None:
             return
-        self.result = LoginRequest("api_key", url)
+        self.result = LoginRequest("api_key", url, remember=False)
         self.destroy()
 
     def _on_cancel(self) -> None:
@@ -704,6 +732,7 @@ class EvOtomasyonServisApp(tk.Tk):
         synchronous: bool = False,
         serial_backend: Optional[Any] = None,
         serial_clock: Optional[Any] = None,
+        session_store: Optional[SessionStore] = None,
     ) -> None:
         super().__init__()
 
@@ -715,6 +744,15 @@ class EvOtomasyonServisApp(tk.Tk):
         self._startup_notes: list[str] = []
         self.scrubber = SecretScrubber()
 
+        # "Beni hatırla": kimlik (sunucu adresi + e-posta) açık ayar dosyasından, refresh token DPAPI dosyasından gelir.
+        # Sunucu adresi AÇIKÇA verilmemişse ve EV_SERVER_URL tanımlı değilse hatırlanan adres kullanılır.
+        self.session_store = session_store if session_store is not None else SessionStore()
+        remembered_url, remembered_email = self.session_store.identity()
+        if server_url is None and remembered_url and not os.environ.get(ENV_SERVER_URL):
+            try:
+                server_url = normalize_server_url(remembered_url)
+            except ValueError:
+                server_url = None
         try:
             self.client = ServerClient(server_url, transport=transport, scrubber=self.scrubber)
         except ValueError as exc:
@@ -742,7 +780,10 @@ class EvOtomasyonServisApp(tk.Tk):
         self._prov_busy = False
         self._register_busy = False
         self._login_busy = False
-        self._last_email = ""
+        self._last_email = remembered_email  # "Beni hatırla": giriş penceresi e-postayla ön dolu açılır
+        self.keeper = SessionKeeper(self.client, self.session_store)
+        self._restoring = False  # açılışta kayıtlı oturumla sessiz giriş sürüyor
+        self._after_restore: Optional[Callable[[], None]] = None  # sessiz giriş sürerken istenen işlem (ensure_login)
         self._known_ports: set[str] = set()
         self._clipboard_secret: Optional[str] = None
         self._clipboard_job: Optional[str] = None
@@ -771,6 +812,8 @@ class EvOtomasyonServisApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self._pump_ui_queue()
         self.update_idletasks()  # bekleyen ttk tema olayları pencere yok edilmeden önce işlensin
+        if self.session_store.has_token():  # "Beni hatırla": pencere açıldıktan sonra kayıtlı oturumla SESSİZ giriş
+            self.after(250, self._startup_restore)
 
     # =========================================================================
     # Altyapı: arka plan işleri, arayüz kuyruğu, iletişim kutuları
@@ -955,6 +998,8 @@ class EvOtomasyonServisApp(tk.Tk):
         if self.client.is_authenticated:
             who = self.client.user_email or "oturum açık"
             how = "API anahtarı" if self.client.auth_mode == "api_key" else "süper kullanıcı"
+            if self.keeper.remembered and self.client.auth_mode == "jwt":
+                how += ", hatırlanıyor"  # şifreli oturum anahtarı bu bilgisayarda saklı ('Oturumu Kapat' siler)
             self.lbl_session.config(text=f"👤 {who} ({how})")
             self.theme.restyle(self.lbl_session, "label.badge.emerald", size=9, weight="bold")
             self.btn_login.config(text="🔄 Hesap Değiştir", state=tk.NORMAL)
@@ -1682,18 +1727,57 @@ class EvOtomasyonServisApp(tk.Tk):
         self.open_login_dialog()
 
     def logout_clicked(self) -> None:
-        """Yerel oturumu hemen siler; sunucudaki oturum ailesini arka planda iptal eder."""
+        """Yerel oturumu hemen siler; sunucudaki oturum ailesini arka planda iptal eder. Hatırlanan oturum (şifreli
+        token + kimlik) da silinir: ortak bilgisayarda 'Oturumu Kapat' hiçbir iz bırakmaz."""
+        was_remembered = self.keeper.remembered
+        self.keeper.forget()
         refresh = self.client.end_session_local()
+        self._last_email = ""
         self.update_session_bar()
         self._set_inventory_placeholder("Oturum kapatıldı. Envanteri görmek için yeniden giriş yapın.")
+        if was_remembered:
+            self.log("[BİLGİ] Hatırlanan oturum bu bilgisayardan silindi.")
         if refresh:
             self.run_background(lambda: self.client.revoke_refresh_token(refresh), None)
 
     def ensure_login(self, on_ready: Callable[[], None], note: str = "") -> None:
         if self.client.is_authenticated:
             on_ready()
+        elif self._restoring:
+            self._after_restore = on_ready  # kayıtlı oturumla sessiz giriş sürüyor: bitince işlem devam eder
         else:
             self.open_login_dialog(on_success=on_ready, note=note)
+
+    def _startup_restore(self) -> None:
+        """Açılışta kayıtlı oturumla SESSİZ giriş (parola sorulmaz). Başarısızlıkta giriş penceresine düşülmez; araç
+        eskisi gibi 'Sunucuya Giriş' bekler. Ağ/sunucu hatasında kayıt silinmez (bir sonraki açılışta yeniden denenir)."""
+        if self._closing or self._restoring or self.client.is_authenticated or not self.session_store.has_token():
+            return
+        self._restoring = True
+        self._login_busy = True
+        self.btn_login.config(state=tk.DISABLED, text="⏳ Kayıtlı oturum açılıyor...")
+
+        def done(result: Any, err: Optional[BaseException]) -> None:
+            self._restoring = False
+            self._login_busy = False
+            pending, self._after_restore = self._after_restore, None
+            outcome, email = (RESTORE_NETWORK, "") if (err is not None or not result) else result
+            if outcome == RESTORE_OK:
+                self._last_email = email or self._last_email
+                self.log("[BAŞARILI] Kayıtlı oturum sessizce açıldı. 'Oturumu Kapat' hatırlanan oturumu siler.")
+                self._after_login(pending)
+                return
+            if outcome in (RESTORE_EXPIRED, RESTORE_FORBIDDEN):
+                self.log("[UYARI] Kayıtlı oturum artık geçerli değil; kayıt silindi. Yeniden giriş yapın.")
+            elif outcome == RESTORE_MISMATCH:
+                self.log("[UYARI] Kayıtlı oturum başka bir sunucu adresine ait; bu adres için giriş yapın.")
+            elif outcome == RESTORE_NETWORK:
+                self.log("[UYARI] Kayıtlı oturum şimdi denetlenemedi (ağ/sunucu); kayıt korundu, gerektiğinde yeniden denenir.")
+            self.update_session_bar()
+            if pending is not None:  # sessiz giriş sürerken istenen işlem: şimdi normal giriş penceresi
+                self.open_login_dialog(on_success=pending)
+
+        self.run_background(self.keeper.try_restore, done)
 
     def open_login_dialog(self, on_success: Optional[Callable[[], None]] = None, note: str = "") -> None:
         if self._login_busy:
@@ -1704,6 +1788,8 @@ class EvOtomasyonServisApp(tk.Tk):
             email=self._last_email,
             api_key_available=self.client.api_key_available(),
             note=note,
+            remember_default=True,
+            can_remember=self.session_store.can_store_token,
         )
         if request is None:
             return
@@ -1732,6 +1818,13 @@ class EvOtomasyonServisApp(tk.Tk):
             self._login_busy = False
             if err is None:
                 self._last_email = email
+                if request.remember:
+                    if self.keeper.remember(email):
+                        self.log("[BİLGİ] Oturum bu bilgisayarda ŞİFRELİ olarak hatırlanacak (parola saklanmaz); 'Oturumu Kapat' siler.")
+                    else:
+                        self.log("[UYARI] Oturum anahtarı şifrelenip saklanamadı; yalnızca e-posta hatırlanacak.")
+                else:
+                    self.keeper.forget()  # 'Beni hatırla' işaretsiz: önceki kayıt (varsa) silinir
                 self._after_login(on_success)
             else:
                 self.update_session_bar()
@@ -2461,8 +2554,10 @@ class EvOtomasyonServisApp(tk.Tk):
         if self._clipboard_secret:
             self._clear_clipboard_if(self._clipboard_secret)
         self._discard_record()
+        remembered = self.keeper.remembered
         refresh = self.client.end_session_local()
-        if refresh:  # sunucudaki oturum ailesi en iyi çabayla iptal edilir (en çok 2 sn beklenir)
+        if refresh and not remembered:  # sunucudaki oturum ailesi en iyi çabayla iptal edilir (en çok 2 sn beklenir)
+            # Hatırlanan oturum iptal EDİLMEZ: şifreli kayıt bir sonraki açılışta sessiz girişle kullanılır (özelliğin amacı).
             closer = threading.Thread(target=self.client.revoke_refresh_token, args=(refresh,), name="ev-logout", daemon=True)
             closer.start()
             closer.join(timeout=2.0)

@@ -1,6 +1,6 @@
 {
   "note": "Simulatorun portlandigi firmware kaynaklarinin SHA-256 ozetleri. Degisirse `node run.js fwcheck`.",
-  "recorded_at": "2026-10-01T21:42:51.083Z",
+  "recorded_at": "2026-10-04T07:09:37.434Z",
   "firmware_dir": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo",
   "files": {
     "src/ShutterFsm.h": "fda73bbaad9d502fa8f3ef692b8b33ffb7a5da4d41001490dbf7c3a7a4ca447d",
@@ -23,7 +23,7 @@
     "src/WebPortal.cpp": "91946806ed7ab70f569d1064b65e22823aaf3809cde7ab69bad7cdffc5cff52d",
     "src/WebPortal.h": "86060e4aaad58507260649a7fb6515e17f06624e3b18b0e5a889c6f3e64e5bd9",
     "src/WiFiManager.cpp": "afc668d97c08d561783877b936f8e36a71c805e088878c06bca2626c1bcde0ae",
-    "src/WiFiManager.h": "92b87d2f7b463cde6bcd62cd6f4b38f011972cbec16b339c0fa96123c670a110",
+    "src/WiFiManager.h": "e35a1551b3bb30d791196502524c159e597af2ed2b91e16cc2f0be92624d1283",
     "test/test_shutter_fsm/test_main.cpp": "c0e71bb336795c6f33389e70584e5ddf13b9d8e4ab109007bf77f26a9ccf50ca",
     "test/test_di_gate/test_main.cpp": "3985136a0b112b3e00d5cd1c991cd64fbb83e4751b914c9de0b71f223ac01a90",
     "test/test_relay_rules/test_main.cpp": "c19008f873fed013be1cd50b2d70d7058e16fc770dec33186523d74a0cba43c0",
@@ -32,5 +32,5 @@
     "test/test_ap_access/test_main.cpp": "5f5965bf843ace50b056297aa7fed112a2b9e60641a26cceba5ff74e47cb0c7a",
     "test/test_net_time/test_main.cpp": "1495623c77fa690033103ef52d2dceef67d01323d8ed623f04fc100d51cbe90d"
   },
-  "fw_version": "1.1.0"
+  "fw_version": "1.1.1"
 }

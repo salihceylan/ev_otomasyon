@@ -48,7 +48,7 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 
 - Windows bilgisayar, **internet bağlantısı** olan normal ağa bağlı. (Araç IT tarafından kurulmuş olmalı — bkz. Teknik Ek.)
 - Hazırlanacak kart ve **USB-C VERİ kablosu**. (Yalnızca şarj eden kablolar çalışmaz; kart bilgisayarda "COM port" olarak görünmelidir.)
-- **Süper kullanıcı hesabı** (e-posta + parola). Yöneticiniz verir. Parolayı kimseyle paylaşmayın; araç parolanızı **kaydetmez**.
+- **Süper kullanıcı hesabı** (e-posta + parola). Yöneticiniz verir. Parolayı kimseyle paylaşmayın; araç parolanızı **hiçbir zaman kaydetmez**. İsterseniz **Beni hatırla** ile yalnızca *şifreli oturum anahtarı* bu bilgisayarda saklanır ve araç bir sonraki açılışta kendiliğinden girer (ortak bilgisayarda işareti kaldırın).
 - İsteğe bağlı: etiket yazıcısı.
 
 #### Kurallar (7 ALTIN KURAL)
@@ -59,7 +59,7 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 4. **Aynı anda tek kart** hazırlayın. Birden fazla kart takılıysa yanlış karta yazılabilir.
 5. **Her kart için yeni kayıt** yapın. Aynı PIN'i/etiketi başka karta kullanmayın.
 6. **Wi-Fi ile provizyon yalnızca yedek yoldur** (güvensizdir). USB çalışıyorsa hiç kullanmayın. (Bölüm 5)
-7. Vardiya bitince **Oturumu Kapat**'a basın.
+7. Vardiya bitince (özellikle ortak bilgisayarda) **Oturumu Kapat**'a basın; hatırlanan oturumu da siler.
 
 > **Güncel firmware şartı:** Kartlara yalnızca **USB provizyon komutunu bilen güncel firmware** yüklenmelidir. Araç, yüklenecek imajı denetler; imajda bu komut (`FACTORYINIT`) yoksa yüklemeden önce **"Firmware Uyarısı"** gösterir. Bu uyarıyı görürseniz **Hayır** deyin ve IT'den güncel imajı isteyin (Teknik Ek E): eski imajla yüklenen kart USB ile provizyonlanamaz.
 
@@ -70,7 +70,7 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 Pencerenin en üstünde iki şerit vardır:
 
 - **Lacivert başlık:** "AHBU AKILLI EV SİSTEMLERİ"; sağında yüklü firmware sürümü rozeti ve **Koyu tema / Açık tema** anahtarı (görünümü değiştirir; seçiminiz bir sonraki açılış için hatırlanır, iş akışı değişmez).
-- **Oturum şeridi:** solda sunucu adresi, ortada kim girişli olduğu ("Giriş yapılmadı" veya e-posta adresiniz), sağda **Sunucuya Giriş** ve **Oturumu Kapat** düğmeleri.
+- **Oturum şeridi:** solda sunucu adresi, ortada kim girişli olduğu ("Giriş yapılmadı" veya e-posta adresiniz), sağda **Sunucuya Giriş** ve **Oturumu Kapat** düğmeleri. Oturum hatırlanıyorsa rozette **"(süper kullanıcı, hatırlanıyor)"** yazar.
 
 Altında **3 sekme** vardır:
 
@@ -95,8 +95,9 @@ Her kart için aynı 8 adımı uygulayın.
 3. Açılan pencerede:
    - **Sunucu adresi:** olduğu gibi bırakın (yönetici başka bir adres vermediyse).
    - **E-posta** ve **Parola:** süper kullanıcı hesabınızı yazın. (Parolayı görmek için yandaki göz düğmesine basabilirsiniz.)
+   - **Beni hatırla** (varsayılan işaretli): işaretliyse parola değil, yalnızca *şifreli oturum anahtarı* ve e-postanız bu bilgisayarda saklanır; araç bir sonraki açılışta **kendiliğinden** girer. **Ortak bilgisayarda işareti kaldırın.**
    - **Giriş Yap**'a basın.
-4. **Ne görmelisiniz?** Şeritte e-posta adresiniz ve **(süper kullanıcı)** yazar, **Sunucuya Giriş** düğmesi **Hesap Değiştir**'e dönüşür; **2. sekmedeki** tablo envanteri listeler.
+4. **Ne görmelisiniz?** Şeritte e-posta adresiniz ve **(süper kullanıcı)** yazar, **Sunucuya Giriş** düğmesi **Hesap Değiştir**'e dönüşür; **2. sekmedeki** tablo envanteri listeler. **Beni hatırla** işaretliyse bir sonraki açılışta giriş penceresi çıkmaz: araç kayıtlı oturumla sessizce girer (Günlükte "Kayıtlı oturum sessizce açıldı"; şeritte "hatırlanıyor"). Oturum artık geçerli değilse kayıt silinir ve eskisi gibi **Sunucuya Giriş** beklenir.
 
 > Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Araç yalnızca **süper kullanıcı** hesabıyla çalışır.
 
@@ -234,7 +235,7 @@ Ayrıntılı elle adımlar için **Elle Provizyon Talimatı** düğmesine basın
 | **Etiket** | PIN ve AP parolası **yalnızca etikettedir**. Etiket **yalnızca cihaz üzerinde veya elde** saklanır; fotoğrafı (karekodlar dahil) WhatsApp/e-posta/sosyal medya ile **paylaşılmaz**. Etiketi karta yapıştırın; basılı fazla/bozuk etiketleri **parçalayın**. |
 | **2. karekod (Wi-Fi)** | Karekodun içinde kartın kurulum ağı adı ve **parolası** vardır: karekodu okutan herkes kartın ağına bağlanabilir. Bu yüzden etiket, 1. karekodla (PIN) birlikte aynı gizlilikte korunur. Telefon kamerasıyla yalnızca **kendi elinizdeki** etiketi okutun. |
 | **PNG etiket dosyası** | Yazdırdıktan sonra silin (Çöp Kutusu'nu da boşaltın). Araç dosyayı kendiliğinden diske yazmaz. |
-| **Hesap** | Süper kullanıcı parolanızı kimseyle paylaşmayın; araç parolayı **kaydetmez**. Ayrılırken **Oturumu Kapat**. |
+| **Hesap** | Süper kullanıcı parolanızı kimseyle paylaşmayın; araç parolayı **kaydetmez**. **Beni hatırla** yalnızca şifreli oturum anahtarını (bu Windows kullanıcısına bağlı) saklar; ortak bilgisayarda işaretlemeyin. Ayrılırken **Oturumu Kapat** (hatırlanan oturumu siler ve sunucuda iptal eder). |
 | **Bir kez gösterilen bilgi** | PIN/anahtar kaybolursa **geri alınamaz** (sunucuda yalnızca özeti vardır). Çözüm: kaydı (yalnızca Durum'u `IN_STOCK` ise) **Envanterden Sil** ile silip kartı yeniden kaydetmek. Silme, cihaz UID'sini yazarak onaylanır; eşlenmiş cihaz silinemez. |
 | **Panoya kopyalama** | "Anahtarı kopyala / AP parolasını kopyala" 45 sn sonra panodan silinir; yine de başka yere yapıştırmayın. |
 | **Wi-Fi yedek yolu** | Yalnızca kontrollü ortamda, USB mümkün değilse (Bölüm 5). |
@@ -260,6 +261,9 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Sunucunun güvenlik sertifikası doğrulanamadı… / Güvenli bağlantı (TLS) kurulamadı. | Bilgisayarın tarih/saati yanlış veya ağ filtreli. | Tarih/saati düzeltin; sürerse IT'ye bildirin. **Asla** güvenlik uyarısını geçmeye çalışmayın. |
 | Sunucuda beklenmeyen bir hata oluştu… (Hata ref: …) | Sunucu tarafında sorun. | Biraz sonra tekrar deneyin; sürerse **Hata ref** kodunu IT'ye iletin. |
 | Oturum süresi doldu / Oturum geçersiz veya sonlandırılmış… | Oturum kapandı. | **Sunucuya Giriş** ile yeniden giriş yapın. |
+| [UYARI] Kayıtlı oturum artık geçerli değil; kayıt silindi. Yeniden giriş yapın. | Hatırlanan oturum sunucuda sona ermiş ya da iptal edilmiş (ör. başka yerden "tüm cihazlardan çıkış", uzun süre kullanılmadı) ya da hesap artık süper kullanıcı değil. | **Sunucuya Giriş** ile yeniden giriş yapın. |
+| [UYARI] Kayıtlı oturum şimdi denetlenemedi (ağ/sunucu); kayıt korundu… | İnternet yok ya da sunucu geçici olarak yanıt vermiyor; kayıt SİLİNMEDİ. | Bağlantıyı düzeltip aracı yeniden açın ya da **Sunucuya Giriş** ile elle girin. |
+| [UYARI] Kayıtlı oturum başka bir sunucu adresine ait… | Kayıt farklı bir sunucu (ör. QA adresi) için alınmış; oturum anahtarı başka sunucuya GÖNDERİLMEZ. | Doğru sunucu adresiyle giriş yapın. |
 | Düz http yalnızca yerel test (127.0.0.1) için kabul edilir… | Sunucu adresi güvenli değil (http://). | Adresi `https://…` olarak yazın; yönetici verdiyse onu kullanın. |
 
 ### Kayıt (2. sekme)
@@ -426,7 +430,7 @@ Waveshare **ESP32-S3-ETH-8DI-8RO** endüstriyel pano modülü (DIN-ray):
 Kurulmuş bir kartın içinde küçük bir web sayfası vardır. **Normal kullanıcı için değildir**; teknik servis içindir.
 
 - Kart evin Wi-Fi'sine bağlandığında kendi `AHBU-XXXXXX` ağı **kapanır**. Sayfaya kartın evdeki IP adresiyle (`http://<kart-IP>`) girilir.
-- Sayfa açılınca **cihaz anahtarını** sorar (anahtar sunucuda saklıdır; servis uygulaması verir). Anahtar girilmeden sayfa kullanılamaz. **İSTİSNA (kurulum modu):** telefon/bilgisayar kartın kendi `AHBU-XXXXXX` ağına (WPA2, etiketteki AP parolası) bağlıyken `http://192.168.4.1` açılırsa — müşteride internet olmadığı için anahtar alınamaz — sayfa "**Kurulum modu (AP): yalnızca Wi-Fi ayarlarını değiştirebilirsiniz**" bandıyla açılır ve **anahtarsız** yalnızca **Wi-Fi (Station)** sekmesi çalışır (ağ listesi, modem karekodu, bağlan); diğer sekmeler "Bu işlem için cihaz anahtarı gerekir" der. Bu ayrıcalık yalnızca kurulmuş (provizyonlu) kartta ve **parolalı** kurtarma ağında geçerlidir; açık kurulum ağında verilmez.
+- Sayfa açılınca **cihaz anahtarını** sorar (anahtar sunucuda saklıdır; servis uygulaması verir). Anahtar girilmeden sayfa kullanılamaz. Anahtar bir kez girilince **bu tarayıcıda hatırlanır** (firmware v1.1.1): sonraki açılışlarda sayfa kendiliğinden girer ve anahtar kutusu görünmez; sayfa başlığındaki **Çıkış** düğmesi anahtarı tarayıcıdan siler (**ortak bir telefonda işiniz bitince basın**). Yanlış ya da eski anahtarda kayıt kendiliğinden silinir ve anahtar yeniden sorulur. **İSTİSNA (kurulum modu):** telefon/bilgisayar kartın kendi `AHBU-XXXXXX` ağına (WPA2, etiketteki AP parolası) bağlıyken `http://192.168.4.1` açılırsa — müşteride internet olmadığı için anahtar alınamaz — sayfa "**Kurulum modu (AP): yalnızca Wi-Fi ayarlarını değiştirebilirsiniz**" bandıyla açılır ve **anahtarsız** yalnızca **Wi-Fi (Station)** sekmesi çalışır (ağ listesi, modem karekodu, bağlan); diğer sekmeler "Bu işlem için cihaz anahtarı gerekir" der. Bu ayrıcalık yalnızca kurulmuş (provizyonlu) kartta ve **parolalı** kurtarma ağında geçerlidir; açık kurulum ağında verilmez.
 - Kart Wi-Fi'den **3 dakika** kopuk kalırsa (veya hiç Wi-Fi tanımlı değilse) ya da servis modunda (seri komut `AP ON`) kendi ağını **10 dakikalığına** açar; bilgisayar bağlıysa en çok 30 dakikaya uzar. Bu ağın parolası **etikette yazan AP parolasıdır** (kurulumdan sonra parola **cihaza özeldir**, sabit parola yoktur); telefonla **etiketteki 2. karekodu kamerayla okutarak** tek dokunuşla bağlanabilirsiniz (Adım 7).
 - Sekmeler: **Kontrol** (röle/panjur), **Kanal Ayarları**, **Wi-Fi (Station)**, **RS485 Terminal**, **Sistem**.
 - Provizyonsuz bir karta girilirse sayfa **"Cihaz Kurulumu (Provizyon)"** formunu gösterir (elle provizyon).
@@ -522,6 +526,8 @@ python -m unittest discover -s tests -v
 python -m py_compile ev_otomasyon_sistemi.py
 ```
 
+`tests/test_session_store.py` (Beni hatırla deposu: DPAPI gidiş-dönüşü [yalnız Windows], bozuk/başka kullanıcı dosyası, rotasyon yazımı, sessiz geri yükleme sonuçları) ve `tests/test_tool_theme.py` (tema/kontrast/tercih) dahildir; testler gerçek `%APPDATA%\AHBU` içeriğine dokunmaz.
+
 Testler gerçek ağa/COM porta/esptool'a **çıkmaz** (sahte HTTP, sahte seri port, gizli Tk penceresi). Gerçek kartla denenmesi gerekenler (doğrulanmadı): flash sonrası USB'nin yeniden numaralanma süresi, gerçek `STATUS`/`FACTORYINIT` zamanlaması, esptool çıktısından MAC okuma, yazdırma, gerçek telefon kamerasıyla 2. karekodun okunması.
 
 ### H. Etiket karekodları (teknik)
@@ -539,6 +545,7 @@ Testler gerçek ağa/COM porta/esptool'a **çıkmaz** (sahte HTTP, sahte seri po
 ### G. Güvenlik tasarımı (özet)
 
 - Kodda **sabit** API anahtarı/parola yoktur; parola yalnızca giriş penceresinden alınır, saklanmaz, loglanmaz.
+- **Beni hatırla** (kullanıcının açık onayıyla; `session_store.py`): yalnızca **refresh token**, Windows **DPAPI** ile (CryptProtectData, kullanıcı kapsamı, uygulamaya özel entropi; `ctypes`, yeni paket yok) şifrelenip `%APPDATA%\AHBU\factory_session.dat` dosyasına yazılır; sunucu adresi + e-posta (gizli değil) `servis_araci_ayarlar.json` içindedir. **Parola ve erişim token'ı ASLA yazılmaz.** DPAPI yoksa (Windows dışı) token yazılmaz, yalnız kimlik hatırlanır. Sunucu refresh token'ı **tek kullanımlık** döndürdüğünden (rotasyon) her yenilemede yeni token ANINDA yazılır; yazılamazsa eski dosya silinir (kapalı-hata). Token yalnızca şifreli yükteki **sunucu adresine** gönderilir; rol yine `super_user` olmalıdır (değilse oturum iptal edilir, kayıt silinir). Pencere kapanışında hatırlanan oturum sunucuda iptal EDİLMEZ; **Oturumu Kapat** kaydı siler ve sunucuda iptal eder; **Beni hatırla** işaretsiz giriş de eski kaydı siler.
 - TLS doğrulaması her zaman açık; yönlendirme izlenmez; düz http yalnızca loopback.
 - `local_key` ve PIN'li karekod adresi sunucudan **bir kez** gelir; bellekte tutulur; diske yalnızca kullanıcı **Etiketi Kaydet** derse etiket görseli olarak yazılır.
 - AP parolası etikette yalnızca **metinde ve 2. karekodda** bulunur (1. karekodda ve loglarda yoktur); 2. karekodun metni gizli değer sayılır (maskelenir, loglanmaz, yalnızca etiket görseline gider).

@@ -35,7 +35,7 @@ export const AP_MAX_EXTEND_MS = ApPolicy.MAX_EXTEND_MS;
 export const STA_STABLE_MS = ApPolicy.STABLE_MS;
 export const MIN_BACKOFF_MS = StaMachine.MIN_BACKOFF_MS;
 export const MAX_BACKOFF_MS = StaMachine.MAX_BACKOFF_MS;
-export const FW_VERSION_DEFAULT = '1.1.0';
+export const FW_VERSION_DEFAULT = '1.1.1';
 
 /** SoftAP ag bilgisi (firmware startAp: 192.168.4.1/24) */
 export const AP_IP = '192.168.4.1';

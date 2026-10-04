@@ -83,7 +83,7 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
     const s = h.states()[0].json;
     assert.equal(s.v, 2);
     assert.equal(s.uid, UID);
-    assert.equal(s.fw, '1.1.0');
+    assert.equal(s.fw, '1.1.1');
     assert.equal(s.seq, 1);
     assert.equal(typeof s.uptime, 'number');
     assert.match(s.ip, /^192\.168\.1\.\d+$/);

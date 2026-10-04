@@ -114,6 +114,12 @@ class ApiException implements Exception {
   /// Girdi doğrulaması (400 `VALIDATION`).
   bool get isValidation => code == 'VALIDATION';
 
+  /// Yazma çakışması (409 `CONFLICT`): sunucudaki durum istemcinin bildiği listeden ilerlemiş. Örnek: uç nokta
+  /// güncellenirken pano yerleşimi eşitlemesi satırı değiştirdi ("Kanal tipi değişti; listeyi yenileyin.",
+  /// CONTRACTS §2.4b). Çare listeyi yenileyip işlemi yeniden denemektir. Yalnızca KOD'a bakar: 409'un öteki kodları
+  /// (`DEVICE_OFFLINE`, `SOLE_OWNER` ...) başka anlam taşır ve yenilemeyle düzelmez.
+  bool get isConflict => code == 'CONFLICT';
+
   /// Hesap silinemiyor: kullanıcı bazı evlerin **tek sahibi** (409 `SOLE_OWNER`); önce devretmelidir.
   bool get isSoleOwner => code == 'SOLE_OWNER';
 

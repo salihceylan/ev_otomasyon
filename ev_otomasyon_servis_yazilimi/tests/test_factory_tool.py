@@ -45,6 +45,7 @@ if TESTS_DIR not in sys.path:
 
 import factory_client as fc  # noqa: E402
 from qr_decode import decode_qr_image, label_qr_boxes  # noqa: E402
+from session_store import SessionStore  # noqa: E402
 from serial_fakes import FakeClock, FakeFirmwareCli, FakeSerialBackend  # noqa: E402
 from wifi_qr_reference import reference_parse_wifi_qr  # noqa: E402
 
@@ -59,8 +60,17 @@ except Exception as _exc:  # noqa: BLE001 - ortam sorunu: arayüz testleri atlan
 SOURCE_FILES = [
     os.path.join(TOOL_DIR, "ev_otomasyon_sistemi.py"),
     os.path.join(TOOL_DIR, "factory_client.py"),
-    os.path.join(TOOL_DIR, "tool_theme.py"),  # görsel tema modülü de sır/kabuk/TLS taramasından geçer
+    os.path.join(TOOL_DIR, "tool_theme.py"),  # görsel tema modülü de sır/kabuk/TLS taramasından geçer    os.path.join(TOOL_DIR, "session_store.py"),  # oturum deposu (DPAPI) de sır/kabuk/TLS taramasından geçer
 ]
+
+def _fake_protect(data):
+    """Testlerde DPAPI yerine kullanılan SAHTE şifreleyici (tersine çevirir): düz metin dosyada görünmez."""
+    return bytes(data)[::-1]
+
+
+def _fake_unprotect(blob):
+    return bytes(blob)[::-1]
+
 
 # --- Test için çalışma anında üretilen SAHTE değerler (sabit sır değildir) --------------------------------
 FAKE_PASSWORD = "pw-" + "q" * 14
@@ -90,9 +100,17 @@ def _guarded_getaddrinfo(host, *args, **kwargs):
 
 
 _PATCHES = []
+_CONFIG_SANDBOX = []
 
 
 def setUpModule():
+    # "Beni hatırla": paket gerçek %APPDATA%\AHBU içeriğini (kullanıcının hatırlanan oturumu/tema tercihi) OKUYUP
+    # SİLEMEZ: kullanıcı ayar dizini geçici bir dizine yönlendirilir.
+    sandbox = tempfile.TemporaryDirectory()
+    _CONFIG_SANDBOX.append(sandbox)
+    env_patch = mock.patch.dict(os.environ, {"APPDATA": sandbox.name, "XDG_CONFIG_HOME": sandbox.name})
+    env_patch.start()
+    _PATCHES.append(env_patch)
     for target, replacement in ((socket.socket, ("connect", _guarded_connect)), (socket, ("getaddrinfo", _guarded_getaddrinfo))):
         patcher = mock.patch.object(target, replacement[0], replacement[1])
         patcher.start()
@@ -103,6 +121,8 @@ def tearDownModule():
     for patcher in reversed(_PATCHES):
         patcher.stop()
     _PATCHES.clear()
+    while _CONFIG_SANDBOX:
+        _CONFIG_SANDBOX.pop().cleanup()
 
 
 # ============================================================================================================
@@ -120,6 +140,7 @@ class FakeApi:
     def set_default_routes(self):
         self.routes["POST /api/v1/auth/login"] = self._login
         self.routes["POST /api/v1/auth/logout"] = lambda call: (200, {"success": True, "message": "ok", "data": None}, {})
+        self.routes["GET /api/v1/auth/me"] = self._me
         self.routes["POST /api/v1/auth/refresh"] = lambda call: (
             200,
             {"success": True, "message": "ok", "data": {"access_token": ACCESS_2, "refresh_token": REFRESH_2}},
@@ -159,6 +180,16 @@ class FakeApi:
                 },
             }, {}
         return 401, {"success": False, "message": "E-posta veya şifre hatalı.", "code": "INVALID_CREDENTIALS"}, {}
+
+    def _me(self, call):
+        return 200, {
+            "success": True,
+            "message": "ok",
+            "data": {
+                "user": {"id": "u-1", "email": "yonetici@example.com", "full_name": "Test Yonetici", "role": self.login_role},
+                "homes": [],
+            },
+        }, {}
 
     def _register(self, call):
         body = call.body or {}
@@ -1694,6 +1725,13 @@ class AppSmokeTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
+        # "Beni hatırla" deposu: test başına geçici dizin + tersine çeviren SAHTE şifreleyici (DPAPI'ye bağımlılık yok)
+        self.store = SessionStore(
+            path=os.path.join(self.tmp.name, "factory_session.dat"),
+            prefs_path=os.path.join(self.tmp.name, "prefs.json"),
+            protect=_fake_protect,
+            unprotect=_fake_unprotect,
+        )
         try:
             self.app = tool.EvOtomasyonServisApp(
                 transport=self.api,
@@ -1701,6 +1739,7 @@ class AppSmokeTests(unittest.TestCase):
                 synchronous=True,
                 serial_backend=self.serial_backend,
                 serial_clock=self.serial_clock,
+                session_store=self.store,
             )
         except Exception as exc:  # noqa: BLE001
             if exc.__class__.__name__ == "TclError":
@@ -1737,8 +1776,8 @@ class AppSmokeTests(unittest.TestCase):
             handle.write(bytes(data))
         return path
 
-    def login_request(self):
-        return tool.LoginRequest("password", fc.DEFAULT_SERVER_URL, "yonetici@example.com", FAKE_PASSWORD)
+    def login_request(self, remember=False):
+        return tool.LoginRequest("password", fc.DEFAULT_SERVER_URL, "yonetici@example.com", FAKE_PASSWORD, remember=remember)
 
     def patch_login(self, request=None):
         patcher = mock.patch.object(tool.ServerLoginDialog, "ask", return_value=request or self.login_request())
@@ -2305,6 +2344,134 @@ class AppSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.app.inv_tree.get_children()), 0)
         self.assertEqual(self.api.paths()[-1], "POST /api/v1/auth/logout")
         self.assertEqual(self.api.calls[-1].body, {"refresh_token": REFRESH_1})
+
+    # ---- "Beni hatırla": şifreli oturum anahtarı + sessiz giriş (kullanıcının açık onayıyla) ----------------------
+    def _remember_login(self):
+        self.patch_login(self.login_request(remember=True))
+        self.app.login_clicked()
+        self.assertTrue(self.app.client.is_authenticated)
+
+    def _read_bytes(self, path):
+        with open(path, "rb") as handle:
+            return handle.read()
+
+    def test_remember_login_stores_encrypted_token_and_never_the_password(self):
+        self._remember_login()
+        self.assertTrue(self.app.keeper.remembered)
+        self.assertTrue(self.store.has_token())
+        self.assertEqual(self.store.load().refresh_token, REFRESH_1)
+        self.assertIn("hatırlanıyor", self.app.lbl_session.cget("text"))
+        token_file = self._read_bytes(self.store.path)
+        prefs = self._read_bytes(self.store.prefs_path)
+        for blob in (token_file, prefs):
+            self.assertNotIn(FAKE_PASSWORD.encode("utf-8"), blob)
+            self.assertNotIn(REFRESH_1.encode("utf-8"), blob)  # düz metin token dosyada YOK (şifreli) ve ayar dosyasında YOK
+            self.assertNotIn(ACCESS_1.encode("utf-8"), blob)
+        saved = json.loads(prefs.decode("utf-8"))
+        self.assertEqual(saved["email"], "yonetici@example.com")
+        self.assertEqual(saved["server_url"], fc.DEFAULT_SERVER_URL)
+        self.assertFalse([key for key in saved if "token" in key.lower() or "pass" in key.lower()])
+        self.assert_no_callback_errors()
+
+    def test_shutdown_keeps_a_remembered_session_and_the_next_start_signs_in_silently(self):
+        self._remember_login()
+        self.app.shutdown()  # pencere kapanışı: hatırlanan oturum sunucuda İPTAL EDİLMEZ
+        self.assertNotIn("POST /api/v1/auth/logout", self.api.paths())
+        self.app = None
+        app2 = tool.EvOtomasyonServisApp(
+            transport=self.api,
+            device_transport=self.device,
+            synchronous=True,
+            serial_backend=self.serial_backend,
+            serial_clock=self.serial_clock,
+            session_store=self.store,
+        )
+        self.addCleanup(app2.destroy)
+        app2.withdraw()
+        app2.update()
+        self.assertFalse(app2.client.is_authenticated)
+        app2._startup_restore()  # açılıştan 250 ms sonra after() ile çalışan sessiz giriş
+        self.assertTrue(app2.client.is_authenticated)
+        self.assertEqual(app2.client.user_email, "yonetici@example.com")
+        self.assertIn("hatırlanıyor", app2.lbl_session.cget("text"))
+        self.assertEqual(self.store.load().refresh_token, REFRESH_2)  # rotasyon: yeni token ANINDA depoya yazıldı
+        self.assertNotIn(REFRESH_1.encode("utf-8"), self._read_bytes(self.store.path))
+        self.assertEqual(app2._callback_errors, [])
+        self.assertEqual(app2._last_email, "yonetici@example.com")
+
+    def test_logout_forgets_the_remembered_session_and_revokes_it(self):
+        self._remember_login()
+        self.app.logout_clicked()
+        self.assertFalse(self.store.has_token())
+        self.assertEqual(self.store.identity(), ("", ""))
+        self.assertFalse(self.app.keeper.remembered)
+        self.assertEqual(self.api.paths()[-1], "POST /api/v1/auth/logout")
+        self.assertEqual(self.api.calls[-1].body, {"refresh_token": REFRESH_1})
+        self.assertNotIn("hatırlanıyor", self.app.lbl_session.cget("text"))
+
+    def test_login_without_remember_clears_the_previous_record(self):
+        self.store.save(fc.DEFAULT_SERVER_URL, "eski@example.com", "old-refresh-token-value")
+        self.assertTrue(self.store.has_token())
+        self.patch_login(self.login_request(remember=False))
+        self.app.login_clicked()
+        self.assertTrue(self.app.client.is_authenticated)
+        self.assertFalse(self.store.has_token())
+        self.assertEqual(self.store.identity(), ("", ""))
+        self.assertNotIn("hatırlanıyor", self.app.lbl_session.cget("text"))
+
+    def _restore_with_stored(self, token=REFRESH_1, url=None):
+        self.store.save(url or fc.DEFAULT_SERVER_URL, "yonetici@example.com", token)
+        self.app._startup_restore()
+        return self.app.log_text.get("1.0", "end")
+
+    def test_startup_restore_with_an_expired_token_clears_it_and_stays_logged_out(self):
+        self.api.routes["POST /api/v1/auth/refresh"] = lambda call: (401, {"success": False, "message": "x", "code": "INVALID_TOKEN"}, {})
+        log = self._restore_with_stored()
+        self.assertFalse(self.app.client.is_authenticated)
+        self.assertFalse(self.store.has_token())
+        self.assertEqual(self.store.identity()[1], "yonetici@example.com")  # e-posta ön doldurma için kalır
+        self.assertIn("Kayıtlı oturum artık geçerli değil", log)
+        self.assertEqual(self.dialogs.all_text().count("Giriş"), 0)  # sessiz: giriş penceresi/uyarı kutusu açılmadı
+        self.assert_no_callback_errors()
+
+    def test_startup_restore_network_error_keeps_the_token_for_next_time(self):
+        def offline(call):
+            raise fc.NetworkError("ag yok")
+
+        self.api.routes["POST /api/v1/auth/refresh"] = offline
+        log = self._restore_with_stored()
+        self.assertFalse(self.app.client.is_authenticated)
+        self.assertTrue(self.store.has_token())  # ağ hatası kaydı SİLMEZ
+        self.assertEqual(self.store.load().refresh_token, REFRESH_1)
+        self.assertIn("kayıt korundu", log)
+        self.assert_no_callback_errors()
+
+    def test_startup_restore_rejects_a_non_super_user_and_revokes_the_new_session(self):
+        self.api.login_role = "user"
+        log = self._restore_with_stored()
+        self.assertFalse(self.app.client.is_authenticated)
+        self.assertFalse(self.store.has_token())
+        self.assertIn("POST /api/v1/auth/logout", self.api.paths())  # açılan oturum hemen iptal edildi
+        self.assertEqual(self.api.calls[-1].body, {"refresh_token": REFRESH_2})
+        self.assertIn("Kayıtlı oturum artık geçerli değil", log)
+
+    def test_startup_restore_never_sends_a_token_to_a_different_server(self):
+        log = self._restore_with_stored(url="http://127.0.0.1:5000")
+        self.assertFalse(self.app.client.is_authenticated)
+        self.assertEqual([c for c in self.api.paths() if "auth/refresh" in c], [])  # token başka sunucuya GİTMEDİ
+        self.assertTrue(self.store.has_token())
+        self.assertIn("başka bir sunucu adresine", log)
+
+    def test_restoring_session_blocks_a_second_login_dialog_but_queues_the_action(self):
+        self.store.save(fc.DEFAULT_SERVER_URL, "yonetici@example.com", REFRESH_1)
+        ran = []
+        self.app._restoring = True  # sessiz giriş sürüyor
+        self.app.ensure_login(lambda: ran.append("islem"))
+        self.assertEqual(ran, [])
+        self.app._restoring = False
+        self.app._startup_restore()  # bitince bekleyen işlem çalışır
+        self.assertEqual(ran, ["islem"])
+        self.assertTrue(self.app.client.is_authenticated)
 
     def test_expired_session_message_and_relogin_prompt(self):
         self.patch_login()

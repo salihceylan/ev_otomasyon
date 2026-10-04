@@ -149,7 +149,7 @@ test('kimlik: anahtarsiz/yanlis anahtar 401; dogru anahtar 200; anahtarsiz yalni
     assert.deepEqual(Object.keys(restricted.json).sort(), ['device', 'fw', 'name', 'provisioned', 'wifi_connected']);
     assert.equal(restricted.json.device, UID);
     assert.equal(restricted.json.provisioned, true);
-    assert.equal(restricted.json.fw, '1.1.0');
+    assert.equal(restricted.json.fw, '1.1.1');
 
     await waitFor(() => sim.qaState().wifi.time_synced, { timeoutMs: 3000 });
     const full = (await j('GET', '/api/status')).json;

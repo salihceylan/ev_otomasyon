@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk
@@ -277,22 +278,49 @@ def load_theme_preference(path: Optional[str] = None) -> str:
     return value if value in THEMES else THEME_DARK
 
 
+_PREFERENCES_LOCK = threading.RLock()
+
+
+def read_preferences(path: Optional[str] = None) -> dict[str, Any]:
+    """Tercih dosyasının tamamı (yoksa/bozuksa boş sözlük)."""
+    with _PREFERENCES_LOCK:
+        return _read_preferences(path or preferences_path())
+
+
+def update_preferences(
+    updates: Optional[dict[str, Any]] = None,
+    *,
+    remove: tuple[str, ...] = (),
+    path: Optional[str] = None,
+) -> bool:
+    """Tercih dosyasını KİLİTLİ ve atomik günceller (okuma-değiştirme-yazma; diğer anahtarlar korunur).
+
+    Tema anahtarı ve "Beni hatırla" kimliği (sunucu adresi + e-posta) aynı dosyayı kullandığından tüm yazımlar buradan
+    geçer: eşzamanlı iki yazım birbirinin anahtarını ezmez. Başarısızlık sessizdir (False). Gizli bilgi (parola, token)
+    bu dosyaya YAZILMAZ."""
+    target = path or preferences_path()
+    with _PREFERENCES_LOCK:
+        data = _read_preferences(target)
+        for key in remove:
+            data.pop(key, None)
+        if updates:
+            data.update(updates)
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            tmp_path = target + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, target)
+            return True
+        except OSError:
+            return False
+
+
 def save_theme_preference(name: str, path: Optional[str] = None) -> bool:
     """Tercihi JSON dosyasına atomik yazar (diğer anahtarlar korunur). Başarısızlık sessizdir (False)."""
     if name not in THEMES:
         return False
-    target = path or preferences_path()
-    data = _read_preferences(target)
-    data[PREFERENCE_KEY] = name
-    try:
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        tmp_path = target + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, target)
-        return True
-    except OSError:
-        return False
+    return update_preferences({PREFERENCE_KEY: name}, path=path)
 
 
 # ---------------------------------------------------------------------------------------------------------------

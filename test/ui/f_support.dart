@@ -620,6 +620,10 @@ class ServiceFakeCloud extends FakeCloudApi {
   /// 300 sn'yi yazarken sihirbazdan çıkış denemesi). Pano tarafındaki etki (`onRuntime`) kapı açılınca uygulanır.
   Completer<void>? updateEndpointGate;
 
+  /// Her `updateEndpoint` çağrısı BAŞTAN bir hata tüketir (kuyruk boşalınca çağrılar normal çalışır; kalıcı
+  /// [updateEndpointError] ayrıdır): "ilk istek 409 CONFLICT, ikincisi başarılı" gibi sırayla değişen sunucu yanıtları.
+  final List<Object> updateEndpointErrorQueue = <Object>[];
+
   /// `devices` yanıtı bu süre (sanal saat) sonra gelir (varsayılan sıfır: hemen).
   Duration devicesDelay = Duration.zero;
 
@@ -854,6 +858,7 @@ class ServiceFakeCloud extends FakeCloudApi {
     homeIdsUsed.add(homeId);
     final gate = updateEndpointGate;
     if (gate != null) await gate.future;
+    if (updateEndpointErrorQueue.isNotEmpty) throw updateEndpointErrorQueue.removeAt(0);
     final error = updateEndpointError;
     if (error != null) throw error;
     if (shutterDurationSec != null && (shutterDurationSec < 1 || shutterDurationSec > 300)) {

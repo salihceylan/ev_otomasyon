@@ -69,3 +69,32 @@ Yalnız **aynı cihaza** ait satırlar değerlendirilir (`applyStatusToEndpoints
 * `test/services/endpoint_layout_mismatch_test.dart` (32 test): denetleyici / imza / `sameEndpointList` birim testleri (saf).
 * `test/services/state_layout_refresh_test.dart` (38 test): `AutomationState` — sahte saat + sahte bulut API + sahte MQTT; iptal noktaları zamanlayıcının kendisinin kalktığını denetler; `DeviceSections` ile arayüz kartlarının (panjur kartı oluşur, lamba kartları kaybolur) geçişi dahil.
 * Doğrulama: `flutter analyze` 0 sorun; tam `flutter test` +3330 (taban +3260 + 70 yeni), ~272 atlanan, hepsi yeşil. Yeni testler ~30 kasıtlı kod bozma (mutasyon) ile sınandı: her kural/iptal noktası/sınır bozulunca en az bir test kırıldı.
+
+## 8. Sunucu inceleme düzeltmelerinin istemci karşılığı (WP-SRVERR)
+
+WP-L incelemesinde (CONTRACTS §2.4b) sunucuya iki yeni yanıt eklendi. REST biçimi değişmedi; istemci karşılıkları:
+
+| Sunucu yanıtı | İstemci davranışı | Yer |
+|---|---|---|
+| `PUT /homes/:id/scheduled-rules/:ruleId {enabled:true}`: kapalı kural yeniden açılırken kanal tipi doğrulanır; uyumsuzsa `400 VALIDATION` + mesaj (ör. "Kanal 5 bir panjura ayrılmış; röle kuralı yerine panjur kuralı oluşturun") | Mesaj **aynen** gösterilir (`ApiException.message` ← sunucu `message`; `showFriendlyError` iletir). Genel "Kural güncellenemedi…" yalnız `ApiException` OLMAYAN bilinmeyen hatada çıkar. Anahtar iyimser çevrilmez: görünen değer `AutomationState.scheduledRules`'tan (sunucu yanıtından) çizilir, hatada liste değişmediği için anahtar KAPALI kalır ve yeniden denenebilir. Kural diyaloğunda (kaydet; düzenlemede `action` hep gönderildiği için sunucu yeniden doğrular) mesaj `text_rule_error`'da kalır, girdi korunur. | `scheduled_rules_page.dart` `_toggle`, `rule_dialog.dart` `_save` (kod DEĞİŞMEDİ; test eklendi) |
+| `PUT /homes/:id/endpoints/:id`: eşitleme satırı bu arada değiştirdiyse `409 CONFLICT` "Kanal tipi değişti; listeyi yenileyin." (panjur süresi yazımında sunucu `set_runtime`'ı yayınlar ama çift artık panjur değilse veritabanına yazmaz; light↔plug tip yazımı) | `ApiException.isConflict` (`code == 'CONFLICT'`; `DEVICE_OFFLINE` ve öteki 409 kodları HARİÇ). Servis sihirbazı 8. adım (`ShutterLogic._putRuntime`; süre kaydı, ölçüm hazırlığı ve geri yükleme): uç nokta listesi (`_endpointIds`, `_endpointFor`'un tek kaynağı) yeniden okunur ve PUT **bir kez** yinelenir; yine 409 → `SetupProblem(conflict, "Kanal yerleşimi değişti", why: sunucu mesajı, todo: Listeyi yenileyip "Tekrar dene"ye basın.)`. "Tekrar dene" aynı yolu baştan yürütür (yeniden okur, yeniden dener). | `api_exception.dart`, `shutter_logic.dart` |
+
+**Bilgi amaçlı sunucu değişiklikleri (istemci kodu gerekmedi):**
+
+* Zamanlayıcı röle kuralını panjur kanalında yayınlamaz (`scheduled_rule_runs.status = 'skipped_invalid'`); istemci kural çalışma geçmişini göstermez.
+* Lamba/priz ↔ darbe değişimi de röle kurallarını kapatır (`enabled = false`). Kural listesi `ScheduledRulesPage` HER açılışta (`initState`, ilk kareden sonra `fetchScheduledRules`) ve ayarlar özet kartı (`ScheduledRulesCard`) açılırken sunucudan okunur; çekip yenile ve ↻ da okur. Bu yüzden `_watchEndpointLayout` başarılı yenilemesi sonrası "kural listesi bayat" işareti **eklenmedi**: bayatlık yalnız kural sayfası/ayarlar AÇIKKEN yerleşim değişirse oluşur ve ↻ / çekip yenile listeyi getirir.
+
+**Sınırlar / doğrulanmadı:**
+
+* Gerçek sunucu ve panoda denenmedi; sunucu yanıtları CONTRACTS §2.4b ve servis kaynağından okunarak sahte API ile simüle edildi.
+* Yenileme + tek yeniden deneme yalnız `409 CONFLICT` içindir. Silinmiş kimlik (`404`) ve `_endpointFor`'un kimliği hiç bulamadığı durum ("Sunucuda bu panjur için kayıt yok") listeyi yenilemez; bu yol eskisi gibidir.
+* `AutomationState.updateEndpoint` (state sarmalayıcısı) uygulamada çağrılmıyor (yalnız testler): 409 için ek mantık eklenmedi; çağıran `ApiException.isConflict` ile ayırt edebilir.
+* İkinci istekte de 409 gelirse (eşitleme hâlâ sürüyor) üçüncü deneme otomatik yapılmaz; kullanıcı "Tekrar dene" der.
+
+**Testler (27 yeni):**
+
+* `test/services/server_error_codes_test.dart` (6): gerçek `EvCloudApiService` + sahte HTTP; 400 VALIDATION mesajı ve 409 CONFLICT kodu / `isConflict` çözümlemesi (DEVICE_OFFLINE ve kodsuz 409 hariç).
+* `test/ui/server_error_handling_test.dart` (8): kural sayfası ve diyalog; mesaj görünür, anahtar kapalı kalır (widget + anlamsal durum), başarı yolu, bilinmeyen hatada genel metin.
+* `test/ui/f_setup_endpoint_conflict_test.dart` (13): sihirbaz 8. adım; 409 → yenile + yeniden dene → başarı (yeni kimlikle), iki kez 409 → `SetupProblem` (+ arayüz hata kutusu, "Tekrar dene"), çakışma dışı hatalarda yenileme/yeniden deneme yok, ölçüm hazırlığı yolu. Destek: `ServiceFakeCloud.updateEndpointErrorQueue` (`test/ui/f_support.dart`).
+* Yeni testler kasıtlı kod bozma ile sınandı: genel metne düşme, geri alınmayan iyimser çevirme ve aşırı geniş `isConflict` (`statusCode == 409`) bozulunca ilgili testler kırıldı; yeniden deneme/yenileme kaldırılınca (uygulamadan önce) sihirbaz testleri kırmızıydı.
+* Doğrulama: `flutter analyze` 0 sorun; tam `flutter test --concurrency=4` +4048, ~493 atlanan, hepsi yeşil (27 yeni test dahil; mevcut test dosyalarında yalnız `f_support.dart`'a eklemeli bir kanca konuldu, hiçbir mevcut test değişmedi; taban = 4048 − 27 = 4021 olarak türetildi, ayrıca ölçülmedi).

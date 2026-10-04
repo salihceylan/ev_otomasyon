@@ -1,7 +1,9 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../../models/automation_models.dart';
+import '../../../../models/cloud_models.dart';
 import '../../../../models/json_utils.dart';
+import '../../../../services/api_exception.dart';
 import '../setup_context.dart';
 import '../setup_problem.dart';
 import '../setup_steps.dart';
@@ -199,12 +201,7 @@ class ShutterLogic extends SetupLogic {
           ctx.deviceCall((api) => api.fetchStatus()),
           ctx.cloud.fetchEndpoints(t.homeId),
         );
-        final ids = <int, String>{};
-        for (final e in endpoints) {
-          if (!e.isShutter) continue;
-          if (e.isPrimaryShutterRow || !ids.containsKey(e.pair)) ids[e.pair] = e.id;
-        }
-        _endpointIds = ids;
+        _endpointIds = _idsByPair(endpoints);
         final existing = <int, ShutterCheck>{for (final s in _shutters) s.pair: s};
         _shutters = <ShutterCheck>[
           for (final item in status.shutters)
@@ -221,6 +218,16 @@ class ShutterLogic extends SetupLogic {
           }
         }
       });
+
+  /// Panjur numarası → sunucudaki uç nokta kimliği (panjurun YUKARI/birincil satırı; yoksa ilk görülen satır).
+  static Map<int, String> _idsByPair(List<EndpointModel> endpoints) {
+    final ids = <int, String>{};
+    for (final e in endpoints) {
+      if (!e.isShutter) continue;
+      if (e.isPrimaryShutterRow || !ids.containsKey(e.pair)) ids[e.pair] = e.id;
+    }
+    return ids;
+  }
 
   ShutterCheck _syncLive(ShutterCheck check, ShutterItem item) =>
       check.copyWith(moving: item.isMoving, direction: item.direction, pos: item.pos);
@@ -451,16 +458,42 @@ class ShutterLogic extends SetupLogic {
     if (s != null) _put(s.copyWith(clearPrevious: true));
   }
 
+  /// Süreyi sunucuya (`PUT /endpoints/:id`) yazar. Sunucu `409 CONFLICT` ("Kanal tipi değişti; listeyi yenileyin.")
+  /// derse pano yerleşimi sunucuda bu arada eşitlenmiş demektir (CONTRACTS §2.4b; sunucu `set_runtime`'ı yayınlar ama
+  /// çift artık panjur değilse veritabanına yazmaz): uç nokta listesi yeniden okunur (`_endpointFor` bu listeden
+  /// beslenir) ve yazım BİR KEZ yinelenir. Yine 409 gelirse anlaşılır bir sorun bildirilir; "Tekrar dene" aynı yolu
+  /// baştan yürütür (yeniden okur, yeniden dener). Çakışma dışındaki hatalar (çevrimdışı pano `409 DEVICE_OFFLINE`,
+  /// 5xx, ağ ...) olduğu gibi yükselir; yenileme/yeniden deneme yapılmaz.
+  Future<void> _putRuntime(String homeId, int pair, int seconds) async {
+    try {
+      await ctx.cloud.updateEndpoint(homeId: homeId, endpointId: _endpointFor(pair), shutterDurationSec: seconds);
+      return;
+    } on ApiException catch (e) {
+      if (!e.isConflict) rethrow;
+    }
+    // Çakışma: sunucudaki liste sihirbazın okuduğundan ilerlemiş. Yenile, sonra TEK yeniden deneme.
+    ctx.ensureActive();
+    _endpointIds = _idsByPair(await ctx.cloud.fetchEndpoints(homeId));
+    ctx.ensureActive();
+    try {
+      await ctx.cloud.updateEndpoint(homeId: homeId, endpointId: _endpointFor(pair), shutterDurationSec: seconds);
+    } on ApiException catch (e) {
+      if (!e.isConflict) rethrow;
+      throw SetupProblemException(SetupProblem(
+        kind: SetupProblemKind.conflict,
+        title: 'Kanal yerleşimi değişti',
+        why: e.message,
+        todo: 'Listeyi yenileyip "Tekrar dene"ye basın.',
+      ));
+    }
+  }
+
   Future<void> _writeRuntime(int pair, int seconds) async {
     final t = ctx.requireTarget;
     await _ensureStopped(pair);
     // Durdurma beklenirken sayfa kapanmış / oturum bitmiş olabilir: bu durumda sunucuya yeni süre yazılmaz.
     ctx.ensureActive();
-    await ctx.cloud.updateEndpoint(
-      homeId: t.homeId,
-      endpointId: _endpointFor(pair),
-      shutterDurationSec: seconds,
-    );
+    await _putRuntime(t.homeId, pair, seconds);
     final applied = await _awaitRuntime(pair, seconds);
     if (!applied) {
       throw SetupProblemException(SetupProblem(

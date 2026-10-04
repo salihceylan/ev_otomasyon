@@ -55,7 +55,7 @@ const DEFAULTS = {
   apPass: '',
   timeScale: 1,
   deviceName: null,
-  fw: '1.1.0',
+  fw: '1.1.1',
   homeWifi: { ssid: HOME_WIFI_SSID, pass: '' },
   wifiConnected: false,
   stateFile: null,

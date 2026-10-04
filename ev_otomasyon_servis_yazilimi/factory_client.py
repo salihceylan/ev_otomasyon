@@ -680,6 +680,9 @@ class ServerClient:
         self._api_key: Optional[str] = None
         self._user: dict[str, Any] = {}
         self.must_change_password = False
+        # "Beni hatırla": sunucu refresh token'ı DÖNDÜRDÜĞÜNDE (tek kullanımlık) yenisini alan kanca; hatırlanan oturum
+        # yoksa None. Kanca hata verirse oturum bozulmaz (bkz. _notify_rotation).
+        self.session_listener: Optional[Callable[[str], None]] = None
 
     # ---- durum -------------------------------------------------------------
     @property
@@ -798,6 +801,76 @@ class ServerClient:
         """Yerel oturumu siler; sunucudaki refresh ailesini en iyi çabayla iptal eder."""
         self.revoke_refresh_token(self.end_session_local())
 
+    # ---- hatırlanan oturum ("Beni hatırla"): geriye uyumlu eklemeler ---------
+    def current_refresh_token(self) -> Optional[str]:
+        """Yürürlükteki refresh token (yalnızca 'Beni hatırla' deposuna yazmak için; gösterilmez, loglanmaz)."""
+        return self._refresh_token
+
+    def _notify_rotation(self, refresh_token: str) -> None:
+        listener = self.session_listener
+        if listener is None:
+            return
+        try:
+            listener(refresh_token)
+        except Exception:  # noqa: BLE001 - depo hatası oturumu bozmasın
+            pass
+
+    def restore_session(self, refresh_token: str) -> dict[str, Any]:
+        """Kayıtlı refresh token ile SESSİZ giriş (parola gerekmez, saklanmaz).
+
+        1) ``POST /auth/refresh``: yeni access + refresh (rotasyon). Yeni refresh token hemen ``session_listener``'a
+           verilir (sunucu eskisini kullanılmış saydığı için depo GÜNCELLENMELİDİR).
+        2) ``GET /auth/me``: rol denetimi; ``super_user`` değilse yeni oturum sunucuda iptal edilir ve
+           ``ApiError(403, FORBIDDEN)`` yükselir (login ile aynı kural).
+
+        Hata: refresh 400/401/403 veya /me 401/403 -> ``SessionExpiredError`` (çağıran kayıtlı tokeni SİLER); ağ/5xx
+        hataları olduğu gibi yükselir (token silinmez: sonraki açılışta yeniden denenir)."""
+        token = (refresh_token or "").strip()
+        if not token:
+            raise SessionExpiredError("Kayıtlı oturum yok. Lütfen giriş yapın.", status=401, code="INVALID_TOKEN")
+        try:
+            data = self._call("POST", "/auth/refresh", body={"refresh_token": token}, auth=False)
+        except ApiError as exc:
+            if exc.status in (400, 401, 403):
+                raise SessionExpiredError(
+                    "Kayıtlı oturum geçersiz veya süresi dolmuş. Lütfen yeniden giriş yapın.", status=401, code="INVALID_TOKEN"
+                ) from None
+            raise
+        access, new_refresh = data.get("access_token"), data.get("refresh_token")
+        if not isinstance(access, str) or not access or not isinstance(new_refresh, str) or not new_refresh:
+            raise SessionExpiredError("Oturum yenilenemedi. Lütfen yeniden giriş yapın.", status=401, code="INVALID_TOKEN")
+        self._clear_session()
+        with self._lock:
+            self._access_token, self._refresh_token = access, new_refresh
+            self.must_change_password = bool(data.get("must_change_password"))
+        self._track(access, new_refresh)
+        self._notify_rotation(new_refresh)  # sunucu eski token'ı kullanılmış saydı: yenisi hemen depoya
+        try:
+            profile = self._call("GET", "/auth/me")
+        except ApiError as exc:
+            self._clear_session()
+            if exc.status in (401, 403):
+                raise SessionExpiredError("Kayıtlı oturum geçersiz. Lütfen yeniden giriş yapın.", status=401, code="INVALID_TOKEN") from None
+            raise
+        except FactoryError:
+            self._clear_session()  # ağ hatası: yeni token depoda; bir sonraki denemede kullanılır
+            raise
+        user = profile.get("user") if isinstance(profile.get("user"), dict) else profile
+        role = str(user.get("role") or "")
+        if role != "super_user":
+            self._clear_session()
+            self._revoke_quietly(new_refresh)  # yetkisiz hesap: açılan oturum hemen iptal edilir, token tutulmaz
+            raise ApiError(
+                "Bu araç yalnızca süper kullanıcı hesabıyla çalışır "
+                f"(bu hesabın rolü: {role or 'bilinmiyor'}).",
+                status=403,
+                code="FORBIDDEN",
+            )
+        with self._lock:
+            self._user = {"email": str(user.get("email") or ""), "role": role, "name": str(user.get("full_name") or "")}
+            self.must_change_password = self.must_change_password or bool(user.get("must_change_password"))
+        return dict(self._user)
+
     # ---- istek çekirdeği ---------------------------------------------------
     def _url(self, path: str, query: Optional[Mapping[str, Any]] = None) -> str:
         url = f"{self._base_url}{API_PREFIX}{path}"
@@ -883,6 +956,7 @@ class ServerClient:
                 self._scrubber.discard(self._access_token, self._refresh_token)
             self._access_token, self._refresh_token = access, new_refresh
             self._track(access, new_refresh)
+            self._notify_rotation(new_refresh)  # hatırlanan oturumda yeni refresh token depoya yazılır (rotasyon)
 
     def request(
         self,
