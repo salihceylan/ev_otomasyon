@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../motion/staggered_entrance.dart';
 import '../theme/app_theme.dart';
 import '../theme/feature_accent.dart';
 import '../theme/tokens.dart';
@@ -173,11 +174,15 @@ class NeonAppBar extends StatelessWidget implements PreferredSizeWidget {
           children: [
             if (icon != null) ...[
               // 44 dp'lik orb ölçekle ~32 dp'ye indirilir: büyük orb'larla AYNI gövde/parıltı (özel boya yok).
-              ExcludeSemantics(
-                child: SizedBox.square(
-                  dimension: orbDiameter,
-                  child: FittedBox(
-                    child: OrbIconBadge(icon: icon!, family: orbFamily, size: OrbSize.sm),
+              // Sayfa açılışında orb tek sefer belirir (başlık metni animasyonsuz; `MotionMode.off`'ta anında tam görünür).
+              StaggeredEntrance(
+                index: 0,
+                child: ExcludeSemantics(
+                  child: SizedBox.square(
+                    dimension: orbDiameter,
+                    child: FittedBox(
+                      child: OrbIconBadge(icon: icon!, family: orbFamily, size: OrbSize.sm),
+                    ),
                   ),
                 ),
               ),

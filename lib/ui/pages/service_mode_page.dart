@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
 import '../common/confirm_dialogs.dart';
-import '../motion/staggered_entrance.dart';
+import '../motion/motion.dart';
 import '../theme/feature_accent.dart';
 import '../theme/tokens.dart';
 import '../widgets/neon_app_bar.dart';
@@ -159,7 +159,13 @@ class _ServiceModePageState extends State<ServiceModePage> {
         feature: AppFeature.commissioning,
         icon: Icons.engineering_rounded,
       ),
-      body: SafeArea(child: _body(context, state, view, access)),
+      // Oturum bitti → giriş → panel geçişi: tek durum çocuğu (eski+yeni görünüm birlikte ağaçta olmaz).
+      body: SafeArea(
+        child: StateSwitcher(
+          stateKey: !view.authenticated && view.hasNotice ? 'expired' : (access == null ? 'login' : 'panel'),
+          child: SizedBox.expand(child: _body(context, state, view, access)),
+        ),
+      ),
     );
   }
 
@@ -352,16 +358,22 @@ class _Panel extends StatelessWidget {
             ),
           ),
           StaggeredEntrance(index: 1, child: WifiSetupCard(deviceApiFactory: deviceApiFactory)),
-          SetupResumeList(
-            key: ValueKey<int>(reload),
-            access: access,
-            store: store,
-            onOpen: (record) => onOpenWizard(resume: record),
+          StaggeredEntrance(
+            index: 2,
+            child: SetupResumeList(
+              key: ValueKey<int>(reload),
+              access: access,
+              store: store,
+              onOpen: (record) => onOpenWizard(resume: record),
+            ),
           ),
-          ExistingDevicesList(
-            onOpen: (target, step) => onOpenWizard(existing: target, startStep: step),
+          StaggeredEntrance(
+            index: 3,
+            child: ExistingDevicesList(
+              onOpen: (target, step) => onOpenWizard(existing: target, startStep: step),
+            ),
           ),
-          ServiceToolCards(scanner: scanner),
+          StaggeredEntrance(index: 4, child: ServiceToolCards(scanner: scanner)),
           if (canEmergencyReset) ...[
             const SetupSectionTitle('Acil durum'),
             const SizedBox(height: 8),

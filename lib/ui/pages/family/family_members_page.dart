@@ -10,7 +10,7 @@ import '../../../utils/friendly_error.dart';
 import '../../common/confirm_dialogs.dart' show showSimpleConfirm;
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
-import '../../motion/skeleton.dart';
+import '../../motion/motion.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/feature_accent.dart';
 import '../../theme/tokens.dart';
@@ -120,7 +120,8 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
     final confirmed = await showSimpleConfirm(
       context,
       title: isGuest ? 'Misafir Yetkisini İptal Et' : 'Üyeyi Evden Çıkar',
-      message: '"$name" kullanıcısının bu ev üzerindeki tüm erişim ve kontrol yetkisi iptal edilecek ve açık '
+      message:
+          '"$name" kullanıcısının bu ev üzerindeki tüm erişim ve kontrol yetkisi iptal edilecek ve açık '
           'bağlantıları kesilecek. Devam etmek istiyor musunuz?',
       confirmLabel: 'Yetkiyi İptal Et',
       cancelLabel: 'Vazgeç',
@@ -146,7 +147,8 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
         if (!mounted) return;
         if (!refreshed) {
           color = AppTheme.accentAmber;
-          message = 'Yetki iptal isteği gönderildi ancak üye listesi yenilenemedi; sonuç doğrulanamadı. '
+          message =
+              'Yetki iptal isteği gönderildi ancak üye listesi yenilenemedi; sonuç doğrulanamadı. '
               'Listeyi aşağı çekip yenileyerek kontrol edin.';
         } else if (_members.any((m) => m.userId == member.userId)) {
           message = 'İşlem tamamlandı ancak "$name" listede görünmeye devam ediyor. Listeyi yenileyip tekrar deneyin.';
@@ -226,67 +228,94 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                   if (_isLoading)
                     const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                   else
-                    Text(
-                      '${_members.length} Kişi',
+                    AnimatedCount(
+                      value: _members.length,
+                      format: (v) => '$v Kişi',
                       style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context)),
                     ),
                 ],
               ),
               const SizedBox(height: 12),
-              if (!view.hasHome)
-                const InlineMessage.warning('Aktif bir daire seçili değil.', key: Key('members_no_home'))
-              else if (_errorMessage != null) ...[
-                InlineMessage.error(
-                  _errorMessage!,
-                  key: const Key('members_error'),
-                  // Tek kurtarma eylemi düz metin bağlantısı DEĞİL, sayfanın diğer eylemleri gibi çerçeveli hap düğme
-                  // (rose = hata ailesi, yenile simgesi): mesaj metniyle aynı sol kenardan başlar (TextButton'ın 12 dp
-                  // iç boşluğu yüzünden 11.5 dp hizasızdı), hedef ≥ 48 dp.
-                  trailing: OutlinedButton.icon(
-                    key: const Key('btn_members_retry'),
-                    onPressed: _isLoading ? null : _loadMembers,
-                    icon: Icon(Icons.refresh_rounded, size: accentIconSize(context)),
-                    label: const Text('Tekrar Dene', style: TextStyle(fontWeight: FontWeight.bold)),
-                    style: accentOutlinedButtonStyle(context, AppFamilies.rose, minimumSize: const Size(0, AppTouch.minTarget)),
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ] else if (!_isLoading && _members.isEmpty)
-                Container(
-                  key: const Key('members_empty'),
-                  padding: const EdgeInsets.all(28),
-                  alignment: Alignment.center,
-                  child: Column(
-                    children: [
-                      // Boş durum orb'u devre dışı gri (slate) değil, özellik renginde (aile = sky) ve yumuşak parıltılıdır
-                      // (üstteki NeonAppBar orb'uyla aynı aile; gri orb sayfanın en "ölü" öğesiydi).
-                      OrbIconBadge(
-                        icon: Icons.group_rounded,
-                        family: AppFeature.family.accentFamily,
-                        size: OrbSize.lg,
-                        glow: true,
+              // Durum geçişi (yükleme → içerik → boş/hata): ağaçta her an TEK durum çocuğu (eski+yeni metin birlikte yok).
+              StateSwitcher(
+                stateKey: _listStateKey(view),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (!view.hasHome)
+                      const InlineMessage.warning('Aktif bir daire seçili değil.', key: Key('members_no_home'))
+                    else if (_errorMessage != null) ...[
+                      InlineMessage.error(
+                        _errorMessage!,
+                        key: const Key('members_error'),
+                        // Tek kurtarma eylemi düz metin bağlantısı DEĞİL, sayfanın diğer eylemleri gibi çerçeveli hap düğme
+                        // (rose = hata ailesi, yenile simgesi): mesaj metniyle aynı sol kenardan başlar (TextButton'ın 12 dp
+                        // iç boşluğu yüzünden 11.5 dp hizasızdı), hedef ≥ 48 dp.
+                        trailing: OutlinedButton.icon(
+                          key: const Key('btn_members_retry'),
+                          onPressed: _isLoading ? null : _loadMembers,
+                          icon: Icon(Icons.refresh_rounded, size: accentIconSize(context)),
+                          label: const Text('Tekrar Dene', style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: accentOutlinedButtonStyle(
+                            context,
+                            AppFamilies.rose,
+                            minimumSize: const Size(0, AppTouch.minTarget),
+                          ),
+                        ),
                       ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Henüz kayıtlı başka bir üye bulunamadı',
-                        style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13),
+                      const SizedBox(height: 12),
+                    ] else if (!_isLoading && _members.isEmpty)
+                      Container(
+                        key: const Key('members_empty'),
+                        padding: const EdgeInsets.all(28),
+                        alignment: Alignment.center,
+                        child: Column(
+                          children: [
+                            // Boş durum orb'u devre dışı gri (slate) değil, özellik renginde (aile = sky) ve yumuşak parıltılıdır
+                            // (üstteki NeonAppBar orb'uyla aynı aile; gri orb sayfanın en "ölü" öğesiydi).
+                            OrbIconBadge(
+                              icon: Icons.group_rounded,
+                              family: AppFeature.family.accentFamily,
+                              size: OrbSize.lg,
+                              glow: true,
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              'Henüz kayıtlı başka bir üye bulunamadı',
+                              style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13),
+                            ),
+                          ],
+                        ),
                       ),
+                    if (_isLoading && _members.isEmpty && _errorMessage == null && view.hasHome) ...[
+                      // Gerçek üye kartıyla aynı iç boşluk (14) ve satır sayısı (3: ad, iletişim, rozet): ~92 dp (gerçek kartlar
+                      // 96-136 dp); eskiden 74 dp idi ve veri gelince liste kart başına ≥ 22 dp zıplıyordu.
+                      const SkeletonCard(lines: 3, padding: EdgeInsets.all(14)),
+                      const SizedBox(height: 12),
+                      const SkeletonCard(lines: 3, padding: EdgeInsets.all(14)),
                     ],
-                  ),
+                    for (final (i, m) in _members.indexed)
+                      StaggeredEntrance(
+                        key: ValueKey<String>('enter_member_${m.userId}'),
+                        index: i,
+                        child: _buildMemberCard(context, m, view, now),
+                      ),
+                  ],
                 ),
-              if (_isLoading && _members.isEmpty && _errorMessage == null && view.hasHome) ...[
-                // Gerçek üye kartıyla aynı iç boşluk (14) ve satır sayısı (3: ad, iletişim, rozet): ~92 dp (gerçek kartlar
-                // 96-136 dp); eskiden 74 dp idi ve veri gelince liste kart başına ≥ 22 dp zıplıyordu.
-                const SkeletonCard(lines: 3, padding: EdgeInsets.all(14)),
-                const SizedBox(height: 12),
-                const SkeletonCard(lines: 3, padding: EdgeInsets.all(14)),
-              ],
-              for (final m in _members) _buildMemberCard(context, m, view, now),
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// [StateSwitcher] anahtarı: build'deki dallarla aynı öncelik (daire yok → hata → yükleniyor → boş → içerik).
+  String _listStateKey(_MembersView view) {
+    if (!view.hasHome) return 'no_home';
+    if (_errorMessage != null) return 'error';
+    if (_members.isEmpty) return _isLoading ? 'loading' : 'empty';
+    return 'content';
   }
 
   Widget _buildHeaderCard(BuildContext context, _MembersView view) {
@@ -348,7 +377,11 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                 ),
                 // Metin, simge ve çerçeve aynı aileden ve OKUNUR tonda (açık temada ham amber ≈2:1 idi); şekil temanın
                 // hap (stadium) biçimi, yükseklik birincil düğmeyle aynı (52).
-                style: accentOutlinedButtonStyle(context, AppFeature.ownershipTransfer.accentFamily, minimumSize: const Size.fromHeight(52)),
+                style: accentOutlinedButtonStyle(
+                  context,
+                  AppFeature.ownershipTransfer.accentFamily,
+                  minimumSize: const Size.fromHeight(52),
+                ),
               ),
             ),
           ],

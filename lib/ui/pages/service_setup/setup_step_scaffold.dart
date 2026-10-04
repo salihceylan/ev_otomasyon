@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../motion/motion_scope.dart';
+import '../../motion/staggered_entrance.dart';
 import '../../theme/feature_accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/orb/orb.dart';
@@ -192,13 +193,19 @@ class _SetupStepScaffoldState extends State<SetupStepScaffold> {
       children: [
         if (widget.banner != null) widget.banner!,
         _buildInstructions(context),
+        // Sorun kutusu BELİRİRKEN tek sefer kademeli girer (`MotionMode.off`'ta anında); kaybolurken anında kalkar.
+        // Sorun değişse de (A -> B) aynı giriş öğesi kalır: yeniden oynamaz. Anahtar kutunun kendisinde (kaydırma hedefi).
         if (widget.problem != null)
-          SetupProblemBox(
-            key: _problemKey,
-            problem: widget.problem!,
-            onRetry: widget.onRetry,
-            onFixStep: widget.onFixStep,
-            retrySecondary: widget.retrySecondary,
+          StaggeredEntrance(
+            index: 0,
+            offset: 8,
+            child: SetupProblemBox(
+              key: _problemKey,
+              problem: widget.problem!,
+              onRetry: widget.onRetry,
+              onFixStep: widget.onFixStep,
+              retrySecondary: widget.retrySecondary,
+            ),
           ),
         widget.body,
       ],

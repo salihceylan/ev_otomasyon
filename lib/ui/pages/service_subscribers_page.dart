@@ -6,7 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
-import '../motion/skeleton.dart';
+import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../theme/feature_accent.dart';
 import '../theme/tokens.dart';
@@ -49,6 +49,8 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
   final TextEditingController _search = TextEditingController();
   final ScrollController _scroll = ScrollController();
 
+  /// Kartların tek seferlik giriş kümesi ([_EnterOnce]).
+  final Set<String> _entered = <String>{};
   List<Subscriber> _items = const <Subscriber>[];
   int? _total;
   bool _loading = false;
@@ -226,7 +228,9 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
           family: AppFeature.subscribers.accentFamily,
           size: OrbSize.xl,
           glow: true,
-          title: _query.isNotEmpty ? 'Aramanıza uygun daire veya pano bulunamadı' : 'Henüz kayıtlı bir daire veya pano bulunmuyor',
+          title: _query.isNotEmpty
+              ? 'Aramanıza uygun daire veya pano bulunamadı'
+              : 'Henüz kayıtlı bir daire veya pano bulunmuyor',
           message: _query.isNotEmpty
               ? 'Lütfen arama teriminizi kontrol edin.'
               : 'Devreye aldığınız cihazlar ve bağlı daireler burada listelenir.',
@@ -245,12 +249,20 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
       Padding(padding: const EdgeInsets.only(top: 12), child: _stats(context)),
       Padding(padding: const EdgeInsets.only(top: 12, bottom: 8), child: _searchField(context)),
       if (cards && _error != null)
-        ServiceStaleBanner(
-          key: const Key('subscribers_stale'),
-          message: 'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
-          onRetry: () => _load(reset: true),
+        _EnterOnce(
+          id: '#stale',
+          index: 0,
+          offset: 8,
+          entered: _entered,
+          child: ServiceStaleBanner(
+            key: const Key('subscribers_stale'),
+            message: 'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
+            onRetry: () => _load(reset: true),
+          ),
         ),
     ];
+    // Durum gövdesi varken öğeler boştur (bkz. [_stateBody] dalları): hata → boş/yükleniyor ayrımı.
+    final stateKey = _error != null ? 'error' : ((_loading || !_loaded) ? 'loading' : 'empty');
     return ListView.builder(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
@@ -259,8 +271,22 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
       itemBuilder: (context, index) {
         if (index < header.length) return header[index];
         final i = index - header.length;
-        if (stateBody != null) return stateBody;
-        if (i < _items.length) return _card(context, _items[i]);
+        if (stateBody != null) {
+          return StateSwitcher(
+            stateKey: stateKey,
+            child: SizedBox(width: double.infinity, child: stateBody),
+          );
+        }
+        if (i < _items.length) {
+          final s = _items[i];
+          return _EnterOnce(
+            key: ValueKey<String>('enter_sub_${s.homeId}'),
+            id: s.homeId,
+            index: i,
+            entered: _entered,
+            child: _card(context, s),
+          );
+        }
         return _footer(context);
       },
     );
@@ -277,7 +303,8 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
     final assigned = _items.where((s) => s.hasOwner).length;
     final pending = _items.length - assigned;
     final partial = _hasMore;
-    String Function(int) fmt(bool plus) => (int n) => plus ? '$n+' : '$n';
+    String Function(int) fmt(bool plus) =>
+        (int n) => plus ? '$n+' : '$n';
     return ServiceStatStrip(
       tiles: [
         ServiceStatTile(
@@ -403,7 +430,11 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
               if (!large) ...[const SizedBox(width: 8), pill],
             ],
           ),
-          if (large) Padding(padding: const EdgeInsets.only(top: 8), child: Wrap(children: [pill])),
+          if (large)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(children: [pill]),
+            ),
           const SizedBox(height: 12),
           Divider(height: 1, color: AppTheme.getCardBorder(context)),
           const SizedBox(height: 4),
@@ -421,9 +452,15 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Pano UUID', style: TextStyle(fontSize: AppText.badge, fontWeight: FontWeight.w500, color: muted)),
+                      Text(
+                        'Pano UUID',
+                        style: TextStyle(fontSize: AppText.badge, fontWeight: FontWeight.w500, color: muted),
+                      ),
                       if (s.deviceUuids.isEmpty)
-                        Text('Pano tanımsız', style: TextStyle(fontSize: AppText.caption, color: muted))
+                        Text(
+                          'Pano tanımsız',
+                          style: TextStyle(fontSize: AppText.caption, color: muted),
+                        )
                       else
                         for (final uid in s.deviceUuids)
                           // Kimlik tek satır: tireden bölünüp iki satıra yayılmaz, sığmazsa küçülür.
@@ -438,7 +475,10 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
                             ),
                           ),
                       if (s.hiddenDeviceCount > 0)
-                        Text('+${s.hiddenDeviceCount} pano daha', style: TextStyle(fontSize: AppText.caption, color: muted)),
+                        Text(
+                          '+${s.hiddenDeviceCount} pano daha',
+                          style: TextStyle(fontSize: AppText.caption, color: muted),
+                        ),
                       if (s.deviceCount > 0)
                         Text(
                           '${s.deviceCount} pano • ${s.onlineCount} çevrimiçi',
@@ -539,4 +579,35 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
     final color = commissioned ? AppTheme.accentGreen : AppTheme.accentAmber;
     return ServiceStatusPill(label: commissioned ? 'Devrede' : 'Bekliyor', color: color);
   }
+}
+
+/// Kart girişi (hareket v3 §4.9): yalnız ilk [AppMotion.staggerMaxItems] öğe, öğe başına TEK SEFER kademeli belirir.
+/// `ListView.builder` ekrandan çıkan satırı atar; geri kaydırınca yeniden kurulan satırın kimliği [entered] kümesinde
+/// olduğundan animasyonsuz gelir (yeniden tetiklenmez). Karar öğenin ömrü boyunca sabittir (ağaç yapısı değişmez).
+class _EnterOnce extends StatefulWidget {
+  const _EnterOnce({
+    super.key,
+    required this.id,
+    required this.index,
+    required this.entered,
+    required this.child,
+    this.offset = 12,
+  });
+
+  final String id;
+  final int index;
+  final Set<String> entered;
+  final double offset;
+  final Widget child;
+
+  @override
+  State<_EnterOnce> createState() => _EnterOnceState();
+}
+
+class _EnterOnceState extends State<_EnterOnce> {
+  late final bool _animate = widget.index < AppMotion.staggerMaxItems && widget.entered.add(widget.id);
+
+  @override
+  Widget build(BuildContext context) =>
+      _animate ? StaggeredEntrance(index: widget.index, offset: widget.offset, child: widget.child) : widget.child;
 }

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../common/qr_flow.dart';
+import '../motion/motion.dart';
 import '../pages/claim/claim_manual_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
 import '../theme/app_theme.dart';
@@ -43,100 +44,116 @@ class HomelessWelcome extends StatelessWidget {
       children: [
         // Ortak cam yüzey ([StateCard] -> SurfaceCard): opak taban + rim + gölge; arkadaki devre izi kartın
         // içinden görünmez (eskiden el yapımı yarı saydam gradyandı).
-        StateCard(
-          accent: AppFamilies.cyan.base,
-          active: true,
-          orb: const OrbIconBadge(icon: Icons.key_rounded, family: AppFamilies.cyan, size: OrbSize.xl, active: true),
-          title: 'Hoş Geldiniz, ${vm.name}!',
-          extra: const _InfoPill(text: 'Henüz kayıtlı bir daireniz yok'),
+        StaggeredEntrance(
+          index: 0,
+          child: StateCard(
+            accent: AppFamilies.cyan.base,
+            active: true,
+            orb: const OrbIconBadge(icon: Icons.key_rounded, family: AppFamilies.cyan, size: OrbSize.xl, active: true),
+            title: 'Hoş Geldiniz, ${vm.name}!',
+            extra: const _InfoPill(text: 'Henüz kayıtlı bir daireniz yok'),
+          ),
         ),
         const SizedBox(height: AppSpace.s24),
-        Text(
-          'Daireye Katılmak İçin',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: AppText.caption,
-            fontWeight: FontWeight.w500,
-            letterSpacing: 0.4,
-            color: AppTheme.getTextMuted(context),
+        StaggeredEntrance(
+          index: 1,
+          child: Text(
+            'Daireye Katılmak İçin',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: AppText.caption,
+              fontWeight: FontWeight.w500,
+              letterSpacing: 0.4,
+              color: AppTheme.getTextMuted(context),
+            ),
           ),
         ),
         const SizedBox(height: AppSpace.s12),
-        StateActions(
-          stackBelow: double.infinity,
-          maxWidth: kDashboardCtaMaxWidth,
-          children: [
-            FilledButton.icon(
-              key: const Key('btn_join_code'),
-              icon: const Icon(Icons.vpn_key_outlined, size: 20),
-              label: const Text('Kod ile Bir Eve Katıl'),
-              style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              onPressed: () async {
-                final joined = await JoinHomeDialog.show(context);
-                if (joined == true && context.mounted) unawaited(state.refresh());
-              },
-            ),
-            OutlinedButton.icon(
-              key: const Key('btn_scan_qr'),
-              icon: const Icon(Icons.qr_code_scanner, size: 20),
-              label: Text(
-                vm.canClaim ? 'Karekod Tara (Katıl / Cihaz Eşle)' : 'Karekod ile Katıl',
-                textAlign: TextAlign.center,
+        StaggeredEntrance(
+          index: 2,
+          child: StateActions(
+            stackBelow: double.infinity,
+            maxWidth: kDashboardCtaMaxWidth,
+            children: [
+              FilledButton.icon(
+                key: const Key('btn_join_code'),
+                icon: const Icon(Icons.vpn_key_outlined, size: 20),
+                label: const Text('Kod ile Bir Eve Katıl'),
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                onPressed: () async {
+                  final joined = await JoinHomeDialog.show(context);
+                  if (joined == true && context.mounted) unawaited(state.refresh());
+                },
               ),
-              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-              onPressed: () => scanAndRouteQr(context),
-            ),
-            if (vm.canClaim)
-              TextButton.icon(
-                key: const Key('btn_claim_manual'),
-                style: TextButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                icon: const Icon(Icons.keyboard_alt_outlined, size: 18),
-                label: const Text('Cihaz Kodunu Elle Gir'),
-                onPressed: () => ClaimManualDialog.show(context),
+              OutlinedButton.icon(
+                key: const Key('btn_scan_qr'),
+                icon: const Icon(Icons.qr_code_scanner, size: 20),
+                label: Text(
+                  vm.canClaim ? 'Karekod Tara (Katıl / Cihaz Eşle)' : 'Karekod ile Katıl',
+                  textAlign: TextAlign.center,
+                ),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                onPressed: () => scanAndRouteQr(context),
               ),
-          ],
+              if (vm.canClaim)
+                TextButton.icon(
+                  key: const Key('btn_claim_manual'),
+                  style: TextButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  icon: const Icon(Icons.keyboard_alt_outlined, size: 18),
+                  label: const Text('Cihaz Kodunu Elle Gir'),
+                  onPressed: () => ClaimManualDialog.show(context),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: AppSpace.s24),
-        SurfaceCard(
-          padding: const EdgeInsets.all(AppSpace.s16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.help_outline_rounded, color: AppTheme.readableFamily(context, AppFamilies.cyan), size: 20),
-                  const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      'Nasıl Daireye Katılırım?',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
-                        color: AppTheme.getTextPrimary(context),
+        StaggeredEntrance(
+          index: 3,
+          child: SurfaceCard(
+            padding: const EdgeInsets.all(AppSpace.s16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.help_outline_rounded,
+                      color: AppTheme.readableFamily(context, AppFamilies.cyan),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        'Nasıl Daireye Katılırım?',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.getTextPrimary(context),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpace.s12),
-              const _Step(
-                step: '1',
-                text: 'Dairenizin sahibinden veya yöneticisinden bir davet kodu alın.',
-                family: AppFamilies.sky,
-              ),
-              const SizedBox(height: AppSpace.s8),
-              const _Step(
-                step: '2',
-                text: '"Kod ile Bir Eve Katıl" düğmesine basın ve size iletilen kodu girin.',
-                family: AppFamilies.cyan,
-              ),
-              const SizedBox(height: AppSpace.s8),
-              const _Step(
-                step: '3',
-                text: 'Katılım onaylandıktan sonra dairenizin kontrolleri otomatik olarak açılır.',
-                family: AppFamilies.emerald,
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: AppSpace.s12),
+                const _Step(
+                  step: '1',
+                  text: 'Dairenizin sahibinden veya yöneticisinden bir davet kodu alın.',
+                  family: AppFamilies.sky,
+                ),
+                const SizedBox(height: AppSpace.s8),
+                const _Step(
+                  step: '2',
+                  text: '"Kod ile Bir Eve Katıl" düğmesine basın ve size iletilen kodu girin.',
+                  family: AppFamilies.cyan,
+                ),
+                const SizedBox(height: AppSpace.s8),
+                const _Step(
+                  step: '3',
+                  text: 'Katılım onaylandıktan sonra dairenizin kontrolleri otomatik olarak açılır.',
+                  family: AppFamilies.emerald,
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -152,8 +169,7 @@ class _InfoPill extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) =>
-      AppPill(label: text, family: AppFamilies.amber, icon: Icons.info_outline);
+  Widget build(BuildContext context) => AppPill(label: text, family: AppFamilies.amber, icon: Icons.info_outline);
 }
 
 /// Numaralı adım: aile renkli mini küre rozeti (28 dp) + açıklama. Rakam 12 sp kalın (şartname tabanı).
@@ -223,31 +239,41 @@ class WelcomeClaimCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return StateCard(
-      key: const Key('card_welcome_claim'),
-      accent: AppFamilies.sky.base,
-      active: true,
-      padding: const EdgeInsets.symmetric(horizontal: AppSpace.s24, vertical: AppSpace.s32),
-      orb: const OrbIconBadge(icon: Icons.qr_code_scanner_rounded, family: AppFamilies.sky, size: OrbSize.xl, active: true),
-      title: 'Evinize Hoş Geldiniz!',
-      message: 'Akıllı panonuzun lamba ve panjurlarını yönetebilmek için pano kapağındaki karekodu '
-          'tarayarak kurulumu tamamlayın.',
-      actionsStackBelow: double.infinity,
-      actionsMaxWidth: kDashboardCtaMaxWidth,
-      actions: [
-        ElevatedButton.icon(
-          key: const Key('btn_scan_qr'),
-          onPressed: () => scanAndRouteQr(context),
-          icon: const Icon(Icons.camera_alt_outlined, size: 20),
-          label: const Text('Karekod ile Cihaz Eşle', textAlign: TextAlign.center),
+    // Boş panoda tek kart: durum kartları gibi tek seferlik giriş (anahtar kartın kendisinde kalır).
+    return StaggeredEntrance(
+      index: 1,
+      child: StateCard(
+        key: const Key('card_welcome_claim'),
+        accent: AppFamilies.sky.base,
+        active: true,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpace.s24, vertical: AppSpace.s32),
+        orb: const OrbIconBadge(
+          icon: Icons.qr_code_scanner_rounded,
+          family: AppFamilies.sky,
+          size: OrbSize.xl,
+          active: true,
         ),
-        OutlinedButton.icon(
-          key: const Key('btn_claim_manual'),
-          onPressed: () => ClaimManualDialog.show(context),
-          icon: const Icon(Icons.keyboard_alt_outlined, size: 18),
-          label: const Text('Kodu Elle Gir (Manuel Eşleme)', textAlign: TextAlign.center),
-        ),
-      ],
+        title: 'Evinize Hoş Geldiniz!',
+        message:
+            'Akıllı panonuzun lamba ve panjurlarını yönetebilmek için pano kapağındaki karekodu '
+            'tarayarak kurulumu tamamlayın.',
+        actionsStackBelow: double.infinity,
+        actionsMaxWidth: kDashboardCtaMaxWidth,
+        actions: [
+          ElevatedButton.icon(
+            key: const Key('btn_scan_qr'),
+            onPressed: () => scanAndRouteQr(context),
+            icon: const Icon(Icons.camera_alt_outlined, size: 20),
+            label: const Text('Karekod ile Cihaz Eşle', textAlign: TextAlign.center),
+          ),
+          OutlinedButton.icon(
+            key: const Key('btn_claim_manual'),
+            onPressed: () => ClaimManualDialog.show(context),
+            icon: const Icon(Icons.keyboard_alt_outlined, size: 18),
+            label: const Text('Kodu Elle Gir (Manuel Eşleme)', textAlign: TextAlign.center),
+          ),
+        ],
+      ),
     );
   }
 }

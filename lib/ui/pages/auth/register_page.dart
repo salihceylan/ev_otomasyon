@@ -125,8 +125,12 @@ class _RegisterPageState extends State<RegisterPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Center(
-                        child: OrbIconBadge(icon: Icons.person_add_alt_1_rounded, family: AppFamilies.sky, size: OrbSize.xl, glow: true),
+                      const StaggeredEntrance(
+                        index: 0,
+                        step: Duration(milliseconds: 70),
+                        child: Center(
+                          child: OrbIconBadge(icon: Icons.person_add_alt_1_rounded, family: AppFamilies.sky, size: OrbSize.xl, glow: true),
+                        ),
                       ),
                       const SizedBox(height: 16),
                       StaggeredEntrance(

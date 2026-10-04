@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/capabilities.dart';
 import '../../services/automation_state.dart';
+import '../motion/motion.dart';
 import '../theme/feature_accent.dart';
 import '../widgets/neon_app_bar.dart';
 import '../widgets/settings/action_cards.dart';
@@ -42,21 +43,13 @@ class DeviceSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final vm = context.select<AutomationState, _PageVm>(
-      (s) => (
-        caps: s.capabilities,
-        mode: s.mode,
-        hasUser: s.currentUser != null,
-        hasStatus: s.status != null,
-      ),
+      (s) => (caps: s.capabilities, mode: s.mode, hasUser: s.currentUser != null, hasStatus: s.status != null),
     );
     final caps = vm.caps;
     final cloud = vm.mode == AppMode.cloud;
     final direct = vm.mode == AppMode.direct;
 
-    final notices = <Widget>[
-      if (caps.hasHomeAccess || direct) const HardwareNoticeCard(),
-      const RoleNoticeCard(),
-    ];
+    final notices = <Widget>[if (caps.hasHomeAccess || direct) const HardwareNoticeCard(), const RoleNoticeCard()];
     // Bölümler: çocuk kilidi Güvenlik'in ilk kartıdır (sayfadaki ilk Switch sözleşmesi). Bölüm başlığı rengi de özellik haritasından
     // gelir ([AppFeature]): bölümün kartlarıyla AYNI aile.
     final sections = <(String, IconData, AccentFamily, List<Widget>)>[
@@ -110,11 +103,15 @@ class DeviceSettingsPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (final notice in notices) ...[notice, const SizedBox(height: 12)],
+            // Giriş koreografisi: bildirim kartları önce, bölümler (kendi [StaggeredEntrance]'ları) onların ardından.
+            for (var n = 0; n < notices.length; n++) ...[
+              StaggeredEntrance(index: n, child: notices[n]),
+              const SizedBox(height: 12),
+            ],
             for (var i = 0; i < sections.length; i++)
               if (sections[i].$4.isNotEmpty) ...[
                 SettingsSection(
-                  index: i,
+                  index: notices.length + i,
                   title: sections[i].$1,
                   icon: sections[i].$2,
                   family: sections[i].$3,
@@ -122,7 +119,7 @@ class DeviceSettingsPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
               ],
-            const _AppInfo(),
+            StaggeredEntrance(index: notices.length + sections.length, child: const _AppInfo()),
           ],
         ),
       ),

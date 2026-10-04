@@ -7,6 +7,7 @@ import '../../models/scheduled_rule_model.dart';
 import '../../services/automation_state.dart';
 import '../common/confirm_dialogs.dart';
 import '../dashboard/dashboard_states.dart';
+import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../widgets/settings/accent_button.dart';
 import '../theme/feature_accent.dart';
@@ -158,7 +159,9 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
     final options = ruleChannelOptions(state.cloudEndpoints);
 
     Widget body;
+    final String bodyState;
     if (!vm.cloud) {
+      bodyState = 'cloud_only';
       body = const InfoCard(
         cardKey: Key('view_rules_cloud_only'),
         icon: Icons.cloud_off_outlined,
@@ -166,25 +169,39 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
         message: 'Zamanlı kurallar sunucuda çalışır. Kuralları yönetmek için bulut moduna geçin.',
       );
     } else if ((!_loadedOnce || vm.loading) && rules.isEmpty && vm.error == null) {
+      bodyState = 'loading';
       body = TimedLoadingView(message: 'Kurallar yükleniyor…', onRetry: () => unawaited(_load()));
     } else if (vm.error != null && rules.isEmpty) {
+      bodyState = 'error';
       body = ErrorRetryCard(title: 'Kurallar yüklenemedi', message: vm.error!, onRetry: () => unawaited(_load()));
     } else if (rules.isEmpty) {
+      bodyState = 'empty';
       body = _EmptyRules(canManage: vm.canManage, onAdd: () => unawaited(_openDialog()));
     } else {
+      bodyState = 'content';
       body = Column(
         children: [
-          if (vm.error != null) _StaleBanner(message: vm.error!, onRetry: () => unawaited(_load())),
-          for (final rule in rules)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _RuleCard(
-                rule: rule,
-                name: ruleChannelName(rule, options),
-                canManage: vm.canManage,
-                onToggle: (value) => unawaited(_toggle(rule, value)),
-                onEdit: () => unawaited(_openDialog(existing: rule)),
-                onDelete: () => unawaited(_confirmDelete(rule, ruleChannelName(rule, options))),
+          if (vm.error != null)
+            StaggeredEntrance(
+              key: const ValueKey<String>('enter_rules_stale'),
+              index: 0,
+              offset: 8,
+              child: _StaleBanner(message: vm.error!, onRetry: () => unawaited(_load())),
+            ),
+          for (final (i, rule) in rules.indexed)
+            StaggeredEntrance(
+              key: ValueKey<String>('enter_rule_${rule.id}'),
+              index: i,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _RuleCard(
+                  rule: rule,
+                  name: ruleChannelName(rule, options),
+                  canManage: vm.canManage,
+                  onToggle: (value) => unawaited(_toggle(rule, value)),
+                  onEdit: () => unawaited(_openDialog(existing: rule)),
+                  onDelete: () => unawaited(_confirmDelete(rule, ruleChannelName(rule, options))),
+                ),
               ),
             ),
         ],
@@ -223,7 +240,7 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
           padding: const EdgeInsets.all(16),
           children: [
             if (vm.cloud) _TimezoneNote(timezone: vm.timezone),
-            body,
+            StateSwitcher(stateKey: bodyState, child: body),
           ],
         ),
       ),
@@ -373,12 +390,7 @@ class _RuleCard extends StatelessWidget {
     final typeName = rule.channelType == 'shutter' ? 'Panjur' : 'Röle';
     final muted = AppTheme.getTextMuted(context);
 
-    final leading = OrbIconBadge(
-      icon: rule.actionIcon,
-      family: family,
-      enabled: rule.enabled,
-      active: rule.enabled,
-    );
+    final leading = OrbIconBadge(icon: rule.actionIcon, family: family, enabled: rule.enabled, active: rule.enabled);
 
     final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -442,9 +454,7 @@ class _RuleCard extends StatelessWidget {
       ),
     );
 
-    final menu = canManage
-        ? _RuleMenuButton(ruleId: rule.id, title: title, onEdit: onEdit, onDelete: onDelete)
-        : null;
+    final menu = canManage ? _RuleMenuButton(ruleId: rule.id, title: title, onEdit: onEdit, onDelete: onDelete) : null;
 
     return SurfaceCard(
       key: Key('card_rule_${rule.id}'),
@@ -600,7 +610,9 @@ class _DayChips extends StatelessWidget {
     final muted = AppTheme.getTextMuted(context);
     final readable = AppTheme.readableAccent(context, family.base);
     final activeFill = family.base;
-    final activeInk = wcagContrast(Colors.white, activeFill) >= wcagContrast(_darkInk, activeFill) ? Colors.white : _darkInk;
+    final activeInk = wcagContrast(Colors.white, activeFill) >= wcagContrast(_darkInk, activeFill)
+        ? Colors.white
+        : _darkInk;
     final edge = dark ? family.base.withValues(alpha: 0.75) : family.deep;
     // Çip yazı ölçeğiyle ölçülenir ama en çok 30 dp: yedi çip 244 dp'lik sütuna TEK satırda sığar (büyük yazıda iki
     // satıra inip kartı şişirmesin; anahtar/menü ilk ekranda kalsın).

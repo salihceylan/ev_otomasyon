@@ -11,7 +11,7 @@ import '../../utils/friendly_error.dart';
 import '../common/app_dialogs.dart';
 import '../common/confirm_dialogs.dart';
 import '../common/date_format.dart';
-import '../motion/skeleton.dart';
+import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../theme/feature_accent.dart';
 import '../theme/tokens.dart';
@@ -54,6 +54,9 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
 
   String _statusFilter = 'ALL';
   String _query = '';
+
+  /// Kartların tek seferlik giriş kümesi ([_EnterOnce]).
+  final Set<String> _entered = <String>{};
   List<InventoryDeviceModel> _items = const <InventoryDeviceModel>[];
   Map<String, int> _stats = const <String, int>{};
   int? _total;
@@ -195,6 +198,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
   // ---------------------------------------------------------------------------
 
   static bool canSuspend(InventoryDeviceModel d) => d.isInStock;
+
   /// Askıdaki ya da iptal edilmiş cihaz stoğa alınabilir (sunucu geçişleri: SUSPENDED/REVOKED -> IN_STOCK).
   static bool canRestore(InventoryDeviceModel d) => d.isSuspended || d.isRevoked;
 
@@ -215,7 +219,9 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       canPop: !_reissuing,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop && _reissuing) {
-          _snack('Yeni etiket bilgileri alınıyor. Bu bilgiler yalnızca bir kez gösterilir: işlem bitene kadar sayfadan çıkılamaz.');
+          _snack(
+            'Yeni etiket bilgileri alınıyor. Bu bilgiler yalnızca bir kez gösterilir: işlem bitene kadar sayfadan çıkılamaz.',
+          );
         }
       },
       child: _scaffold(context, manage),
@@ -418,13 +424,18 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
           size: OrbSize.xl,
           glow: true,
           title: 'Envanterde Cihaz Bulunmuyor',
-          message: 'Masaüstü servis yazılımından "Karekod Üret & Etiket Bas" sekmesiyle cihaza etiket basıp '
+          message:
+              'Masaüstü servis yazılımından "Karekod Üret & Etiket Bas" sekmesiyle cihaza etiket basıp '
               'kaydettiğinizde burada tüm detaylarıyla listelenecektir.',
           action: OutlinedButton.icon(
             onPressed: () => _load(reset: true),
             icon: Icon(Icons.refresh_rounded, size: accentIconSize(context, base: 18)),
             label: const Text('Yenile'),
-            style: accentOutlinedButtonStyle(context, AppFeature.inventory.accentFamily, minimumSize: const Size(64, AppTouch.minTarget)),
+            style: accentOutlinedButtonStyle(
+              context,
+              AppFeature.inventory.accentFamily,
+              minimumSize: const Size(64, AppTouch.minTarget),
+            ),
           ),
         ),
       );
@@ -439,15 +450,23 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       _statsHeader(context),
       _searchAndFilters(context),
       if (stateBody == null && _error != null)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-          child: ServiceStaleBanner(
-            key: const Key('inventory_stale'),
-            message: 'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
-            onRetry: () => _load(reset: true),
+        _EnterOnce(
+          id: '#stale',
+          index: 0,
+          offset: 8,
+          entered: _entered,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: ServiceStaleBanner(
+              key: const Key('inventory_stale'),
+              message: 'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
+              onRetry: () => _load(reset: true),
+            ),
           ),
         ),
     ];
+    // Durum gövdesi varken öğeler boştur (bkz. [_stateBody] dalları, aynı öncelik).
+    final stateKey = _loading ? 'loading' : (_error != null ? 'error' : 'empty');
     return ListView.builder(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
@@ -455,12 +474,24 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       itemCount: header.length + (stateBody != null ? 1 : _items.length + 1),
       itemBuilder: (context, index) {
         if (index < header.length) return header[index];
-        if (stateBody != null) return stateBody;
+        if (stateBody != null) {
+          return StateSwitcher(
+            stateKey: stateKey,
+            child: SizedBox(width: double.infinity, child: stateBody),
+          );
+        }
         final i = index - header.length;
         // Filtre çipleri ekran kenarına kadar kayabilsin diye liste yatay dolgusuz; kartlar kendi 16 dp'lerini alır.
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: i < _items.length ? _card(context, _items[i], manage) : _footer(context),
+        if (i >= _items.length) {
+          return Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _footer(context));
+        }
+        final device = _items[i];
+        return _EnterOnce(
+          key: ValueKey<String>('enter_inventory_${device.deviceUuid}'),
+          id: device.deviceUuid,
+          index: i,
+          entered: _entered,
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _card(context, device, manage)),
         );
       },
     );
@@ -614,7 +645,11 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                 onPressed: () => _showQrDialog(device),
                 icon: Icon(Icons.qr_code_rounded, size: accentIconSize(context, base: 18)),
                 label: const Text('Karekod Gör', textAlign: TextAlign.center),
-                style: accentOutlinedButtonStyle(context, AppFeature.inventory.accentFamily, minimumSize: const Size(64, AppTouch.minTarget)),
+                style: accentOutlinedButtonStyle(
+                  context,
+                  AppFeature.inventory.accentFamily,
+                  minimumSize: const Size(64, AppTouch.minTarget),
+                ),
               ),
               if (manage && canSuspend(device))
                 OutlinedButton.icon(
@@ -683,7 +718,10 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(label, style: TextStyle(fontSize: AppText.badge, color: AppTheme.getTextMuted(context))),
+                    Text(
+                      label,
+                      style: TextStyle(fontSize: AppText.badge, color: AppTheme.getTextMuted(context)),
+                    ),
                     FittedBox(
                       fit: BoxFit.scaleDown,
                       alignment: AlignmentDirectional.centerStart,
@@ -725,7 +763,10 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(label, style: TextStyle(fontSize: AppText.badge, color: AppTheme.getTextMuted(context))),
+                Text(
+                  label,
+                  style: TextStyle(fontSize: AppText.badge, color: AppTheme.getTextMuted(context)),
+                ),
                 Text(
                   value,
                   maxLines: 2,
@@ -770,13 +811,15 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       confirm = await ConfirmDestructiveDialog.show(
         context,
         title: 'İptal edilmiş cihaz stoğa alınsın mı?',
-        message: '${device.deviceUuid} cihazı arıza, iade ya da güvenlik gerekçesiyle İPTAL EDİLMİŞTİ. Stoğa '
+        message:
+            '${device.deviceUuid} cihazı arıza, iade ya da güvenlik gerekçesiyle İPTAL EDİLMİŞTİ. Stoğa '
             'alınırsa yeniden saha kurulumuna açılır. Devam etmeden önce iptal gerekçesini kontrol edin.',
         confirmPhrase: device.deviceUuid,
         confirmLabel: 'Evet, Stoğa Al',
       );
     } else {
-      confirm = await showAppDialog<bool>(
+      confirm =
+          await showAppDialog<bool>(
             context,
             builder: (ctx) => AlertDialog(
               title: Text(suspending ? 'Cihaz askıya alınsın mı?' : 'Cihaz stoğa alınsın mı?'),
@@ -828,7 +871,8 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     final ok = await ConfirmDestructiveDialog.show(
       context,
       title: 'Cihaz envanterden silinsin mi?',
-      message: '${device.deviceUuid} (${device.formattedSerial}) envanterden tamamen silinecek. Bu işlem geri alınamaz.',
+      message:
+          '${device.deviceUuid} (${device.formattedSerial}) envanterden tamamen silinecek. Bu işlem geri alınamaz.',
       confirmPhrase: device.deviceUuid,
       confirmLabel: 'Evet, Sil',
     );
@@ -855,7 +899,8 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     final ok = await ConfirmDestructiveDialog.show(
       context,
       title: 'Etiket yeniden üretilsin mi?',
-      message: '${device.deviceUuid} için yeni kurulum PIN\'i ve yerel anahtar üretilecek. ESKİ ETİKET GEÇERSİZ olur; '
+      message:
+          '${device.deviceUuid} için yeni kurulum PIN\'i ve yerel anahtar üretilecek. ESKİ ETİKET GEÇERSİZ olur; '
           'yeni bilgiler yalnızca bir kez gösterilir.',
       confirmPhrase: device.deviceUuid,
       confirmLabel: 'Yeniden Üret',
@@ -882,7 +927,10 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       }
       final result = LabelReissueResult.fromJson(res);
       if (result.isEmpty) {
-        _snack('Sunucu yeni etiket bilgisini vermedi. Lütfen tekrar deneyin.', color: AppTheme.filledAccent(AppTheme.accentRed));
+        _snack(
+          'Sunucu yeni etiket bilgisini vermedi. Lütfen tekrar deneyin.',
+          color: AppTheme.filledAccent(AppTheme.accentRed),
+        );
       } else if (mounted) {
         await LabelReissueDialog.show(context, deviceUuid: device.deviceUuid, result: result);
       } else if (rootContext.mounted) {
@@ -913,14 +961,22 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.qr_code_2_rounded, color: AppTheme.readableFamily(context, AppFeature.inventory.accentFamily), size: 22),
+                    Icon(
+                      Icons.qr_code_2_rounded,
+                      color: AppTheme.readableFamily(context, AppFeature.inventory.accentFamily),
+                      size: 22,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Cihaz Karekodu (${device.formattedSerial})',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.getTextPrimary(context),
+                        ),
                       ),
                     ),
                     IconButton(
@@ -934,7 +990,12 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                  child: QrImageView(data: device.qrClaimUrl, version: QrVersions.auto, size: 200, backgroundColor: Colors.white),
+                  child: QrImageView(
+                    data: device.qrClaimUrl,
+                    version: QrVersions.auto,
+                    size: 200,
+                    backgroundColor: Colors.white,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 FittedBox(
@@ -980,7 +1041,11 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                   },
                   icon: const Icon(Icons.copy_rounded, size: 16),
                   label: const Text('Karekod Bağlantısını Kopyala', textAlign: TextAlign.center),
-                  style: accentOutlinedButtonStyle(context, AppFeature.inventory.accentFamily, minimumSize: const Size(64, AppTouch.minTarget)),
+                  style: accentOutlinedButtonStyle(
+                    context,
+                    AppFeature.inventory.accentFamily,
+                    minimumSize: const Size(64, AppTouch.minTarget),
+                  ),
                 ),
               ],
             ),
@@ -989,4 +1054,35 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
       },
     );
   }
+}
+
+/// Kart girişi (hareket v3 §4.9): yalnız ilk [AppMotion.staggerMaxItems] öğe, öğe başına TEK SEFER kademeli belirir.
+/// `ListView.builder` ekrandan çıkan satırı atar; geri kaydırınca yeniden kurulan satırın kimliği [entered] kümesinde
+/// olduğundan animasyonsuz gelir (yeniden tetiklenmez). Karar öğenin ömrü boyunca sabittir (ağaç yapısı değişmez).
+class _EnterOnce extends StatefulWidget {
+  const _EnterOnce({
+    super.key,
+    required this.id,
+    required this.index,
+    required this.entered,
+    required this.child,
+    this.offset = 12,
+  });
+
+  final String id;
+  final int index;
+  final Set<String> entered;
+  final double offset;
+  final Widget child;
+
+  @override
+  State<_EnterOnce> createState() => _EnterOnceState();
+}
+
+class _EnterOnceState extends State<_EnterOnce> {
+  late final bool _animate = widget.index < AppMotion.staggerMaxItems && widget.entered.add(widget.id);
+
+  @override
+  Widget build(BuildContext context) =>
+      _animate ? StaggeredEntrance(index: widget.index, offset: widget.offset, child: widget.child) : widget.child;
 }

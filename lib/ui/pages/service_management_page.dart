@@ -10,7 +10,7 @@ import '../../services/ev_cloud_api_service.dart';
 import '../../utils/friendly_error.dart';
 import '../common/confirm_dialogs.dart';
 import '../theme/app_theme.dart';
-import '../motion/skeleton.dart';
+import '../motion/motion.dart';
 import '../theme/feature_accent.dart';
 import '../theme/tokens.dart';
 import '../widgets/accent_fab.dart';
@@ -35,12 +35,7 @@ import 'service_setup/setup_widgets.dart';
 ///   etkinleştirme / sıfırlama bağlantısı e-postayla gider.
 /// * **Görevler ve Araçlar** sekmesi: servis araçlarına kısayollar.
 class ServiceManagementPage extends StatefulWidget {
-  const ServiceManagementPage({
-    super.key,
-    this.autoLoad = true,
-    this.initialTabIndex = 0,
-    this.pageSize = 30,
-  });
+  const ServiceManagementPage({super.key, this.autoLoad = true, this.initialTabIndex = 0, this.pageSize = 30});
 
   /// `false` ise açılışta sunucudan yüklenmez (yenile ile yüklenir).
   final bool autoLoad;
@@ -65,6 +60,8 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
   final TextEditingController _search = TextEditingController();
   final ScrollController _scroll = ScrollController();
 
+  /// Kartların tek seferlik giriş kümesi ([_EnterOnce]).
+  final Set<String> _entered = <String>{};
   List<AdminAccount> _items = const <AdminAccount>[];
   int? _total;
   bool _loading = false;
@@ -289,7 +286,8 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
     final ok = await showSimpleConfirm(
       context,
       title: 'Hesap dondurulsun mu?',
-      message: '${account.fullName} (${account.email}) hesabı dondurulacak: tüm oturumları kapanır, uygulamaya '
+      message:
+          '${account.fullName} (${account.email}) hesabı dondurulacak: tüm oturumları kapanır, uygulamaya '
           'giriş yapamaz ve evlerdeki cihaz erişimi durur. Daha sonra yeniden aktifleştirebilirsiniz.',
       confirmLabel: 'Dondur',
       destructive: true,
@@ -378,9 +376,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
         subtitle: view.isSuper ? 'Yöneticiler, servis sorumluları, müşteriler' : 'Müşteri hesapları ve araçlar',
         feature: AppFeature.management,
         icon: Icons.admin_panel_settings_rounded,
-        actions: [
-          ServiceRefreshAction(key: const Key('btn_refresh'), onPressed: _loading ? null : _refreshAll),
-        ],
+        actions: [ServiceRefreshAction(key: const Key('btn_refresh'), onPressed: _loading ? null : _refreshAll)],
         bottom: TabBar(
           controller: _tabs,
           // Kaydırılabilir sekmeler: sabit yarı genişlikte "Görevler ve Araçlar" 1.5 yazı ölçeğinde glif ortasından kesiliyordu.
@@ -434,12 +430,24 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
           child: SetupInfoRow(
             icon: Icons.info_outline_rounded,
             color: SetupColors.info,
-            text: 'Servis sorumlusu ve yönetici hesaplarını yalnızca süper yönetici tanımlayabilir. Burada '
+            text:
+                'Servis sorumlusu ve yönetici hesaplarını yalnızca süper yönetici tanımlayabilir. Burada '
                 'oluşturduğunuz müşteri hesaplarını görür ve yönetirsiniz.',
           ),
         ),
       _filters(context, isSuper),
-      if (stateItems != null) ...stateItems else if (_error != null) _staleBanner(),
+      // Durum öğeleri tek [StateSwitcher] çocuğudur (yükleniyor → hata/boş geçişi; her an tek durum ağaçta).
+      if (stateItems != null)
+        StateSwitcher(
+          stateKey: _loading ? 'loading' : (_error != null ? 'error' : 'empty'),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: stateItems,
+          ),
+        )
+      else if (_error != null)
+        _EnterOnce(id: '#stale', index: 0, offset: 8, entered: _entered, child: _staleBanner()),
     ];
     final accountCount = showAccounts ? _items.length : 0;
     final hasFooter = showAccounts && (_loadingMore || (_hasMore && _error == null));
@@ -458,7 +466,14 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
           if (index < fixed.length) return fixed[index];
           final i = index - fixed.length;
           if (i < accountCount) {
-            return _accountItem(_items[i], meId: meId, isSuper: isSuper, allSupersLoaded: allSupersLoaded);
+            final account = _items[i];
+            return _EnterOnce(
+              key: ValueKey<String>('enter_account_${account.id}'),
+              id: account.id,
+              index: i,
+              entered: _entered,
+              child: _accountItem(account, meId: meId, isSuper: isSuper, allSupersLoaded: allSupersLoaded),
+            );
           }
           return _footer();
         },
@@ -548,7 +563,11 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
                     style: TextStyle(fontSize: 12.5, color: SetupColors.readable(context, SetupColors.error)),
                   ),
                 ),
-                TextButton(key: const Key('btn_summary_retry'), onPressed: _loadSummary, child: const Text('Tekrar dene')),
+                TextButton(
+                  key: const Key('btn_summary_retry'),
+                  onPressed: _loadSummary,
+                  child: const Text('Tekrar dene'),
+                ),
               ],
             ),
         ],
@@ -607,12 +626,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
   }
 
   Widget _chip(String key, String label, GlobalRole? role) {
-    return AppChip(
-      key: Key(key),
-      label: label,
-      selected: _roleFilter == role,
-      onTap: () => _setFilter(role),
-    );
+    return AppChip(key: Key(key), label: label, selected: _roleFilter == role, onTap: () => _setFilter(role));
   }
 
   /// Hesap listesinin YERİNE geçen durum öğeleri (yükleniyor / hata / boş); hesaplar gösterilecekse `null`.
@@ -908,4 +922,35 @@ class _AccountCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Kart girişi (hareket v3 §4.9): yalnız ilk [AppMotion.staggerMaxItems] öğe, öğe başına TEK SEFER kademeli belirir.
+/// `ListView.builder` ekrandan çıkan satırı atar; geri kaydırınca yeniden kurulan satırın kimliği [entered] kümesinde
+/// olduğundan animasyonsuz gelir (yeniden tetiklenmez). Karar öğenin ömrü boyunca sabittir (ağaç yapısı değişmez).
+class _EnterOnce extends StatefulWidget {
+  const _EnterOnce({
+    super.key,
+    required this.id,
+    required this.index,
+    required this.entered,
+    required this.child,
+    this.offset = 12,
+  });
+
+  final String id;
+  final int index;
+  final Set<String> entered;
+  final double offset;
+  final Widget child;
+
+  @override
+  State<_EnterOnce> createState() => _EnterOnceState();
+}
+
+class _EnterOnceState extends State<_EnterOnce> {
+  late final bool _animate = widget.index < AppMotion.staggerMaxItems && widget.entered.add(widget.id);
+
+  @override
+  Widget build(BuildContext context) =>
+      _animate ? StaggeredEntrance(index: widget.index, offset: widget.offset, child: widget.child) : widget.child;
 }
