@@ -1,7 +1,7 @@
 KULLANILMAZ - bu klasördeki imajları (firmware_combined_0x0.bin, firmware_v1.0.1.bin) karta YAZMAYIN.
 
 İşaretleme tarihi : 2026-10-02
-Yerine geçen sürüm: v1.1.0  ->  firmware_releases/v1.1.0/firmware_combined_0x0.bin
+Yerine geçen sürüm: v1.1.1  ->  firmware_releases/v1.1.1/firmware_combined_0x0.bin
 
 NEDEN (imaj dosyaları taranarak doğrulandı):
   1. USB-seri provizyon YOK: imajda FACTORYINIT ve RESETKEY komutları bulunmaz. Fabrika aracı bu imajla yüklenen

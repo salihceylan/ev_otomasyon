@@ -1,10 +1,12 @@
 # AHBU Akıllı Ev - ESP32-S3 firmware v1.1.1 (sürüm notları)
 
-> **DONANIMDA VE TARAYICIDA DOĞRULANMADI.** Bu imaj yalnızca dosya düzeyinde doğrulandı (başlık, bölüm tablosu, SHA-256
-> özetleri, dizgi taraması, fabrika aracının imaj doğrulayıcısı) ve gömülü web sayfası tarayıcısız (statik) denetlendi.
-> Hiçbir karta yazılıp çalıştırılmadı; sayfanın görünümü hiçbir tarayıcıda/telefonda görülmedi. Toplu üretimden önce TEK bir
-> test kartında şunları deneyin: Flash, FACTORYINIT provizyonu, **telefon tarayıcısında web sayfası (görünüm, giriş
-> hatırlama, Çıkış)**, Wi-Fi servis akışı, röle ve panjur denemesi.
+> **DONANIMDA YALNIZ YAZMA VE AÇILIŞ GÖRÜLDÜ; TARAYICIDA DOĞRULANMADI.** Bu imaj dosya düzeyinde doğrulandı (başlık, bölüm
+> tablosu, SHA-256 özetleri, dizgi taraması, fabrika aracının imaj doğrulayıcısı) ve gömülü web sayfası tarayıcısız (statik)
+> denetlendi. 2026-10-04'te bir test kartına esptool ile 0x0 adresine yazıldı (yazım hash'i doğrulandı) ve seri çıkışta
+> açılışı görüldü (yeni durum biçimi; birleşik imaj NVS bölgesini de sildiğinden kart provizyonsuz, kurulum ağı açık).
+> FACTORYINIT provizyonu, **telefon
+> tarayıcısında web sayfası (görünüm, giriş hatırlama, Çıkış)**, Wi-Fi servis akışı, röle ve panjur denemesi henüz
+> YAPILMADI: toplu üretimden önce TEK bir test kartında bunları deneyin.
 
 ## Dosyalar
 
@@ -98,7 +100,7 @@ esptool --chip esp32s3 --port COMx --baud 460800 write_flash 0x10000 app_0x10000
 3. **Telefon tarayıcısı, LAN (`http://<pano IP>`):** anahtarı BİR KEZ girin -> sayfayı yenileyin, sekmeyi ve tarayıcıyı kapatıp
    yeniden açın: anahtar sorulmamalı, başlıkta "Çıkış" görünmeli. "Çıkış" -> anahtar sorulmalı; yeniden girince yine hatırlanmalı.
    Gizli sekmede anahtar yalnız o oturumda hatırlanır (sekme kapanınca silinir).
-4. **Eski anahtar:** anahtarı Sistem sekmesinden (ya da uygulamadan) değiştirip eski anahtarı hatırlayan telefonda sayfayı açın:
+4. **Eski anahtar:** anahtarı Sistem sekmesinden ("Cihaz Anahtarını Değiştir") değiştirip eski anahtarı hatırlayan telefonda sayfayı açın:
    "Kayıtlı anahtar artık geçerli değil..." + anahtar kutusu çıkmalı; cihazda kilit (`423`) OLUŞMAMALI (tek hata).
 5. Kontrol sekmesi: röle kartı anahtarı/darbe düğmesi, panjur AÇ/DURDUR/KAPAT düğmeleri, hareket sırasında turkuaz orb, dijital
    girişler; Kanal Ayarları (Çift 1-4, ek modül açık/kapalı), RS485 terminal, Sistem sekmesi.
