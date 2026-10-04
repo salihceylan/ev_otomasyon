@@ -229,7 +229,7 @@ void main() {
       expect(find.text('Sıfırlama kısmen tamamlandı'), findsOneWidget);
       expect(exists('reset_partial'), isTrue);
       expect(find.text('Pano çevrimdışıydı; kimlik iptali kuyruğa alındı.'), findsOneWidget);
-      expect(find.textContaining('Yerel anahtar panoya iletilemedi: pano çevrimdışıydı.'), findsOneWidget);
+      expect(find.textContaining('Yerel anahtar panoya iletilemedi: komut gönderilemedi.'), findsOneWidget);
       expect(find.textContaining('Çocuk kilidi sıfırlaması panoya iletilemedi (hata).'), findsOneWidget);
       expect(find.text(kReissuedKey), findsOneWidget);
       // Eski sunucu yanıtı (anahtar döndü): uygulanamaz "yerinde yazılmalıdır" yerine gerçek kurtarma yolu (SERVIS-01).

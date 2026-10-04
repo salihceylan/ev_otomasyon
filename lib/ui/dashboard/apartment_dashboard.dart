@@ -311,7 +311,7 @@ class _CloudContentState extends State<_CloudContent> {
         ],
         if (vm.offline) ...[
           const SizedBox(height: 20),
-          const DeviceOfflineNotice(),
+          const StaggeredEntrance(index: 0, offset: 8, child: DeviceOfflineNotice()),
         ],
       ],
     );
@@ -353,7 +353,7 @@ class _DirectContent extends StatelessWidget {
           const DeviceSections(),
           if (vm.conn == ConnectionStateEnum.offline) ...[
             const SizedBox(height: 20),
-            const DeviceOfflineNotice(),
+            const StaggeredEntrance(index: 0, offset: 8, child: DeviceOfflineNotice()),
           ],
         ],
       );

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../motion/staggered_entrance.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/orb/orb.dart';
 import '../../widgets/settings/accent_button.dart';
@@ -138,11 +139,15 @@ class _DeviceConnectionPanelState extends State<DeviceConnectionPanel> {
               onPressed: _connect,
             ),
           if (problem != null)
-            SetupProblemBox(
-              problem: problem,
-              onRetry: conn.canRetry ? () => conn.retry() : null,
-              // "Panoya Bağlan" hemen yukarıda (bu panelin birincil eylemi): yeniden deneme aynı işi yapar, çerçeveli kalır.
-              retrySecondary: true,
+            StaggeredEntrance(
+              index: 0,
+              offset: 8,
+              child: SetupProblemBox(
+                problem: problem,
+                onRetry: conn.canRetry ? () => conn.retry() : null,
+                // "Panoya Bağlan" hemen yukarıda (bu panelin birincil eylemi): yeniden deneme aynı işi yapar, çerçeveli kalır.
+                retrySecondary: true,
+              ),
             ),
           if (needsKey) ...[
             const SizedBox(height: 4),

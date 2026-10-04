@@ -504,7 +504,7 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
       case 'failed':
         return '$label panoya iletilemedi (hata).';
       case 'skipped_offline':
-        return '$label panoya iletilemedi: pano çevrimdışıydı.';
+        return '$label panoya iletilemedi: komut gönderilemedi.';
       default:
         return null;
     }

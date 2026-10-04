@@ -392,21 +392,25 @@ class _ChildLockWallNote extends StatelessWidget {
       (s) => s.childLockStatus == ChildLockStatus.locked,
     );
     if (!locked) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        key: const Key('note_child_lock_wall'),
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.lock_outline, size: 16, color: AppTheme.warningText(context)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Kilitli: duvar anahtarları devre dışı. Uygulamadan kontrol edebilirsiniz.',
-              style: TextStyle(fontSize: 12, color: AppTheme.warningText(context)),
+    return StaggeredEntrance(
+      index: 0,
+      offset: 8,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(
+          key: const Key('note_child_lock_wall'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.lock_outline, size: 16, color: AppTheme.warningText(context)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Kilitli: duvar anahtarları devre dışı. Uygulamadan kontrol edebilirsiniz.',
+                style: TextStyle(fontSize: 12, color: AppTheme.warningText(context)),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
