@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../common/app_dialogs.dart';
 import '../../../theme/app_theme.dart';
 import '../logic/claim_logic.dart';
 import '../service_setup_controller.dart';
@@ -39,8 +40,8 @@ class _Step4ClaimState extends State<Step4Claim> {
 
   Future<void> _claim() async {
     final c = widget.controller;
-    final confirmed = await showDialog<bool>(
-      context: context,
+    final confirmed = await showAppDialog<bool>(
+      context,
       builder: (ctx) => AlertDialog(
         scrollable: true, // küçük ekranda / büyük yazıda içerik kaydırılır (taşma olmaz)
         title: const Text('Cihaz daireye bağlansın mı?'),

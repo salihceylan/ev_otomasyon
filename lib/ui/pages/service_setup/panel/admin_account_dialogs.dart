@@ -7,6 +7,7 @@ import '../../../../models/capabilities.dart';
 import '../../../../models/json_utils.dart';
 import '../../../../services/automation_state.dart';
 import '../../../../utils/friendly_error.dart';
+import '../../../common/app_dialogs.dart';
 import '../../../common/arc_spinner.dart';
 import '../../../common/validators.dart';
 import '../setup_fields.dart';
@@ -58,8 +59,8 @@ class CreateAccountDialog extends StatefulWidget {
     required bool actorIsSuper,
     GlobalRole defaultRole = GlobalRole.serviceUser,
   }) {
-    return showDialog<CreateAccountOutcome>(
-      context: context,
+    return showAppDialog<CreateAccountOutcome>(
+      context,
       barrierDismissible: false,
       builder: (_) => CreateAccountDialog(actorIsSuper: actorIsSuper, defaultRole: defaultRole),
     );
@@ -313,8 +314,8 @@ class EditAccountDialog extends StatefulWidget {
     required bool actorIsSuper,
     required bool isSelf,
   }) {
-    return showDialog<bool>(
-      context: context,
+    return showAppDialog<bool>(
+      context,
       barrierDismissible: false,
       builder: (_) => EditAccountDialog(account: account, actorIsSuper: actorIsSuper, isSelf: isSelf),
     );

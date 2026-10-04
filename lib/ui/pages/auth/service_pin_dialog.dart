@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/auth_form.dart';
 import '../../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../../common/cooldown.dart';
@@ -24,8 +25,8 @@ class ServicePinDialog extends StatefulWidget {
 
   static Future<void> show(BuildContext context) {
     final state = context.read<AutomationState>();
-    return showDialog<void>(
-      context: context,
+    return showAppDialog<void>(
+      context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(value: state, child: const ServicePinDialog()),
     );
   }

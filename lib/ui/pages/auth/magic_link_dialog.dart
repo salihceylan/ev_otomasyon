@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../utils/magic_link_parser.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/auth_form.dart';
 import '../../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../../common/inline_message.dart';
@@ -17,7 +18,7 @@ class MagicLinkDialog extends StatefulWidget {
   const MagicLinkDialog({super.key});
 
   static Future<void> show(BuildContext context) {
-    return showDialog<void>(context: context, builder: (_) => const MagicLinkDialog());
+    return showAppDialog<void>(context, builder: (_) => const MagicLinkDialog());
   }
 
   @override

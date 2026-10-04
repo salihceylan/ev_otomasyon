@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 
 import '../../../services/automation_state.dart';
 import '../../../services/biometric_auth_service.dart';
+import '../../common/app_dialogs.dart';
 import '../../dashboard/child_lock_status.dart';
 import '../../dashboard/command_retry.dart';
 import '../../theme/app_theme.dart';
@@ -95,8 +96,8 @@ class _ChildLockCardState extends State<ChildLockCard> {
   Future<void> _disable() async {
     final state = context.read<AutomationState>();
     final registry = CommandRetryRegistry.maybeOf(context);
-    final confirmed = await showModalBottomSheet<bool>(
-      context: context,
+    final confirmed = await showAppSheet<bool>(
+      context,
       isScrollControlled: true,
       showDragHandle: true,
       useSafeArea: true,

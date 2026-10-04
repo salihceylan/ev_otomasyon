@@ -8,6 +8,7 @@ import '../../models/cloud_models.dart';
 import '../../models/json_utils.dart';
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
+import '../common/app_dialogs.dart';
 import '../common/confirm_dialogs.dart';
 import '../common/date_format.dart';
 import '../motion/skeleton.dart';
@@ -775,8 +776,8 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
         confirmLabel: 'Evet, Stoğa Al',
       );
     } else {
-      confirm = await showDialog<bool>(
-            context: context,
+      confirm = await showAppDialog<bool>(
+            context,
             builder: (ctx) => AlertDialog(
               title: Text(suspending ? 'Cihaz askıya alınsın mı?' : 'Cihaz stoğa alınsın mı?'),
               content: Text(
@@ -901,8 +902,8 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
   }
 
   void _showQrDialog(InventoryDeviceModel device) {
-    showDialog<void>(
-      context: context,
+    showAppDialog<void>(
+      context,
       builder: (ctx) {
         return Dialog(
           child: Padding(

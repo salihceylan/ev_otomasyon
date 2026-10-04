@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/capabilities.dart';
 import '../../services/automation_state.dart';
+import '../common/app_dialogs.dart';
 import '../common/confirm_dialogs.dart';
 import '../common/date_format.dart';
 import '../pages/auth/change_password_page.dart';
@@ -64,8 +65,8 @@ class UserProfileDialog extends StatelessWidget {
 
   static Future<void> show(BuildContext context) {
     final state = context.read<AutomationState>();
-    return showDialog(
-      context: context,
+    return showAppDialog(
+      context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
         child: const UserProfileDialog(),

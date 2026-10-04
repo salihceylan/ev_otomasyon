@@ -7,6 +7,7 @@ import '../../../models/cloud_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../services/ev_cloud_api_service.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/auth_form.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../common/inline_message.dart';
@@ -31,8 +32,8 @@ class DeleteAccountDialog extends StatefulWidget {
 
   static Future<void> show(BuildContext context) {
     final state = context.read<AutomationState>();
-    return showDialog<void>(
-      context: context,
+    return showAppDialog<void>(
+      context,
       barrierDismissible: false,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(value: state, child: const DeleteAccountDialog()),
     );

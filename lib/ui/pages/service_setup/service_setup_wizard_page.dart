@@ -5,8 +5,9 @@ import 'package:provider/provider.dart';
 
 import '../../../models/api_models.dart';
 import '../../../services/automation_state.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/confirm_dialogs.dart';
-import '../../motion/motion_scope.dart';
+import '../../motion/shared_axis.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/orb/orb.dart';
 import 'device_link.dart';
@@ -122,8 +123,8 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
           ? 'İlerlemeniz bu telefonda kaydedildi. "Devam eden kurulumlar" listesinden kaldığınız yerden sürdürebilirsiniz.'
           : 'Cihaz henüz daireye bağlanmadı; şimdi çıkarsanız baştan başlamanız gerekir.',
     );
-    final leave = await showDialog<bool>(
-      context: context,
+    final leave = await showAppDialog<bool>(
+      context,
       builder: (ctx) => AlertDialog(
         scrollable: true,
         title: const Text('Sihirbazdan çıkılsın mı?'),
@@ -332,20 +333,9 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
                       ),
                       Expanded(
                         // Geçiş "fade-through": eski adım hemen kalkar (aynı anda iki adım ağaçta olmaz), yenisi
-                        // solarak ve hafifçe kayarak gelir. Hareket kapalıyken anında.
-                        child: AnimatedSwitcher(
-                          duration: MotionScope.durationOf(context, AppMotion.base),
-                          reverseDuration: Duration.zero,
-                          switchInCurve: AppMotion.standard,
-                          transitionBuilder: (child, animation) => FadeTransition(
-                            opacity: animation,
-                            child: SlideTransition(
-                              position: Tween<Offset>(begin: const Offset(0.04, 0), end: Offset.zero).animate(animation),
-                              child: child,
-                            ),
-                          ),
-                          child: _step(c),
-                        ),
+                        // solarak ve hafifçe kayarak gelir; ileri giderken sağdan, geri giderken soldan. Hareket
+                        // kapalıyken anında.
+                        child: SharedAxisSwitcher(index: c.currentStep, child: _step(c)),
                       ),
                     ],
                   ),

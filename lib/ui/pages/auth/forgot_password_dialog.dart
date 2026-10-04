@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../../../models/api_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/auth_form.dart';
 import '../../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../../common/cooldown.dart';
@@ -33,7 +34,7 @@ class ForgotPasswordDialog extends StatefulWidget {
   const ForgotPasswordDialog({super.key});
 
   static Future<void> show(BuildContext context) {
-    return showDialog(context: context, barrierDismissible: false, builder: (_) => const ForgotPasswordDialog());
+    return showAppDialog(context, barrierDismissible: false, builder: (_) => const ForgotPasswordDialog());
   }
 
   @override

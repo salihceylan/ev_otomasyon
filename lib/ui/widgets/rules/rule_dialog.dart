@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../../models/scheduled_rule_model.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/app_dialogs.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../orb/orb.dart';
@@ -23,8 +24,8 @@ enum RuleSaveOutcome {
 /// Kural ekleme / düzenleme diyaloğunu açar. Kayıt diyalog içinde yapılır (hata alanın altında
 /// kalır, girdi kaybolmaz); iptalde `null` döner.
 Future<RuleSaveOutcome?> showRuleDialog(BuildContext context, {ScheduledRule? existing}) {
-  return showDialog<RuleSaveOutcome>(
-    context: context,
+  return showAppDialog<RuleSaveOutcome>(
+    context,
     builder: (_) => RuleDialog(existing: existing),
   );
 }

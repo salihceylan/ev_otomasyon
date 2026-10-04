@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../../../models/json_utils.dart';
 import '../../../../services/automation_state.dart';
 import '../../../../utils/friendly_error.dart';
+import '../../../common/app_dialogs.dart';
 import '../../../common/arc_spinner.dart';
 import '../../../common/confirm_dialogs.dart';
 import '../logic/customer_logic.dart';
@@ -66,7 +67,7 @@ class AssignWarningsDialog extends StatelessWidget {
   final AssignAdminOutcome outcome;
 
   static Future<void> show(BuildContext context, AssignAdminOutcome outcome) {
-    return showDialog<void>(context: context, builder: (_) => AssignWarningsDialog(outcome: outcome));
+    return showAppDialog<void>(context, builder: (_) => AssignWarningsDialog(outcome: outcome));
   }
 
   @override
@@ -122,8 +123,8 @@ class AssignAdminDialog extends StatefulWidget {
   final Subscriber subscriber;
 
   static Future<AssignAdminOutcome?> show(BuildContext context, Subscriber subscriber) {
-    return showDialog<AssignAdminOutcome>(
-      context: context,
+    return showAppDialog<AssignAdminOutcome>(
+      context,
       barrierDismissible: false,
       builder: (_) => AssignAdminDialog(subscriber: subscriber),
     );
@@ -238,8 +239,8 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
     if (_busy || !_validate()) return;
     final owner = _s.owner;
     final newName = _name.text.trim();
-    final confirmed = await showDialog<bool>(
-      context: context,
+    final confirmed = await showAppDialog<bool>(
+      context,
       builder: (ctx) => AlertDialog(
         title: const Text('Yönetici değişikliğini onaylıyor musunuz?'),
         content: Text(

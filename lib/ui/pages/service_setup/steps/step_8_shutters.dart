@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../../common/app_dialogs.dart';
 import '../../../theme/app_theme.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/orb/orb.dart';
@@ -184,8 +185,8 @@ class _ShutterCardState extends State<_ShutterCard> {
 
   /// "Kullanılmıyor" bir **beyandır** (test yapılmaz): onay istenir, teslim raporuna beyan olarak yazılır.
   Future<void> _confirmUnused(int pair) async {
-    final ok = await showDialog<bool>(
-      context: context,
+    final ok = await showAppDialog<bool>(
+      context,
       builder: (ctx) => AlertDialog(
         scrollable: true,
         title: const Text('Bu panjur kullanılmıyor mu?'),

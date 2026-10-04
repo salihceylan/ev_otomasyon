@@ -7,6 +7,7 @@ import '../../../models/json_utils.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../../utils/qr_claim_parser.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/cooldown.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
@@ -84,8 +85,8 @@ class ClaimManualDialog extends StatefulWidget {
     String? initialPin,
   }) {
     final state = context.read<AutomationState>();
-    return showDialog<bool>(
-      context: context,
+    return showAppDialog<bool>(
+      context,
       barrierDismissible: false,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,

@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../../models/json_utils.dart';
+import '../common/app_dialogs.dart';
 import '../motion/skeleton.dart';
 import '../theme/tokens.dart';
 import '../widgets/orb/glass_icon_button.dart';
@@ -33,8 +34,8 @@ class SystemDoctorDialog extends StatefulWidget {
 
   static Future<void> show(BuildContext context, {Map<String, dynamic>? initialData}) {
     final state = context.read<AutomationState>();
-    return showDialog<void>(
-      context: context,
+    return showAppDialog<void>(
+      context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
         child: SystemDoctorDialog(initialData: initialData),

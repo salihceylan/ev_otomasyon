@@ -14,6 +14,7 @@ import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../theme/tone_button_surface.dart';
 import '../widgets/orb/orb.dart';
+import 'app_dialogs.dart';
 import 'auth_form.dart' show BalancedText, authInputDecoration;
 
 // =============================================================================
@@ -35,6 +36,8 @@ import 'auth_form.dart' show BalancedText, authInputDecoration;
 
 /// Onay diyaloğunun giriş hareketi: ölçek 0.94 -> 1 + solma (220 ms, tek sefer). `MotionMode.off` (varsayılan) ve
 /// "hareketi azalt"ta anında tam görünür. Girdiyi bloklamaz; yalnız dekoratif.
+/// [AppDialogRoute] içinde (`showAppDialog`) rota geçişi zaten solma+ölçek yaptığı için anında tam görünür (çift
+/// geçiş yok); eski `showDialog` ile açılan yerlerde bugünkü gibi canlanır.
 class ConfirmDialogEntrance extends StatefulWidget {
   const ConfirmDialogEntrance({super.key, required this.child});
 
@@ -55,7 +58,7 @@ class _ConfirmDialogEntranceState extends State<ConfirmDialogEntrance> with Sing
     super.didChangeDependencies();
     if (_started) return;
     _started = true;
-    if (MotionScope.enabledOf(context)) {
+    if (MotionScope.enabledOf(context) && !AppDialogScope.isInside(context)) {
       _controller.forward();
     } else {
       _controller.value = 1.0;
@@ -352,8 +355,8 @@ class ConfirmDestructiveDialog extends StatefulWidget {
     String cancelLabel = 'Vazgeç',
     IconData icon = Icons.warning_amber_rounded,
   }) async {
-    final result = await showDialog<bool>(
-      context: context,
+    final result = await showAppDialog<bool>(
+      context,
       builder: (_) => ConfirmDestructiveDialog(
         title: title,
         message: message,
@@ -484,8 +487,8 @@ Future<bool> showSimpleConfirm(
   Key cancelKey = const Key('btn_simple_cancel'),
   Key confirmKey = const Key('btn_simple_confirm'),
 }) async {
-  final result = await showDialog<bool>(
-    context: context,
+  final result = await showAppDialog<bool>(
+    context,
     builder: (ctx) => AuthDialogShell(
       key: dialogKey,
       icon: icon,
@@ -536,8 +539,8 @@ Future<bool> confirmAndLogout(BuildContext context, AutomationState state) async
   if (_logoutRunning) return false;
   // Gezgin, await'ler öncesinde alınır: çağıran widget (ör. profil diyaloğu) kapanmış olabilir.
   final navigator = Navigator.of(context, rootNavigator: true);
-  final confirmed = await showDialog<bool>(
-    context: context,
+  final confirmed = await showAppDialog<bool>(
+    context,
     builder: (ctx) => AuthDialogShell(
       icon: Icons.logout_rounded,
       family: AppFamilies.rose,

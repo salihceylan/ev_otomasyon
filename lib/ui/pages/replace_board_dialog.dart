@@ -8,6 +8,7 @@ import '../../models/api_models.dart';
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/qr_claim_parser.dart';
+import '../common/app_dialogs.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/orb/glass_icon_button.dart';
@@ -39,8 +40,8 @@ class ReplaceBoardDialog extends StatefulWidget {
 
   static Future<void> show(BuildContext context, {SetupScanner scanner = defaultSetupScanner}) {
     final state = context.read<AutomationState>();
-    return showDialog<void>(
-      context: context,
+    return showAppDialog<void>(
+      context,
       // Bariyere dokunmak diyaloğu kapatmaz (PF-46): değişim geri alınamaz bir işlemdir ve sonucu (uyarılar, tek
       // seferlik bulut kimliği) yalnızca bu pencerede gösterilir. Kapatma X düğmesiyle/Kapat ile yapılır; işlem
       // sürerken ikisi de ([PopScope] ile sistem geri tuşu da) engellenir.
@@ -212,8 +213,8 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
     });
 
     final reason = _reason.text.trim();
-    final confirmed = await showDialog<bool>(
-      context: context,
+    final confirmed = await showAppDialog<bool>(
+      context,
       builder: (ctx) => _ConfirmReplaceDialog(
         homeName: _homeName,
         oldBoard: old,

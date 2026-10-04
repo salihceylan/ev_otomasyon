@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../../services/biometric_auth_service.dart';
+import '../common/app_dialogs.dart';
 import '../common/auth_form.dart' show buttonSpinner;
 import '../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../common/inline_message.dart';
@@ -27,8 +28,8 @@ class BiometricPromptDialog extends StatefulWidget {
   const BiometricPromptDialog({super.key, this.biometricLabel = 'Face ID / Parmak İzi'});
 
   static Future<bool?> show(BuildContext context, {String label = 'Face ID / Parmak İzi'}) {
-    return showDialog<bool>(
-      context: context,
+    return showAppDialog<bool>(
+      context,
       barrierDismissible: false,
       builder: (_) => BiometricPromptDialog(biometricLabel: label),
     );

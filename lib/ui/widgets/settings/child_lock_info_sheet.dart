@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../services/automation_state.dart';
+import '../../common/app_dialogs.dart';
 import '../../dashboard/child_lock_status.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/feature_accent.dart';
@@ -11,8 +12,8 @@ import '../orb/orb.dart';
 /// Çocuk kilidi bilgi sayfasını açar: neyi kilitler / kilitlemez, elektrik kesintisinde ne olur,
 /// kapsamı ve kimin değiştirebileceği. Hem ayar kartından hem pano rozetinden açılır.
 Future<void> showChildLockInfoSheet(BuildContext context) {
-  return showModalBottomSheet<void>(
-    context: context,
+  return showAppSheet<void>(
+    context,
     isScrollControlled: true,
     showDragHandle: true,
     useSafeArea: true,

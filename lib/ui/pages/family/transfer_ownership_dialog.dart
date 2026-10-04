@@ -13,6 +13,7 @@ import '../../../services/clock.dart';
 import '../../../utils/friendly_error.dart';
 import '../../../utils/qr_claim_parser.dart';
 import '../../../utils/qr_router.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
@@ -52,8 +53,8 @@ class TransferOwnershipDialog extends StatefulWidget {
 
   static Future<void> show(BuildContext context, {int initialTab = 0}) {
     final state = context.read<AutomationState>();
-    return showDialog(
-      context: context,
+    return showAppDialog(
+      context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
         child: TransferOwnershipDialog(initialTab: initialTab),

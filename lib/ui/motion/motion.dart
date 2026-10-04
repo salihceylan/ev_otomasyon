@@ -15,5 +15,7 @@ export 'fade_through_transitions.dart';
 export 'motion_scope.dart';
 export 'pressable.dart';
 export 'pulse_ring.dart';
+export 'shared_axis.dart';
 export 'skeleton.dart';
 export 'staggered_entrance.dart';
+export 'state_switcher.dart';

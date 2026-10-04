@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../models/capabilities.dart';
 import '../../models/cloud_models.dart';
 import '../../services/automation_state.dart';
+import '../common/app_dialogs.dart';
 import '../pages/system_doctor_dialog.dart';
 import '../pages/wifi_recovery_dialog.dart';
 import '../motion/motion.dart';
@@ -701,8 +702,8 @@ class HomePickerList extends StatelessWidget {
 
 /// Daire seçici alt sayfası (birden çok dairesi olan kullanıcı için).
 Future<void> showHomeSwitcherSheet(BuildContext context) {
-  return showModalBottomSheet<void>(
-    context: context,
+  return showAppSheet<void>(
+    context,
     isScrollControlled: true,
     showDragHandle: true,
     useSafeArea: true,

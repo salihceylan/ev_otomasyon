@@ -9,6 +9,7 @@ import '../../../../models/json_utils.dart';
 import '../../../../services/automation_state.dart';
 import '../../../../utils/friendly_error.dart';
 import '../../../../utils/qr_claim_parser.dart';
+import '../../../common/app_dialogs.dart';
 import '../../../common/confirm_dialogs.dart';
 import '../logic/customer_logic.dart';
 import '../secret_clipboard.dart';
@@ -457,8 +458,8 @@ class EmergencyResetResultDialog extends StatefulWidget {
       'önce RESETKEY, ardından FACTORYINIT ile yazın (fabrika aracı). Yazılana kadar yerel ağdan komut verilemez.';
 
   static Future<bool?> show(BuildContext context, EmergencyResetResult result) {
-    return showDialog<bool>(
-      context: context,
+    return showAppDialog<bool>(
+      context,
       barrierDismissible: false,
       builder: (_) => EmergencyResetResultDialog(result: result),
     );

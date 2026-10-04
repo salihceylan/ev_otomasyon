@@ -10,6 +10,7 @@ import '../../services/automation_state.dart';
 import '../../services/board_network_binding.dart';
 import '../../services/clock.dart';
 import '../../utils/qr_claim_parser.dart';
+import '../common/app_dialogs.dart';
 import '../common/auth_form.dart' show BalancedText;
 import '../common/wifi_provision_panel.dart';
 import '../theme/app_theme.dart';
@@ -74,8 +75,8 @@ class WifiRecoveryDialog extends StatefulWidget {
     Future<String?> Function(BuildContext context)? qrScanner,
   }) {
     final state = context.read<AutomationState>();
-    return showDialog<void>(
-      context: context,
+    return showAppDialog<void>(
+      context,
       routeSettings: const RouteSettings(name: routeName),
       // Yanlışlıkla dışarı dokunmak yazılan Wi-Fi bilgilerini / bekleyen bağlantıyı kaybettirmesin:
       // kapatmak için "Kapat" düğmesi (ya da geri tuşu) kullanılır.

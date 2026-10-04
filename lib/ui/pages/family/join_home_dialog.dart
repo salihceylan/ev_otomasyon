@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../../../services/automation_state.dart';
 import '../../../services/ev_cloud_api_service.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
@@ -63,8 +64,8 @@ class JoinHomeDialog extends StatefulWidget {
 
   static Future<bool?> show(BuildContext context, {String? initialCode}) {
     final state = context.read<AutomationState>();
-    return showDialog<bool>(
-      context: context,
+    return showAppDialog<bool>(
+      context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
         child: JoinHomeDialog(initialCode: initialCode),

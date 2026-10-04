@@ -8,6 +8,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../../../models/cloud_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/app_dialogs.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../motion/motion_scope.dart';
@@ -45,8 +46,8 @@ class InviteFamilyDialog extends StatefulWidget {
 
   static Future<void> show(BuildContext context) {
     final state = context.read<AutomationState>();
-    return showDialog(
-      context: context,
+    return showAppDialog(
+      context,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
         child: const InviteFamilyDialog(),

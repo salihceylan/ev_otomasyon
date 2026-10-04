@@ -4,6 +4,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../../models/json_utils.dart';
 import '../../../../services/automation_state.dart';
+import '../../../common/app_dialogs.dart';
 import '../secret_clipboard.dart';
 import '../secret_value_row.dart';
 import '../setup_style.dart';
@@ -44,8 +45,8 @@ class LabelReissueDialog extends StatefulWidget {
   final LabelReissueResult result;
 
   static Future<void> show(BuildContext context, {required String deviceUuid, required LabelReissueResult result}) {
-    return showDialog<void>(
-      context: context,
+    return showAppDialog<void>(
+      context,
       barrierDismissible: false,
       builder: (_) => LabelReissueDialog(deviceUuid: deviceUuid, result: result),
     );

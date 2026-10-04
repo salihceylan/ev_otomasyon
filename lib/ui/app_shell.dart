@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../services/automation_state.dart';
 import '../services/peace_notice_controller.dart';
+import 'common/app_dialogs.dart';
 import 'common/deep_links.dart';
 import 'dashboard/command_retry.dart';
 import 'theme/app_theme.dart';
@@ -157,8 +158,8 @@ class _AppShellState extends State<AppShell> {
     if (context == null) return;
     _guestDialogOpen = true;
     final name = (homeName == null || homeName.trim().isEmpty) ? 'Bu daire' : homeName.trim();
-    showDialog<void>(
-      context: context,
+    showAppDialog<void>(
+      context,
       builder: (ctx) => AlertDialog(
         key: const Key('dialog_guest_expired'),
         icon: const Icon(Icons.timer_off_outlined, color: AppTheme.accentAmber, size: 32),
