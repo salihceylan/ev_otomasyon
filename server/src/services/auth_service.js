@@ -9,7 +9,9 @@
 //  - Refresh token: OPAK rastgele deger; DB'de YALNIZCA SHA-256 ozeti; her kullanimda doner
 //    (rotation); kullanilmis token tekrar gelirse AILE (family_id) iptal edilir; 30 gun.
 //  - Sifre: en az 10 karakter (en fazla 72 bayt - bcrypt siniri), bcrypt cost 12.
-//  - Sifre degisimi / sifirlama / dondurma -> refresh token'lar iptal + token_version++.
+//  - Sifre degisimi / sifirlama / dondurma -> refresh token'lar iptal + token_version++ + TUM evlerdeki uygulama
+//    MQTT kimlikleri silinir (ayni transaction), acik baglantilar COMMIT sonrasi atilir (UYELIK-02).
+//  - Yer tutucu e-posta (telefon-OTP / Apple gizli / silinmis) disari donen kullanici nesnesinde null (UYELIK-07).
 //  - Google / Apple: YALNIZCA dogrulanmis kimlik jetonu (imza + aud + iss + exp + email_verified).
 //    Jeton yok/gecersiz -> giris REDDEDILIR. Istemciden gelen e-posta/kimlik alanina GUVENILMEZ.
 //  - OTP / sifirlama kodlari: crypto.randomInt, DB'de HMAC(PIN_PEPPER) ozeti; yeniden istek 60 sn
@@ -25,6 +27,8 @@ const jwtConfig = require('../middlewares/jwt_config');
 const { invalidateUserAuthCache } = require('../middlewares/auth_middleware');
 const pin = require('../utils/pin');
 const mailer = require('../utils/mailer');
+// Yalniz saf yardimci (modul yuklenirken db/auth_service gerektirmez; silme servisi auth_service'i tembel kullanir).
+const { isPlaceholderEmail } = require('./account_deletion_service');
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -38,6 +42,8 @@ const ACCOUNT_SETUP_TTL_SEC = 72 * 3600;
 const ADMIN_RESET_TTL_SEC = 60 * 60;
 // Oturum iptali sonrasi push belirteci devre disi birakma: yanit en cok bu kadar bekler (plan §5d-1).
 const PUSH_REVOKE_TIMEOUT_MS = 3000;
+// Oturum iptali sonrasi MQTT baglanti atma (EMQX REST): yanit en cok bu kadar bekler, atma arka planda surer.
+const MQTT_KICK_WAIT_MS = 5000;
 const TIMED_OUT = Symbol('push_revoke_timed_out');
 const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 const APPLE_ISSUER = 'https://appleid.apple.com';
@@ -149,7 +155,8 @@ function isValidCodeFormat(code) {
 function publicUser(user) {
   return {
     id: user.id,
-    email: user.email,
+    // Teslim edilemeyen yer tutucu e-posta disari VERILMEZ (istemci "Belirtilmedi" gosterir); DB satiri aynen kalir.
+    email: isPlaceholderEmail(user.email) ? null : user.email,
     full_name: user.full_name,
     phone: user.phone || null,
     role: user.role || 'user',
@@ -224,6 +231,8 @@ class AuthService {
     this._dummyHashPromise = null;
     // undefined: ilk kullanimda varsayilan ornek kurulur; null: bilincli devre disi (modul yok / test)
     this._pushService = undefined;
+    // undefined: varsayilan mqtt_credential_service modulu; null: bilincli devre disi (modul yok / test)
+    this._mqttCredentials = undefined;
   }
 
   // ----------------------------- DI / test ---------------------------------
@@ -239,6 +248,25 @@ class AuthService {
   /** SMS gonderici: async (phone, text) => ({ sent:boolean }) . Yoksa SMS gonderilemez. */
   setSmsSender(fn) {
     this._smsSender = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * MQTT kimlik servisi (`mqtt_credential_service` ornegi; `revokeAllUserAccess`, `kickUsernames` ve yonetici kalici
+   * silmesinde `revokeHomeAccess` kullanilir). `undefined` verilirse varsayilan modul kullanilir, `null` verilirse
+   * MQTT kimlik iptali ATLANIR (modul yok / test). admin_user_service ayni ornegi buradan alir.
+   */
+  setMqttCredentialService(svc) {
+    this._mqttCredentials = svc === undefined ? undefined : svc;
+  }
+
+  getMqttCredentialService() {
+    if (this._mqttCredentials !== undefined) return this._mqttCredentials;
+    try {
+      return require('./mqtt_credential_service');
+    } catch (err) {
+      if (err && err.code === 'MODULE_NOT_FOUND' && /mqtt_credential_service/.test(String(err.message))) return null;
+      throw err;
+    }
   }
 
   /**
@@ -260,6 +288,31 @@ class AuthService {
       this._pushService = null; // modul yuklenemedi: sessizce atla
     }
     return this._pushService;
+  }
+
+  // ----------------------------- Yetenekler (UYELIK-04) --------------------
+  // Asagidaki kosullar ilgili uclarin 503 kosullarinin TEK kaynagidir (sendPhoneOtp, loginWithGoogle,
+  // loginWithApple); GET /auth/capabilities ayni kosullari istemciye bildirir.
+  _googleAudiences() {
+    return csvEnv('GOOGLE_CLIENT_IDS');
+  }
+
+  _appleAudiences() {
+    return csvEnv('APPLE_CLIENT_IDS');
+  }
+
+  /** Telefon OTP gonderilebilir mi: SMS gonderici bagli VEYA debug OTP izinli (uretimde asla). */
+  _canSendPhoneOtp() {
+    return Boolean(this._smsSender) || isDebugOtpAllowed();
+  }
+
+  /** GET /auth/capabilities: giris yollari sunucuda 503 vermeden calisir mi (yalniz boolean; sir/ayrinti yok). */
+  getCapabilities() {
+    return {
+      sms_otp: this._canSendPhoneOtp(),
+      google: this._googleAudiences().length > 0,
+      apple: this._appleAudiences().length > 0,
+    };
   }
 
   // ----------------------------- Yardimcilar --------------------------------
@@ -589,32 +642,98 @@ class AuthService {
   }
 
   /**
-   * Kullanicinin TUM oturumlarini sonlandirir: refresh token'lar iptal + token_version++
-   * (mevcut access token'lar en gec onbellek suresi icinde gecersiz olur).
+   * Kullanicinin TUM oturumlarini sonlandirir: refresh token'lar iptal + token_version++ (mevcut access token'lar
+   * en gec onbellek suresi icinde gecersiz olur) + TUM evlerdeki uygulama MQTT kimlikleri silinir (UYELIK-02: diger
+   * cihazin acik canli kanali da kesilir; EMQX kimligi token_version'i bilmez). Hepsi TEK transaction'dadir.
    *
    * PUSH BELIRTECI GIZLILIGI (plan §5d-1): oturumlar kapaninca kullanicinin push belirteclerinin de devre disi
    * kalmasi gerekir; aksi halde gece bildirimi (ev adi + acik lamba ozeti) cikis yapmis telefona duser.
-   *  - `tx` YOKSA (ornegin /auth/logout-all) iptal zaten tamamlanmistir: belirteclerin devre disi birakilmasi
-   *    burada, iptalden SONRA yapilir.
-   *  - `tx` VARSA cagiran COMMIT'ten SONRA `revokePushTokens(userId)` cagirmalidir (transaction icinde dis cagri/
-   *    ikinci baglanti yok; tx geri alinirsa belirtece dokunulmaz).
+   *  - `tx` YOKSA (ornegin /auth/logout-all) servis kendi transaction'ini acar; COMMIT SONRASI belirtecler devre
+   *    disi birakilir ve acik MQTT baglantilari atilir (en iyi caba: hata yaniti bozmaz).
+   *  - `tx` VARSA cagiran COMMIT'ten SONRA `revokePushTokens(userId)` ve donen `mqttUsernames` icin
+   *    `kickMqttUsernames(...)` cagirmalidir (transaction icinde dis cagri/ikinci baglanti yok; tx geri alinirsa
+   *    belirtece / baglantiya dokunulmaz).
    * @param {string} userId
    * @param {{tx?:object, reason?:string, bumpTokenVersion?:boolean, disablePushTokens?:boolean}} [opts]
+   * @returns {Promise<{mqttUsernames:string[]}>} tx ile: COMMIT sonrasi atilacak adlar; tx'siz: bos (atildi)
    */
   async revokeAllUserSessions(userId, { tx, reason = 'revoke_all', bumpTokenVersion = true, disablePushTokens } = {}) {
-    if (!userId) return;
-    const q = tx || db;
-    if (bumpTokenVersion) {
-      await q.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [userId]);
+    if (!userId) return { mqttUsernames: [] };
+    if (!tx) {
+      const out = await db.withTransaction((t) =>
+        this.revokeAllUserSessions(userId, { tx: t, reason, bumpTokenVersion, disablePushTokens: false })
+      );
+      invalidateUserAuthCache(userId);
+      if (disablePushTokens !== false) await this.revokePushTokens(userId, { reason });
+      await this.kickMqttUsernames(out.mqttUsernames, { reason });
+      return { mqttUsernames: [] };
     }
-    await q.query(
+    if (bumpTokenVersion) {
+      await tx.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [userId]);
+    }
+    await tx.query(
       `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = $2
         WHERE user_id = $1 AND revoked_at IS NULL`,
       [userId, String(reason).slice(0, 40)]
     );
+    const mqttUsernames = await this.revokeUserMqttCredentials(userId, { tx });
     invalidateUserAuthCache(userId);
-    if (disablePushTokens === undefined ? !tx : disablePushTokens === true) {
+    if (disablePushTokens === true) {
       await this.revokePushTokens(userId, { reason });
+    }
+    return { mqttUsernames };
+  }
+
+  /**
+   * Kullanicinin TUM evlerdeki uygulama MQTT kimliklerini `tx` icinde siler (paylasilan yardimci:
+   * mqtt_credential_service.revokeAllUserAccess; oturumlarin toplu iptali ve yonetici dondurma/kalici silme kullanir).
+   * Ag cagrisi (kick) YAPILMAZ: cagiran COMMIT SONRASI `kickMqttUsernames(usernames)` cagirir. Servis yoksa bos liste.
+   * @returns {Promise<string[]>} atilacak kullanici adlari
+   */
+  async revokeUserMqttCredentials(userId, { tx } = {}) {
+    if (!tx) throw new TypeError('revokeUserMqttCredentials: tx zorunludur (baglanti atma COMMIT sonrasi yapilir).');
+    const svc = this.getMqttCredentialService();
+    if (!userId || !svc || typeof svc.revokeAllUserAccess !== 'function') return [];
+    const r = await svc.revokeAllUserAccess({ userId, tx });
+    return r && Array.isArray(r.usernames) ? r.usernames.slice() : [];
+  }
+
+  /**
+   * COMMIT SONRASI: silinen MQTT kimliklerinin acik baglantilarini atar (EMQX REST). En iyi caba: ASLA firlatmaz,
+   * yaniti bozmaz ve en cok MQTT_KICK_WAIT_MS bekler (atma arka planda surer). Log'a kullanici adi / hata ayrintisi
+   * YAZILMAZ (yalniz neden, sayi ve hata kodu).
+   * @returns {Promise<boolean>} tum baglantilar atildi mi (yapilandirma yok / hata / zaman asimi: false)
+   */
+  async kickMqttUsernames(usernames, { reason = 'sessions_revoked' } = {}) {
+    const list = Array.isArray(usernames) ? usernames.filter((u) => typeof u === 'string' && u) : [];
+    if (list.length === 0) return true;
+    const who = `${String(reason).replace(/[^A-Za-z0-9_.-]/g, '?').slice(0, 30)}, ${list.length} kimlik`;
+    let timer = null;
+    try {
+      const svc = this.getMqttCredentialService();
+      if (!svc || typeof svc.kickUsernames !== 'function') return false;
+      const limitMs = Number.isFinite(this._mqttKickWaitMs) && this._mqttKickWaitMs > 0
+        ? this._mqttKickWaitMs
+        : MQTT_KICK_WAIT_MS; // alan yalnizca testlerde ezilir
+      const work = Promise.resolve().then(() => svc.kickUsernames(list));
+      work.catch(() => {}); // zaman asiminda gec gelen hata yutulur
+      const timeout = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), limitMs);
+        if (typeof timer.unref === 'function') timer.unref();
+      });
+      const r = await Promise.race([work, timeout]);
+      if (r === TIMED_OUT) {
+        console.warn(`[AUTH] MQTT baglanti atma zaman asimina ugradi (${who}); arka planda surer.`);
+        return false;
+      }
+      // Yapilandirma yok / kismi hata: mqtt_credential_service zaten uyari yazar.
+      return !(r && (r.skipped || r.failed > 0));
+    } catch (err) {
+      const kind = err && typeof err.code === 'string' && /^[A-Za-z0-9_]{1,12}$/.test(err.code) ? err.code : (err && err.name) || 'Error';
+      console.warn(`[AUTH] MQTT baglanti atma basarisiz (${who}): ${kind}`);
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -670,10 +789,12 @@ class AuthService {
   }
 
   /**
-   * Parolayi ayarlar (bcrypt 12) ve tum oturumlari sonlandirir. Yonetici akislari da kullanir.
+   * Parolayi ayarlar (bcrypt 12) ve tum oturumlari sonlandirir (uygulama MQTT kimlikleri dahil). Yonetici akislari
+   * da kullanir. `tx` ile cagrilirsa silinen MQTT kimlik adlari `revokedMqtt` dizisine eklenir; cagiran COMMIT
+   * SONRASI `kickMqttUsernames(revokedMqtt)` cagirir.
    * @returns {Promise<object>} guncel kullanici satiri
    */
-  async setPassword(userId, newPassword, { tx, mustChange = false, markEmailVerified = false, activate = false } = {}) {
+  async setPassword(userId, newPassword, { tx, mustChange = false, markEmailVerified = false, activate = false, revokedMqtt } = {}) {
     validatePassword(newPassword);
     const q = tx || db;
     const hash = await bcrypt.hash(newPassword, bcryptCost());
@@ -690,7 +811,8 @@ class AuthService {
       [hash, Boolean(mustChange), Boolean(markEmailVerified), Boolean(activate), userId]
     );
     if (r.rows.length === 0) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
-    await this.revokeAllUserSessions(userId, { tx, reason: 'password_changed', bumpTokenVersion: false });
+    const { mqttUsernames } = await this.revokeAllUserSessions(userId, { tx, reason: 'password_changed', bumpTokenVersion: false });
+    if (Array.isArray(revokedMqtt)) revokedMqtt.push(...mqttUsernames);
     return r.rows[0];
   }
 
@@ -708,8 +830,9 @@ class AuthService {
     const ok = await this._comparePassword(current_password, user.password_hash);
     if (!ok) throw httpError(400, 'Mevcut şifre hatalı.', 'INVALID_CREDENTIALS');
 
+    const revokedMqtt = [];
     const updated = await db.withTransaction(async (tx) => {
-      const u = await this.setPassword(userId, new_password, { tx, mustChange: false });
+      const u = await this.setPassword(userId, new_password, { tx, mustChange: false, revokedMqtt });
       return u;
     });
     invalidateUserAuthCache(userId);
@@ -717,6 +840,9 @@ class AuthService {
     // Bu cihaz oturumda KALIR ama belirteci de kapanir: istemci yeni oturumdan sonra belirtecini yeniden kaydeder
     // (PUT /me/push-tokens; docs/FLUTTER_API_CHANGES.md).
     await this.revokePushTokens(userId, { reason: 'password_changed' });
+    // Uygulama MQTT kimlikleri tx icinde silindi: diger cihazlarin acik canli kanali COMMIT sonrasi kesilir
+    // (bu cihaz yeni oturumla kimligi yeniden alir: POST /homes/:id/mqtt-credentials).
+    await this.kickMqttUsernames(revokedMqtt, { reason: 'password_changed' });
     // Bu cihaz icin yeni oturum (diger tum cihazlar dusurulur).
     return this._buildUserAuthResponse(updated, { ip });
   }
@@ -802,14 +928,13 @@ class AuthService {
             WHERE phone = $1 AND is_active = TRUE AND account_status IN ('active', 'pending_invite')`,
           [id.value]
         );
-      const user = userRes.rows.length === 1 ? userRes.rows[0] : null;
+      const found = userRes.rows.length === 1 ? userRes.rows[0] : null;
+      // Yer tutucu e-postali hesap (telefon-OTP / Apple gizli) e-postayla teslim edilemez (UYELIK-08): kayitsiz kimlik
+      // gibi islenir -> kullaniciya bagli talep ACILMAZ, gonderim denenmez. Yazilan kullanicisiz (tuketilemez) satir
+      // yalniz 60 sn / saatte 5 sinirlarinin kayitsiz kimlikle AYNI islemesi icindir (aksi halde hesap varligi sizar).
+      const user = found && !isPlaceholderEmail(found.email) ? found : null;
 
-      // Onceki aktif talepler kapatilir (yeni kod gecerli tek koddur).
-      await tx.query(
-        `UPDATE password_resets SET used_at = NOW()
-          WHERE identifier = $1 AND used_at IS NULL`,
-        [id.value]
-      );
+      // Onceki gecerli talepler burada KAPATILMAZ: yeni kod teslim edilince kapatilir (UYELIK-K1, asagida).
       const ins = await tx.query(
         `INSERT INTO password_resets (user_id, identifier, code_hash, token_hash, expires_at, attempts, purpose)
          VALUES ($1, $2, $3, $4, NOW() + make_interval(secs => $5::int), $6, 'reset')
@@ -825,23 +950,33 @@ class AuthService {
       resend_after: RESEND_COOLDOWN_SEC,
     };
 
-    if (created.user) {
-      const result = await mailer.sendPasswordResetEmail({
-        to: created.user.email,
-        code,
-        link: this._resetLink(token),
-        expiresMinutes: Math.max(1, Math.round(ttlSec / 60)),
-      });
-      if (!result.sent && result.reason !== mailer.REASONS.INVALID_RECIPIENT && !debug) {
-        if (created.resetId) {
-          await db.query('UPDATE password_resets SET used_at = NOW() WHERE id = $1', [created.resetId]);
-        }
-        throw httpError(503, 'Şifre sıfırlama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.', 'DELIVERY_FAILED', { expose: true });
+    if (!created.user) return response;
+
+    const result = await mailer.sendPasswordResetEmail({
+      to: created.user.email,
+      code,
+      link: this._resetLink(token),
+      expiresMinutes: Math.max(1, Math.round(ttlSec / 60)),
+    });
+    if (!result.sent && !debug) {
+      // Yalniz teslim edilemeyen YENI talep iptal; elde olan ESKI gecerli kod/baglanti kullanilabilir kalir (UYELIK-K1).
+      if (created.resetId) {
+        await db.query('UPDATE password_resets SET used_at = NOW() WHERE id = $1', [created.resetId]);
       }
-      if (debug) {
-        response.debug_code = code;
-        response.debug_token = token;
-      }
+      if (result.reason === mailer.REASONS.INVALID_RECIPIENT) return response; // genel yanit (hesap varligi sizmaz)
+      throw httpError(503, 'Şifre sıfırlama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.', 'DELIVERY_FAILED', { expose: true });
+    }
+    // Yeni kod teslim edildi (ya da gelistirmede debug): onceki talepler artik gecersiz (gecerli tek kod budur).
+    if (created.resetId) {
+      await db.query(
+        `UPDATE password_resets SET used_at = NOW()
+          WHERE identifier = $1 AND used_at IS NULL AND id <> $2`,
+        [id.value, created.resetId]
+      );
+    }
+    if (debug) {
+      response.debug_code = code;
+      response.debug_token = token;
     }
     return response;
   }
@@ -975,6 +1110,7 @@ class AuthService {
     const request = await this._consumeResetRequest({ identifier, code, token });
     if (!request.user_id) throw httpError(400, 'Geçersiz veya süresi dolmuş kod.', 'VALIDATION');
 
+    const revokedMqtt = [];
     const user = await db.withTransaction(async (tx) => {
       const current = await this._findUserById(tx, request.user_id);
       if (!current || current.is_active === false || current.account_status === 'suspended') {
@@ -985,6 +1121,7 @@ class AuthService {
         mustChange: false,
         markEmailVerified: true,
         activate: true,
+        revokedMqtt,
       });
       // Kullaniciya ait diger acik talepler kapatilir.
       await tx.query('UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL', [current.id]);
@@ -994,6 +1131,7 @@ class AuthService {
     // Push belirteci gizliligi (plan §5d-1): tum oturumlar kapandi -> COMMIT sonrasi belirteclerde de kapat.
     // Yanit bu cihaza yeni oturum verir; istemci belirtecini yeniden kaydeder (PUT /me/push-tokens).
     await this.revokePushTokens(user.id, { reason: 'password_reset' });
+    await this.kickMqttUsernames(revokedMqtt, { reason: 'password_reset' });
 
     const auth = await this._buildUserAuthResponse(user, { ip });
     return { ...auth, message: 'Şifreniz yenilendi. Diğer tüm oturumlarınız kapatıldı.' };
@@ -1028,7 +1166,7 @@ class AuthService {
     if (!cleanPhone) throw httpError(400, 'Geçerli bir telefon numarası giriniz (örn: +905xxxxxxxxx).', 'VALIDATION');
 
     const debug = isDebugOtpAllowed();
-    if (!this._smsSender && !debug) {
+    if (!this._canSendPhoneOtp()) {
       throw httpError(503, 'SMS doğrulama servisi şu anda kullanılamıyor.', 'DELIVERY_FAILED', { expose: true });
     }
 
@@ -1041,10 +1179,7 @@ class AuthService {
         keyCol: 'phone',
         key: cleanPhone,
       });
-      await tx.query(
-        'UPDATE phone_otp_codes SET consumed_at = NOW() WHERE phone = $1 AND consumed_at IS NULL',
-        [cleanPhone]
-      );
+      // Onceki gecerli kod burada KAPATILMAZ: yeni kod teslim edilince kapatilir (UYELIK-K1, asagida).
       const ins = await tx.query(
         `INSERT INTO phone_otp_codes (phone, otp_hash, expires_at, attempts)
          VALUES ($1, $2, NOW() + make_interval(secs => $3::int), $4)
@@ -1057,9 +1192,18 @@ class AuthService {
     if (this._smsSender) {
       const sms = await this._sendSms(cleanPhone, `AHBU doğrulama kodunuz: ${code}. Kimseyle paylaşmayın.`);
       if (!sms.sent && !debug) {
+        // Yalniz teslim edilemeyen YENI kod iptal; elde olan ESKI gecerli kod kullanilabilir kalir.
         if (otpId) await db.query('UPDATE phone_otp_codes SET consumed_at = NOW() WHERE id = $1', [otpId]);
         throw httpError(503, 'Doğrulama kodu gönderilemedi. Lütfen daha sonra tekrar deneyin.', 'DELIVERY_FAILED', { expose: true });
       }
+    }
+    // Yeni kod teslim edildi (SMS ya da gelistirmede debug): onceki kodlar artik gecersiz (gecerli tek kod budur).
+    if (otpId) {
+      await db.query(
+        `UPDATE phone_otp_codes SET consumed_at = NOW()
+          WHERE phone = $1 AND consumed_at IS NULL AND id <> $2`,
+        [cleanPhone, otpId]
+      );
     }
 
     const out = {
@@ -1145,7 +1289,7 @@ class AuthService {
 
   // ----------------------------- Sosyal giris ------------------------------
   async loginWithGoogle({ id_token } = {}, { ip } = {}) {
-    const audiences = csvEnv('GOOGLE_CLIENT_IDS');
+    const audiences = this._googleAudiences();
     if (audiences.length === 0) {
       throw httpError(503, 'Google ile giriş şu anda kullanılamıyor.', 'SERVICE_UNAVAILABLE', { expose: true });
     }
@@ -1186,7 +1330,7 @@ class AuthService {
   }
 
   async loginWithApple({ identity_token, full_name, nonce } = {}, { ip } = {}) {
-    const audiences = csvEnv('APPLE_CLIENT_IDS');
+    const audiences = this._appleAudiences();
     if (audiences.length === 0) {
       throw httpError(503, 'Apple ile giriş şu anda kullanılamıyor.', 'SERVICE_UNAVAILABLE', { expose: true });
     }
@@ -1239,6 +1383,7 @@ class AuthService {
 
     let user;
     let sessionsRevoked = false; // on-hesap-ele-gecirme savunmasi calistiysa (push belirteci gizliligi, plan §5d-1)
+    const revokedMqtt = []; // ayni savunmada silinen uygulama MQTT kimlikleri (COMMIT sonrasi atilir)
     try {
       user = await db.withTransaction(async (tx) => {
         let r = await tx.query(`SELECT ${USER_COLS} FROM users WHERE ${idCol} = $1 FOR UPDATE`, [subject]);
@@ -1262,11 +1407,9 @@ class AuthService {
                   RETURNING ${USER_COLS}`,
                 [subject, unusable, found.id]
               );
-              await tx.query(
-                `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'social_link'
-                  WHERE user_id = $1 AND revoked_at IS NULL`,
-                [found.id]
-              );
+              // Eski hesabin TUM oturumlari + uygulama MQTT kimlikleri (token_version yukarida artti).
+              const revoked = await this.revokeAllUserSessions(found.id, { tx, reason: 'social_link', bumpTokenVersion: false });
+              revokedMqtt.push(...revoked.mqttUsernames);
               sessionsRevoked = true;
               found = upd.rows[0];
             } else {
@@ -1312,7 +1455,10 @@ class AuthService {
     invalidateUserAuthCache(user.id);
     // Eski (dogrulanmamis) hesabin oturumlari kapandi: o hesapla kayit edilmis push belirteclerini de kapat
     // (onceden kayit olan saldirganin telefonu ev bildirimlerini almaya devam etmesin). COMMIT sonrasi.
-    if (sessionsRevoked) await this.revokePushTokens(user.id, { reason: 'social_link' });
+    if (sessionsRevoked) {
+      await this.revokePushTokens(user.id, { reason: 'social_link' });
+      await this.kickMqttUsernames(revokedMqtt, { reason: 'social_link' });
+    }
     return this._buildUserAuthResponse(user, { ip });
   }
 

@@ -120,6 +120,14 @@ class ApiException implements Exception {
   /// (`DEVICE_OFFLINE`, `SOLE_OWNER` ...) başka anlam taşır ve yenilemeyle düzelmez.
   bool get isConflict => code == 'CONFLICT';
 
+  /// 4xx gövdesindeki makine okunur alt neden (`reason`; ör. uç nokta güncellemesinde `409 CONFLICT` için
+  /// `NOT_APPLIED` = pano süreyi uygulamadı, `TYPE_CHANGED` = kanal yerleşimi değişti). Eski sunucu göndermeyebilir:
+  /// yoksa / boşsa / metin değilse `null`.
+  String? get reason {
+    final value = details?['reason'];
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
   /// Hesap silinemiyor: kullanıcı bazı evlerin **tek sahibi** (409 `SOLE_OWNER`); önce devretmelidir.
   bool get isSoleOwner => code == 'SOLE_OWNER';
 

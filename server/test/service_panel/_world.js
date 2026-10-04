@@ -327,6 +327,22 @@ function createWorld({ clock = createClock() } = {}) {
   db.on("DELETE FROM mqtt_credentials WHERE user_id = $1 AND kind = 'app' RETURNING username", (ctx) =>
     deleteCreds(ctx, (c) => c.user_id === ctx.params[0] && c.kind === 'app')
   );
+  // revokeHomeAccess({ includeDevice: true }) - bos daire silinirken (UYELIK-03)
+  db.on("DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind IN ('app', 'device') RETURNING username", (ctx) =>
+    deleteCreds(ctx, (c) => c.home_id === ctx.params[0] && (c.kind === 'app' || c.kind === 'device'))
+  );
+  // DELETE FROM homes: ON DELETE CASCADE tablolari birlikte gider (migration 001-028), SET NULL olanlar bosaltilir
+  db.on('DELETE FROM homes WHERE id = $1', (ctx) => {
+    const homeId = ctx.params[0];
+    const removed = removeRows(ctx, s.homes, (x) => x.id === homeId);
+    if (removed.length === 0) return { rows: [], rowCount: 0 };
+    for (const table of ['home_users', 'mqtt_credentials', 'service_tokens', 'service_sessions', 'home_invitations', 'home_transfers', 'scheduled_rules', 'home_admin_assign_otps']) {
+      removeRows(ctx, s[table], (r) => r.home_id === homeId);
+    }
+    for (const d of s.devices.filter((x) => x.home_id === homeId)) patch(ctx, d, { home_id: null });
+    for (const a of s.device_audit_logs.filter((x) => x.home_id === homeId)) patch(ctx, a, { home_id: null });
+    return { rows: [], rowCount: removed.length };
+  });
   db.on((sql) => sql.startsWith('INSERT INTO home_admin_assignment_logs'), (ctx) => {
     const [homeId, homeName, actorId, actorRole, ip, mode, previous, newOwner, created, reason] = ctx.params;
     insert(ctx, s.home_admin_assignment_logs, {

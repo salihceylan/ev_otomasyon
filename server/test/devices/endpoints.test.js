@@ -200,7 +200,7 @@ test('D12 tip yarisi: kilitsiz okumadan sonra kanal panjur olursa PUT {type:plug
   const ctx = setup();
   const target = ctx.ep(5);
   raceAfterRead(ctx, () => Object.assign(target, { type: 'shutter', shutter_pair_index: 3, shutter_duration_sec: 20 }));
-  const err = await expectHttp(ctx.update(target, { type: 'plug', name: 'Salon Priz' }), 409, 'CONFLICT');
+  const err = await expectHttp(ctx.update(target, { type: 'plug', name: 'Salon Priz' }), 409, 'CONFLICT', { reason: 'TYPE_CHANGED' });
   assert.strictEqual(err.message, TYPE_CHANGED);
   assert.strictEqual(target.type, 'shutter', 'panjur satirina plug yazilmamali');
   assert.strictEqual(target.shutter_pair_index, 3);
@@ -279,7 +279,7 @@ test('D12 sure yolu yarisi: yayindan sonra kanal panjur olmaktan cikarsa 409 CON
     Object.assign(target, { type: 'light', shutter_pair_index: null, shutter_duration_sec: null });
     Object.assign(mate, { type: 'light', shutter_pair_index: null, shutter_duration_sec: null });
   });
-  const err = await expectHttp(ctx.update(target, { shutter_duration_sec: 33, name: 'X' }), 409, 'CONFLICT');
+  const err = await expectHttp(ctx.update(target, { shutter_duration_sec: 33, name: 'X' }), 409, 'CONFLICT', { reason: 'TYPE_CHANGED' });
   assert.strictEqual(err.message, TYPE_CHANGED);
   assert.strictEqual(ctx.bridge.commands.length, 1, 'yayin transaction oncesi yapildi (tasarim: yayin once, DB sonra)');
   assert.strictEqual(target.name, 'Salon Panjur Yukarı');

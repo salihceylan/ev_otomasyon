@@ -7,18 +7,23 @@ import '../theme/tokens.dart';
 import '../widgets/orb/orb.dart';
 import '../widgets/surface_card.dart';
 import 'close_all_lights_button.dart';
+import 'connection_status.dart';
 
 /// Gece huzur bandı: evde açık lamba varsa "Hepsini Kapat" önerir. Toplu komut yetkisi
 /// (`canUseGroupCommands`) yoksa (misafir) görünmez. Anahtar: `Key('banner_peace')`.
+///
+/// Pano **kesin** çevrimdışıyken ([deviceKnownOffline]: bulutta `devicePresence == offline`, doğrudan kipte cihaza
+/// ulaşılamıyor) de görünmez: açık lamba sayısı son bilinen değerdir (bilinmez) ve "Hepsini Kapat" sunucuda
+/// `409 DEVICE_OFFLINE` ile düşerdi. Çevrimdışı uyarısı panoda ayrıca gösterilir.
 class PeaceBanner extends StatelessWidget {
   const PeaceBanner({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final vm = context.select<AutomationState, ({int lights, bool canUse})>(
-      (s) => (lights: s.openLightsCount, canUse: s.capabilities.canUseGroupCommands),
+    final vm = context.select<AutomationState, ({int lights, bool canUse, bool offline})>(
+      (s) => (lights: s.openLightsCount, canUse: s.capabilities.canUseGroupCommands, offline: deviceKnownOffline(s)),
     );
-    if (!vm.canUse || vm.lights <= 0) return const SizedBox.shrink();
+    if (!vm.canUse || vm.offline || vm.lights <= 0) return const SizedBox.shrink();
 
     final accent = AppFamilies.amber.base;
     // Yazı boyutları şartname tabanının (12 sp) üstünde: başlık 14 (AppText.body) / alt metin 12.5 (AppText.caption).

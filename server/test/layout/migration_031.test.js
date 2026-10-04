@@ -82,11 +82,12 @@ test('calistirici: listMigrationFiles 031\'i surum 31 olarak, 030\'dan hemen son
   const names = files.map((f) => f.name);
   assert.equal(names.indexOf(FILE), names.indexOf(PREV) + 1);
   assert.equal(files.filter((f) => f.version === 31).length, 1);
-  // bos bir veritabaninda 030 uygulanmisken yalniz 031 bekler ve sira disi sayilmaz
+  // 030'a kadar uygulanmis bir veritabaninda 031 bekler ve sira disi sayilmaz (sonraki migration'lar da bekler)
   const { planMigrations } = require('../../scripts/migrate');
-  const applied = new Map(names.filter((n) => n !== FILE).map((n) => [n, { checksum: null, baseline: false }]));
+  const applied = new Map(files.filter((f) => f.version <= 30).map((f) => [f.name, { checksum: null, baseline: false }]));
   const plan = planMigrations(files, applied);
-  assert.deepEqual(plan.pending.map((f) => f.name), [FILE]);
+  assert.equal(plan.pending[0].name, FILE);
+  assert.ok(plan.pending.every((f) => f.version >= 31), 'yalniz 031 ve sonrasi bekler');
   assert.deepEqual(plan.outOfOrder, []);
 });
 

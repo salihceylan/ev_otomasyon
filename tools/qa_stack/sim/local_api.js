@@ -5,6 +5,8 @@
 //    423 {"error":"locked","retry_after":N} + Retry-After basligi (kilit dogru anahtari da engeller). Anahtarsiz istek 401'dir ama deneme sayilmaz.
 //    Tum kaynaklardan 60 sn'de 20 hatali anahtar -> tum anahtarli erisim 60 sn kilitli (NetUtil::AuthLimiter portu: sim/fw/net_time.js).
 //  * Provizyonsuz cihaz (local_key yok): yalniz POST /api/factory/init ve kisitli GET /api/status; anahtarli uclar 403 "unprovisioned".
+//    factory/init: hizli ret + ATOMIK cm.provisionIfEmpty (seri FACTORYINIT ile ortak yol; govde ayristirilirken yazilan anahtar ezilmez -> 403);
+//    bicim hatasi 400 invalid_*, NVS yazma hatasi 503 "storage" (rekey de ayni: 503 "storage", eski anahtar gecerli kalir).
 //  * Wi-Fi servis akisi (CONTRACTS 3d): GET /api/wifi/scan, POST /api/wifi/connect ve YENI GET /api/wifi/status "AP_OR_KEYED"dir: gecerli X-Device-Key
 //    YA DA (istemci SoftAP arayuzunde + AP su an FIILEN WPA2 + gecerli ap_pass >= 8 + cihaz provizyonlu; karar sim/fw/ap_access.js). Digerleri (20 uc)
 //    yalniz anahtarla acilir (AP istemcisi 401). AP kaynakli yolda yanlis anahtar hata sayacina islenmez ve 423 yoklanmaz; hiz siniri yalniz AP kaynakli
@@ -27,6 +29,7 @@ import {
   cStrLen, constantTimeEquals, copyUtf8Truncated, isCleanUtf8, isPrintableAsciiNoSpace, parseIntStrict, sanitizeInto, sanitizeUtf8,
 } from './fw/netutil.js';
 import { ConnectRequest } from './fw/wifi_manager.js';
+import { ProvisionResult } from './fw/config_manager.js';
 import { isInt } from './command_schema.js';
 import { AuthLimiter, ScanGate, ScanDriver, ScanPoll, ScanDecision } from './fw/net_time.js';
 import { ConnectLimiter, apOrigin, clientOnSoftAp, ipToU32, via, VIA_AP } from './fw/ap_access.js';
@@ -58,6 +61,9 @@ export class PortalState {
     this.apConnect = new ConnectLimiter();     // AP kaynakli ANAHTARSIZ POST /api/wifi/connect: 60 sn'de en cok 6 (GLOBAL)
     this.wifiRestorePending = false;
     this.cachedNetworks = [];
+    // QA (yalniz test; firmware'de YOK): factory/init govdesi ayristirilip dogrulandiktan SONRA, yazimdan ONCE BIR KEZ cagrilir.
+    // Firmware'de WebTask govdeyi ayristirirken loopTask'in seri FACTORYINIT'i araya girebilir (SERVIS-04); kanca bu araya girmeyi modeller.
+    this.qaBeforeProvision = null;
   }
 
   /** WebTask her turda (housekeeping): dolan kilit/hiz siniri/tarama sayaclari sonlandirilir (N6: bayat kilit/"scanning" kalmaz). */
@@ -783,6 +789,9 @@ function makeHandlers(sim, fw, ctx) {
   };
 
   // ---- kimlik / provizyon
+  // Bastaki denetim yalniz HIZLI RET'tir (govde okunmadan); KESIN denetim yazmayla ayni kilit altinda cm.provisionIfEmpty icindedir
+  // (seri FACTORYINIT de ayni yolu kullanir): govde ayristirilirken baska baglam anahtari yazdiysa 403, yeni anahtar EZILMEZ (SERVIS-04).
+  // Bicim hatalari 400 invalid_*; bicim gecip NVS'e yazilamazsa 503 storage (CONTRACTS 3b; SERVIS-03), cihaz provizyonsuz kalir.
   h.factoryInit = () => {
     if (cm.hasLocalKey()) return err(403, 'already_provisioned');
     const j = readJson();
@@ -795,8 +804,14 @@ function makeHandlers(sim, fw, ctx) {
     const al = Buffer.byteLength(ap.v);
     if (kl < LOCAL_KEY_MIN_LEN || kl > LOCAL_KEY_MAX_LEN || !isPrintableAsciiNoSpace(k.v)) return err(400, 'invalid_key');
     if (al < AP_PASS_MIN_LEN || al > AP_PASS_MAX_LEN) return err(400, 'invalid_ap_pass');
-    if (!cm.setLocalKey(k.v)) return err(400, 'invalid_key');
-    if (!cm.setApPass(ap.v)) { cm.clearLocalKey(); return err(400, 'invalid_ap_pass'); }
+    const race = portal.qaBeforeProvision;
+    portal.qaBeforeProvision = null;
+    if (race) race();
+    const r = cm.provisionIfEmpty(k.v, ap.v);
+    if (r === ProvisionResult.ALREADY) return err(403, 'already_provisioned');
+    if (r === ProvisionResult.INVALID_KEY) return err(400, 'invalid_key');
+    if (r === ProvisionResult.INVALID_AP_PASS) return err(400, 'invalid_ap_pass');
+    if (r !== ProvisionResult.OK) return err(503, 'storage');
     sim.event('provisioned', {});
     wifi.applyApConfigChange();   // acik kurulum AP'si WPA2 + ap_pass ile ~1,5 sn sonra yeniden baslar
     return ok();
@@ -810,7 +825,8 @@ function makeHandlers(sim, fw, ctx) {
     if (f.s !== 'ok') return err(400, 'invalid_key');
     const kl = Buffer.byteLength(f.v);
     if (kl < LOCAL_KEY_MIN_LEN || kl > LOCAL_KEY_MAX_LEN || !isPrintableAsciiNoSpace(f.v)) return err(400, 'invalid_key');
-    if (!cm.setLocalKey(f.v)) return err(500, 'storage_error');
+    // bicim yukarida dogrulandi (SystemConfig kurali ile ayni): false yalniz NVS hatasidir -> 503 storage; eski anahtar gecerli kalir
+    if (!cm.setLocalKey(f.v)) return err(503, 'storage');
     sim.event('rekeyed', {});
     return ok();
   };

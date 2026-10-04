@@ -47,6 +47,11 @@
 //     doneminin basinda bekleyen niyet (cocuk kilidi, pano degisimi sonrasi panjur sureleri) cihaz durumundan
 //     farkliysa `publishCommand` yoluyla bir kez uygulanir. Ana state yolunu (toplu UPDATE, retain farkindaligi,
 //     sorgu/transaction sayisi) DEGISTIRMEZ: ek sorgular ayri, sonradan ve hata yalitimli calisir.
+//   - CIHAZ ONAYI BEKLEME (DAIRE-03): `expectAck(topicId, commandId, timeoutMs)` -> Promise<boolean>. Firmware
+//     basarili komutta `state.last_id`'yi komut kimligine esitler ve hemen yayinlar; reddettigi komutta last_id
+//     DEGISMEZ. Bekleyici YAYINDAN ONCE kurulur (hizli yanki kacmaz); yalniz CANLI state onaydir (retained bayat
+//     olabilir) ve kuyruk birlestirmesinden ONCE denetlenir (ara state'teki yanki kaybolmaz). Zaman asimi / end() /
+//     cancelAck -> false. Toplam bekleyici sayisi ACK_MAX_WAITERS ile sinirlidir (dolunca yeni bekleme 503).
 //   - YERLESIM ESITLEME (WP-L, CONTRACTS §2.4b): services/endpoint_layout_sync.js; yalniz `layoutSync: true` ile
 //     (uretim tekili). Dogrulanmis her state'in HAM yukunden panonun bildirdigi yerlesim (role id + tip + ad, panjur
 //     ciftleri) cikarilir (utils/endpoint_layout.js `extractReportedLayout`; en kucuk suphede null). Yalniz CANLI
@@ -81,6 +86,8 @@ const MAX_COMMAND_BYTES = 1024; // giden komut ust siniri (firmware JSON havuzu 
 const MAX_ARRAY_ITEMS = 64;
 const MAX_RELAY_ID = 64;
 const MAX_SHUTTER_PAIR = 32;
+const ACK_MAX_WAITERS = 1000; // es zamanli cihaz onayi bekleyicisi ust siniri (bellek korumasi)
+const ACK_MAX_TIMEOUT_MS = 30 * 1000; // tek bekleyicinin en uzun suresi
 
 const DEFAULTS = Object.freeze({
   host: '127.0.0.1',
@@ -348,6 +355,11 @@ function buildHomeChildLockSync(homeId) {
   };
 }
 
+/** Onay bekleyicisi anahtari: konu ve komut kimligi kurallari `|` icermez. */
+function ackKey(topicId, commandId) {
+  return `${topicId}|${commandId}`;
+}
+
 /** Bir komut/sys yuku icin JSON uretir; boyut ve tip denetimi yapar. */
 function serializeCommand(obj) {
   if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
@@ -561,6 +573,8 @@ class MqttBridge {
     this._resubscribeDelayMs = DEFAULTS.resubscribeDelayMs;
     this._sweepTimer = null;
     this._warned = new Map(); // anahtar -> son uyari zamani
+    this._ackWaiters = new Map(); // ackKey(topicId, commandId) -> Set<{ finish(ok) }> (DAIRE-03)
+    this._ackCount = 0;
     this._queue = new KeyedWorkQueue({
       concurrency: DEFAULTS.queueConcurrency,
       maxPending: DEFAULTS.queueMaxPending,
@@ -798,6 +812,8 @@ class MqttBridge {
       this._reconciler = createDeviceReconciler({
         db: this.db,
         publishCommand: (topicId, cmd) => this.publishCommand(topicId, cmd),
+        // Bekleyen yerel anahtar (SERVIS-01): `ev/{t}/sys` yonetim yayini (yuk loglanmaz).
+        publishSys: (topicId, obj) => this.publishSys(topicId, obj),
         isConnected: () => this.isConnected(),
         logger: this.logger,
         now: this.now,
@@ -821,6 +837,16 @@ class MqttBridge {
     } catch (err) {
       this._warnOnce('reconcile-notify', `Uzlastirici bildirimi hatasi: ${err && err.message ? err.message : 'bilinmiyor'}`);
     }
+  }
+
+  /**
+   * Sunucu tarafinda bu ev icin yeni bir BEKLEYEN niyet yazildi (ornegin acil sifirlama yerel anahtari bekleyen yapti,
+   * SERVIS-01/K1): uzlastirici evin cevrimici donem kaydini sifirlar, boylece cihazin SONRAKI canli state'i kontrol
+   * planlar (pano kopruyle kisa kopukluk boyunca bagli kalmissa yeni donem hic baslamazdi). En iyi caba: ASLA firlatmaz.
+   */
+  requestReconcile(topicId) {
+    if (!this._reconcileEnabled || !isValidTopicId(topicId)) return;
+    this._notifyReconciler('rearm', topicId);
   }
 
   // -- Yerlesim esitleme (WP-L, CONTRACTS §2.4b) --------------------------------------
@@ -908,6 +934,10 @@ class MqttBridge {
       this._resubscribeTimer = null;
     }
     this._queue.clear();
+    // Bekleyen cihaz onaylari: kapanista onay gelemez -> hepsi false (cagiran "uygulanmadi" sayar, DB'ye yazmaz).
+    for (const set of [...this._ackWaiters.values()]) {
+      for (const waiter of [...set]) waiter.finish(false);
+    }
     if (this._reconciler && typeof this._reconciler.stop === 'function') {
       try {
         this._reconciler.stop();
@@ -1025,6 +1055,10 @@ class MqttBridge {
         );
       }
       this.counters.state++;
+      // Cihaz onayi (DAIRE-03): yalniz CANLI state; kuyruga/birlestirmeye girmeden (ara state'teki yanki kaybolmasin).
+      if (!retain && check.value.lastId && this._ackCount > 0) {
+        this._settleAcks(ackKey(parsed.topicId, check.value.lastId), true);
+      }
       // Yerlesim (WP-L): dogrulama BASARILI olduktan sonra HAM yukten cikarilir (esitleme kapaliysa cikarilmaz).
       // Kapanisa girer: kuyruk birlestirmesi en yeni mesajin degerini + yerlesimini birlikte kullanir.
       const layout = this._layoutSyncEnabled ? this._extractLayout(obj) : null;
@@ -1243,6 +1277,70 @@ class MqttBridge {
     return { topic, payload };
   }
 
+  /**
+   * Cihaz ONAYI bekleyicisi (DAIRE-03). Firmware basarili komutta `state.last_id`'yi komut kimligine esitler ve hemen
+   * yayinlar; reddettigi komutta (or. panjur hareket halindeyken set_runtime) last_id DEGISMEZ. Bu yuzden PUBACK
+   * "uygulandi" demek degildir; onay CANLI state'teki last_id yankisidir.
+   *  - YAYINDAN ONCE kurulmalidir (Promise yurutucusu eszamanli kaydeder: hizli yanki kacmaz).
+   *  - CANLI state last_id === commandId -> true. Retained state onay SAYILMAZ. Zaman asimi / end() / cancelAck -> false.
+   *  - Asla reddetmez. Ust sinir dolduysa (ACK_MAX_WAITERS) ESZAMANLI 503 firlatir: cagiran henuz yayin yapmamistir.
+   * @param {string} topicId    ev konu kimligi (homes.mqtt_username)
+   * @param {string} commandId  komutun `id` alani (firmware kurali ^[A-Za-z0-9._:-]{1,24}$)
+   * @param {number} timeoutMs  1..ACK_MAX_TIMEOUT_MS
+   * @returns {Promise<boolean>}
+   */
+  expectAck(topicId, commandId, timeoutMs) {
+    if (!isValidTopicId(topicId)) throw new TypeError('Gecersiz konu kimligi (topicId)');
+    if (typeof commandId !== 'string' || !LAST_ID_RE.test(commandId)) throw new TypeError('Gecersiz komut kimligi (commandId)');
+    if (this._ackCount >= ACK_MAX_WAITERS) {
+      this._warnOnce('ack-limit', `Cihaz onayi bekleyici siniri (${ACK_MAX_WAITERS}) doldu; yeni bekleme reddedildi`);
+      throw new HttpError(503, 'Sunucu şu anda çok sayıda cihaz onayı bekliyor; birkaç saniye sonra yeniden deneyin.', 'SERVICE_UNAVAILABLE');
+    }
+    const requested = Number.isFinite(timeoutMs) ? Math.round(timeoutMs) : ACK_MAX_TIMEOUT_MS;
+    const ms = Math.min(Math.max(requested, 1), ACK_MAX_TIMEOUT_MS);
+    const key = ackKey(topicId, commandId);
+    return new Promise((resolve) => {
+      const waiter = { done: false, timer: null, finish: null };
+      waiter.finish = (ok) => {
+        if (waiter.done) return;
+        waiter.done = true;
+        if (waiter.timer) this.timers.clearTimeout(waiter.timer);
+        const set = this._ackWaiters.get(key);
+        if (set) {
+          set.delete(waiter);
+          if (set.size === 0) this._ackWaiters.delete(key);
+        }
+        this._ackCount -= 1;
+        resolve(ok === true);
+      };
+      let set = this._ackWaiters.get(key);
+      if (!set) {
+        set = new Set();
+        this._ackWaiters.set(key, set);
+      }
+      set.add(waiter);
+      this._ackCount += 1;
+      waiter.timer = this.timers.setTimeout(() => waiter.finish(false), ms);
+      if (waiter.timer && typeof waiter.timer.unref === 'function') waiter.timer.unref();
+    });
+  }
+
+  /** Bekleyen onayi false ile kapatir (or. yayin basarisiz oldu). Bekleyen yoksa sessiz. */
+  cancelAck(topicId, commandId) {
+    this._settleAcks(ackKey(topicId, commandId), false);
+  }
+
+  /** Bekleyen cihaz onayi sayisi (izleme/test). */
+  pendingAcks() {
+    return this._ackCount;
+  }
+
+  _settleAcks(key, ok) {
+    const set = this._ackWaiters.get(key);
+    if (!set) return;
+    for (const waiter of [...set]) waiter.finish(ok);
+  }
+
   /** Yonetim komutu: `ev/{topicId}/sys` (yalnizca backend; ornek: set_local_key). Gizli deger tasiyabilir. */
   async publishSys(topicId, obj) {
     if (!isValidTopicId(topicId)) throw new TypeError('Gecersiz konu kimligi (topicId)');
@@ -1308,4 +1406,4 @@ module.exports.helpers = {
   buildHomeChildLockSync,
   serializeCommand,
 };
-module.exports.constants = { MAX_PAYLOAD_BYTES, MAX_COMMAND_BYTES, SUBSCRIPTIONS, DEFAULTS };
+module.exports.constants = { MAX_PAYLOAD_BYTES, MAX_COMMAND_BYTES, SUBSCRIPTIONS, DEFAULTS, ACK_MAX_WAITERS, ACK_MAX_TIMEOUT_MS };

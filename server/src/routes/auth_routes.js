@@ -6,19 +6,21 @@
 // Tum yanitlar `Cache-Control: no-store` (token tasir). Hatalar global hata
 // yakalayiciya (middlewares/error_handler) iletilir: { success:false, message, code }.
 
+const crypto = require('node:crypto');
 const express = require('express');
 const authService = require('../services/auth_service');
 const serviceTokenService = require('../services/service_token_service');
 const { authenticateToken, rejectServiceSession } = require('../middlewares/auth_middleware');
-const { rateLimit, clientIp } = require('../middlewares/rate_limit');
+const { rateLimit, clientIp, limitKey } = require('../middlewares/rate_limit');
 const { asyncHandler } = require('../middlewares/error_handler');
 const { successResponse, HttpError } = require('../utils/helpers');
 
 const router = express.Router();
 const MIN = 60 * 1000;
 
+// IP basina sayac anahtari: IPv6 /64 onekine indirgenir (M1-01; IPv4 aynen). Denetim `ip` alani tam adrestir.
 function ipKey(prefix) {
-  return (req) => `${prefix}:${clientIp(req)}`;
+  return (req) => `${prefix}:${limitKey(req)}`;
 }
 
 // IP basina hiz sinirlari (CONTRACTS §1.3: service-login 10 / 15 dk).
@@ -34,13 +36,20 @@ const limiters = {
   otpVerify: rateLimit({ windowMs: 15 * MIN, max: 30, keyGenerator: ipKey('otp-verify') }),
   social: rateLimit({ windowMs: 15 * MIN, max: 30, keyGenerator: ipKey('social') }),
   serviceLogin: rateLimit({ windowMs: 15 * MIN, max: 10, keyGenerator: ipKey('service-login') }),
+  // Yetenek bilgisi (kimliksiz, ucuz): giris ekrani her acilista sorar; NAT arkasi coklu istemci icin hafif sinir.
+  capabilities: rateLimit({ windowMs: 15 * MIN, max: 120, keyGenerator: ipKey('capabilities') }),
   account: rateLimit({ windowMs: 15 * MIN, max: 10, keyGenerator: (req) => `account:${req.user && req.user.id ? req.user.id : clientIp(req)}` }),
   // Hesap silme: her istek parola tahmini olabilir -> kullanici basina siki sinir
   accountDelete: rateLimit({ windowMs: 15 * MIN, max: 5, keyGenerator: (req) => `account-delete:${req.user && req.user.id ? req.user.id : clientIp(req)}` }),
 };
 
-// Kimlik (e-posta/telefon) basina BASARISIZ giris sayaci (programatik kullanim).
+// BASARISIZ parola girisi sayaclari (programatik kullanim; yalniz 401'de artar, basarida ikisi de sifirlanir).
+// Iki katman: ucuncu kisi kendi IP'sinden yanlis deneyerek hesap sahibini KILITLEYEMEZ (UYELIK-10), dagitik
+// denemenin de bir tavani vardir. Herhangi biri asilinca 429 RATE_LIMITED.
+//  - (kimlik | IP) basina 10 / 15 dk
+//  - kimlik basina TOPLAM 50 / 15 dk
 const loginFailures = rateLimit({ windowMs: 15 * MIN, max: 10 });
+const loginFailuresTotal = rateLimit({ windowMs: 15 * MIN, max: 50 });
 
 function pick(body, keys) {
   if (!body || typeof body !== 'object') return undefined;
@@ -84,19 +93,31 @@ router.post('/login', limiters.login, asyncHandler(async (req, res) => {
   }
   // Normalize kimlik: "+90 555 ..." ve "+90555..." ayni sayaci paylasir.
   const parsed = authService.parseIdentifier(identifier);
-  const failKey = `login-id:${parsed ? parsed.value : identifier.trim().toLowerCase()}`;
-  const state = loginFailures.peek(failKey);
-  if (!state.allowed) {
+  const ip = clientIp(req);
+  // Sayac anahtari kimligin ham kopyasini TASIMAZ (M1-02): sha256(normalize kimlik) -> sabit 64 karakter; IP kismi
+  // /64 indirgemeli (M1-01). Uzun kimlik reddedilmez (400 yeni bir istemci metni gerektirirdi); sayilmaya devam eder.
+  const idDigest = crypto
+    .createHash('sha256')
+    .update(parsed ? parsed.value : identifier.trim().toLowerCase(), 'utf8')
+    .digest('hex');
+  const totalKey = `login-id:${idDigest}`;
+  const pairKey = `${totalKey}|${limitKey(req)}`;
+  const blocked = [loginFailures.peek(pairKey), loginFailuresTotal.peek(totalKey)].filter((s) => !s.allowed);
+  if (blocked.length > 0) {
     const err = new HttpError(429, 'Çok fazla hatalı giriş denemesi. Lütfen daha sonra tekrar deneyin.', 'RATE_LIMITED');
-    err.retryAfter = state.retryAfter;
+    err.retryAfter = Math.max(...blocked.map((s) => s.retryAfter));
     throw err;
   }
   try {
-    const result = await authService.login(identifier, password, { ip: clientIp(req) });
-    loginFailures.resetKey(failKey);
+    const result = await authService.login(identifier, password, { ip });
+    loginFailures.resetKey(pairKey);
+    loginFailuresTotal.resetKey(totalKey);
     return successResponse(res, result, 'Giriş başarılı.');
   } catch (err) {
-    if (err && (err.status === 401 || err.statusCode === 401)) loginFailures.consume(failKey);
+    if (err && (err.status === 401 || err.statusCode === 401)) {
+      loginFailures.consume(pairKey);
+      loginFailuresTotal.consume(totalKey);
+    }
     throw err;
   }
 }));
@@ -116,7 +137,8 @@ router.post('/logout', limiters.logout, asyncHandler(async (req, res) => {
   return successResponse(res, null, 'Oturum sonlandırıldı.');
 }));
 
-// POST /auth/logout-all (tum cihazlar)
+// POST /auth/logout-all (tum cihazlar: refresh + token_version + uygulama MQTT kimlikleri tek transaction'da;
+// acik MQTT baglantilari ve push belirtecleri COMMIT sonrasi - auth_service.revokeAllUserSessions)
 router.post('/logout-all', authenticateToken, rejectServiceSession, limiters.account, asyncHandler(async (req, res) => {
   await authService.revokeAllUserSessions(req.user.id, { reason: 'logout_all' });
   return successResponse(res, null, 'Tüm oturumlarınız sonlandırıldı.');
@@ -137,7 +159,8 @@ router.post('/change-password', authenticateToken, rejectServiceSession, limiter
 
 // DELETE /auth/account { password } veya (sifresiz/sosyal hesap) { confirm: "SİL" }
 // Yumusak silme + anonimlestirme (WP-B2, services/account_deletion_service.js). Staff/super 403;
-// tek sahibi oldugu ev varsa 409 SOLE_OWNER + ev listesi. Eski e-posta serbest kalir (yeniden kayit mumkun).
+// tek sahibi oldugu ve baska uyesi/cihazi olan ev varsa 409 SOLE_OWNER + ev listesi; bos (uyesiz+cihazsiz)
+// tek-sahipli evler silinir (released_homes). Eski e-posta serbest kalir (yeniden kayit mumkun).
 router.delete('/account', authenticateToken, rejectServiceSession, limiters.accountDelete, asyncHandler(async (req, res) => {
   const result = await authService.deleteAccount({
     userId: req.user.id,
@@ -200,6 +223,10 @@ router.post('/service-login', limiters.serviceLogin, asyncHandler(async (req, re
   return successResponse(res, result, 'Yetkili servis oturumu başlatıldı.');
 }));
 
+// GET /auth/capabilities - kimliksiz: giris yollari sunucuda calisir mi (UYELIK-04). Istemci calismayan yolu
+// (ornegin SMS saglayicisi bagli degilken telefon-OTP) giris ekraninda gizler. { sms_otp, google, apple } (boolean).
+router.get('/capabilities', limiters.capabilities, (req, res) => successResponse(res, authService.getCapabilities()));
+
 // GET /auth/me (profil + evler; servis oturumunda tek ev)
 router.get('/me', authenticateToken, asyncHandler(async (req, res) => {
   const result = await authService.getProfile(req.user);
@@ -252,4 +279,5 @@ router.post('/otp/verify', limiters.otpVerify, asyncHandler(async (req, res) => 
 
 router.limiters = limiters;
 router.loginFailures = loginFailures;
+router.loginFailuresTotal = loginFailuresTotal;
 module.exports = router;

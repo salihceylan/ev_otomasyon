@@ -17,16 +17,16 @@ import '../setup_steps.dart';
 /// adresi (`wifi_sta_ip`) 5. adımda hedefe yazılmıştır. Claim yanıtındaki bulut kimliği uygulama kapanırsa
 /// kaybolur: kimlik bellekte yoksa sunucudan yeniden üretilir (`POST /homes/:id/devices/:uuid/mqtt-credential`).
 ///
-/// **Mevcut cihaz** ("Mevcut cihazlarım -> Testleri yap") zaten sunucuda çevrimiçiyse bulut kimliği
-/// DEĞİŞTİRİLMEZ: çalışan panonun kimliğini yeniden üretip yazmak onu buluttan düşürebilir.
+/// Pano sunucuda **zaten çevrimiçiyse** ve bellekte bekleyen (tek seferlik) kimlik yoksa bulut kimliği
+/// DEĞİŞTİRİLMEZ (CONTRACTS §3d): çalışan panonun kimliğini yeniden üretip yazmak onu buluttan düşürür. Kural kipten
+/// bağımsızdır: mevcut cihaz ("Mevcut cihazlarım -> Testleri yap"), geçici servis (PIN) oturumunda "Yeni Kurulum" ve
+/// kayıttan devam eden personel kurulumu aynı davranır. Kimliği yalnız açık "Kimliği Yeniden Yaz"
+/// ([rewriteCredential]) zorla yeniden üretir.
 ///
 /// Geçiş koşulu: sunucu `online=true` + yeni durum. Zaman aşımında pano yerel durumundan
 /// (`mqtt_configured`, `time_synced`, `mqtt_connected`, `wifi_connected`) neden-sonuç açıklaması üretilir.
 class CloudLogic extends SetupLogic {
-  CloudLogic(super.ctx, {this.canReuseOnline});
-
-  /// Mevcut cihaz kipinde (kimlik zaten çalışıyor olabilir) `true` döner.
-  final bool Function()? canReuseOnline;
+  CloudLogic(super.ctx);
 
   @override
   int get number => SetupSteps.cloud;
@@ -46,7 +46,7 @@ class CloudLogic extends SetupLogic {
   bool get credentialWritten => _credentialWritten;
   bool get online => _online;
 
-  /// Pano sunucuda zaten çevrimiçiydi: bulut kimliği yeniden üretilip yazılmadı (mevcut cihaz).
+  /// Pano sunucuda zaten çevrimiçiydi: bulut kimliği yeniden üretilip yazılmadı.
   bool get alreadyOnline => _alreadyOnline;
   DateTime? get lastSeenAt => _lastSeenAt;
 
@@ -73,12 +73,8 @@ class CloudLogic extends SetupLogic {
           // Kimlik yazılmadan ÖNCE sunucudaki durum alınır: son görülme zamanının yazımdan sonra ilerlemesi
           // "yeni durum iletisi alındı" kanıtıdır (saat farkından etkilenmez).
           final current = _find(await ctx.cloud.devices(t.homeId), t.deviceUuid);
-          if (!force &&
-              (canReuseOnline?.call() ?? false) &&
-              ctx.pendingCredential == null &&
-              current != null &&
-              current.online) {
-            // Mevcut pano zaten buluttan görünüyor: çalışan panonun kimliğine dokunulmaz.
+          if (!force && ctx.pendingCredential == null && current != null && current.online) {
+            // Pano zaten buluttan görünüyor (kip ne olursa olsun): çalışan panonun kimliğine dokunulmaz.
             _online = true;
             _alreadyOnline = true;
             _lastSeenAt = current.lastSeenAt;

@@ -11,6 +11,7 @@
 //   });
 //   peace.getSettings({ homeId });                                     // GET  /peace-notification/:home_id
 //   peace.closeAll({ actor, homeId, noticeId, includeShutters });      // POST /peace-notification/close-all
+//   peace.closeLightsKeepingPlugs({ homeId, topicId });                // sendCommand all_lights_off / all_off (DAIRE-01)
 //
 // Bu modül YETKİ DENETLEMEZ (çağıran: DeviceService can('group') + route requireHomeAccess).
 //
@@ -361,6 +362,40 @@ function createPeaceService(deps = {}) {
     if (typeof homeId !== 'string' || homeId === '') throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
   };
 
+  // --- closeAll ve closeLightsKeepingPlugs ORTAK adımları (aynı kural tek yerde) ---
+  /** Evde 'plug' (priz) uç noktası var mı? Ev konusu tüm panolara gider: evin tamamına bakılır. */
+  async function homeHasPlug(homeId) {
+    const res = await db.query(SQL.hasPlug, [homeId]);
+    const row = res && res.rows && res.rows[0];
+    return Boolean(row && (row.has_plug === true || row.has_plug === 't'));
+  }
+  /** Canlı anlık görüntü; pano yoksa 404, hiçbir pano canlı değilse 409 DEVICE_OFFLINE. */
+  async function loadLive(homeId) {
+    const snap = await snapshot.loadLiveSnapshot(db, homeId);
+    if (snap.devicesTotal === 0) throw httpError(404, 'Daireye bağlı pano bulunamadı.', 'NOT_FOUND');
+    if (!snap.live) throw httpError(409, 'Cihaz çevrimdışı; lambalar kapatılamadı.', 'DEVICE_OFFLINE', { device_online: false });
+    return snap;
+  }
+  /** Yalnız ÇOK PANOLU evde numara çakışmaları (findSharedConflicts); tek panolu evde sorgu yok, null. */
+  async function loadConflicts(homeId, snap) {
+    if (snap.devicesTotal <= 1) return null;
+    const res = await db.query(SQL.layout, [homeId]);
+    const minPos = Number.isFinite(snapshot.OPEN_SHUTTER_MIN_POS) ? snapshot.OPEN_SHUTTER_MIN_POS : OPEN_SHUTTER_MIN_POS_DEFAULT;
+    return findSharedConflicts(res && res.rows, minPos);
+  }
+  /** Sırayla, PUBACK beklenerek yayın; her CHUNK_SIZE komutta kısa mola (firmware kuyruğu). Hata -> DUR, fırlat. */
+  async function publishAll(topicId, homeId, commands, label) {
+    for (let i = 0; i < commands.length; i += 1) {
+      try {
+        await publishCommand(topicId, commands[i]);
+      } catch (err) {
+        logWarn(`[PEACE] ${label} ev ${shortId(homeId)}: yayin ${i}/${commands.length} komuttan sonra durdu`);
+        throw err;
+      }
+      if ((i + 1) % CHUNK_SIZE === 0 && i + 1 < commands.length) await sleep(CHUNK_DELAY_MS);
+    }
+  }
+
   /** Tek transaction (db.withTransaction varsa); yoksa ardışık sorgu (yalnızca eski/sahte db'ler için). */
   async function inTransaction(fn) {
     if (typeof db.withTransaction === 'function') {
@@ -489,56 +524,25 @@ function createPeaceService(deps = {}) {
     if (!topicRow) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
     const topicId = topicRow.mqtt_username;
 
-    const snap = await snapshot.loadLiveSnapshot(db, homeId);
-    if (snap.devicesTotal === 0) throw httpError(404, 'Daireye bağlı pano bulunamadı.', 'NOT_FOUND');
-    if (!snap.live) {
-      throw httpError(409, 'Cihaz çevrimdışı; lambalar kapatılamadı.', 'DEVICE_OFFLINE', { device_online: false });
-    }
-
-    let hasPlug = false;
-    if (snap.lights.length > 0) {
-      const plugRes = await db.query(SQL.hasPlug, [homeId]);
-      const plugRow = plugRes && plugRes.rows && plugRes.rows[0];
-      hasPlug = Boolean(plugRow && (plugRow.has_plug === true || plugRow.has_plug === 't'));
-    }
+    const snap = await loadLive(homeId);
+    const hasPlug = snap.lights.length > 0 ? await homeHasPlug(homeId) : false;
 
     // Çok panolu ev: ev konusu tüm panolara gider, numara çakışmaları komuttan ÖNCE ayıklanır (bkz. başlık).
     // Sorgu YAYINDAN önce: hata verirse hiçbir komut gitmemiştir.
-    let conflicts = null;
     const needsPerItem = (hasPlug && snap.lights.length > 0) || (input.includeShutters && snap.shutters.length > 0);
-    if (snap.devicesTotal > 1 && needsPerItem) {
-      const layoutRes = await db.query(SQL.layout, [homeId]);
-      const minPos = Number.isFinite(snapshot.OPEN_SHUTTER_MIN_POS) ? snapshot.OPEN_SHUTTER_MIN_POS : OPEN_SHUTTER_MIN_POS_DEFAULT;
-      conflicts = findSharedConflicts(layoutRes && layoutRes.rows, minPos);
-    }
+    const conflicts = needsPerItem ? await loadConflicts(homeId, snap) : null;
 
     const { commands, closedLights, closedShutters, skippedLights, skippedShutters } = buildCloseCommands({
-      lights: snap.lights,
-      shutters: snap.shutters,
-      includeShutters: input.includeShutters,
-      hasPlug,
-      newCommandId,
-      conflicts,
+      lights: snap.lights, shutters: snap.shutters, includeShutters: input.includeShutters, hasPlug, newCommandId, conflicts,
     });
     const skippedCount = skippedLights + skippedShutters;
     if (skippedCount > 0) {
       logWarn(`[PEACE] close-all ev ${shortId(homeId)}: ${skippedCount} oge cok panolu ortak konu nedeniyle atlandi`);
     }
 
-    // Yayın: sırayla ve PUBACK beklenerek; her CHUNK_SIZE komuttan sonra firmware kuyruğu için kısa mola.
-    // Hata -> DUR, olduğu gibi fırlat; bildirim ÇÖZÜLMEZ ve hiçbir şey yazılmaz.
+    // Yayın hatası -> bildirim ÇÖZÜLMEZ ve hiçbir şey yazılmaz.
     const startedAt = Number(now());
-    let published = 0;
-    for (let i = 0; i < commands.length; i += 1) {
-      try {
-        await publishCommand(topicId, commands[i]);
-      } catch (err) {
-        logWarn(`[PEACE] close-all ev ${shortId(homeId)}: yayin ${published}/${commands.length} komuttan sonra durdu`);
-        throw err;
-      }
-      published += 1;
-      if (published % CHUNK_SIZE === 0 && published < commands.length) await sleep(CHUNK_DELAY_MS);
-    }
+    await publishAll(topicId, homeId, commands, 'close-all');
 
     const commandIds = commands.map((c) => c.id);
     let resolvedId = null;
@@ -580,7 +584,26 @@ function createPeaceService(deps = {}) {
     };
   }
 
-  return { getSettings, closeAll };
+  /**
+   * Toplu "ışıkları kapat" (DeviceService.sendCommand: all_lights_off / all_off) için "Hepsini Kapat" ile AYNI kural
+   * (DAIRE-01): firmware'de priz tipi yoktur, toplu komut prizleri de kapatırdı. Evde priz YOKSA null (hiçbir şey
+   * yayınlanmaz; çağıran toplu komutu aynen yayınlar); varsa yalnız AÇIK ışık röleleri {relay:N, state:false, id}
+   * (çok panolu evde ortak numaralar atlanır). Panjur/kayıt yok. Hatalar: 404, 409 DEVICE_OFFLINE, 502.
+   */
+  async function closeLightsKeepingPlugs({ homeId, topicId } = {}) {
+    assertHomeId(homeId);
+    if (!(await homeHasPlug(homeId))) return null;
+    const snap = await loadLive(homeId);
+    const conflicts = snap.lights.length > 0 ? await loadConflicts(homeId, snap) : null;
+    const { commands, closedLights, skippedLights } = buildCloseCommands({
+      lights: snap.lights, shutters: [], includeShutters: false, hasPlug: true, newCommandId, conflicts,
+    });
+    if (skippedLights > 0) logWarn(`[PEACE] isik-kapat ev ${shortId(homeId)}: ${skippedLights} lamba ortak konu nedeniyle atlandi`);
+    await publishAll(topicId, homeId, commands, 'isik-kapat');
+    return { commandIds: commands.map((c) => c.id), closedLights, skippedLights };
+  }
+
+  return { getSettings, closeAll, closeLightsKeepingPlugs };
 }
 
 module.exports = {

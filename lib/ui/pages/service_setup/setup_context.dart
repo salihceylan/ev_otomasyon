@@ -265,7 +265,13 @@ class SetupContext {
   /// Panoya yapılan bir anahtarlı çağrıyı sarar: gerekirse bağlantıyı kurar; bağlantı/anahtar hatasında
   /// bağlantıyı geçersiz sayar (sonraki çağrı yeniden doğrular). Pano anahtarı **reddederse** anahtar
   /// hedeften de silinir (aynı anahtar tekrar tekrar gönderilip pano kilitlenmesin).
-  Future<T> deviceCall<T>(Future<T> Function(AutomationApiService api) action) async {
+  ///
+  /// 401'den sonra çağrı **bir kez** kendiliğinden yinelenir (M4-01): sunucu bekleyen anahtarı panoya bağlantı
+  /// doğrulandıktan sonra iletip takas etmiş olabilir. Yinelemede [ensureDeviceReady] anahtar boş olduğu için sunucudan
+  /// taze anahtarı alır; sunucu reddedilen anahtarı yeniden verirse `_keyRejected` ile durur (panoya ikinci yanlış
+  /// deneme gitmez). Firmware anahtarı komuttan önce denetlediğinden 401 komutun uygulanmadığı anlamına gelir; yineleme
+  /// güvenlidir. Süper yöneticiye sunucu anahtar vermediği için yinelenmez (elle girilen anahtar reddedildi demektir).
+  Future<T> deviceCall<T>(Future<T> Function(AutomationApiService api) action, {bool retried = false}) async {
     final api = await ensureDeviceReady();
     try {
       return await action(api);
@@ -275,6 +281,7 @@ class SetupContext {
         _rejectedKey = target?.localKey ?? _rejectedKey;
         final t = target;
         if (t != null) target = t.copyWith(clearLocalKey: true);
+        if (!retried && !access.isSuperUser) return deviceCall(action, retried: true);
       }
       rethrow;
     }

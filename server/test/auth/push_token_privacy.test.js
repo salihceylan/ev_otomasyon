@@ -72,6 +72,7 @@ const warnings = () => logs.filter((l) => l.startsWith('warn:'));
 test.beforeEach(() => {
   for (const l of Object.values(authRoutes.limiters)) l.reset();
   authRoutes.loginFailures.reset();
+  authRoutes.loginFailuresTotal.reset();
   authService.setPushService(undefined); // varsayilan: tembel, veritabani tabanli ornek
   authService._pushRevokeTimeoutMs = undefined;
   pushUpdateFailure = null;

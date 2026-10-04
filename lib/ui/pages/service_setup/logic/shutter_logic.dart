@@ -464,12 +464,17 @@ class ShutterLogic extends SetupLogic {
   /// beslenir) ve yazım BİR KEZ yinelenir. Yine 409 gelirse anlaşılır bir sorun bildirilir; "Tekrar dene" aynı yolu
   /// baştan yürütür (yeniden okur, yeniden dener). Çakışma dışındaki hatalar (çevrimdışı pano `409 DEVICE_OFFLINE`,
   /// 5xx, ağ ...) olduğu gibi yükselir; yenileme/yeniden deneme yapılmaz.
+  ///
+  /// Sunucu panonun süreyi UYGULAMADIĞINI da (panjur hareket halinde / ölü zamanda) aynı `409 CONFLICT` koduyla
+  /// bildirir ("Pano panjur süresini uygulamadı ..."; veritabanı değişmez). Bu bir yerleşim çakışması değildir:
+  /// yenileme/yineleme yapılmaz, sunucunun mesajı aynen gösterilir ([_notAppliedProblem]).
   Future<void> _putRuntime(String homeId, int pair, int seconds) async {
     try {
       await ctx.cloud.updateEndpoint(homeId: homeId, endpointId: _endpointFor(pair), shutterDurationSec: seconds);
       return;
     } on ApiException catch (e) {
       if (!e.isConflict) rethrow;
+      if (_isNotApplied(e)) throw SetupProblemException(_notAppliedProblem(e));
     }
     // Çakışma: sunucudaki liste sihirbazın okuduğundan ilerlemiş. Yenile, sonra TEK yeniden deneme.
     ctx.ensureActive();
@@ -479,6 +484,7 @@ class ShutterLogic extends SetupLogic {
       await ctx.cloud.updateEndpoint(homeId: homeId, endpointId: _endpointFor(pair), shutterDurationSec: seconds);
     } on ApiException catch (e) {
       if (!e.isConflict) rethrow;
+      if (_isNotApplied(e)) throw SetupProblemException(_notAppliedProblem(e));
       throw SetupProblemException(SetupProblem(
         kind: SetupProblemKind.conflict,
         title: 'Kanal yerleşimi değişti',
@@ -487,6 +493,25 @@ class ShutterLogic extends SetupLogic {
       ));
     }
   }
+
+  /// Sunucunun "pano süreyi uygulamadı" yanıtı mı (`409 CONFLICT`; kod yerleşim çakışmasıyla aynıdır). Önce gövdedeki
+  /// makine okunur [ApiException.reason]'a bakılır (`NOT_APPLIED` = uygulanmadı, `TYPE_CHANGED` = yerleşim değişti);
+  /// `reason` göndermeyen ESKİ sunucuda sunucu mesajı eşlemesi yedek olarak kalır.
+  static bool _isNotApplied(ApiException e) {
+    if (!e.isConflict) return false;
+    final reason = e.reason;
+    if (reason != null) return reason == 'NOT_APPLIED';
+    return e.message.contains('uygulamadı') || e.message.contains('uygulanmadı');
+  }
+
+  /// Pano süreyi uygulamadı: sunucunun mesajı "Neden?" altında aynen gösterilir. "Tekrar dene" panjuru önce durdurur
+  /// ([_ensureStopped]) ve süreyi yeniden yazar.
+  static SetupProblem _notAppliedProblem(ApiException e) => SetupProblem(
+        kind: SetupProblemKind.deviceRejected,
+        title: 'Süre panoda uygulanmadı',
+        why: e.message,
+        todo: 'Panjurun durduğundan emin olup "Tekrar dene"ye basın; sihirbaz panjuru önce durdurup süreyi yeniden yazar.',
+      );
 
   Future<void> _writeRuntime(int pair, int seconds) async {
     final t = ctx.requireTarget;

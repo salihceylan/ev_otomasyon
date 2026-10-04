@@ -193,8 +193,9 @@ class ChildLockChip extends StatelessWidget {
 /// ("Sistem Hazır" yalnızca broker bağlı **ve** cihaz çevrimiçiyken). Anahtar: `Key('status_bar')`.
 ///
 /// Sayaç hapları (ışık / panjur) yalnızca **sayılacak durum verisi varken** çizilir: cihaz erişilemez / anahtar
-/// gerekli / geçici kilitli iken ya da hiç cihaz yokken "Tüm Işıklar Kapalı" demek bilinmeyen durumu kesin bilgi
-/// gibi sunardı (açık lamba olabilir). Sistem durumu hapı ve çocuk kilidi rozeti her zaman anlamlıdır.
+/// gerekli / geçici kilitli iken, pano **kesin** çevrimdışıyken ([deviceKnownOffline]; sayılar son bilinen değerdir)
+/// ya da hiç cihaz yokken "Tüm Işıklar Kapalı" demek bilinmeyen durumu kesin bilgi gibi sunardı (açık lamba
+/// olabilir). Sistem durumu hapı ve çocuk kilidi rozeti her zaman anlamlıdır.
 class DashboardStatusBar extends StatelessWidget {
   const DashboardStatusBar({super.key});
 
@@ -204,8 +205,9 @@ class DashboardStatusBar extends StatelessWidget {
       (s) => (
         lights: s.openLightsCount,
         moving: s.shutterItems.where((item) => item.isMoving).length,
-        // Doğrudan modda cihaz durumu (`status`) yoksa, bulutta uç nokta listesi boşsa sayılacak veri yoktur.
-        hasData: s.mode == AppMode.direct ? s.status != null : s.cloudEndpoints.isNotEmpty,
+        // Doğrudan modda cihaz durumu (`status`) yoksa, bulutta uç nokta listesi boşsa sayılacak veri yoktur. Pano kesin
+        // çevrimdışıyken eldeki sayılar son bilinen değerdir: aynı "veri yok" gösterimi (yalnız sistem hapı) kullanılır.
+        hasData: !deviceKnownOffline(s) && (s.mode == AppMode.direct ? s.status != null : s.cloudEndpoints.isNotEmpty),
         // Çocuk kilidi rozeti görünür mü: görünmezken şeritte HİÇ yuva ayrılmaz (aşağıda koşullu eleman).
         childLock: ChildLockChip.visibleFor(childLockVmOf(s)),
         badge: connectionBadgeOf(s),

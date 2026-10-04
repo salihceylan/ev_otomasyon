@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/pages/auth/login_page.dart';
 import 'package:ev_otomasyon/ui/pages/auth/phone_otp_dialog.dart';
@@ -25,7 +26,10 @@ void main() {
   group('kod isteme', () {
     testWidgets('giriş ekranından açılır ve "İptal" ile kapanır', (tester) async {
       final env = e2Env(authenticated: false);
+      // Düğme yalnız sunucu SMS yeteneğini bildirirse görünür (UYELIK-04; `GET /auth/capabilities`).
+      env.cloud.authCapabilities = const AuthCapabilities(smsOtp: true);
       await pumpApp(tester, state: env.state, child: const LoginPage());
+      await tester.pump();
 
       await tapKey(tester, 'btn_phone_otp');
       expect(find.byType(PhoneOtpDialog), findsOneWidget);

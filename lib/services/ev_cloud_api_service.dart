@@ -667,6 +667,19 @@ class EvCloudApiService {
     return _applyAuth(body, requireTokens: false);
   }
 
+  /// Sunucunun giriş yöntemi yetenekleri (`GET /auth/capabilities`, **kimliksiz**; UYELIK-04):
+  /// `{sms_otp, google, apple}`. Eski sunucuda uç yoktur (`404`): [ApiException] fırlatılır ve çağıran bunu
+  /// "yetenek yok" sayar (fail-closed). Kimliksiz uç olduğundan 401 refresh / oturum sonu tetiklemez.
+  Future<AuthCapabilities> fetchAuthCapabilities() async {
+    final body = await _call(
+      'GET',
+      '/v1/auth/capabilities',
+      auth: false,
+      timeout: const Duration(seconds: 8),
+    );
+    return AuthCapabilities.fromJson(_data(body));
+  }
+
   /// Sihirli bağlantı ile tek seferlik giriş (POST; GET ile oturum açılmaz).
   Future<Map<String, dynamic>> magicLogin(String token) async {
     final body = await _call(
@@ -1627,17 +1640,19 @@ class EvCloudApiService {
   /// * Parolalı hesap: [password] (kırpılmaz).
   /// * Sosyal giriş (Google/Apple/SMS) hesabı: [confirm] = `SİL`.
   ///
-  /// Kullanıcı bazı evlerin **tek sahibi** ise sunucu `409 SOLE_OWNER` döndürür ([ApiException.isSoleOwner];
-  /// ev listesi [soleOwnedHomesOf] ile okunur): önce daire devredilmelidir. Başarıda yerel oturum
-  /// silinmez; çağıran ([AutomationState.deleteAccount]) çıkışı yapar. Servis PIN oturumunda yasak.
-  Future<void> deleteAccount({String? password, String? confirm}) async {
+  /// Kullanıcı, başka üyesi ya da panosu olan bazı evlerin **tek sahibi** ise sunucu `409 SOLE_OWNER` döndürür
+  /// ([ApiException.isSoleOwner]; ev listesi [soleOwnedHomesOf] ile okunur): önce daire devredilmelidir. Üyesiz ve
+  /// panosuz tek sahipli daireler engel değildir: hesapla birlikte silinir ve sayısı yanıtta `released_homes`'tur
+  /// ([AccountDeletionResult.releasedHomes]; eski sunucu vermez: 0). Başarıda yerel oturum silinmez; çağıran
+  /// ([AutomationState.deleteAccount]) çıkışı yapar. Servis PIN oturumunda yasak.
+  Future<AccountDeletionResult> deleteAccount({String? password, String? confirm}) async {
     if (isServiceSession) throw ApiException.forbidden();
     final hasPassword = password != null && password.isNotEmpty;
     final confirmText = confirm?.trim() ?? '';
     if (!hasPassword && confirmText.isEmpty) {
       throw ApiException.validation('Hesabı silmek için parolanızı girin veya onay ifadesini yazın.');
     }
-    await _call(
+    final body = await _call(
       'DELETE',
       '/v1/auth/account',
       body: <String, dynamic>{
@@ -1645,6 +1660,8 @@ class EvCloudApiService {
         if (!hasPassword) 'confirm': confirmText,
       },
     );
+    final released = asInt(_data(body)['released_homes'] ?? body['released_homes']);
+    return AccountDeletionResult(releasedHomes: (released != null && released > 0) ? released : 0);
   }
 
   /// Davet / devir kodunu **tüketmeden** önizler (`POST /api/v1/homes/join-preview`): ev adı, sakin

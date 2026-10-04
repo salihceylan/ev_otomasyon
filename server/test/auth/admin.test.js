@@ -5,7 +5,7 @@
 //  - staff super kullanici detayini goremez; liste created_by kapsamli
 //  - kendini / son super kullaniciyi dondurma-dusurme engeli
 //  - baska super kullanicinin parolasi icin aktorun mevcut parolasi ile yeniden dogrulama
-//  - parola/aktiflik/rol degisince oturumlar iptal; dondurmada MQTT kimlikleri iptal
+//  - parola/aktiflik/rol degisince oturumlar iptal + TUM evlerdeki uygulama MQTT kimlikleri iptal (UYELIK-02)
 //  - kalici silme tek transaction; sahipsiz ev olusmaz; constraint sizmaz
 
 const test = require('node:test');
@@ -93,8 +93,14 @@ const { errorHandler } = require('../../src/middlewares/error_handler');
 auth.configureAuthMiddleware({ cacheTtlMs: 0 });
 
 const mqttCalls = [];
+// Tek kaynak auth_service: oturum iptali (revokeAllUserSessions) ve yonetici akislari ayni ornegi kullanir.
 adminUserService.setMqttCredentialService({
-  revokeUserAccess: async ({ homeId, userId, tx }) => { mqttCalls.push(['user', homeId, userId, Boolean(tx)]); return { revoked: 1, usernames: [`a_${homeId}_${userId}`] }; },
+  // Kullanicinin TUM evlerdeki uygulama kimlikleri (uyelik basina bir kimlik varsayilir)
+  revokeAllUserAccess: async ({ userId, tx }) => {
+    mqttCalls.push(['all', userId, Boolean(tx)]);
+    const usernames = memberships.filter((m) => m.user_id === userId).map((m) => `a_${m.home_id}_${userId}`);
+    return { revoked: usernames.length, usernames };
+  },
   revokeHomeAccess: async ({ homeId, includeDevice, tx }) => { mqttCalls.push(['home', homeId, includeDevice, Boolean(tx)]); return { revoked: 1, usernames: [`d_${homeId}`] }; },
   kickUsernames: async (names) => { mqttCalls.push(['kick', names]); return { kicked: names.length, failed: 0, skipped: false }; },
 });
@@ -277,8 +283,30 @@ test('dondurma (soft delete / is_active=false): oturumlar + TUM evlerdeki MQTT k
   assert.strictEqual(u.is_active, false);
   assert.strictEqual(u.account_status, 'suspended');
   assert.strictEqual(u.token_version, tvBefore + 1);
-  assert.deepStrictEqual(mqttCalls.filter((c) => c[0] === 'user').map((c) => [c[1], c[3]]), [['ev-1', true], ['ev-2', true]]);
+  // TEK cagri, oturum iptaliyle ayni transaction'da (revokeAllUserSessions); tekrar iptal yok
+  assert.deepStrictEqual(mqttCalls.filter((c) => c[0] === 'all'), [['all', u1.id, true]]);
   assert.deepStrictEqual(mqttCalls.find((c) => c[0] === 'kick')[1].sort(), [`a_ev-1_${u1.id}`, `a_ev-2_${u1.id}`].sort());
+  assert.ok(mqttCalls.findIndex((c) => c[0] === 'kick') > mqttCalls.findIndex((c) => c[0] === 'all'));
+});
+
+test('parola atama ve rol degisimi de TUM evlerdeki uygulama MQTT kimliklerini iptal eder + COMMIT sonrasi kick (UYELIK-02)', async () => {
+  const a = store.addUser({ email: 'parola.mqtt@example.com', password_hash: hash });
+  memberships.push({ home_id: 'ev-p1', user_id: a.id, role: 'resident' });
+  assert.strictEqual((await api('patch', `/users/${a.id}`, T(super1), { password: 'Atanan-Parola-2027' })).status, 200);
+  assert.deepStrictEqual(mqttCalls.filter((c) => c[0] === 'all'), [['all', a.id, true]]);
+  assert.deepStrictEqual(mqttCalls.find((c) => c[0] === 'kick')[1], [`a_ev-p1_${a.id}`]);
+
+  mqttCalls.length = 0;
+  const b = store.addUser({ email: 'rol.mqtt@example.com', password_hash: hash });
+  memberships.push({ home_id: 'ev-r1', user_id: b.id, role: 'resident' });
+  assert.strictEqual((await api('patch', `/users/${b.id}`, T(super1), { role: 'service_user' })).status, 200);
+  assert.deepStrictEqual(mqttCalls.filter((c) => c[0] === 'all'), [['all', b.id, true]]);
+  assert.deepStrictEqual(mqttCalls.find((c) => c[0] === 'kick')[1], [`a_ev-r1_${b.id}`]);
+
+  // yalniz ad degisimi: oturum/MQTT iptali YOK
+  mqttCalls.length = 0;
+  assert.strictEqual((await api('patch', `/users/${b.id}`, T(super1), { full_name: 'Sadece Ad' })).status, 200);
+  assert.deepStrictEqual(mqttCalls, []);
 });
 
 // ---- S1 (plan §5d-1): oturumlar toplu iptal edilince push belirteci de COMMIT SONRASI kapanir ----
@@ -377,8 +405,9 @@ test('kalici silme: tek uyesi oldugu ev silinir, MQTT (ev + kullanici) iptal ve 
   assert.ok(deleted.homes.includes('ev-4'));
   assert.ok(!deleted.homes.includes('ev-5'));
   assert.ok(mqttCalls.some((c) => c[0] === 'home' && c[1] === 'ev-4' && c[2] === true && c[3] === true));
-  assert.ok(mqttCalls.some((c) => c[0] === 'user' && c[1] === 'ev-5'));
-  assert.ok(mqttCalls.some((c) => c[0] === 'kick'));
+  assert.ok(mqttCalls.some((c) => c[0] === 'all' && c[1] === u4.id && c[2] === true), 'kullanicinin TUM evlerdeki kimlikleri (ev-5 dahil)');
+  const kicked = mqttCalls.find((c) => c[0] === 'kick')[1];
+  assert.ok(kicked.includes(`a_ev-5_${u4.id}`) && kicked.includes('d_ev-4'));
 });
 
 test('kalici silme: FK hatasi -> 409 genel mesaj (constraint adi SIZMAZ)', async () => {

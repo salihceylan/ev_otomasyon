@@ -18,7 +18,8 @@ import '../../theme/tokens.dart';
 ///
 /// * Telefon doğrulanır ve ayırıcılardan arındırılarak (`+905551234567` / `05551234567`) gönderilir.
 /// * "Yeniden gönder", sunucunun `resend_after` süresi dolana kadar kapalıdır (429'da
-///   `resend_after` / `retry_after` ile de); kodun geçerlilik süresi geri sayılır.
+///   `resend_after` / `retry_after` ile de); kodun geçerlilik süresi geri sayılır. Yeniden gönderim başarısız
+///   olursa kod adımı korunur: önceki kod hâlâ geçerlidir, yalnız hata iletisi gösterilir.
 /// * Hatalı kodda kalan deneme hakkı (`remaining_attempts`) gösterilir; deneme bitince bekleme.
 ///
 /// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]). İki alan (telefon, kod) aynı alan
@@ -47,6 +48,10 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
   String? _phone; // gönderimde kullanılan normalleştirilmiş numara
   String? _phoneError;
   String? _error;
+
+  /// `true`: [_error] KOD alanıyla ilgilidir (eksik/hatalı/süresi dolmuş kod): alan kırmızı çizilir. Yeniden
+  /// gönderim hatası koda ait değildir (önceki kod hâlâ geçerli): alan hatalı çizilmez, yalnız ileti gösterilir.
+  bool _codeError = false;
   String? _info;
 
   @override
@@ -85,6 +90,7 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
       _isLoading = true;
       _phoneError = null;
       _error = null;
+      _codeError = false;
       _info = null;
     });
     try {
@@ -103,6 +109,8 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
       if (expiresIn != null) _expiry.start(expiresIn);
     } catch (e) {
       if (!mounted) return;
+      // Yeniden gönderim başarısızsa (saatlik sınır, 503, ağ) kod adımı KORUNUR: önceki kod sunucuda hâlâ geçerlidir
+      // (sunucu onu yalnız yeni kod üretince tüketir); kod alanı ve "Giriş Yap" kalır, yalnız hata iletisi (UYELIK-01).
       setState(() => _error = friendlyError(e, fallback: 'Kod gönderilemedi. Lütfen tekrar deneyin.'));
       if (e is ApiException && e.isRateLimited) {
         final wait = e.resendAfter ?? e.retryAfter;
@@ -118,12 +126,16 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
     final code = _codeController.text.trim();
     final codeError = AuthValidators.sixDigitCodeError(code, emptyMessage: 'Lütfen 6 haneli doğrulama kodunu giriniz');
     if (codeError != null) {
-      setState(() => _error = codeError);
+      setState(() {
+        _error = codeError;
+        _codeError = true;
+      });
       return;
     }
     setState(() {
       _isLoading = true;
       _error = null;
+      _codeError = false;
     });
     try {
       await context.read<AutomationState>().verifyPhoneOtp(_phone ?? '', code);
@@ -146,7 +158,10 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
         }
       }
       // Kalan hak TEK yerde: iletinin içinde (bölünmeyen boşlukla; "2." yetim kalmaz). Alan altında ikinci satır yok.
-      setState(() => _error = remaining == null ? text : '$text ${remainingAttemptsText(remaining)}');
+      setState(() {
+        _error = remaining == null ? text : '$text ${remainingAttemptsText(remaining)}';
+        _codeError = true;
+      });
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -211,8 +226,14 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
                 onSubmitted: (_) => _handleVerifyCode(),
                 style: authCodeTextStyle(context),
-                // Hata varken alan KIRMIZI çizilir (odak halkası cyan kalıp yanlış kodu "geçerli" göstermesin).
-                decoration: authCodeInputDecoration(context, label: 'Doğrulama Kodu', hint: '••••••', hasError: errorBox != null),
+                // Kod hatası varken alan KIRMIZI çizilir (odak halkası cyan kalıp yanlış kodu "geçerli" göstermesin);
+                // yeniden gönderim hatasında çizilmez (önceki kod hâlâ geçerli).
+                decoration: authCodeInputDecoration(
+                  context,
+                  label: 'Doğrulama Kodu',
+                  hint: '••••••',
+                  hasError: errorBox != null && _codeError,
+                ),
               ),
               if (errorBox != null) ...[const SizedBox(height: 8), errorBox],
               const SizedBox(height: 8),
@@ -249,13 +270,9 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
                   ),
                   TextButton(
                     key: const Key('btn_resend_code'),
-                    onPressed: (_isLoading || _resend.isActive)
-                        ? null
-                        : () async {
-                            // Yeni kod isteği: önceki kod girişi sıfırlanır, telefon aynı kalır.
-                            setState(() => _isCodeSent = false);
-                            await _handleSendCode();
-                          },
+                    // Yeni kod isteği (telefon aynı). Kod adımı istekten ÖNCE kapatılmaz: başarıda kod alanı temizlenir
+                    // (yeni kod), başarısızlıkta alan ve "Giriş Yap" kalır (önceki kod hâlâ geçerli; UYELIK-01).
+                    onPressed: (_isLoading || _resend.isActive) ? null : _handleSendCode,
                     style: TextButton.styleFrom(padding: EdgeInsets.zero),
                     child: ValueListenableBuilder<int>(
                       valueListenable: _resend.remaining,

@@ -667,7 +667,8 @@ test('acil sifirlama: pano cevrimdisi -> child_lock_reset "skipped_offline" + uy
   const off = await lifecycleSetup({ online: false, locked: true });
   const r1 = await resetCall(off);
   assert.strictEqual(r1.child_lock_reset, 'skipped_offline');
-  assert.ok(r1.warnings.some((w) => /çocuk kilidi sıfırlanamadı/.test(w)), JSON.stringify(r1.warnings));
+  // M1-03: uyari nedene gore; stoga donuste niyet yazilacak ev yok -> "yerelde kilitli kalmis olabilir"
+  assert.ok(r1.warnings.includes('Pano çevrimdışı; çocuk kilidi sıfırlama komutu gönderilemedi. Pano yerelde kilitli kalmış olabilir.'), JSON.stringify(r1.warnings));
   assert.strictEqual(r1.partial, true);
   assert.strictEqual(off.dev.child_lock_enabled, false);
   assert.strictEqual(off.bridge.commands.length, 0);

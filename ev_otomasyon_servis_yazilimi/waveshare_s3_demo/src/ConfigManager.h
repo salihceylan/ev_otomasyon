@@ -30,6 +30,20 @@ public:
   bool setApPass(const char* pass);
   // Fiziksel erişimle kurtarma (seri CLI "RESETKEY"): yerel anahtarı siler.
   bool clearLocalKey();
+
+  // İlk provizyon, ATOMİK: seri FACTORYINIT ve HTTP POST /api/factory/init AYNI yöntemi kullanır (CONTRACTS §3/§3c).
+  // TEK ConfigLock altında: local_key varsa PROVISION_ALREADY (önce denetlenir; hiçbir şey değişmez) -> biçim denetimi ->
+  // ÖNCE ap_pass SONRA local_key yazılır. local_key yazılamazsa ap_pass önceki değerine geri alınır (yarım provizyon kalmaz;
+  // cihaz PROVİZYONSUZ kalır, yeniden denenebilir). Denetim yazmayla aynı kilit altında olduğundan iki yol yarışamaz:
+  // önce yazan kazanır, diğeri PROVISION_ALREADY alır (sonradan gelen, yeni yazılan anahtarı EZEMEZ).
+  enum ProvisionResult : uint8_t {
+    PROVISION_OK = 0,
+    PROVISION_ALREADY,          // cihazda local_key var
+    PROVISION_INVALID_KEY,      // 8..32 karakter, 0x21..0x7E değil
+    PROVISION_INVALID_AP_PASS,  // 8..32 karakter, 0x20..0x7E değil
+    PROVISION_STORAGE           // NVS yazılamadı (ya da açılamadı): cihaz provizyonsuz kalır
+  };
+  ProvisionResult provisionIfEmpty(const char* key, const char* pass);
   // MQTT kimliğini yazar (POST /api/mqtt/config). Alan uzunlukları doğrulanır; false = reddedildi.
   bool setMqttCredentials(const char* server, uint16_t port, const char* user, const char* pass);
   // Yalnız bir rölenin süresini kalıcılaştırır (SET_RUNTIME; tüm yapılandırmayı yeniden yazmaz).
@@ -56,6 +70,7 @@ private:
   ConfigManager();
   void applyDefaults();
   bool eraseAppKeys();
+  void restoreApPass(const char* old);   // provisionIfEmpty geri alma adımı
   Preferences prefs;
   SemaphoreHandle_t _mutex;
   bool _prefsOk;

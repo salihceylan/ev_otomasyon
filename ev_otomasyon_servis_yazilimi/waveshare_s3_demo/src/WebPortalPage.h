@@ -3,6 +3,9 @@
 // WebPortalPage.h - Gomulu web arayuzu (tek sayfa, GET /).
 //
 // Bu dosyanin kaynagi WebPortal.cpp'den ayrilmistir; arayuz mantigi (JS) bu dosyadadir.
+// v1.1.2: yalniz metin duzeltmesi. Anahtar ipuclari artik dogru yeri soyler (anahtar etikette ve uygulamada
+// gosterilmez; kurulumda fabrika/servis araci verir) ve provizyon formuna "sunucuya kayitli panoda kullanmayin"
+// uyarisi eklendi (bu formla belirlenen anahtari sunucu bilmez). Gorunum, JS mantigi, id/sinif adlari 1.1.1 ile ayni.
 // v1.1.1 gorunum: "Neon Glass" (cam kartlar, hap dugmeler, orb durum noktalari; koyu + acik tema
 // [prefers-color-scheme], prefers-reduced-motion, :focus-visible halkalari, >=44 px dokunma hedefi). Dis kaynak YOK
 // (CSP: default-src 'none'; style-src/script-src 'unsafe-inline'; img-src data:); eski tarayici (iOS 12+/Chrome 80+) icin
@@ -323,7 +326,7 @@ th{background:var(--surf2);color:var(--muted);font-size:12px;text-transform:uppe
 <div class="key-gate" id="keyGate">
   <div class="card">
     <h3 class="card-h">🔑 Bu işlem için cihaz anahtarı gerekir</h3>
-    <p class="muted">Kurulum modunda (AP) yalnızca Wi-Fi ayarlarını anahtarsız değiştirebilirsiniz. Diğer ayarlar için cihaz anahtarını girin (anahtar cihazın etiketinde/servis kaydında veya uygulamada bulunur).</p>
+    <p class="muted">Kurulum modunda (AP) yalnızca Wi-Fi ayarlarını anahtarsız değiştirebilirsiniz. Diğer ayarlar için cihaz anahtarını girin (anahtar etikette ve uygulamada gösterilmez; kurulum sırasında fabrika/servis aracı verir).</p>
     <input type="password" id="gateKey" placeholder="Cihaz anahtarı" aria-label="Cihaz anahtarı" autocomplete="off" onkeydown="if(event.key==='Enter')submitGateKey()">
     <button class="btn btn-primary" onclick="submitGateKey()">Giriş</button>
     <span class="muted" id="gateMsg" role="alert"></span>
@@ -547,12 +550,13 @@ th{background:var(--surf2);color:var(--muted);font-size:12px;text-transform:uppe
     <div id="authLoginBox" class="auth-box" style="display: flex;">
       <input type="password" id="authKey" placeholder="Cihaz anahtarı" aria-label="Cihaz anahtarı" autocomplete="off" onkeydown="if(event.key==='Enter')submitKey()">
       <button class="btn btn-primary" onclick="submitKey()">Giriş</button>
-      <p class="muted">Anahtar, cihazın etiketinde/servis kaydında veya uygulamada (Cihaz Ayarları) bulunur.</p>
+      <p class="muted">Anahtar etikette ve uygulamada gösterilmez; kurulum sırasında fabrika/servis aracı verir. Anahtarınız yoksa servis yetkilisine başvurun.</p>
       <p class="muted">Giriş bu tarayıcıda hatırlanır; ortak bir telefondaysanız işiniz bitince üstteki “Çıkış” düğmesine basın.</p>
     </div>
 
     <div id="authProvBox" class="auth-box" style="display: none;">
       <p class="muted">Bu cihaz henüz kurulmamış (provizyonsuz). Yerel erişim anahtarı ve kurtarma ağı (AP) parolası belirleyin. <b>Bu iki değeri güvenli bir yere kaydedin</b>; sonradan yalnızca anahtarla değiştirilebilir.</p>
+      <p class="muted"><b>Sunucuya kayıtlı (etiketli) panolarda bu formu kullanmayın:</b> kurulumu fabrika aracı (USB) ya da uygulamanın kurulum sihirbazı yapar; burada belirlenen anahtarı sunucu bilmez.</p>
       <label class="muted" for="provKey">Yerel anahtar (8-32 karakter)</label>
       <div class="row2">
         <input type="text" id="provKey" maxlength="32" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -630,6 +634,7 @@ const ERR_TEXT = {
   too_large: 'İstek çok büyük.',
   busy: 'Cihaz meşgul (panjur hareket ediyor veya işlem sürüyor).',
   storage_error: 'Ayarlar cihaz hafızasına yazılamadı.',
+  storage: 'Ayarlar cihaz hafızasına yazılamadı.',
   invalid_ssid: 'Wi-Fi adı geçersiz (1-32 bayt).',
   invalid_password: 'Wi-Fi şifresi 8-63 karakter olmalı (açık ağ için boş bırakın).',
   invalid_key: 'Anahtar 8-32 karakter, boşluksuz yazdırılabilir ASCII olmalı.',

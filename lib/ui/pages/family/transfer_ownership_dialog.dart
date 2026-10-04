@@ -18,6 +18,7 @@ import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../claim/qr_scanner_page.dart';
+import '../service_setup/panel/emergency_reset_card.dart' show EmergencyResetCard, EmergencyResetResultDialog;
 import '../service_setup/panel/uncertain_outcome_card.dart';
 import '../../motion/motion_scope.dart';
 import '../../theme/app_theme.dart';
@@ -41,6 +42,9 @@ import '../../theme/feature_accent.dart';
 ///   tamamlanmış olabilir; "tekrar deneyin" DENMEZ (kör tekrar yeni PIN üretir ve devredilen sahibi bozabilir),
 ///   envanterde "Durumu Kontrol Et" sunulur ve belirsizken gönder düğmesi pasiftir (servis panelindeki
 ///   `EmergencyResetCard` ile aynı sözleşme).
+///   Kalıcı servis personeli (süper değil) kapsam notunu görür; 403'te yönlendirme hatanın altında gösterilir. Yerel
+///   anahtar `pending` ise bilgi notu, eski sunucu yanıtındaki anahtar için seri konsol (RESETKEY + FACTORYINIT)
+///   yönergesi gösterilir (metinler [EmergencyResetCard] / [EmergencyResetResultDialog] ile ortak).
 class TransferOwnershipDialog extends StatefulWidget {
   /// 0: daire devri, 1: acil sıfırlama (yetkisi olmayan sekme yerine ilk yetkili sekme açılır).
   final int initialTab;
@@ -64,7 +68,9 @@ class TransferOwnershipDialog extends StatefulWidget {
 enum _Tab { transfer, emergency }
 
 /// Diyaloğun durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skalerler).
-typedef _TransferView = ({bool canTransfer, bool canReset, String homeName});
+/// [resetLimited]: acil sıfırlama yetkisi var ama süper değil (kalıcı servis personeli: 72 saatlik kapsam).
+/// [isSuper]: süper yönetici (sunucu ona yerel anahtar vermez; devrinde sihirbaz yolu yok, M4-02).
+typedef _TransferView = ({bool canTransfer, bool canReset, bool resetLimited, bool isSuper, String homeName});
 
 class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   static const Duration _loadTimeout = Duration(seconds: 15);
@@ -101,6 +107,9 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   // Acil sıfırlama
   bool _resetting = false;
   String? _resetError;
+
+  /// [_resetError] sunucunun 403'üdür ve kullanıcı süper değildir: kapsam yönlendirmesi hatanın altında gösterilir.
+  bool _resetForbidden = false;
   String? _uidFieldError;
   String? _reasonFieldError;
   String? _ownerFieldError;
@@ -140,6 +149,8 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     return (
       canTransfer: caps.canTransferOwnership,
       canReset: caps.canEmergencyReset,
+      resetLimited: caps.canEmergencyReset && !caps.isSuperUser,
+      isSuper: caps.isSuperUser,
       homeName: state.activeHome?.name ?? 'Evim',
     );
   }
@@ -404,6 +415,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     setState(() {
       _resetting = true;
       _resetError = null;
+      _resetForbidden = false;
     });
     try {
       // PF-45: üst süre (40 sn). Zamanlayıcı `Clock`'tandır; geç dönen yanıt yok sayılır.
@@ -436,6 +448,8 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       }
       setState(() {
         _resetError = friendlyError(e, fallback: 'Acil sıfırlama tamamlanamadı. Lütfen tekrar deneyin.');
+        // 403: servis personelinin kapsamı dışındaki daire (ya da iptal/askı): süper yönetici yönlendirmesi hatanın altında.
+        _resetForbidden = e is ApiException && e.isForbidden && !state.capabilities.isSuperUser;
         _resetting = false;
       });
     }
@@ -606,7 +620,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
                   const InlineMessage.error('Bu işlem için yetkiniz yok.', key: Key('transfer_forbidden'))
                 else ...[
                   if (bothTabs) ...[_buildTabSelector(tab), const SizedBox(height: 16)],
-                  if (tab == _Tab.transfer) _buildTransfer() else _buildEmergency(),
+                  if (tab == _Tab.transfer) _buildTransfer() else _buildEmergency(limited: view.resetLimited, isSuper: view.isSuper),
                 ],
               ],
             ),
@@ -914,11 +928,14 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
 
   // ---- Acil sıfırlama sekmesi ----
 
-  Widget _buildEmergency() {
+  /// [limited]: kalıcı servis personeli (süper değil); sıfırlama kapsamı notu gösterilir.
+  Widget _buildEmergency({required bool limited, required bool isSuper}) {
     final result = _resetResult;
-    if (result != null) return _buildResetResult(result);
+    if (result != null) return _buildResetResult(result, isSuper: isSuper);
     final muted = AppTheme.getTextMuted(context);
     final reasonLength = _resetReasonController.text.trim().length;
+    // 403 sonrası kapsam yönlendirmesi hatanın altında gösterilir: aynı not ekranda iki kez yazılmaz.
+    final hintInError = _resetError != null && _resetForbidden;
 
     InputDecoration deco(String label, String hint, IconData icon, {String? error, Widget? suffix, String? helper}) =>
         InputDecoration(
@@ -944,6 +961,10 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           'ya da doğrudan yeni sahibe devredebilirsiniz. Yetkiniz denetim kaydına işlenir.',
           key: Key('emergency_warning'),
         ),
+        if (limited && !hintInError) ...[
+          const SizedBox(height: 8),
+          const InlineMessage.info(EmergencyResetCard.staffScopeNote, key: Key('reset_staff_scope_note')),
+        ],
         const SizedBox(height: 14),
         SizedBox(
           width: double.infinity,
@@ -1017,6 +1038,10 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
         if (_resetError != null) ...[
           const SizedBox(height: 12),
           InlineMessage.error(_resetError!, key: const Key('reset_error')),
+          if (hintInError) ...[
+            const SizedBox(height: 8),
+            const InlineMessage.info(EmergencyResetCard.staffScopeNote, key: Key('reset_forbidden_hint')),
+          ],
         ],
         if (_uncertainUid != null)
           UncertainOutcomeCard(
@@ -1045,13 +1070,17 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     );
   }
 
-  Widget _buildResetResult(EmergencyResetResult res) {
+  Widget _buildResetResult(EmergencyResetResult res, {required bool isSuper}) {
     final muted = AppTheme.getTextMuted(context);
+    // Bekleyen anahtar uyarısı (eski sunucu) aşağıdaki bilgi notunda verilir; uyarı satırı olarak tekrarlanmaz.
+    final shown = res.displayWarnings;
     final warnings = <String>[
-      ...res.warnings,
-      if (res.partial && res.warnings.isEmpty)
+      ...shown,
+      if (res.isPartial && shown.isEmpty)
         'İşlem kısmen tamamlandı: bazı adımlar uygulanamadı. Cihazın ve ev durumunu kontrol edin.',
     ];
+    // Süper yöneticiye sunucu yerel anahtar vermez: sihirbaz yolu onun için çıkmaz (M4-02).
+    final superHandoff = res.isReassigned && isSuper;
     final String headline;
     if (res.isUnclaimed) {
       headline = 'Cihaz sıfırlandı ve stoğa alındı.';
@@ -1093,17 +1122,31 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
             label: 'Kurulum PIN\'i',
           ),
         ],
+        if (res.localKeyPending) ...[
+          const SizedBox(height: 12),
+          const InlineMessage.info(EmergencyResetResultDialog.keyPendingNote, key: Key('reset_key_pending')),
+        ],
         if (res.needsManualLocalKey) ...[
+          // Eski sunucu yanıtı: anahtar panoya iletilemedi ve ağ üzerinden yazılamaz (seri konsol yolu).
           const SizedBox(height: 12),
           _secretCard(
-            caption: 'YEREL ANAHTAR (cihaza iletilemedi; yerinde girilmeli)',
+            caption: 'YEREL ANAHTAR (panoya iletilemedi)',
             value: res.localKey!,
             valueKey: const Key('reset_local_key'),
             copyKey: const Key('btn_copy_local_key'),
             label: 'Yerel anahtar',
           ),
+          const SizedBox(height: 6),
+          Text(
+            EmergencyResetResultDialog.manualKeyHint,
+            key: const Key('reset_key_manual_hint'),
+            style: TextStyle(fontSize: 12.5, color: muted),
+          ),
         ],
-        if (res.isReassigned && res.deviceCredential != null) ...[
+        if (superHandoff) ...[
+          const SizedBox(height: 12),
+          const InlineMessage.info(EmergencyResetResultDialog.superHandoffNote, key: Key('reset_super_note')),
+        ] else if (res.isReassigned && res.deviceCredential != null) ...[
           const SizedBox(height: 12),
           const InlineMessage.info(
             'Yeni sahip için bulut kimliği üretildi; panoya yazılması gerekir. Servis kurulum sihirbazının '

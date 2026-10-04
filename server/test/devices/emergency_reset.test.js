@@ -407,11 +407,16 @@ test('commit sonrasi yan etki hatalari YUTULMAZ: yanitta warnings + partial; yan
   assert.strictEqual(r.action, 'UNCLAIMED');
   assert.match(r.setup_pin, /^\d{6}$/, 'islem commit edildi; PIN yine doner');
   assert.strictEqual(r.partial, true);
-  assert.strictEqual(r.local_key_publish, 'failed');
-  assert.strictEqual(r.local_key.length, 16, 'iletilemeyen anahtar yetkili personele doner');
-  assert.ok(r.warnings.length >= 3, JSON.stringify(r.warnings));
+  // SERVIS-01: yayin basarisiz -> TELAFI: panodaki gercek (eski) anahtar gecerli kalir, yenisi BEKLEYEN; anahtar donmez
+  assert.strictEqual(r.local_key_publish, 'pending');
+  assert.ok(!('local_key' in r), 'bekleyen anahtar yanitta donmez (uzlastirici otomatik iletir)');
+  assert.strictEqual(ctx.dev.local_key_enc, ctx.oldKeyEnc);
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.oldKeyEnc);
+  assert.ok(ctx.dev.local_key_pending_enc, 'yeni anahtar bekleyen');
+  // fx2 S-1: bekleyen anahtar UYARI DEGIL (bilgi: local_key_publish 'pending'); partial diger gercek hatalardan
+  assert.ok(r.warnings.length >= 2, JSON.stringify(r.warnings));
   const w = r.warnings.join(' | ');
-  assert.match(w, /yerel anahtar/i);
+  assert.doesNotMatch(w, /yerel anahtar/i);
   assert.match(w, /bağlantı/i);
   assert.match(w, /Retained/);
   // kimlikler yine de silindi (yeni baglanti engellendi)
@@ -425,14 +430,19 @@ test('EMQX yonetim API ayari yoksa uyari doner (sessizce gecilmez)', async () =>
   assert.strictEqual(r.partial, true);
 });
 
-test('cihaz cevrimdisiysa yerel anahtar iletilemez: yanitta bir kez doner + uyari', async () => {
+test('cihaz cevrimdisiysa yeni yerel anahtar BEKLEYEN olur: mevcut anahtar gecerli kalir, yanitta anahtar DONMEZ + uyari (SERVIS-01)', async () => {
   const ctx = await setup({ deviceOnline: false, emqx: true });
   const r = await ctx.reset(ctx.tech);
-  assert.strictEqual(r.local_key_publish, 'skipped_offline');
+  assert.strictEqual(r.local_key_publish, 'pending');
   assert.strictEqual(ctx.bridge.topics.length, 0);
-  assert.strictEqual(r.local_key.length, 16);
-  assert.ok(ctx.secretBox.decrypt(ctx.dev.local_key_enc) === r.local_key, 'yanitlanan anahtar DB\'dekiyle ayni');
-  assert.ok(r.warnings.some((x) => /çevrimdışı/.test(x)));
+  assert.ok(!('local_key' in r));
+  assert.strictEqual(ctx.dev.local_key_enc, ctx.oldKeyEnc, 'panodaki gercek anahtar gecerli kalir (LAN sihirbazi baglanabilir)');
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.oldKeyEnc);
+  assert.ok(ctx.secretBox.isValidLocalKey(ctx.secretBox.decrypt(ctx.dev.local_key_pending_enc)));
+  // fx2 S-1: bekleyen anahtar icin uyari YOK; uyari yalniz gercek sorun (cocuk kilidi komutu gonderilemedi)
+  assert.ok(!r.warnings.some((x) => /yerel anahtar/i.test(x)), JSON.stringify(r.warnings));
+  assert.ok(r.warnings.includes('Pano çevrimdışı; çocuk kilidi sıfırlama komutu gönderilemedi. Pano yerelde kilitli kalmış olabilir.'), JSON.stringify(r.warnings));
+  assert.strictEqual(r.child_lock_reset, 'skipped_offline', 'cocuk kilidi davranisi degismedi');
 });
 
 test('eski ailenin kullanici oturumlari GLOBAL iptal edilmez (baska evlerdeki oturumlar korunur); ev erisimi uyelik silinerek kesilir', () => {

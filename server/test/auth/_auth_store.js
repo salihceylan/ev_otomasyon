@@ -21,6 +21,8 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     resets: [],
     otps: [],
     pushTokens: [], // { id, user_id, token, disabled_at }  (plan §5d-1: oturumlar iptal edilince belirtec kapanir)
+    // { id, username, kind:'app'|'device', home_id, user_id }  (UYELIK-02: toplu oturum iptali uygulama kimliklerini siler)
+    mqttCreds: [],
     homes: [], // { home_id, user_id, role, name, mqtt_username, valid_from, valid_until }
     seq: 1,
   };
@@ -55,6 +57,23 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     return t;
   };
   s.activePushTokens = (userId) => s.pushTokens.filter((t) => t.user_id === userId && !t.disabled_at);
+
+  /** Uygulama (varsayilan) veya cihaz MQTT kimligi; `home_id` verilmezse rastgele ev. */
+  s.addMqttCred = (userId, fields = {}) => {
+    const homeId = fields.home_id || crypto.randomUUID();
+    const kind = fields.kind || 'app';
+    const c = {
+      id: crypto.randomUUID(),
+      username: kind === 'device' ? `d_h_${s.seq++}` : `a_h_${s.seq++}_${crypto.randomBytes(5).toString('hex')}`,
+      kind,
+      home_id: homeId,
+      user_id: kind === 'device' ? null : userId,
+      ...fields,
+    };
+    s.mqttCreds.push(c);
+    return c;
+  };
+  s.appCredsOf = (userId) => s.mqttCreds.filter((c) => c.user_id === userId && c.kind === 'app');
 
   const byEmail = (email) => [...s.users.values()].filter((u) => String(u.email).toLowerCase() === email);
   const byPhone = (phone) => [...s.users.values()].filter((u) => u.phone === phone);
@@ -129,6 +148,13 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     [/revoked_reason = 'social_link'/, (p) => {
       s.refresh.filter((x) => x.user_id === p[0] && !x.revoked_at).forEach((x) => { x.revoked_at = NOW(); x.revoked_reason = 'social_link'; });
       return [];
+    }],
+
+    // ---------------- mqtt_credentials (mqtt_credential_service.revokeAllUserAccess) ----------------
+    [/DELETE FROM mqtt_credentials WHERE user_id = \$1 AND kind = 'app' RETURNING username/, (p) => {
+      const hit = s.mqttCreds.filter((c) => c.user_id === p[0] && c.kind === 'app');
+      s.mqttCreds = s.mqttCreds.filter((c) => !hit.includes(c));
+      return hit.map((c) => ({ username: c.username }));
     }],
 
     // ---------------- push_tokens (push_service.disableAllTokensForUser) ----------------
@@ -223,6 +249,11 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     [/FROM users\s+WHERE id = \$1/, (p) => (s.users.has(p[0]) ? [{ ...s.users.get(p[0]) }] : [])],
 
     // ---------------- password_resets ----------------
+    // UYELIK-K1: yeni kod TESLIM EDILDIKTEN sonra onceki talepler kapatilir (yeni satir haric). Genel kuraldan ONCE.
+    [/UPDATE password_resets SET used_at = NOW\(\)\s+WHERE identifier = \$1 AND used_at IS NULL AND id <> \$2/, (p) => {
+      s.resets.filter((r) => r.identifier === p[0] && !r.used_at && r.id !== p[1]).forEach((r) => { r.used_at = NOW(); });
+      return [];
+    }],
     [/UPDATE password_resets SET used_at = NOW\(\)\s+WHERE identifier = \$1 AND used_at IS NULL/, (p) => {
       s.resets.filter((r) => r.identifier === p[0] && !r.used_at).forEach((r) => { r.used_at = NOW(); });
       return [];
@@ -270,6 +301,11 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     }],
 
     // ---------------- phone_otp_codes ----------------
+    // UYELIK-K1: yeni SMS TESLIM EDILDIKTEN sonra onceki kodlar kapatilir (yeni satir haric). Genel kuraldan ONCE.
+    [/UPDATE phone_otp_codes SET consumed_at = NOW\(\)\s+WHERE phone = \$1 AND consumed_at IS NULL AND id <> \$2/, (p) => {
+      s.otps.filter((r) => r.phone === p[0] && !r.consumed_at && r.id !== p[1]).forEach((r) => { r.consumed_at = NOW(); });
+      return [];
+    }],
     [/UPDATE phone_otp_codes SET consumed_at = NOW\(\) WHERE phone = \$1/, (p) => {
       s.otps.filter((r) => r.phone === p[0] && !r.consumed_at).forEach((r) => { r.consumed_at = NOW(); });
       return [];

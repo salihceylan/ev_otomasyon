@@ -110,7 +110,9 @@ class UserProfileDialog extends StatelessWidget {
     final remaining = state.serviceSessionRemaining;
     return (
       fullName: user?.fullName ?? '',
-      email: user?.email.trim() ?? '',
+      // Telefon / Apple-gizli hesapta sunucunun teknik yer tutucusu (`...@ahbu.local` vb.) e-posta sayılmaz:
+      // "Belirtilmedi" görünür (UYELIK-07; yeni sunucu zaten `email:null` döner).
+      email: user?.contactEmail ?? '',
       phone: user?.phone ?? '',
       roleLabel: roleLabel,
       roleColor: roleColor,

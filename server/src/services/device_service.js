@@ -36,11 +36,19 @@ const OTP_RESEND_COOLDOWN_SECONDS = 60;
 const OTP_ATTEMPT_WINDOW_MINUTES = 15;
 const STAFF_INSTALL_WINDOW_HOURS = 72; // servis personelinin sahiplendigi evde kurulum penceresi
 const BURNED_PIN = 'CLAIMED_BURNED_PIN'; // yakilmis PIN: hicbir ozet bu degere esit olamaz
+// Acil sifirlama: yeni yerel anahtar ne yayinla ne telafiyle tutulabildi ('failed'); anahtar yanitta bir kez doner.
+// Panoya bulut yolu yok: gercek kurtarma yolu seri konsol RESETKEY + FACTORYINIT (istemci yonergesiyle ayni).
+// ('pending' icin uyari YOKTUR: bekleyen anahtar hata degil, uzlastirici otomatik iletir; fx2 S-1.)
+const LOCAL_KEY_FAILED_WARNING =
+  'Yeni yerel anahtar panoya iletilemedi; anahtar yalnız bu yanıtta gösterilir. Panoya seri konsoldan RESETKEY ve ' +
+  'ardından FACTORYINIT ile (fabrika aracı) yazılabilir.';
 const RESET_REASON_MIN_LENGTH = 15;
 const MAX_TEXT_LENGTH = 500;
 const DEFAULT_HOME_NAME = 'Evim';
 const DEFAULT_MODEL = 'ESP32-S3-POE-ETH-8DI-8RO';
 const REQUIRED_COMMISSIONING_CHECKS = Object.freeze(['relays', 'buttons', 'shutters', 'network', 'cloud']);
+// Toplu "isiklari kapat" komutlari (firmware'de esanlamli): evde priz varsa "Hepsini Kapat" kurali uygulanir (DAIRE-01).
+const LIGHTS_OFF_GROUP_COMMANDS = Object.freeze(['all_lights_off', 'all_off']);
 
 const DEVICE_UUID_PATTERN = /^AHBU-[A-Z0-9-]{3,32}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -226,6 +234,46 @@ class DeviceService {
     const bridge = this.bridge;
     if (typeof bridge.publishSys === 'function') return bridge.publishSys(topicId, obj);
     return bridge.publishToTopic(`ev/${topicId}/sys`, obj);
+  }
+
+  /** Bu ev icin yeni bekleyen niyet yazildi: kopru uzlastiricisi sonraki canli state'te kontrol etsin. En iyi caba. */
+  _requestReconcile(topicId) {
+    try {
+      const bridge = this.bridge;
+      if (bridge && typeof bridge.requestReconcile === 'function') bridge.requestReconcile(topicId);
+    } catch (_) {
+      /* en iyi caba: uzlastirici yine en gec sonraki cevrimici donemde kontrol eder */
+    }
+  }
+
+  /**
+   * Acil sifirlama TELAFISI (SERVIS-01): yeni yerel anahtar commit ile gecerli olmustu ama panoya iletilemedi. Gecerli
+   * anahtar eskisine (panodaki GERCEK anahtar) geri cekilir, yeni anahtar BEKLEYEN olur (uzlastirici iletir). CAS:
+   * yalniz kayit hala bu sifirlamanin yeni anahtarini tasiyorsa; arada baska yazim olduysa hicbir sey degismez.
+   * Kilit sirasi acil sifirlama / claim ile ayni (once envanter, sonra cihaz). @returns {Promise<boolean>} telafi yazildi mi
+   */
+  async _holdLocalKeyAfterFailedPublish(outcome) {
+    if (!outcome.deviceId) return false;
+    try {
+      return await this.db.withTransaction(async (tx) => {
+        await tx.query('UPDATE device_inventory SET local_key_enc = $2 WHERE id = $1 AND local_key_enc = $3', [
+          outcome.inventoryId,
+          outcome.previousInventoryKeyEnc,
+          outcome.newLocalKeyEnc,
+        ]);
+        const res = await tx.query(
+          `UPDATE devices
+              SET local_key_enc = $2, local_key_pending_enc = $3, local_key_pending_at = CURRENT_TIMESTAMP
+            WHERE id = $1 AND local_key_enc = $3`,
+          [outcome.deviceId, outcome.previousDeviceKeyEnc, outcome.newLocalKeyEnc]
+        );
+        if (!res || !res.rowCount) throw new Error('cihaz anahtari arada degisti; telafi geri alindi');
+        return true;
+      });
+    } catch (err) {
+      console.error('[DEVICE] Acil sifirlama yerel anahtar telafisi yazilamadi:', err && err.message);
+      return false;
+    }
   }
 
   _newCommandId() {
@@ -834,7 +882,10 @@ class DeviceService {
         technicianAccessUntil = m.rows[0] ? m.rows[0].installer_expires_at : null;
       }
 
-      // 8) Cihaz (devices) kaydi: MAC cakismasi giderilir; duz metin PIN yazilmaz; yerel anahtar sifreli
+      // 8) Cihaz (devices) kaydi: MAC cakismasi giderilir; duz metin PIN yazilmaz; yerel anahtar sifreli.
+      //    Bekleyen yerel anahtara (local_key_pending_enc, SERVIS-01) DOKUNULMAZ: burada yazilan envanter anahtari
+      //    panodaki GERCEK anahtardir (kurulum LAN'dan bununla yapilir); bekleyen anahtar pano buluta baglaninca
+      //    uzlastiriciyla iletilir ve takas edilir.
       await this._resolveMacConflict(tx, inv.mac_address, uuid);
       const localKey = this._resolveLocalKeyEnc(inv);
       const devRes = await tx.query(
@@ -964,6 +1015,9 @@ class DeviceService {
    *  - Servis personeli kendisini yeni sahip yapamaz.
    *  - Tek transaction; her seferinde YENI rastgele PIN (yanitta tek sefer) ve YENI yerel anahtar;
    *    devices.setup_pin kullanilmaz.
+   *  - Yerel anahtar (SERVIS-01): pano SIMDI iletilebilir degilse (cevrimdisi ya da kopru broker'a bagli degil)
+   *    panodaki GERCEK anahtar gecerli kalir, yeni anahtar BEKLEYEN yazilir (devices.local_key_pending_enc);
+   *    uzlastirici pano buluta baglaninca iletir. Yanit: local_key_publish 'published' | 'pending' | 'skipped' (ev yok).
    *  - Temizlik: endpoints, scheduled_rules, davetler, servis PIN/oturumlari (cleanupHome), uyelikler,
    *    MQTT kimlikleri; retained state/status bos yayinla temizlenir.
    *  - Commit sonrasi yan etki hatalari YUTULMAZ: yanitta `warnings` olarak doner.
@@ -996,7 +1050,7 @@ class DeviceService {
     const outcome = await this.db.withTransaction(async (tx) => {
       // 1) Cihaz + envanter satirlarini KILITLE
       const invRes = await tx.query(
-        `SELECT id, device_uuid, status, claimed_home_id, claimed_by_user_id, model, mac_address
+        `SELECT id, device_uuid, status, claimed_home_id, claimed_by_user_id, model, mac_address, local_key_enc
            FROM device_inventory WHERE device_uuid = $1 FOR UPDATE`,
         [uuid]
       );
@@ -1005,7 +1059,7 @@ class DeviceService {
       }
       const inv = invRes.rows[0];
       const devRes = await tx.query(
-        `SELECT id, home_id, is_claimed, is_online, model FROM devices WHERE device_uuid = $1 FOR UPDATE`,
+        `SELECT id, home_id, is_claimed, is_online, model, local_key_enc FROM devices WHERE device_uuid = $1 FOR UPDATE`,
         [uuid]
       );
       const dev = devRes.rows[0] || null;
@@ -1064,6 +1118,10 @@ class DeviceService {
         }
       }
 
+      const deviceWasOnline = Boolean(dev && dev.is_online);
+      // Devirde cocuk kilidi komutu commit sonrasi gonderilemeyecekse niyet yolu (adim 7, M1-03)
+      const childLockDeferred = Boolean(newOwnerRow && homeId && dev && !(deviceWasOnline && this._bridgeConnected()));
+
       // 4) Ev bilgisi (konu kimligi: MQTT temizligi icin)
       let topicId = null;
       let oldUserIds = [];
@@ -1085,20 +1143,48 @@ class DeviceService {
 
         // 7) Evin kullanici ayarlari varsayilana. Cocuk kilidi (durum + niyet) da sifirlanir:
         //    devredilen pano yeni sahibe KILITLI gitmemeli (panoya komut commit sonrasi yayinlanir).
-        await tx.query(
-          `UPDATE homes
-              SET child_lock_enabled = FALSE, child_lock_requested = NULL, child_lock_requested_at = NULL,
-                  child_lock_requested_by = NULL, peace_notification_enabled = TRUE, peace_notification_time = '23:30'
-            WHERE id = $1`,
-          [homeId]
-        );
-        await tx.query('UPDATE devices SET child_lock_enabled = FALSE WHERE home_id = $1', [homeId]);
+        //    Devirde komut SIMDI gonderilemiyorsa (pano cevrimdisi ya da kopru kopuk; M1-03) durum sifirlanmaz: "kilit
+        //    kapali" NIYETI yazilir ve panonun son bildirdigi durum korunur. Uzlastirici (device_reconciler) niyeti
+        //    cihazin BILDIRDIGI durumla karsilastirir; durum burada FALSE'a cekilseydi niyet hemen "karsilandi" sayilip
+        //    silinirdi. Pano baglanip kilitli bildirirse set_child_lock false gonderilir. Stoga donuste ev bagi
+        //    kalmadigi icin niyet anlamsizdir: eski davranis (durum sifirlanir, uyari).
+        if (childLockDeferred) {
+          await tx.query(
+            `UPDATE homes
+                SET child_lock_requested = $2, child_lock_requested_at = CURRENT_TIMESTAMP, child_lock_requested_by = $3,
+                    peace_notification_enabled = TRUE, peace_notification_time = '23:30'
+              WHERE id = $1`,
+            [homeId, false, null]
+          );
+        } else {
+          await tx.query(
+            `UPDATE homes
+                SET child_lock_enabled = FALSE, child_lock_requested = NULL, child_lock_requested_at = NULL,
+                    child_lock_requested_by = NULL, peace_notification_enabled = TRUE, peace_notification_time = '23:30'
+              WHERE id = $1`,
+            [homeId]
+          );
+          await tx.query('UPDATE devices SET child_lock_enabled = FALSE WHERE home_id = $1', [homeId]);
+        }
       }
-      const deviceWasOnline = Boolean(dev && dev.is_online);
 
-      // 8) Yeni yerel anahtar (her seferinde)
+      // 8) Yeni yerel anahtar (her seferinde). Nereye yazilacagi panoya SIMDI iletilip iletilemeyecegine baglidir
+      //    (SERVIS-01):
+      //    'publish' : pano cevrimici + kopru bagli -> yeni anahtar commit ile gecerli; commit sonrasi sys ile iletilir
+      //                (iletilemezse asagida TELAFI edilir).
+      //    'pending' : pano cevrimdisi ya da kopru kopuk (K1) -> panodaki GERCEK anahtar gecerli kalir (devices +
+      //                envanter degismez; servis sihirbazi LAN'dan bununla baglanip yeni bulut kimligini yazabilir, K2),
+      //                yeni anahtar BEKLEYEN yazilir; uzlastirici pano buluta baglaninca iletir (device_reconciler).
+      //    'direct'  : ev/konu ya da cihaz kaydi yok (stoktaki cihaz) -> iletim yolu yok: eski davranis (anahtar hemen
+      //                degisir, yanitta bir kez doner).
       const newLocalKey = this.secretBox.generateLocalKey();
       const newLocalKeyEnc = this.secretBox.encrypt(newLocalKey);
+      let keyPlan = 'direct';
+      if (topicId && dev) keyPlan = deviceWasOnline && this._bridgeConnected() ? 'publish' : 'pending';
+      const holdKey = keyPlan === 'pending';
+      const deviceKeyEnc = holdKey ? dev.local_key_enc || null : newLocalKeyEnc; // devices.local_key_enc
+      const inventoryKeyEnc = holdKey ? inv.local_key_enc || null : newLocalKeyEnc; // device_inventory.local_key_enc
+      const pendingKeyEnc = holdKey ? newLocalKeyEnc : null; // devices.local_key_pending_enc (yeni anahtar gecerliyse NULL)
 
       // 9) MQTT kimlikleri: uygulama kimlikleri DB'den silinir (kick commit sonrasi).
       //    Yeni sahibe devirde cihaz kimligi asagida YENILENIR; stoga donuste cihaz kimligi de silinir.
@@ -1143,7 +1229,7 @@ class DeviceService {
                   pin_hash = $3,
                   local_key_enc = $4
             WHERE id = $5`,
-          [homeId, newOwnerRow.id, BURNED_PIN, newLocalKeyEnc, inv.id]
+          [homeId, newOwnerRow.id, BURNED_PIN, inventoryKeyEnc, inv.id]
         );
         if (dev) {
           await tx.query(
@@ -1151,10 +1237,13 @@ class DeviceService {
                 SET home_id = $1, is_claimed = TRUE, claimed_by = $2, claimed_at = CURRENT_TIMESTAMP,
                     is_online = FALSE, is_commissioned = FALSE, commissioned_at = NULL, commissioned_by = NULL,
                     commissioning_status = 'PENDING_INSTALLATION', commissioning_notes = NULL,
-                    device_status = 'ACTIVE', local_key_enc = $3, setup_pin = NULL, child_lock_enabled = FALSE,
+                    device_status = 'ACTIVE', local_key_enc = $3, setup_pin = NULL,
+                    child_lock_enabled = CASE WHEN $6::boolean THEN child_lock_enabled ELSE FALSE END,
+                    local_key_pending_enc = $5::text,
+                    local_key_pending_at = CASE WHEN $5::text IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
                     reported_layout = NULL, reported_layout_at = NULL, updated_at = CURRENT_TIMESTAMP
               WHERE id = $4`,
-            [homeId, newOwnerRow.id, newLocalKeyEnc, dev.id]
+            [homeId, newOwnerRow.id, deviceKeyEnc, dev.id, pendingKeyEnc, childLockDeferred]
           );
           await this._seedEndpoints(tx, homeId, dev.id, dev.model || inv.model);
           deviceCredential = await this.credentials.issueDeviceCredential({
@@ -1180,7 +1269,7 @@ class DeviceService {
                   pin_hash = $1,
                   local_key_enc = $2
             WHERE id = $3`,
-          [pinHash, newLocalKeyEnc, inv.id]
+          [pinHash, inventoryKeyEnc, inv.id]
         );
         if (dev) {
           await tx.query(
@@ -1189,9 +1278,11 @@ class DeviceService {
                     is_online = FALSE, is_commissioned = FALSE, commissioned_at = NULL, commissioned_by = NULL,
                     commissioning_status = 'PENDING_INSTALLATION', commissioning_notes = NULL,
                     device_status = 'ACTIVE', local_key_enc = $1, setup_pin = NULL, child_lock_enabled = FALSE,
+                    local_key_pending_enc = $3::text,
+                    local_key_pending_at = CASE WHEN $3::text IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END,
                     reported_layout = NULL, reported_layout_at = NULL, updated_at = CURRENT_TIMESTAMP
               WHERE id = $2`,
-            [newLocalKeyEnc, dev.id]
+            [deviceKeyEnc, dev.id, pendingKeyEnc]
           );
           // Cihaz bagli oldugu tum kanal satirlarindan arindirilir (yeni sahiplenmede yeniden uretilir).
           await tx.query('DELETE FROM endpoints WHERE device_id = $1', [dev.id]);
@@ -1230,6 +1321,12 @@ class DeviceService {
         topicId,
         setupPin,
         newLocalKey,
+        newLocalKeyEnc,
+        keyPlan,
+        // telafi icin (yayin basarisiz olursa gecerli anahtar bunlara geri cekilir)
+        previousDeviceKeyEnc: dev ? dev.local_key_enc || null : null,
+        previousInventoryKeyEnc: inv.local_key_enc || null,
+        inventoryId: inv.id,
         newOwnerRow,
         deviceCredential,
         affectedUsers: oldUserIds.length,
@@ -1240,6 +1337,7 @@ class DeviceService {
           ])
         ),
         deviceWasOnline,
+        childLockDeferred,
         deviceId: dev ? dev.id : null,
       };
     });
@@ -1263,7 +1361,9 @@ class DeviceService {
 
     if (outcome.topicId) {
       // (a0) Cocuk kilidini sifirla (devredilen pano yeni sahibe kilitli gitmesin). Cihaz hala ESKI kimlikle bagliyken.
-      if (outcome.deviceWasOnline && this._bridgeConnected()) {
+      //      Gonderilemezse uyari NEDENE gore (kopru kopuk / pano cevrimdisi; M1-03). Devirde transaction "kilit kapali"
+      //      NIYETINI yazdi (childLockDeferred): uzlastirici pano buluta baglaninca set_child_lock false gonderir.
+      if (!outcome.childLockDeferred && outcome.deviceWasOnline && this._bridgeConnected()) {
         try {
           await this._publishCommand(outcome.topicId, { cmd: 'set_child_lock', enabled: false, id: this._newCommandId() });
           childLockReset = 'published';
@@ -1273,11 +1373,17 @@ class DeviceService {
         }
       } else {
         childLockReset = 'skipped_offline';
-        warnings.push('Pano çevrimdışı; çocuk kilidi sıfırlanamadı. Pano yerelde kilitli kalmış olabilir.');
+        const cause = outcome.deviceWasOnline ? 'Bulut bağlantısı yok' : 'Pano çevrimdışı';
+        const tail = outcome.childLockDeferred
+          ? 'Kilit, pano bağlandığında otomatik kaldırılacak.'
+          : 'Pano yerelde kilitli kalmış olabilir.';
+        warnings.push(`${cause}; çocuk kilidi sıfırlama komutu gönderilemedi. ${tail}`);
       }
 
-      // (a) Yeni yerel anahtari cihaza ilet (cihaz hala ESKI kimlikle bagliyken; sonra baglanti atilir)
-      if (outcome.deviceWasOnline && this._bridgeConnected()) {
+      // (a) Yerel anahtar (SERVIS-01). 'publish': yeni anahtar cihaza iletilir (cihaz hala ESKI kimlikle bagliyken;
+      //     sonra baglanti atilir). Iletilemezse TELAFI: gecerli anahtar eskisine, yeni anahtar bekleyene cekilir.
+      //     'pending': transaction'da zaten bekleyen yazildi. Ikisinde de uzlastirici bu ev icin yeniden kurulur.
+      if (outcome.keyPlan === 'publish') {
         try {
           await this._publishSys(outcome.topicId, {
             cmd: 'set_local_key',
@@ -1286,12 +1392,18 @@ class DeviceService {
           });
           localKeyPublish = 'published';
         } catch (_) {
-          localKeyPublish = 'failed';
-          warnings.push('Yeni yerel anahtar cihaza iletilemedi; cihaza yerinde elle yazılmalıdır.');
+          localKeyPublish = (await this._holdLocalKeyAfterFailedPublish(outcome)) ? 'pending' : 'failed';
+          if (localKeyPublish === 'failed') {
+            warnings.push(LOCAL_KEY_FAILED_WARNING);
+          }
         }
-      } else {
-        localKeyPublish = 'skipped_offline';
-        warnings.push('Cihaz çevrimdışı; yeni yerel anahtar cihaza iletilemedi, yerinde elle yazılmalıdır.');
+      } else if (outcome.keyPlan === 'pending') {
+        localKeyPublish = 'pending';
+      }
+      if (localKeyPublish === 'pending') {
+        // Uyari YOK (S-1): bekleyen anahtar hata degildir; `local_key_publish:'pending'` istemciye bilgi notu olarak
+        // yeter, tek basina partial yapmaz.
+        this._requestReconcile(outcome.topicId);
       }
 
       // (b) Eski uygulama/cihaz baglantilarini at
@@ -1334,8 +1446,10 @@ class DeviceService {
       data.message =
         'Cihaz yeni sahibe devredildi. Eski ailenin tüm erişimleri kaldırıldı; cihaz kimliği yenilendi.';
     }
-    // Yerel anahtar cihaza iletilemediyse yetkili personel yerinde yazabilsin diye bir kez doner.
-    if (localKeyPublish !== 'published') {
+    // Yerel anahtar yanitta YALNIZ gecerli oldugu halde panoya iletilemediyse bir kez doner ('skipped': ev yok,
+    // 'failed': yayin ve telafi basarisiz). 'pending' iken DONMEZ: panonun mevcut anahtari gecerlidir, yenisi
+    // uzlastiriciyla otomatik iletilir; 'published' iken pano zaten aldi.
+    if (localKeyPublish === 'skipped' || localKeyPublish === 'failed') {
       data.local_key = outcome.newLocalKey;
     }
     if (warnings.length > 0) {
@@ -1468,7 +1582,9 @@ class DeviceService {
         ownerId = o.rows[0] ? o.rows[0].user_id : null;
       }
 
-      // 8) Yeni cihaz kaydi (duz metin PIN YOK; yerel anahtar sifreli)
+      // 8) Yeni cihaz kaydi (duz metin PIN YOK; yerel anahtar sifreli). Bekleyen yerel anahtara (local_key_pending_enc,
+      //    SERVIS-01) DOKUNULMAZ: envanter anahtari yeni panodaki GERCEK anahtardir; yeni panonun onceki bir acil
+      //    sifirlamadan kalan bekleyen anahtari varsa pano buluta baglaninca uzlastiriciyla iletilir.
       const localKey = this._resolveLocalKeyEnc(newInv);
       const upsert = await tx.query(
         `INSERT INTO devices (home_id, device_uuid, mac_address, is_claimed, claimed_at, claimed_by, model,
@@ -1767,6 +1883,20 @@ class DeviceService {
 
     if (!device.is_online) {
       throw httpError(409, 'Cihaz çevrimdışı; komut iletilmedi.', 'DEVICE_OFFLINE', { device_online: false });
+    }
+
+    // Toplu "isiklari kapat" (DAIRE-01): firmware'de priz tipi yok; all_lights_off / all_off uygulamada 'plug' (priz)
+    // diye isaretlenen roleleri de kapatirdi. Evde priz varsa "Hepsini Kapat" ile AYNI kural (peace_service): yalniz
+    // ACIK isik roleleri tek tek kapatilir; yanit ayni bicim (+ command_ids). Priz yoksa davranis AYNEN (tek toplu komut).
+    if (validated.kind === KINDS.GROUP && LIGHTS_OFF_GROUP_COMMANDS.includes(validated.command.cmd)) {
+      const kept = await this.peace.closeLightsKeepingPlugs({ homeId, topicId: device.topic_id });
+      if (kept) {
+        const ids = kept.commandIds;
+        const out = { delivered: true, device_online: true, command_id: ids.length > 0 ? ids[0] : null, command_ids: ids };
+        if (ids.length === 0 && kept.skippedLights === 0) out.no_change = true; // acik lamba yoktu: komut gonderilmedi
+        if (kept.skippedLights > 0) out.skipped_count = kept.skippedLights;
+        return out;
+      }
     }
 
     const commandId = validated.command.id || this._newCommandId();

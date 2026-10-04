@@ -7,6 +7,8 @@
 // SORUN: REST yalnizca NIYET kaydeder; cihaz o sirada cevrimdisiysa komut kaybolur:
 //   * Cocuk kilidi: `homes.child_lock_requested` (ve pano degisimi sonrasi `child_lock.sync: pending_device_online`)
 //   * Panjur sureleri: pano degisiminden sonra yeni pano varsayilan sureleriyle acilir (`runtime_sync: pending_device_online`)
+//   * Yerel anahtar (SERVIS-01): acil sifirlama pano cevrimdisiyken yeni anahtari BEKLEYEN yazar
+//     (`devices.local_key_pending_enc`, migration 032); panonun gercek anahtari `local_key_enc`'de kalir.
 //   Pano cevrimici olunca bu niyetler cihaza (bir kez) uygulanmali ve bekleyen isaret temizlenmelidir.
 //
 // TASARIM (kopru `mqtt_bridge.js` bu modulu CANLI `state` mesajlarindan sonra cagirir; bkz. onLiveState):
@@ -34,6 +36,12 @@
 //     (bekleyen niyet yoktur; gercek durum devices/homes.child_lock_enabled'dadir).
 //   - panjur sureleri: devices.config_snapshot ->> 'runtime_sync' = 'pending' (replaceBoard yazar; burada 'synced').
 //     Panjur sureleri cihazin state'inde YOKTUR; bu yuzden "pending" isareti zorunludur.
+//   - yerel anahtar: devices.local_key_pending_enc (sifreli). Yalniz `publishSys` verildiyse uzlastirilir (kopru verir):
+//     `ev/{t}/sys {cmd:'set_local_key', local_key, id}` yayinlanir; PUBACK sonrasi TEK transaction'da CAS takas
+//     (local_key_enc = bekleyen, bekleyen = NULL; yalniz bekleyen hala yayinlananla ayniysa) + envanter ayni degere +
+//     device_audit_logs 'local_key_rotated' (anahtarsiz). Basarisiz yayinda bekleyen KALIR (ustel bekleme / sonraki
+//     cevrimici donem). Firmware sys komutunu yankilamaz: kanit PUBACK'tir. Anahtar ve sifreli deger ASLA loglanmaz.
+//     Cok panolu evde atlanir (ev konusu tum panolara gider: diger panonun anahtari da degisirdi).
 //
 // Sinirlar (bilincli):
 //   * Panjur uzlastirmasi YALNIZ tek panolu evde yapilir: ev konusu tum panolara gittiginden `set_runtime` ortak
@@ -151,6 +159,39 @@ UPDATE devices
  WHERE id = $1
    AND config_snapshot ->> 'runtime_sync' = 'pending'
    AND config_snapshot ->> 'replaced_at' IS NOT DISTINCT FROM $2`,
+
+  // Bekleyen yerel anahtari olan cihazlar (yalnizca bu evin; SERVIS-01). Deger SIFRELIDIR (yalniz yayinda cozulur).
+  localKeyPending: `
+SELECT h.id AS home_id,
+       d.id AS device_id,
+       d.device_uuid,
+       d.local_key_pending_enc AS pending_enc,
+       (d.is_online IS TRUE AND d.last_seen_at IS NOT NULL
+         AND d.last_seen_at > CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 second')) AS live,
+       (SELECT COUNT(*)::int FROM devices x WHERE x.home_id = h.id) AS device_count
+  FROM homes h
+  JOIN devices d ON d.home_id = h.id
+ WHERE h.mqtt_username = $1
+   AND d.local_key_pending_enc IS NOT NULL
+ ORDER BY d.created_at ASC, d.id`,
+
+  // Takas islemi kilit sirasi acil sifirlama / claim ile AYNI: once envanter satiri, sonra cihaz (40P01 dongusu yok).
+  localKeyLockInventory: 'SELECT id FROM device_inventory WHERE device_uuid = $1 FOR UPDATE',
+
+  // CAS takas: yalniz bekleyen anahtar hala YAYINLANANLA ayniysa (arada yeni acil sifirlama / etiket yenileme yazdiysa
+  // dokunulmaz).
+  localKeySwap: `
+UPDATE devices
+   SET local_key_enc = local_key_pending_enc, local_key_pending_enc = NULL, local_key_pending_at = NULL
+ WHERE id = $1 AND local_key_pending_enc = $2`,
+
+  // Envanter ayni sifreli degere (sonraki sahiplenme / pano degisimi envanter anahtarini esas alir).
+  localKeyInventory: 'UPDATE device_inventory SET local_key_enc = $2, updated_at = CURRENT_TIMESTAMP WHERE device_uuid = $1',
+
+  // Denetim kaydi: anahtar / sifreli deger YAZILMAZ.
+  localKeyAudit: `
+INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
+VALUES ('local_key_rotated', $1, $2, NULL, 'system', NULL, $3::jsonb)`,
 });
 
 // ------------------------------------------------------------------------------
@@ -183,6 +224,9 @@ class DeviceReconciler {
    * @param {object} deps
    * @param {{query:Function}} deps.db                         (zorunlu)
    * @param {(topicId:string, cmd:object)=>Promise} deps.publishCommand  kopru yayin yolu (zorunlu)
+   * @param {(topicId:string, obj:object)=>Promise} [deps.publishSys]  `ev/{t}/sys` yayini; YOKSA yerel anahtar
+   *                                                          uzlastirmasi kapali (SERVIS-01)
+   * @param {{decrypt:Function, isValidLocalKey:Function}} [deps.secretBox]  varsayilan utils/secret_box
    * @param {()=>boolean} [deps.isConnected]                   false ise yayin denenmez (deneme hakki harcanmaz)
    * @param {object} [deps.logger]                             log/warn/error
    * @param {()=>number} [deps.now]                            ms
@@ -197,6 +241,8 @@ class DeviceReconciler {
     if (typeof deps.publishCommand !== 'function') throw new TypeError('DeviceReconciler: publishCommand zorunludur');
     this.db = deps.db;
     this.publishCommand = deps.publishCommand;
+    this.publishSys = typeof deps.publishSys === 'function' ? deps.publishSys : null;
+    this._secretBox = deps.secretBox || null;
     this.isConnected = typeof deps.isConnected === 'function' ? deps.isConnected : () => true;
     this.logger = deps.logger || console;
     this.now = typeof deps.now === 'function' ? deps.now : Date.now;
@@ -231,8 +277,21 @@ class DeviceReconciler {
       skippedMultiDevice: 0,
       skippedNotConnected: 0,
       runtimeSynced: 0,
+      localKeyRotated: 0,
       errors: 0,
     };
+  }
+
+  /** Tembel: modul yuklenirken LOCAL_KEY_SECRET gerektirmez. */
+  get secretBox() {
+    if (!this._secretBox) this._secretBox = require('../utils/secret_box');
+    return this._secretBox;
+  }
+
+  /** Tek transaction (db.withTransaction varsa); yoksa ardisik sorgu (yalniz sahte db'ler icin). */
+  _inTransaction(fn) {
+    if (typeof this.db.withTransaction === 'function') return this.db.withTransaction((tx) => fn((t, p) => tx.query(t, p)));
+    return fn((t, p) => this.db.query(t, p));
   }
 
   // -- Gunluk -------------------------------------------------------------------
@@ -291,6 +350,16 @@ class DeviceReconciler {
 
   /** Canli `status: offline` (LWT): cevrimici donem biter; sonraki canli state yeni donemdir. */
   onOffline(topicId) {
+    const home = this._homes.get(topicId);
+    if (home) home.devices.clear();
+  }
+
+  /**
+   * Sunucu (REST) bu ev icin yeni bir BEKLEYEN niyet yazdi (or. acil sifirlama yerel anahtari bekleyen yapti):
+   * cevrimici donem kaydi sifirlanir, cihazin SONRAKI canli state'i yeni donem sayilir ve kontrol planlanir. Pano
+   * kopruyle kisa kopukluk boyunca (< offlineAfterSec) bagli kaldiysa yeni donem hic baslamaz, niyet beklerdi (SERVIS-K1).
+   */
+  rearm(topicId) {
     const home = this._homes.get(topicId);
     if (home) home.devices.clear();
   }
@@ -411,7 +480,8 @@ class DeviceReconciler {
       this._homes.set(topicId, home);
     }
     // Bir turun hatasi digerini etkilemez.
-    for (const [kind, fn] of [['child_lock', this._checkChildLock], ['runtime', this._checkRuntime]]) {
+    const kinds = [['child_lock', this._checkChildLock], ['runtime', this._checkRuntime], ['local_key', this._checkLocalKey]];
+    for (const [kind, fn] of kinds) {
       try {
         await fn.call(this, topicId, home);
       } catch (err) {
@@ -627,6 +697,115 @@ class DeviceReconciler {
     this.counters.runtimeSynced += 1;
     this._log('log', `panjur_suresi ${tag} cihaz=${row.device_uuid} sonuc=uygulandi yayinlanan=${ok} atlanan_gecersiz=${invalid} `
       + `${r && r.rowCount > 0 ? 'isaret_temizlendi' : 'isaret_zaten_degismis'}`);
+  }
+
+  // -- Bekleyen yerel anahtar (SERVIS-01) ----------------------------------------------
+  async _checkLocalKey(topicId, home) {
+    if (!this.publishSys) return; // sys yayincisi yok (eski kurulum / test): kapali, ek sorgu yok
+    const res = await this.db.query(SQL.localKeyPending, [topicId, this.offlineAfterSec]);
+    const rows = (res && res.rows) || [];
+    if (rows.length === 0) {
+      this._dropBudgets(home, 'local_key');
+      return;
+    }
+    const t = this.now();
+    for (const row of rows) {
+      if (row.home_id) home.homeId = row.home_id;
+      const tag = `home=${shortId(home.homeId)}`;
+      if (Number(row.device_count) !== 1) {
+        // Ev konusu tum panolara gider: set_local_key evdeki DIGER panonun anahtarini da degistirirdi.
+        this.counters.skippedMultiDevice += 1;
+        this._logOnce(home, `local_key|multi|${row.device_id}`, 'warn',
+          `yerel_anahtar ${tag} sonuc=atlandi (evde ${Number(row.device_count)} pano var; ev konusu hepsine gider)`);
+        continue;
+      }
+      if (row.live !== true) {
+        this.counters.skippedOffline += 1; // cevrimdisi: yayin yok; cihaz donunce yeni donem tetikler
+        continue;
+      }
+      try {
+        await this._syncLocalKey(topicId, home, row, tag, t);
+      } catch (err) {
+        this.counters.errors += 1;
+        this._logOnce(home, `error|local_key|${row.device_id}|${errorKind(err)}`, 'warn', `yerel_anahtar ${tag} kontrol hatasi: ${errorKind(err)}`);
+      }
+    }
+  }
+
+  async _syncLocalKey(topicId, home, row, tag, t) {
+    const key = `local_key|${row.device_id}`;
+    const intentKey = String(row.pending_enc); // yeni bekleyen anahtar = yeni niyet (butce sifirlanir); loglanmaz
+    const status = this._canAttempt(this._entry(home, key, intentKey), t);
+    if (!status.ok) {
+      if (status.reason === 'backoff') {
+        this._schedule(topicId, home, status.waitMs);
+      } else {
+        this.counters.exhausted += 1;
+        this._logOnce(home, `local_key|exhausted|${row.device_id}`, 'warn',
+          `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=deneme_hakki_bitti (${MAX_ATTEMPTS}/${MAX_ATTEMPTS}); bekleyen anahtar korunur`);
+      }
+      return;
+    }
+    if (!this.isConnected()) {
+      this._deferUntilConnected(topicId, home); // deneme hakki HARCANMAZ
+      this._logOnce(home, 'local_key|notconnected', 'warn', `yerel_anahtar ${tag} sonuc=ertelendi (MQTT koprusu bagli degil)`);
+      return;
+    }
+    home.disconnectedRetries = 0;
+
+    let localKey = null;
+    try {
+      localKey = this.secretBox.decrypt(row.pending_enc);
+    } catch (_) {
+      localKey = null;
+    }
+    if (!localKey || !this.secretBox.isValidLocalKey(localKey)) {
+      // Cozulemeyen / firmware bicimine uymayan deger panoya GONDERILMEZ; bekleyen korunur (operator incelemeli).
+      this.counters.errors += 1;
+      this._logOnce(home, `local_key|invalid|${row.device_id}`, 'error',
+        `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=gecersiz_bekleyen (cozulemedi ya da bicim disi); yayin yok`);
+      return;
+    }
+
+    let failure = null;
+    try {
+      // CONTRACTS §3b: alan adi `local_key`; kopru sys yukunu loglamaz.
+      await this.publishSys(topicId, { cmd: 'set_local_key', local_key: localKey, id: this.newCommandId() });
+      this.counters.published += 1;
+    } catch (err) {
+      failure = errorKind(err);
+      this.counters.publishFailed += 1;
+    }
+    if (failure) {
+      const e = this._recordAttempt(home, key, intentKey, t);
+      this._log('warn', `yerel_anahtar ${tag} cihaz=${row.device_uuid} deneme=${e.attempts}/${MAX_ATTEMPTS} sonuc=yayin_basarisiz `
+        + `hata=${failure}; bekleyen anahtar korunur`);
+      this._schedule(topicId, home, e.nextAt - t);
+      return;
+    }
+
+    // PUBACK: CAS takas + envanter + denetim TEK transaction'da (kilit sirasi: envanter -> cihaz).
+    let swapped;
+    try {
+      swapped = await this._inTransaction(async (q) => {
+        await q(SQL.localKeyLockInventory, [row.device_uuid]);
+        const r = await q(SQL.localKeySwap, [row.device_id, row.pending_enc]);
+        if (!r || !r.rowCount) return false; // bekleyen arada degisti (yeni sifirlama / etiket): dokunulmaz
+        await q(SQL.localKeyInventory, [row.device_uuid, row.pending_enc]);
+        await q(SQL.localKeyAudit, [row.device_uuid, row.home_id || home.homeId || null, JSON.stringify({ via: 'reconciler' })]);
+        return true;
+      });
+    } catch (err) {
+      // Pano anahtari ALDI ama kayit yazilamadi: bekleyen korunur; ustel bekleme sonra ayni anahtarla yeniden denenir.
+      const e = this._recordAttempt(home, key, intentKey, t);
+      this.counters.errors += 1;
+      this._log('warn', `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=takas_yazilamadi hata=${errorKind(err)}; yeniden denenecek`);
+      this._schedule(topicId, home, e.nextAt - t);
+      return;
+    }
+    home.budgets.delete(key);
+    if (swapped) this.counters.localKeyRotated += 1;
+    this._log('log', `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=${swapped ? 'uygulandi' : 'isaret_zaten_degismis'}`);
   }
 }
 

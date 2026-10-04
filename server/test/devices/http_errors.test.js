@@ -63,6 +63,13 @@ test('ek alanlar beyaz liste ile sinirli (ic bilgi sizmaz)', () => {
   assert.ok(!('stack' in r.body));
 });
 
+test('reason: makine-okur 409 ayirici govdeye yansir (fx2 S-4: NOT_APPLIED / TYPE_CHANGED)', () => {
+  for (const reason of ['NOT_APPLIED', 'TYPE_CHANGED']) {
+    const r = toErrorResponse(httpError(409, 'x', 'CONFLICT', { reason }));
+    assert.deepStrictEqual(r.body, { success: false, message: 'x', code: 'CONFLICT', reason });
+  }
+});
+
 test('5xx: ham ic mesaj (SQL, kisit adi) istemciye DONMEZ, loga yazilir', () => {
   const raw = new Error('duplicate key value violates unique constraint "uq_users_email_lower" DETAIL: Key (email)=(a@b.com)');
   raw.code = '23505';

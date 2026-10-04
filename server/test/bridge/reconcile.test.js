@@ -113,6 +113,9 @@ function makeWorld() {
           }
           return { rowCount: 0 };
         }
+        case SQL.localKeyPending:
+          // bu dunyada bekleyen yerel anahtar yok (ayrintili testler: local_key_reconcile.test.js)
+          return { rows: [] };
         default:
           throw new Error(`beklenmeyen sorgu: ${String(text).slice(0, 60)}`);
       }
@@ -788,6 +791,8 @@ test('kopru: CANLI state COMMIT sonrasi uzlastiriciyi tetikler; yayin kopru yolu
   assert.equal(cmd.enabled, true);
   assert.match(cmd.id, CMD_ID_RE);
   assert.equal(ctx.bridge.getStatus().reconcile.published, 1);
+  assert.equal(ctx.bridge.getStatus().reconcile.errors, 0, 'yerel anahtar turu dahil hicbir kontrol hata vermez');
+  assert.ok(ctx.w.queries.some((q) => q.text === SQL.localKeyPending), 'kopru uzlastiricisinda yerel anahtar turu ACIK (publishSys)');
 });
 
 test('kopru: RETAINED state uzlastirmayi TETIKLEMEZ (canli oldugunu kanitlamaz); canli status offline donemi bitirir', async () => {

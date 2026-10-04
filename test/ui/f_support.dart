@@ -153,6 +153,9 @@ class FakeDevice {
   bool rejectRuntimeApply = false;
   int wrongKeyAttempts = 0;
 
+  /// Panoya giden yanlış anahtarlı isteklerin TOPLAMI (başarılı doğrulamada sıfırlanmaz; [wrongKeyAttempts] sıfırlanır).
+  int wrongKeyTotal = 0;
+
   /// Erişilemeyen adrese (telefon o ağda değil / AP kapandı) giden istek, bu süre **sanal saatle** (FakeClock)
   /// beklendikten sonra ağ hatasıyla düşer: gerçek istemcideki bağlantı zaman aşımını (`AutomationApiService`
   /// 4 sn) taklit eder. Varsayılan sıfır: eski davranış (hata hemen gelir).
@@ -232,6 +235,7 @@ class FakeDevice {
     keyHeaderHosts.add(r.url.host);
     if (key != localKey) {
       wrongKeyAttempts++;
+      wrongKeyTotal++;
       if (wrongKeyAttempts >= 5) return _err(423, 'locked', extra: <String, dynamic>{'retry_after': 60});
       return _err(401, 'unauthorized');
     }

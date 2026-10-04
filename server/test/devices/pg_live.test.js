@@ -71,7 +71,8 @@ function getCtx() {
     const { EndpointService } = require('../../src/services/endpoint_service');
     const { MqttCredentialService } = require('../../src/services/mqtt_credential_service');
 
-    const bridge = {
+    // Cihaz onayi (expectAck, DAIRE-03): pano yayinlanan komutu uygular ('auto').
+    const bridge = require('./_ack_bridge').withAckSupport({
       connected: true,
       failPublish: false,
       commands: [],
@@ -86,7 +87,7 @@ function getCtx() {
       async publishSys(topic, obj) { this.sys.push({ topic, obj: JSON.parse(JSON.stringify(obj)) }); return {}; },
       async publishToTopic(topic, obj) { this.sys.push({ topic, obj }); return {}; },
       async clearRetained(topic) { this.cleared.push(topic); },
-    };
+    });
     const mailer = {
       sent: [],
       async sendClaimOtpEmail(a) { this.sent.push(a); return { sent: true }; },

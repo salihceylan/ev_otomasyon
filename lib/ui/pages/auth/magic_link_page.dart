@@ -23,7 +23,11 @@ typedef _GateView = ({bool isAuthenticated, bool checking});
 ///
 /// * `magicLogin`: oturum yokken bağlantı açılır açılmaz giriş yapılır; zaten bir oturum açıksa
 ///   (hesap değişimi) önce **onay** istenir. Belirteç tek kullanımlıktır: otomatik yeniden deneme yok.
-/// * `resetPassword`: yeni şifre (politika: en az 10 karakter, kırpılmaz) ister ve belirteçle sıfırlar.
+/// * `resetPassword`: yeni şifre (politika: en az 10 karakter, kırpılmaz) ister ve belirteçle sıfırlar. Sunucu
+///   sıfırlama yanıtında bağlantının hesabıyla oturum açtığından, zaten bir oturum açıksa magic-login'deki ile
+///   AYNI uyarı ve onay istenir; onaysız oturum değişmez (UYELIK-05).
+/// * İki kol da açılış / biyometrik kilit sürerken (oturum durumu bilinmiyor) bekler: istek atılmaz, kilit
+///   atlatılmaz (UYELIK-K2).
 ///
 /// Belirteç ekranda gösterilmez ve loglanmaz.
 ///
@@ -49,6 +53,9 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
   bool _obscureConfirm = true;
   String? _error;
   String? _success;
+
+  /// Şifre sıfırlama: oturum açıkken kullanıcı "mevcut oturum kapanır" uyarısını onayladı (UYELIK-05).
+  bool _resetConfirmed = false;
 
   /// Açılış / biyometrik kilit sürerken durumu izlenen oturum durumu (giriş kararı bekler).
   AutomationState? _gateState;
@@ -125,19 +132,24 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
 
   Future<void> _submitReset() async {
     if (_busy || _consumed) return;
-    if (!_formKey.currentState!.validate()) return;
     final state = context.read<AutomationState>();
+    // Savunma (görünüm zaten formu göstermez): oturum durumu bilinmeden (açılış / biyometrik kilit) ya da açık oturum
+    // onaysızken sıfırlama gönderilmez; yanıt oturum taşıyıp mevcut oturumu değiştirebilir.
+    if (state.authStatus == AuthStatus.checking) return;
+    if (state.isAuthenticated && !_resetConfirmed) return;
+    if (!_formKey.currentState!.validate()) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       // Şifre KIRPILMAZ.
-      await state.resetPassword(token: widget.link.token, newPassword: _passwordController.text);
+      final adopted = await state.resetPassword(token: widget.link.token, newPassword: _passwordController.text);
       if (!mounted) return;
       _consumed = true;
-      // Mesaj dönen duruma göre: sunucu oturum verdiyse otomatik giriş yapılmıştır.
-      if (state.isAuthenticated) {
+      // Mesaj dönen duruma göre: sunucu oturum verdiyse otomatik giriş yapılmıştır (bağlantının hesabı açıldı).
+      // Vermediyse (açık oturum sürüyor olsa bile) sessizce kapanılmaz: başarı iletisi gösterilir.
+      if (adopted && state.isAuthenticated) {
         _leave();
         return;
       }
@@ -168,7 +180,7 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: _isLogin ? _buildLogin(gate) : _buildReset()),
+              child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: _isLogin ? _buildLogin(gate) : _buildReset(gate)),
             ),
           ),
         ),
@@ -250,7 +262,59 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
     );
   }
 
-  Widget _buildReset() {
+  /// Şifre sıfırlamadan ÖNCEKİ kapı (UYELIK-K2 / UYELIK-05): açılış / biyometrik kilit sürerken bekleme; oturum
+  /// açıkken magic-login'deki ile aynı "mevcut oturum kapanır" uyarısı ve onayı. Gerekmiyorsa `null` (form).
+  Widget? _buildResetGate(_GateView gate) {
+    if (_busy || _consumed) return null;
+    final waitingForGate = gate.checking;
+    final needsConfirm = !waitingForGate && gate.isAuthenticated && !_resetConfirmed;
+    if (!waitingForGate && !needsConfirm) return null;
+    final muted = AppTheme.getTextMuted(context);
+    return Column(
+      key: const Key('magic_reset_gate'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Center(
+          child: OrbIconBadge(icon: Icons.lock_reset_rounded, family: AppFamilies.sky, size: OrbSize.xl, glow: true),
+        ),
+        const SizedBox(height: 16),
+        SurfaceCard(
+          padding: const EdgeInsets.fromLTRB(18, 20, 18, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (waitingForGate) ...[
+                _progress(const Key('magic_reset_waiting')),
+                const SizedBox(height: 16),
+                Text(
+                  'Oturum durumu kontrol ediliyor. Uygulama kilitliyse önce kilidi açın...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: muted, fontSize: 13, height: 1.4),
+                ),
+              ] else ...[
+                InlineMessage.warning(
+                  'Bu cihazda şu anda başka bir hesap açık. Bağlantıyla şifre yenilerseniz mevcut oturum kapanır '
+                  've bağlantının hesabı açılır.',
+                  key: const Key('magic_reset_confirm_notice'),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  key: const Key('btn_magic_reset_confirm'),
+                  onPressed: () => setState(() => _resetConfirmed = true),
+                  child: authPrimaryLabel('Bu Bağlantıyla Devam Et'),
+                ),
+              ],
+              TextButton(key: const Key('btn_magic_reset_cancel'), onPressed: _leave, child: const Text('Vazgeç')),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildReset(_GateView gate) {
+    final pending = _buildResetGate(gate);
+    if (pending != null) return pending;
     if (_success != null) {
       return Column(
         key: const Key('magic_reset_done'),

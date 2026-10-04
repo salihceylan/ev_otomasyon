@@ -1046,7 +1046,10 @@ test('statik: kaynakta endpoints uzerinde UPDATE/INSERT/DELETE yok; SQL yalniz b
   for (const text of Object.values(SQL)) {
     assert.doesNotMatch(text, /\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+endpoints\b/i);
   }
-  assert.ok(source.split('\n').length <= 600, 'dosya boyutu makul kalmali (hedef ~500; cok panolu koruma ile ~590)');
+  assert.ok(
+    source.split('\n').length <= 640,
+    'dosya boyutu makul kalmali (hedef ~500; cok panolu koruma ile ~590; DAIRE-01 ortak "isiklari kapat" kurali ile ~620)'
+  );
 });
 
 // ==============================================================================

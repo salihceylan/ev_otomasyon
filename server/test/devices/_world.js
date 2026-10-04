@@ -10,6 +10,7 @@
 
 const crypto = require('crypto');
 const { FakeDb, tick } = require('./_fake_db');
+const { withAckSupport } = require('./_ack_bridge');
 
 const uid = () => crypto.randomUUID();
 const copy = (o) => (o ? { ...o } : o);
@@ -67,7 +68,8 @@ function createFakeMailer() {
 }
 
 function createFakeBridge(timeline = []) {
-  return {
+  // Cihaz onayi (expectAck/cancelAck, DAIRE-03): varsayilan 'auto' = pano yayinlanan komutu uygular.
+  return withAckSupport({
     connected: true,
     failPublish: false,
     failSys: false,
@@ -102,7 +104,7 @@ function createFakeBridge(timeline = []) {
       this.cleared.push(topicId);
       timeline.push('clearRetained');
     },
-  };
+  });
 }
 
 /** EMQX REST sahtesi: GET /clients?username=U -> [{clientid:U}], DELETE /clients/:id -> 204 */
@@ -476,27 +478,46 @@ function createWorld({ clock = createClock() } = {}) {
     for (const d of devs) await ctx.lock(`dev:${d.id}`);
     return copies(devs);
   });
+  // SERVIS-01: acil sifirlama bekleyen yerel anahtari ACIKCA yazar (local_key_pending_enc = $N::text; NULL = yeni anahtar gecerli)
+  const pendingKey = (sql, value) =>
+    sql.includes('local_key_pending_enc = $')
+      ? { local_key_pending_enc: value || null, local_key_pending_at: value ? now() : null }
+      : {};
   db.on('UPDATE devices SET home_id = $1, is_claimed = TRUE, claimed_by = $2', (ctx) => {
-    // acil sifirlama (yeni sahip): [home, newOwner, enc, devId]
-    const [homeId, owner, enc, id] = ctx.params;
+    // acil sifirlama (yeni sahip): [home, newOwner, enc, devId, pendingEnc, childLockDeferred]
+    const [homeId, owner, enc, id, pendingEnc, keepChildLock] = ctx.params;
     const dev = state.devices.find((d) => d.id === id);
     patch(ctx, dev, {
       home_id: homeId, is_claimed: true, claimed_by: owner, claimed_at: now(), is_online: false, is_commissioned: false,
       commissioning_status: 'PENDING_INSTALLATION', device_status: 'ACTIVE', local_key_enc: enc, setup_pin: null,
-      child_lock_enabled: false, ...baseReset(ctx.sql),
+      child_lock_enabled: keepChildLock === true ? dev.child_lock_enabled : false,
+      ...baseReset(ctx.sql), ...pendingKey(ctx.sql, pendingEnc),
     });
     return { rows: [], rowCount: 1 };
   });
   db.on('UPDATE devices SET home_id = NULL, is_claimed = FALSE, claimed_by = NULL, claimed_at = NULL', (ctx) => {
-    // acil sifirlama (stoga don): [enc, devId]
-    const [enc, id] = ctx.params;
+    // acil sifirlama (stoga don): [enc, devId, pendingEnc]
+    const [enc, id, pendingEnc] = ctx.params;
     const dev = state.devices.find((d) => d.id === id);
     patch(ctx, dev, {
       home_id: null, is_claimed: false, claimed_by: null, claimed_at: null, is_online: false, is_commissioned: false,
       commissioning_status: 'PENDING_INSTALLATION', device_status: 'ACTIVE', local_key_enc: enc, setup_pin: null,
-      child_lock_enabled: false, ...baseReset(ctx.sql),
+      child_lock_enabled: false, ...baseReset(ctx.sql), ...pendingKey(ctx.sql, pendingEnc),
     });
     return { rows: [], rowCount: 1 };
+  });
+  // acil sifirlama TELAFISI (yayin basarisiz): CAS ile gecerli anahtar eskisine, yeni anahtar bekleyene
+  db.on('UPDATE device_inventory SET local_key_enc = $2 WHERE id = $1 AND local_key_enc = $3', (ctx) => {
+    const [id, prev, expected] = ctx.params;
+    const inv = state.device_inventory.find((i) => i.id === id && i.local_key_enc === expected);
+    if (inv) patch(ctx, inv, { local_key_enc: prev });
+    return { rows: [], rowCount: inv ? 1 : 0 };
+  });
+  db.on('UPDATE devices SET local_key_enc = $2, local_key_pending_enc = $3, local_key_pending_at = CURRENT_TIMESTAMP WHERE id = $1 AND local_key_enc = $3', (ctx) => {
+    const [id, prev, expected] = ctx.params;
+    const dev = state.devices.find((d) => d.id === id && d.local_key_enc === expected);
+    if (dev) patch(ctx, dev, { local_key_enc: prev, local_key_pending_enc: expected, local_key_pending_at: now() });
+    return { rows: [], rowCount: dev ? 1 : 0 };
   });
   db.on("UPDATE devices SET home_id = NULL, is_claimed = FALSE, claimed_by = NULL, is_online = FALSE, device_status = 'REPLACED_DAMAGED'", (ctx) => {
     const dev = state.devices.find((d) => d.id === ctx.params[0]);
@@ -645,6 +666,10 @@ function createWorld({ clock = createClock() } = {}) {
       child_lock_requested: carried ? true : ctx.params[1],
       child_lock_requested_at: now(),
       child_lock_requested_by: carried ? ctx.params[1] : ctx.params[2],
+      // acil sifirlama devri (komut gonderilemedi, M1-03): niyet + ev ayarlari varsayilana
+      ...(ctx.sql.includes('peace_notification_enabled = TRUE')
+        ? { peace_notification_enabled: true, peace_notification_time: '23:30' }
+        : {}),
     });
     return { rows: [], rowCount: 1 };
   });

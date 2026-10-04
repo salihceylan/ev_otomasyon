@@ -7,8 +7,11 @@
 //   PUT  /homes/:homeId/endpoints/:id        kanal adi/oda + panjur kalibrasyonu (owner/staff/servis oturumu/super)
 //   POST /homes/:homeId/endpoints/:id/control  tek uc nokta komutu (firmware sozlugune cevrilip sendCommand'dan gecer)
 //
-// Panjur kalibrasyonu (shutter_duration_sec 1..300): once cihaza `set_runtime` YAYINLANIR; DB yalnizca
-// yayin basarili olduktan sonra guncellenir (DB ile cihaz sapmaz). Cevrimdisi -> 409 DEVICE_OFFLINE.
+// Panjur kalibrasyonu (shutter_duration_sec 1..300): once cihaza `set_runtime` YAYINLANIR ve cihaz ONAYI beklenir
+// (DAIRE-03): firmware basarili komutta state.last_id'yi komut kimligine esitler; panjur hareket halindeyken / cift
+// yapilandirilmamisken komutu REDDEDER ve last_id degismez. Onay RUNTIME_ACK_TIMEOUT_MS icinde gelmezse 409 CONFLICT
+// ve DB'ye YAZILMAZ; DB yalnizca pano komutu uyguladiktan sonra guncellenir (DB ile cihaz sapmaz).
+// Cevrimdisi -> 409 DEVICE_OFFLINE.
 // ==============================================================================
 
 const crypto = require('crypto');
@@ -25,6 +28,11 @@ const COSMETIC_TYPES = Object.freeze(['light', 'plug']);
 const IMMUTABLE_FIELDS = Object.freeze(['channel', 'channel_index', 'device_id', 'shutter_pair_index']);
 // Kilitsiz okumadan sonra kanal yerlesimi (esitleme) degistiyse.
 const TYPE_CHANGED_MESSAGE = 'Kanal tipi değişti; listeyi yenileyin.';
+// set_runtime cihaz onayi (state.last_id yankisi) bekleme suresi. Firmware basarili komutu hemen (~0,25 sn birlestirme)
+// yayinlar; istemci zaman asimi (10 sn) yayin (en cok 5 sn) + bu bekleme icine sigar.
+const RUNTIME_ACK_TIMEOUT_MS = 4000;
+const RUNTIME_NOT_APPLIED_MESSAGE =
+  'Pano panjur süresini uygulamadı (panjur hareket halinde olabilir). Panjuru durdurup yeniden deneyin.';
 
 /**
  * Kilit altindaki satirlarda hedef hala `pair` numarali panjurun bir yonu mu ve cift tam (iki panjur satiri) mi?
@@ -181,8 +189,12 @@ class EndpointService {
         throw httpError(409, 'Cihaz çevrimdışı; panjur süresi cihaza iletilemedi.', 'DEVICE_OFFLINE', { device_online: false });
       }
       commandId = crypto.randomBytes(9).toString('base64url');
-      // Yayin hatasi YUTULMAZ: DB cihazdan once degismez.
-      await this._publishRuntime(ep.topic_id, ep.shutter_pair_index, durationSec, commandId);
+      // Yayin hatasi YUTULMAZ: DB cihazdan once degismez. Pano komutu uygulamadiysa (onay yok) DB'ye yazilmaz.
+      const applied = await this._publishRuntime(ep.topic_id, ep.shutter_pair_index, durationSec, commandId);
+      if (!applied) {
+        console.warn(`[ENDPOINT] set_runtime cihaz onayi gelmedi (cift ${ep.shutter_pair_index}); DB guncellenmedi`);
+        throw httpError(409, RUNTIME_NOT_APPLIED_MESSAGE, 'CONFLICT', { reason: 'NOT_APPLIED' });
+      }
     }
 
     const updated = await this.db.withTransaction(async (tx) => {
@@ -195,10 +207,11 @@ class EndpointService {
           [homeId, ep.device_id]
         );
         if (!isSamePairLocked(locked.rows, endpointId, ep.shutter_pair_index)) {
-          // set_runtime zaten yayinlandi (tasarim: yayin once, DB sonra). Pano cifti artik tanimiyorsa komutu reddeder
-          // (pairConfigured); DB'ye yazilmaz, istemci listeyi yenileyip yeniden dener.
-          console.warn(`[ENDPOINT] set_runtime yayinlandi (cift ${ep.shutter_pair_index}) ama kanal artik bu panjur degil; DB guncellenmedi`);
-          throw httpError(409, TYPE_CHANGED_MESSAGE, 'CONFLICT');
+          // set_runtime yayinlandi ve pano ONAYLADI (cift panoda tanimli); ancak onay beklenirken esitleme DB'deki
+          // kanal yerlesimini degistirdi. DB'ye yazilmaz, istemci listeyi yenileyip yeniden dener. (Pano cifti artik
+          // tanimiyorsa komutu reddeder ve onay gelmez: yukarida 409 "uygulamadi".)
+          console.warn(`[ENDPOINT] set_runtime onaylandi (cift ${ep.shutter_pair_index}) ama kanal artik bu panjur degil; DB guncellenmedi`);
+          throw httpError(409, TYPE_CHANGED_MESSAGE, 'CONFLICT', { reason: 'TYPE_CHANGED' });
         }
       }
 
@@ -218,7 +231,7 @@ class EndpointService {
         [name, room, typeParam, endpointId, homeId, durationSec]
       );
       if (res.rows.length === 0) {
-        if (typeParam !== null) throw httpError(409, TYPE_CHANGED_MESSAGE, 'CONFLICT');
+        if (typeParam !== null) throw httpError(409, TYPE_CHANGED_MESSAGE, 'CONFLICT', { reason: 'TYPE_CHANGED' });
         throw httpError(404, 'Kontrol noktası bulunamadı.', 'NOT_FOUND');
       }
 
@@ -251,17 +264,24 @@ class EndpointService {
     return result;
   }
 
+  /**
+   * set_runtime yayini + cihaz onayi. Onay bekleyicisi YAYINDAN ONCE kurulur (hizli yanki kacmaz); yayin hatasinda
+   * iptal edilir. @returns {Promise<boolean>} true = pano komutu uyguladi (CANLI state.last_id === commandId)
+   */
   async _publishRuntime(topicId, pair, sec, commandId) {
     const bridge = this.bridge;
     if (typeof bridge.isConnected === 'function' && !bridge.isConnected()) {
       throw httpError(502, 'MQTT broker bağlantısı yok; panjur süresi cihaza iletilemedi.', 'BROKER_UNAVAILABLE');
     }
+    const ack = bridge.expectAck(topicId, commandId, RUNTIME_ACK_TIMEOUT_MS);
     try {
       await bridge.publishCommand(topicId, { cmd: 'set_runtime', shutter: pair, sec, id: commandId });
     } catch (err) {
+      if (typeof bridge.cancelAck === 'function') bridge.cancelAck(topicId, commandId);
       console.error('[ENDPOINT] set_runtime yayinlanamadi:', err && err.message);
       throw httpError(502, 'Panjur süresi MQTT broker üzerinden iletilemedi.', 'BROKER_UNAVAILABLE');
     }
+    return ack;
   }
 
   /**

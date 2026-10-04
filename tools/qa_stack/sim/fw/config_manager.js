@@ -5,13 +5,24 @@
 //   ahbu_auto -> cocuk kilidi
 //   ahbu_pos  -> panjur konumlari (20 bayt)
 // Dosya yoksa/bos ise "bos flash" gibi davranir (varsayilanlar). Yazma atomiktir (tmp + rename).
+// QA: `failKeys` NVS yazma arizasi enjeksiyonudur (bozuk/dolu NVS bolumu; firmware Preferences::putString/remove basarisiz):
+// kimlik yardimcilari (setLocalKey/setApPass/clearLocalKey/provisionIfEmpty) bu anahtarlari TEK TEK yazar ve ariza gorur.
 import fs from 'node:fs';
 import path from 'node:path';
 import {
   SystemConfig, RelayType, DIMode, MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, DEFAULT_MQTT_SERVER, DEFAULT_MQTT_PORT,
-  SHUTTER_RUNTIME_DEFAULT_SEC, CAP, isAsciiRange,
+  SHUTTER_RUNTIME_DEFAULT_SEC, CAP, isAsciiRange, LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN, AP_PASS_MIN_LEN, AP_PASS_MAX_LEN,
 } from './sysconfig.js';
 import { cCopy } from './netutil.js';
+
+/**
+ * ConfigManager::ProvisionResult (firmware) karsiligi; degerler HTTP hata kodlariyla ayni adlidir.
+ * Esleme: HTTP factory/init -> 200 | 403 already_provisioned | 400 invalid_key | 400 invalid_ap_pass | 503 storage;
+ *         seri FACTORYINIT  -> OK factory_init | ERR already_provisioned | ERR invalid_local_key | ERR invalid_ap_pass | ERR persist_failed.
+ */
+export const ProvisionResult = Object.freeze({
+  OK: 'ok', ALREADY: 'already_provisioned', INVALID_KEY: 'invalid_key', INVALID_AP_PASS: 'invalid_ap_pass', STORAGE: 'storage',
+});
 
 export class NvsImage {
   /** @param {string|null} file  null = yalnizca bellek */
@@ -20,6 +31,8 @@ export class NvsImage {
     this.log = log;
     this.data = { v: 2, cfg: null, auto: null, pos: null };
     this.writes = 0;
+    /** QA: yazmasi/silmesi BASARISIZ olacak NVS anahtarlari (ornek 'lk', 'ap_pw'); donanim durumu: yeniden acilista korunur. */
+    this.failKeys = new Set();
     if (file) this.#read();
   }
 
@@ -50,6 +63,23 @@ export class NvsImage {
   put(ns, value) { this.data[ns] = JSON.parse(JSON.stringify(value)); this.#flush(); }
 
   clear(ns) { this.data[ns] = null; this.#flush(); }
+
+  /** TEK anahtar yazar (Preferences::putX). `failKeys`'teki anahtar YAZILMAZ -> false. */
+  putKey(ns, key, value) {
+    if (this.failKeys.has(key)) { this.log('nvs_write_failed', { key }); return false; }
+    this.put(ns, { ...(this.get(ns) || {}), [key]: value });
+    return true;
+  }
+
+  /** TEK anahtar siler (Preferences::remove). Anahtar yoksa basarili; `failKeys`'teki anahtar SILINMEZ -> false. */
+  removeKey(ns, key) {
+    const cur = this.get(ns) || {};
+    if (!(key in cur)) return true;
+    if (this.failKeys.has(key)) { this.log('nvs_write_failed', { key }); return false; }
+    delete cur[key];
+    this.put(ns, cur);
+    return true;
+  }
 
   /** Tum imaji siler (fiziksel "flash erase"). */
   eraseAll() { this.data = { v: 2, cfg: null, auto: null, pos: null }; this.#flush(); }
@@ -234,23 +264,50 @@ export class ConfigManager {
     this.nvs.put('cfg', { ...cur, ...patch });
   }
 
+  /** RAM + NVS BIRLIKTE degisir ya da hicbiri: bicim gecersizse ya da NVS yazilamazsa false ve RAM eski degerde (firmware ile ayni). */
   setLocalKey(key) {
+    const old = this.config.local_key;
     if (!this.config.setLocalKey(key)) return false;
-    this.#putCfg({ lk: this.config.local_key });
-    return true;
+    if (this.nvs.putKey('cfg', 'lk', this.config.local_key)) return true;
+    this.config.local_key = old;
+    return false;
   }
 
   setApPass(pass) {
+    const old = this.config.ap_pass;
     if (!this.config.setApPass(pass)) return false;
-    this.#putCfg({ ap_pw: this.config.ap_pass });
-    return true;
+    if (this.nvs.putKey('cfg', 'ap_pw', this.config.ap_pass)) return true;
+    this.config.ap_pass = old;
+    return false;
   }
 
+  /** Seri RESETKEY: RAM her zaman silinir; NVS'ten silinemezse false (yeniden acilista NVS'teki anahtar doner; firmware ile ayni). */
   clearLocalKey() {
     this.config.local_key = '';
-    const cur = this.nvs.get('cfg') || {};
-    if ('lk' in cur) { delete cur.lk; this.nvs.put('cfg', cur); }
-    return true;
+    return this.nvs.removeKey('cfg', 'lk');
+  }
+
+  /**
+   * ConfigManager::provisionIfEmpty portu: ATOMIK ilk provizyon -- seri FACTORYINIT ve HTTP POST /api/factory/init ORTAK yolu.
+   * Firmware'de tek ConfigLock altinda calisir (JS'te cagri bolunmez): local_key varsa ALREADY (once denetlenir, hicbir sey degismez);
+   * bicim (local_key 8..32 0x21..0x7E, ap_pass 8..32 0x20..0x7E); ONCE ap_pass SONRA local_key yazilir. local_key yazilamazsa ap_pass
+   * onceki degerine geri alinir (yarim provizyon kalmaz; cihaz provizyonsuz kalir, yeniden denenebilir). @returns {string} ProvisionResult
+   */
+  provisionIfEmpty(key, pass) {
+    if (this.config.hasLocalKey()) return ProvisionResult.ALREADY;
+    if (!isAsciiRange(key, LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN, 0x21, 0x7E)) return ProvisionResult.INVALID_KEY;
+    if (!isAsciiRange(pass, AP_PASS_MIN_LEN, AP_PASS_MAX_LEN, 0x20, 0x7E)) return ProvisionResult.INVALID_AP_PASS;
+    const oldPass = this.config.ap_pass;
+    if (!this.setApPass(pass)) return ProvisionResult.STORAGE;   // RAM geri alindi: hicbir sey degismedi
+    if (this.setLocalKey(key)) return ProvisionResult.OK;
+    this.#restoreApPass(oldPass);                                // local_key RAM'i setLocalKey'de geri alindi
+    return ProvisionResult.STORAGE;
+  }
+
+  /** provisionIfEmpty geri alma adimi: RAM NVS'i izler (NVS geri yazilamazsa RAM de yeni degerde kalir). */
+  #restoreApPass(old) {
+    if (old !== '') { this.setApPass(old); return; }
+    if (this.nvs.removeKey('cfg', 'ap_pw')) this.config.ap_pass = '';
   }
 
   /** POST /api/mqtt/config: alan uzunluklari dogrulanir; kirpma yok, reddedilir. */

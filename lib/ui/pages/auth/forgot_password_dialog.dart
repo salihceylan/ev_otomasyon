@@ -25,6 +25,9 @@ import 'magic_link_dialog.dart';
 /// Sıfırlama sonrası mesaj dönen **duruma göre** verilir: sunucu oturum açtıysa "oturumunuz açıldı",
 /// açmadıysa "yeni şifrenizle giriş yapın". Kod ekranda gösterilmez (geliştirme `debug_code` alanı dahil).
 ///
+/// Kimlik (biçimden) telefon numarasıysa, yalnız telefonla açılmış hesaplara kod gönderilemeyeceği ipucu gösterilir
+/// (UYELIK-08). İpucu yalnız kimlik TÜRÜNE bağlıdır, sunucu yanıtına değil: hesap varlığı sızmaz.
+///
 /// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]); eylem satırı gövdeyle kaydırılmaz.
 class ForgotPasswordDialog extends StatefulWidget {
   const ForgotPasswordDialog({super.key});
@@ -38,6 +41,11 @@ class ForgotPasswordDialog extends StatefulWidget {
 }
 
 class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
+  /// Telefon kimliği ipucu (UYELIK-08): telefon-OTP hesabının parolası yoktur, e-postası sunucunun teknik yer
+  /// tutucusudur; sunucu genel "gönderildi" yanıtı verse de kod hiçbir kanala ulaşmaz.
+  static const String _phoneOnlyHint =
+      'Yalnızca telefonla açılmış hesapların şifresi ve e-postası yoktur; bu hesaplara sıfırlama kodu gönderilemez.';
+
   final _identifierController = TextEditingController();
   final _codeController = TextEditingController();
   final _newPasswordController = TextEditingController();
@@ -51,6 +59,9 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
   bool _obscureConfirm = true;
   String? _identifier; // gönderimde kullanılan, normalleştirilmiş kimlik
   String? _identifierError;
+
+  /// Kimlik alanındaki değer (yalnız BİÇİMDEN) telefon numarası mı: ipucu bunun için gösterilir.
+  bool _identifierIsPhone = false;
   String? _error;
 
   /// `true`: [_error] KOD alanıyla ilgilidir (eksik/hatalı/süresi dolmuş kod): alan kırmızı çizilir ve ileti alanın
@@ -235,8 +246,15 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         autocorrect: false,
         enableSuggestions: false,
         onSubmitted: (_) => _handleSendCode(),
-        onChanged: (_) {
-          if (_identifierError != null) setState(() => _identifierError = null);
+        onChanged: (text) {
+          // Yalnız değişince yeniden kurulur (her tuşta değil): hata temizlenir / telefon ipucu açılır-kapanır.
+          final isPhone = AuthValidators.parseIdentifier(text)?.isPhone ?? false;
+          if (_identifierError != null || isPhone != _identifierIsPhone) {
+            setState(() {
+              _identifierError = null;
+              _identifierIsPhone = isPhone;
+            });
+          }
         },
         style: TextStyle(color: AppTheme.getTextPrimary(context)),
         decoration: authInputDecoration(
@@ -247,6 +265,10 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
           errorText: _identifierError,
         ),
       ),
+      if (_identifierIsPhone) ...[
+        const SizedBox(height: 12),
+        const InlineMessage.info(_phoneOnlyHint, key: Key('forgot_phone_hint')),
+      ],
       if (_error != null) ...[const SizedBox(height: 12), InlineMessage.error(_error!, key: const Key('forgot_error'))],
       const SizedBox(height: 4),
       // Bağlantı gövde metniyle AYNI sol hizada (iç boşluk yok), hedef >= 48 dp.
@@ -299,6 +321,8 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
     // uyuşmazlık, ağ) formun sonunda. Aynı anda tek ileti vardır; anahtar aynıdır.
     final errorBox = _error == null ? null : InlineMessage.error(_error!, key: const Key('forgot_error'));
     final codeScoped = errorBox != null && _codeError;
+    // Kod telefon kimliğiyle istendiyse ipucu burada da kalır (sunucunun genel "gönderildi" iletisinin altında).
+    final sentToPhone = AuthValidators.parseIdentifier(_identifier)?.isPhone ?? false;
     return [
       Text(
         _info ?? 'Kurtarma kodunu ve yeni şifrenizi girin.',
@@ -310,6 +334,10 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         '$_identifier adresine/numarasına gönderilen 6 haneli kodu girin.',
         style: TextStyle(fontSize: 12, color: muted, height: 1.4),
       ),
+      if (sentToPhone) ...[
+        const SizedBox(height: 12),
+        const InlineMessage.info(_phoneOnlyHint, key: Key('forgot_phone_hint')),
+      ],
       const SizedBox(height: 16),
       TextField(
         key: const Key('field_code'),

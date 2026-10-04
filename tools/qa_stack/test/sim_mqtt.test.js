@@ -4,6 +4,7 @@ import test from 'node:test';
 import { performance } from 'node:perf_hooks';
 import assert from 'node:assert/strict';
 import { DeviceSimulator } from '../sim/device_sim.js';
+import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
 import { randomB64Url, randomHex } from '../lib/util.js';
 import {
   startTestBroker, connect, subscribe, collect, publish, endClients, hashPw, waitFor, sleep,
@@ -83,7 +84,7 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
     const s = h.states()[0].json;
     assert.equal(s.v, 2);
     assert.equal(s.uid, UID);
-    assert.equal(s.fw, '1.1.1');
+    assert.equal(s.fw, FW_VERSION_DEFAULT);
     assert.equal(s.seq, 1);
     assert.equal(typeof s.uptime, 'number');
     assert.match(s.ip, /^192\.168\.1\.\d+$/);

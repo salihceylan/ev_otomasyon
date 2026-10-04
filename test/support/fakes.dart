@@ -450,6 +450,14 @@ class FakeCloudApi extends EvCloudApiService {
   Object? loginError;
   int _loginCounter = 0;
 
+  /// `GET /auth/capabilities` yanıtı (UYELIK-04). `null` (varsayılan): uç yok (eski sunucu, sahte HTTP 404) ->
+  /// giriş ekranı telefonla (SMS) giriş düğmesini GİZLER (fail-closed). Düğmeye dayanan testler
+  /// `AuthCapabilities(smsOtp: true, ...)` atar. Çağrı [calls]'a YAZILMAZ (giriş ekranını açan testlerin çağrı listesi
+  /// beklentileri değişmesin); sayısı [authCapabilitiesCalls]'tadır.
+  AuthCapabilities? authCapabilities;
+  Object? authCapabilitiesError;
+  int authCapabilitiesCalls = 0;
+
   /// `refreshSession` davranışı (varsayılan: gerçek istemci; sahte HTTP 404 -> kalıcı red).
   Future<bool> Function()? refreshHandler;
 
@@ -627,6 +635,14 @@ class FakeCloudApi extends EvCloudApiService {
     final error = loginError;
     if (error != null) throw error;
     return _newFakeSession(loginUser);
+  }
+
+  @override
+  Future<AuthCapabilities> fetchAuthCapabilities() async {
+    authCapabilitiesCalls++;
+    final error = authCapabilitiesError;
+    if (error != null) throw error;
+    return authCapabilities ?? super.fetchAuthCapabilities();
   }
 
   @override

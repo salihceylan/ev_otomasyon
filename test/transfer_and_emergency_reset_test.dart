@@ -368,7 +368,9 @@ void main() {
       expect(textOf(tester, 'reset_warning_0'), 'Pano çevrimdışı: yerel anahtar iletilemedi.');
       expect(textOf(tester, 'reset_warning_1'), 'Eski MQTT bağlantıları kesilemedi.');
       expect(textOf(tester, 'reset_local_key'), 'yerel-anahtar-ornek');
-      expect(find.byKey(const Key('reset_credential_note')), findsOneWidget);
+      // Süper yöneticiye sunucu yerel anahtar vermez (M4-02): sihirbaz notu yerine servis PIN yolu yazılır.
+      expect(find.byKey(const Key('reset_credential_note')), findsNothing);
+      expect(find.byKey(const Key('reset_super_note')), findsOneWidget);
       // Bulut kimliği parolası ekranda GÖSTERİLMEZ.
       expect(find.textContaining('gizli-sifre-ornek'), findsNothing);
     });

@@ -12,8 +12,10 @@
 //    dusurulemez, silinemez. Baska bir super kullanicinin parolasini degistirmek icin KENDI
 //    mevcut parolasiyla yeniden dogrulama (current_password) gerekir. Kendi parolasi icin
 //    /auth/change-password kullanilir.
-//  - Parola / aktiflik / rol degisince: oturumlar iptal (token_version++ + refresh iptal) ve
-//    (dondurma/silmede) tum evlerdeki uygulama MQTT kimlikleri iptal (WP-B revokeUserAccess).
+//  - Parola / aktiflik / rol degisince: oturumlar iptal (token_version++ + refresh iptal + tum evlerdeki uygulama
+//    MQTT kimlikleri: auth_service.revokeAllUserSessions, ayni transaction); kalici silmede de tum evlerdeki uygulama
+//    MQTT kimlikleri iptal (paylasilan yardimci auth_service.revokeUserMqttCredentials). Acik baglantilar COMMIT sonrasi
+//    atilir (auth_service.kickMqttUsernames).
 //  - Kalici silme TEK transaction: tek sahibi oldugu ve baska uyesi olan ev varsa 409
 //    (sahipsiz ev olusmaz); tek uyesi oldugu ev silinir; FK'ler temizlenir.
 //  - Hata mesajlarinda constraint/SQL ayrintisi yoktur.
@@ -31,17 +33,6 @@ const { normalizeEmail, normalizePhone, normalizeFullName, validatePassword } = 
 const VALID_ROLES = Object.freeze(['super_user', 'service_user', 'user']);
 const TARGET_COLS = `id, email, full_name, phone, role, is_active, account_status, created_by_user_id,
   must_change_password, created_at, updated_at, admin_notes`;
-
-let mqttOverride;
-function getMqttCredentialService() {
-  if (mqttOverride !== undefined) return mqttOverride;
-  try {
-    return require('./mqtt_credential_service');
-  } catch (err) {
-    if (err && err.code === 'MODULE_NOT_FOUND' && /mqtt_credential_service/.test(String(err.message))) return null;
-    throw err;
-  }
-}
 
 function isSuper(actor) {
   return Boolean(actor && !actor.is_service_session && actor.role === 'super_user');
@@ -75,29 +66,6 @@ function cleanNotes(value) {
   return s ? s.slice(0, 2000) : null;
 }
 
-async function kickAll(usernames) {
-  const svc = getMqttCredentialService();
-  if (!svc || typeof svc.kickUsernames !== 'function' || !usernames || usernames.length === 0) return;
-  try {
-    await svc.kickUsernames(usernames);
-  } catch (err) {
-    console.warn('[ADMIN] MQTT baglanti atma basarisiz:', err && err.message);
-  }
-}
-
-/** Kullanicinin TUM evlerdeki uygulama MQTT kimliklerini (tx icinde) iptal eder; kick icin adlari doner. */
-async function revokeUserMqttEverywhere(tx, userId) {
-  const svc = getMqttCredentialService();
-  if (!svc || typeof svc.revokeUserAccess !== 'function') return [];
-  const homes = await tx.query('SELECT home_id FROM home_users WHERE user_id = $1', [userId]);
-  const usernames = [];
-  for (const h of homes.rows || []) {
-    const r = await svc.revokeUserAccess({ homeId: h.home_id, userId, tx });
-    if (r && Array.isArray(r.usernames)) usernames.push(...r.usernames);
-  }
-  return usernames;
-}
-
 async function countOtherActiveSupers(q, excludeUserId) {
   const r = await q.query(
     `SELECT COUNT(*)::int AS n FROM users
@@ -114,9 +82,12 @@ function mapPgError(err) {
 }
 
 class AdminUserService {
-  /** Test icin MQTT kimlik servisi enjeksiyonu (null = yok; undefined = gercek). */
+  /**
+   * Test icin MQTT kimlik servisi enjeksiyonu (null = yok; undefined = gercek). Tek kaynak auth_service'tir:
+   * oturum iptali (revokeAllUserSessions) ve yonetici akislari AYNI ornegi kullanir.
+   */
   setMqttCredentialService(svc) {
-    mqttOverride = svc;
+    authService.setMqttCredentialService(svc);
   }
 
   async _getTarget(q, userId, { forUpdate = false } = {}) {
@@ -395,22 +366,21 @@ class AdminUserService {
           );
           let updated = upd.rows[0];
 
+          // Oturum iptalinde silinen uygulama MQTT kimlikleri (TUM evler); baglantilar COMMIT sonrasi atilir.
+          const usernames = [];
           if (wantsPassword) {
             // Super baska kullaniciya parola atarsa: ilk giriste degistirme zorunlu.
-            const u = await authService.setPassword(target.id, String(password), { tx, mustChange: true });
+            const u = await authService.setPassword(target.id, String(password), { tx, mustChange: true, revokedMqtt: usernames });
             updated = { ...updated, must_change_password: u.must_change_password };
           }
 
-          let usernames = [];
           const revokeSessions = roleChanged || (activeChanged && nextActive === false);
           if (revokeSessions) {
-            await authService.revokeAllUserSessions(target.id, {
+            const revoked = await authService.revokeAllUserSessions(target.id, {
               tx,
               reason: activeChanged && nextActive === false ? 'account_suspended' : 'role_changed',
             });
-          }
-          if (activeChanged && nextActive === false) {
-            usernames = await revokeUserMqttEverywhere(tx, target.id);
+            usernames.push(...revoked.mqttUsernames);
           }
           // Oturumlar toplu iptal edildiyse (parola atama dahil) push belirteci COMMIT sonrasi kapatilir.
           const pushReason = wantsPassword
@@ -426,7 +396,7 @@ class AdminUserService {
     invalidateUserAuthCache(userId);
     // Push belirteci gizliligi (plan §5d-1): COMMIT sonrasi; hata/yapilandirma yoklugu islemi bozmaz.
     if (outcome.sessionsRevoked) await authService.revokePushTokens(userId, { reason: outcome.pushReason });
-    await kickAll(outcome.usernames);
+    await authService.kickMqttUsernames(outcome.usernames, { reason: outcome.pushReason });
     return outcome.updated;
   }
 
@@ -484,9 +454,9 @@ class AdminUserService {
               WHERE id = $1`,
             [target.id]
           );
-          await authService.revokeAllUserSessions(target.id, { tx, reason: 'account_suspended' });
-          const usernames = await revokeUserMqttEverywhere(tx, target.id);
-          return { target, usernames, deletedHomes: 0, sessionsRevoked: true };
+          // Oturumlar + TUM evlerdeki uygulama MQTT kimlikleri (ayni transaction)
+          const revoked = await authService.revokeAllUserSessions(target.id, { tx, reason: 'account_suspended' });
+          return { target, usernames: revoked.mqttUsernames, deletedHomes: 0, sessionsRevoked: true };
         }
 
         // --- Kalici silme ---
@@ -512,8 +482,8 @@ class AdminUserService {
           .filter((h) => Number(h.other_owners) === 0 && Number(h.other_members) === 0)
           .map((h) => h.home_id);
 
-        const usernames = await revokeUserMqttEverywhere(tx, target.id);
-        const mqtt = getMqttCredentialService();
+        const usernames = await authService.revokeUserMqttCredentials(target.id, { tx });
+        const mqtt = authService.getMqttCredentialService();
         for (const homeId of homesToDelete) {
           if (mqtt && typeof mqtt.revokeHomeAccess === 'function') {
             const r = await mqtt.revokeHomeAccess({ homeId, includeDevice: true, tx });
@@ -539,7 +509,7 @@ class AdminUserService {
     invalidateServiceSessionCache();
     // Pasife alma: push belirteci COMMIT sonrasi kapatilir (kalici silmede push_tokens FK CASCADE ile gider).
     if (outcome.sessionsRevoked) await authService.revokePushTokens(userId, { reason: 'account_suspended' });
-    await kickAll(outcome.usernames);
+    await authService.kickMqttUsernames(outcome.usernames, { reason: hardDelete ? 'user_deleted' : 'account_suspended' });
 
     if (!hardDelete) {
       return { success: true, message: 'Kullanıcı pasife alındı; tüm oturumları sonlandırıldı.' };

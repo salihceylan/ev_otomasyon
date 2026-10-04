@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MqttManager, QA_TIMING, FIRMWARE_TIMING } from '../sim/fw/mqtt_manager.js';
+import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
 import { Rig } from './_rig.js';
 
 const T = 'h_0123456789abcdef';
@@ -18,7 +19,7 @@ function makeManager({ timing = {}, t0 = 5000 } = {}) {
   const wifi = { getDeviceUid: () => 'AHBU-S3-0A0001', isConnected: () => true, isTimeSynced: () => true, getLocalIP: () => '192.168.1.40', applyApConfigChange() {} };
   const posted = [];
   const m = new MqttManager({
-    config: rig.cm, wifi, automation: rig.a, clock, uptimeSec: () => 1, mac: '02:A5:00:0A:00:01', fw: '1.1.1',
+    config: rig.cm, wifi, automation: rig.a, clock, uptimeSec: () => 1, mac: '02:A5:00:0A:00:01', fw: FW_VERSION_DEFAULT,
     post: (c) => { posted.push(c); return true; }, hooks: { event: (type, f) => events.push({ type, ...f }) }, timing,
   });
   m.begin();

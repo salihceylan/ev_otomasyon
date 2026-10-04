@@ -35,6 +35,9 @@ import '../../../theme/feature_accent.dart';
 /// * Yeni sahip (isteğe bağlı) e-posta/telefon olarak doğrulanır ve normalleştirilir.
 /// * Sonuçtaki uyarılar / kısmi başarı kullanıcıya gösterilir; tek seferlik gizli değerler
 ///   ([EmergencyResetResultDialog]) panoya yalnızca 45 sn kalacak şekilde kopyalanır.
+/// * Kalıcı servis personeli (süper olmayan) yalnızca süresi dolmamış (72 saatlik) servis üyeliği olan dairelerin
+///   panolarını sıfırlayabilir (sunucu kuralı): kart bunu [staffScopeNote] ile söyler; sunucu 403 dönerse yönlendirme
+///   hata kutusunda gösterilir.
 class EmergencyResetCard extends StatefulWidget {
   const EmergencyResetCard({super.key, this.scanner = defaultSetupScanner});
 
@@ -42,6 +45,11 @@ class EmergencyResetCard extends StatefulWidget {
 
   /// Gerekçenin en az uzunluğu (sunucu ve istemci aynı kuralı uygular).
   static const int minReasonLength = 15;
+
+  /// Servis personelinin (süper olmayan) sıfırlama kapsamı: sunucu yalnız süresi dolmamış servis üyeliği olan dairenin
+  /// panosuna izin verir (üyelik kurulum/devirde 72 saatliğine verilir).
+  static const String staffScopeNote = 'Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin '
+      'panolarını sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.';
 
   @override
   State<EmergencyResetCard> createState() => _EmergencyResetCardState();
@@ -60,6 +68,10 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
   String? _reasonError;
   String? _ownerError;
   String? _error;
+
+  /// [_error] sunucunun 403'üdür ve kullanıcı süper değildir: kapsam yönlendirmesi ([EmergencyResetCard.staffScopeNote])
+  /// hata kutusunda gösterilir.
+  bool _forbiddenHint = false;
 
   /// Yanıt gelmedi (zaman aşımı / ağ kesintisi) ama sunucu sıfırlamayı tamamlamış olabilir: bu cihaz için
   /// işlem **körlemesine yinelenmez**; önce durum kontrol edilir.
@@ -115,11 +127,15 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
         _reasonError = reasonError;
         _ownerError = ownerError;
         _error = null;
+        _forbiddenHint = false;
       });
       return;
     }
     if (!state.capabilities.canEmergencyReset) {
-      setState(() => _error = 'Acil sıfırlama için yetkiniz yok.');
+      setState(() {
+        _error = 'Acil sıfırlama için yetkiniz yok.';
+        _forbiddenHint = false;
+      });
       return;
     }
     if (owner != null && isOwnIdentifier(owner, state.currentUser)) {
@@ -128,6 +144,7 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
         _uidError = null;
         _reasonError = null;
         _error = null;
+        _forbiddenHint = false;
       });
       return;
     }
@@ -136,6 +153,7 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
       _reasonError = null;
       _ownerError = null;
       _error = null;
+      _forbiddenHint = false;
     });
 
     final confirmed = await ConfirmDestructiveDialog.show(
@@ -197,6 +215,8 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
       setState(() {
         _busy = false;
         _error = friendlyError(e, fallback: 'Acil sıfırlama tamamlanamadı. Cihazın durumunu kontrol edip tekrar deneyin.');
+        // 403: servis personelinin kapsamı dışındaki daire (ya da iptal/askı): süper yönetici yönlendirmesi hatanın yanında.
+        _forbiddenHint = e is ApiException && e.isForbidden && !state.capabilities.isSuperUser;
       });
     }
   }
@@ -258,6 +278,11 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
   @override
   Widget build(BuildContext context) {
     final muted = SetupColors.muted(context);
+    // Kalıcı servis personeli (süper değil): sıfırlama kapsamı sunucuda 72 saatlik servis üyeliğiyle sınırlıdır.
+    final limited =
+        context.select<AutomationState, bool>((s) => s.capabilities.canEmergencyReset && !s.capabilities.isSuperUser);
+    // 403 sonrası yönlendirme hata kutusunda gösterilir: aynı not ekranda iki kez yazılmaz.
+    final hintInError = _error != null && _forbiddenHint;
     return ServiceCard(
       key: const Key('card_emergency_reset'),
       accent: SetupColors.error,
@@ -287,6 +312,16 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
             'doğrudan yeni malike devredin. Eski ailenin tüm yetkileri sonlanır. Bu işlem denetim kaydına yazılır.',
             style: TextStyle(fontSize: AppText.caption, height: 1.35, color: muted),
           ),
+          if (limited && !hintInError)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: SetupInfoRow(
+                key: Key('reset_staff_scope_note'),
+                icon: Icons.info_outline_rounded,
+                color: SetupColors.info,
+                text: EmergencyResetCard.staffScopeNote,
+              ),
+            ),
           SetupTextField(
             key: const Key('field_reset_uid'),
             controller: _uid,
@@ -338,7 +373,19 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
               key: const Key('reset_error'),
               accent: SetupColors.error,
               margin: const EdgeInsets.only(top: 12),
-              child: SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
+                  if (hintInError)
+                    const SetupInfoRow(
+                      key: Key('reset_forbidden_hint'),
+                      icon: Icons.info_outline_rounded,
+                      color: SetupColors.info,
+                      text: EmergencyResetCard.staffScopeNote,
+                    ),
+                ],
+              ),
             ),
           if (_uncertainUid != null)
             UncertainOutcomeCard(
@@ -386,10 +433,28 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
 ///
 /// Diyalog kapanınca pano hemen temizlenir. `true` dönerse kullanıcı panoyu yeni sahibe bağlamak için
 /// kurulum sihirbazını açmak istemiştir.
+///
+/// Yerel anahtar: sunucu panoya iletemediyse `pending` döner ([EmergencyResetResult.localKeyPending]) ve pano buluta
+/// bağlanınca kendisi iletir; bu bir bilgi notudur ([keyPendingNote]). Eski sunucu yanıtındaki anahtar
+/// ([EmergencyResetResult.needsManualLocalKey]) ağ üzerinden yazılamaz: yönerge [manualKeyHint].
 class EmergencyResetResultDialog extends StatefulWidget {
   const EmergencyResetResultDialog({super.key, required this.result});
 
   final EmergencyResetResult result;
+
+  /// `local_key_publish: pending`: yeni anahtar sunucu tarafından otomatik iletilecek.
+  static const String keyPendingNote = 'Yeni yerel anahtar, pano buluta bağlandığında sunucu tarafından otomatik '
+      'iletilecek; o zamana kadar panonun mevcut anahtarı geçerlidir.';
+
+  /// Süper yöneticinin devri (M4-02): sunucu süper yöneticiye yerel anahtar vermez (6. adım anahtarsız kalır) ve
+  /// süperin sıfırlaması servis personeline daire üyeliği vermez. Tek yol yeni sahibin servis PIN'i.
+  static const String superHandoffNote = 'Süper yönetici hesabına cihaz anahtarı verilmez ve bu devir servis '
+      "personeline daire yetkisi vermez. Panoyu bağlamak için yeni sahibin uygulamasından servis PIN'i alınıp servis "
+      'girişiyle sihirbaz açılmalı.';
+
+  /// Eski sunucu yanıtındaki (panoya iletilemeyen) anahtarın gerçek kurtarma yolu.
+  static const String manualKeyHint = 'Bu anahtar panoya ağ üzerinden yazılamaz: panoyu USB ile bağlayıp seri konsolda '
+      'önce RESETKEY, ardından FACTORYINIT ile yazın (fabrika aracı). Yazılana kadar yerel ağdan komut verilemez.';
 
   static Future<bool?> show(BuildContext context, EmergencyResetResult result) {
     return showDialog<bool>(
@@ -453,7 +518,11 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
       ?_publishNote('Yerel anahtar', r.localKeyPublish),
       ?_publishNote('Çocuk kilidi sıfırlaması', r.childLockReset),
     ];
-    final canOpenWizard = r.isReassigned && r.homeId != null;
+    // Süper yöneticiye sunucu yerel anahtar vermez: sihirbaz 6. adımda anahtarsız kalır (M4-02). Ona sihirbaz önerilmez.
+    final isSuper = context.select<AutomationState, bool>((s) => s.capabilities.isSuperUser);
+    final superHandoff = isSuper && r.isReassigned;
+    final canOpenWizard = r.isReassigned && r.homeId != null && !isSuper;
+    final warnings = r.displayWarnings;
     return AlertDialog(
       title: Row(
         children: [
@@ -488,7 +557,7 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                     style: TextStyle(fontSize: AppText.caption, color: SetupColors.muted(context)),
                   ),
                 ),
-              if (r.partial)
+              if (r.isPartial)
                 const ServiceCard(
                   key: Key('reset_partial'),
                   accent: SetupColors.warn,
@@ -499,15 +568,28 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                     text: 'Bazı adımlar tamamlanamadı. Aşağıdaki uyarıları okuyun ve gerekeni yapın.',
                   ),
                 ),
-              for (var i = 0; i < r.warnings.length; i++)
+              for (var i = 0; i < warnings.length; i++)
                 SetupInfoRow(
                   key: Key('reset_warning_$i'),
                   icon: Icons.info_outline_rounded,
                   color: SetupColors.warn,
-                  text: r.warnings[i],
+                  text: warnings[i],
                 ),
               for (final note in notes) SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.warn, text: note),
-              if (shownPin != null || r.localKey != null)
+              if (r.localKeyPending)
+                ServiceCard(
+                  key: const Key('reset_key_pending'),
+                  accent: SetupColors.info,
+                  child: SetupInfoRow(
+                    icon: Icons.sync_rounded,
+                    color: SetupColors.info,
+                    text: canOpenWizard
+                        ? '${EmergencyResetResultDialog.keyPendingNote} "Panoyu şimdi bağla" ile kuruluma devam '
+                            'edebilirsiniz.'
+                        : EmergencyResetResultDialog.keyPendingNote,
+                  ),
+                ),
+              if (shownPin != null || r.needsManualLocalKey)
                 const ServiceCard(
                   key: Key('reset_secret_warning'),
                   accent: SetupColors.warn,
@@ -538,11 +620,22 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    'Bu anahtar panoya yerinde yazılmalıdır; yazılana kadar yerel ağdan komut verilemez.',
+                    EmergencyResetResultDialog.manualKeyHint,
+                    key: const Key('reset_key_manual_hint'),
                     style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
                   ),
                 ),
               ],
+              if (superHandoff)
+                const ServiceCard(
+                  key: Key('reset_super_note'),
+                  accent: SetupColors.info,
+                  child: SetupInfoRow(
+                    icon: Icons.info_outline_rounded,
+                    color: SetupColors.info,
+                    text: EmergencyResetResultDialog.superHandoffNote,
+                  ),
+                ),
               if (canOpenWizard)
                 const ServiceCard(
                   key: Key('reset_next_step'),

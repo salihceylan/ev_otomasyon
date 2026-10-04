@@ -232,7 +232,9 @@ void main() {
       expect(find.textContaining('Yerel anahtar panoya iletilemedi: pano çevrimdışıydı.'), findsOneWidget);
       expect(find.textContaining('Çocuk kilidi sıfırlaması panoya iletilemedi (hata).'), findsOneWidget);
       expect(find.text(kReissuedKey), findsOneWidget);
-      expect(find.textContaining('yerinde yazılmalıdır'), findsOneWidget);
+      // Eski sunucu yanıtı (anahtar döndü): uygulanamaz "yerinde yazılmalıdır" yerine gerçek kurtarma yolu (SERVIS-01).
+      expect(find.textContaining('seri konsolda önce RESETKEY, ardından FACTORYINIT'), findsOneWidget);
+      expect(find.textContaining('yerinde yazılmalıdır'), findsNothing);
     });
 
     testWidgets('yeni sahibe devredildi: sahip adı ve etkilenen kullanıcı sayısı yazılır; "Panoyu şimdi bağla" sihirbazı açar', (tester) async {

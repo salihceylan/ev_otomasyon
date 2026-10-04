@@ -7,7 +7,16 @@ import path from 'node:path';
 import { DeviceSimulator, macFromUid, optionsFromCli, UID_RE, S3_UID_RE } from '../sim/device_sim.js';
 import { CmdType } from '../sim/command_schema.js';
 import { makeCommand, CmdSource } from '../sim/fw/automation.js';
+import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
+import { readFwVersion } from '../lib/fwcheck.js';
 import { tmpDir } from './_helpers.js';
+
+test('surum: simulatorun bildirdigi fw = firmware FW_VERSION (src/WiFiManager.h); firmware surumu yukselince simulator de yukselir', () => {
+  const fw = readFwVersion();
+  assert.match(String(fw), /^\d+\.\d+\.\d+$/, 'WiFiManager.h FW_VERSION okunamadi');
+  assert.equal(FW_VERSION_DEFAULT, fw);
+  assert.equal(new DeviceSimulator({ uid: 'AHBU-S3-0A0003' }).fw_version, fw, 'varsayilan cihaz surumu');
+});
 
 function makeClock(start = 100000) {
   return { t: start, now() { return this.t; }, advance(ms) { this.t += ms; } };

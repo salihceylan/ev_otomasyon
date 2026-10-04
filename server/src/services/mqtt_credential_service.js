@@ -15,6 +15,8 @@
 // Disa acik (WP-A bu imzalari cagirir; DEGISTIRMEYIN):
 //   revokeUserAccess({ homeId, userId })   uye cikarma / misafir bitisi / hesap silme
 //   revokeHomeAccess({ homeId })           daire devri / acil sifirlama
+//   revokeAllUserAccess({ userId })        oturumlarin toplu iptali (logout-all, parola degisimi/sifirlama,
+//                                          dondurma, rol degisimi) / yonetici kalici silmesi: TUM evler
 //
 // `tx` verilirse DB islemleri cagiranin transaction'inda yapilir ve ag cagrisi olan "kick"
 // (EMQX REST ile baglanti atma) YAPILMAZ: sonuctaki `usernames` ile commit SONRASI
@@ -311,6 +313,19 @@ class MqttCredentialService {
       `DELETE FROM mqtt_credentials WHERE home_id = $1 AND user_id = $2 AND kind = 'app' RETURNING username`,
       [homeId, userId]
     );
+    return this._finishRevoke(res.rows, tx);
+  }
+
+  /**
+   * Bir kullanicinin TUM evlerdeki uygulama kimliklerini siler ve baglantilarini atar (paylasilan yardimci:
+   * auth_service.revokeAllUserSessions ve admin_user_service). Uyeligi sonradan kalkmis evde kalan kimlik de gider.
+   * Cihaz kimligine ve servis (PIN) oturumu kimliklerine (user_id bos) dokunulmaz.
+   * @returns {{revoked:number, usernames:string[], kick?:object}}
+   */
+  async revokeAllUserAccess({ userId, tx = null }) {
+    if (!userId) throw new TypeError('revokeAllUserAccess: userId zorunludur.');
+    const q = this._query(tx);
+    const res = await q(`DELETE FROM mqtt_credentials WHERE user_id = $1 AND kind = 'app' RETURNING username`, [userId]);
     return this._finishRevoke(res.rows, tx);
   }
 

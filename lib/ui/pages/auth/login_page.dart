@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -23,7 +25,8 @@ import 'register_page.dart';
 import 'service_pin_dialog.dart';
 import 'social_sign_in.dart';
 
-/// Giriş ekranı: e-posta + şifre, Google, Apple (yalnızca iOS/macOS), SMS kodu, servis PIN'i, yerel mod.
+/// Giriş ekranı: e-posta + şifre, Google, Apple (yalnızca iOS/macOS), SMS kodu (yalnız sunucu `sms_otp`
+/// yeteneğini bildirirse), servis PIN'i, yerel mod.
 ///
 /// * Giriş formu yalnızca **boş mu** kontrolü yapar (en az uzunluk politikası kayıtta); şifre
 ///   **kırpılmaz**, e-posta kırpılır.
@@ -58,12 +61,28 @@ class _LoginPageState extends State<LoginPage> {
   String? _error;
   AutovalidateMode _autovalidate = AutovalidateMode.disabled;
 
+  /// Sunucu telefonla (SMS kodu) girişi destekliyor mu (`GET /auth/capabilities` -> `sms_otp`; UYELIK-04). Yanıt
+  /// gelene kadar ve uç yoksa / hata alınırsa düğme GİZLİDİR (fail-closed): SMS göndericisi bağlı olmayan sunucuda
+  /// her denemesi 503 olan ölü bir seçenek sunulmaz. Form yanıtı beklemez.
+  bool _smsOtpAvailable = false;
+
   @override
   void initState() {
     super.initState();
-    _loginCooldown = Cooldown(context.read<AutomationState>().clock, () {
+    final state = context.read<AutomationState>();
+    _loginCooldown = Cooldown(state.clock, () {
       if (mounted) setState(() {});
     });
+    final known = state.authCapabilities;
+    if (known != null) {
+      _smsOtpAvailable = known.smsOtp;
+    } else {
+      unawaited(
+        state.loadAuthCapabilities().then((caps) {
+          if (mounted && caps.smsOtp != _smsOtpAvailable) setState(() => _smsOtpAvailable = caps.smsOtp);
+        }),
+      );
+    }
   }
 
   @override
@@ -414,13 +433,16 @@ class _LoginPageState extends State<LoginPage> {
                                     label: 'Apple ile Giriş Yap',
                                   ),
                                 ],
-                                const SizedBox(height: 10),
-                                _altButton(
-                                  key: const Key('btn_phone_otp'),
-                                  onPressed: _isLoading ? null : () => PhoneOtpDialog.show(context),
-                                  badge: _MethodBadge(icon: Icons.sms_rounded, family: AppFamilies.violet, enabled: !_isLoading),
-                                  label: 'Telefon Numarası ile Şifresiz Giriş (SMS)',
-                                ),
+                                // SMS ile giriş: yalnız sunucu `sms_otp` yeteneğini bildirdiyse (bkz. `_smsOtpAvailable`).
+                                if (_smsOtpAvailable) ...[
+                                  const SizedBox(height: 10),
+                                  _altButton(
+                                    key: const Key('btn_phone_otp'),
+                                    onPressed: _isLoading ? null : () => PhoneOtpDialog.show(context),
+                                    badge: _MethodBadge(icon: Icons.sms_rounded, family: AppFamilies.violet, enabled: !_isLoading),
+                                    label: 'Telefon Numarası ile Şifresiz Giriş (SMS)',
+                                  ),
+                                ],
                                 const SizedBox(height: 10),
                                 _altButton(
                                   key: const Key('btn_magic_link'),

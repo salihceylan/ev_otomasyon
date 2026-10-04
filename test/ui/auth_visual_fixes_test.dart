@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/common/auth_form.dart';
 import 'package:ev_otomasyon/ui/common/confirm_dialogs.dart';
@@ -40,7 +41,8 @@ void main() {
     }
   });
 
-  /// Ekran yüksekliği/genişliği verilen uygulamada [child]'ı pompalar (varsayılan koyu tema).
+  /// Ekran yüksekliği/genişliği verilen uygulamada [child]'ı pompalar (varsayılan koyu tema). [configure] pompalamadan
+  /// ÖNCE sahte bulutu hazırlar (ör. giriş ekranının açılışta sorduğu `GET /auth/capabilities` yanıtı).
   Future<E2Env> pumpScreen(
     WidgetTester tester,
     Widget child, {
@@ -48,10 +50,12 @@ void main() {
     double textScale = 1.0,
     ThemeMode themeMode = ThemeMode.dark,
     bool authenticated = false,
+    void Function(E2Env env)? configure,
   }) async {
     tester.platformDispatcher.textScaleFactorTestValue = textScale;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
     final env = e2Env(authenticated: authenticated);
+    configure?.call(env);
     await pumpApp(
       tester,
       state: env.state,
@@ -492,7 +496,13 @@ void main() {
         tester.widgetList<OrbCore>(find.descendant(of: find.byKey(Key(key)), matching: find.byType(OrbCore)));
 
     testWidgets('hesapla giriş yöntemleri renkli, servis/kurulum araçları nötr (slate) ve başlıklı grupta', (tester) async {
-      await pumpScreen(tester, const LoginPage(), size: const Size(360, 1500));
+      // SMS ile giriş satırı yalnız sunucu yeteneği bildirirse görünür (UYELIK-04).
+      await pumpScreen(
+        tester,
+        const LoginPage(),
+        size: const Size(360, 1500),
+        configure: (env) => env.cloud.authCapabilities = const AuthCapabilities(smsOtp: true),
+      );
       expect(orbsIn(tester, 'btn_google_sign_in').single.family, AppFamilies.sky);
       expect(orbsIn(tester, 'btn_phone_otp').single.family, AppFamilies.violet);
       expect(orbsIn(tester, 'btn_magic_link').single.family, AppFamilies.cyan);

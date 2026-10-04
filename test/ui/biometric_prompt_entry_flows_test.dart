@@ -201,7 +201,12 @@ void main() {
       });
 
       _flowTest('telefon OTP (PhoneOtpDialog): akış bitince istem en üstte kalır, OTP diyaloğu kapanır', (tester) async {
-        final rig = await _pumpRealApp(tester, order);
+        // SMS ile giriş düğmesi yalnız sunucu yeteneği bildirirse görünür (UYELIK-04).
+        final rig = await _pumpRealApp(
+          tester,
+          order,
+          configure: (env) => env.cloud.authCapabilities = const AuthCapabilities(smsOtp: true),
+        );
 
         await tapKey(tester, 'btn_phone_otp');
         expect(find.byType(PhoneOtpDialog), findsOneWidget, reason: 'hazırlık: OTP diyaloğu açıldı');

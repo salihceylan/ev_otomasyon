@@ -19,8 +19,10 @@ import 'social_sign_in.dart';
 ///
 /// * Parolalı hesap: parola girilir; Google/Apple/SMS hesabı: parola boş bırakılır. İki durumda da
 ///   onay için `SİL` **yazılır** (düğme ifade doğru yazılana kadar pasiftir).
-/// * Kullanıcı bazı evlerin **tek sahibi** ise sunucu `409 SOLE_OWNER` döndürür: hiçbir şey silinmez,
-///   ilgili daireler listelenir ve **önce devir** yönlendirmesi yapılır.
+/// * Kullanıcı, başka üyesi ya da panosu olan bazı evlerin **tek sahibi** ise sunucu `409 SOLE_OWNER` döndürür:
+///   hiçbir şey silinmez, ilgili daireler listelenir ve **önce devir** yönlendirmesi yapılır. İstemci bu kuralı
+///   önceden hesaplayıp engellemez (kararı sunucu verir): üyesiz + panosuz tek sahipli daireler engel değildir ve
+///   hesapla birlikte silinir (`released_homes`; başarı iletisinde belirtilir).
 /// * Başarıda yerel oturum tamamen temizlenir ve uygulama giriş ekranına döner.
 ///
 /// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]).
@@ -83,13 +85,17 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
       _soleOwned = null;
     });
     try {
-      await state.deleteAccount(password: password.isEmpty ? null : password, confirm: password.isEmpty ? _phrase : null);
+      final result = await state.deleteAccount(password: password.isEmpty ? null : password, confirm: password.isEmpty ? _phrase : null);
       unawaited(SocialSignIn.signOutGoogle());
       // Oturum temizlendi: açık tüm sayfalar kapanır, kapı giriş ekranını gösterir.
       navigator.popUntil((route) => route.isFirst);
+      // Sunucu üyesiz + panosuz tek sahipli daireleri hesapla birlikte sildiyse kısa bilgi (UYELIK-03).
+      final released = result.releasedHomes;
       messenger?.showSnackBar(
         SnackBar(
-          content: const Text('Hesabınız silindi.'),
+          content: Text(
+            released > 0 ? 'Hesabınız silindi. Üyesi ve panosu olmayan $released daireniz de kaldırıldı.' : 'Hesabınız silindi.',
+          ),
           // Beyaz iletiyle AA (ham #10B981 ile ~2.5:1'di).
           backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
           behavior: SnackBarBehavior.floating,

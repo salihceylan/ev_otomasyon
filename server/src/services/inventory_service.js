@@ -364,7 +364,10 @@ class InventoryService {
       if (upd.rows.length === 0) throw new HttpError(409, 'Cihaz durumu bu sırada değişti. Lütfen tekrar deneyin.', 'CONFLICT');
 
       // Yetim cihaz kaydi (acil sifirlamadan kalan; home_id bos): sonraki sahiplenmede envanter anahtari esas alinir,
-      // yine de iki kayit ayni anahtari tasisin.
+      // yine de iki kayit ayni anahtari tasisin. Yeni etiket anahtari ESASTIR: onceki bir acil sifirlamadan kalan
+      // BEKLEYEN yerel anahtar (devices.local_key_pending_enc, SERVIS-01) bu guncellemeyle NULL'lanir (migration 032
+      // tetikleyicisi trg_devices_pending_key_superseded: sahipsiz kayitta bekleyene dokunmadan anahtar degisirse
+      // bekleyen temizlenir), yoksa uzlastirici sonradan eski bekleyeni panoya iletip etiket anahtarini ezerdi.
       await tx.query(
         'UPDATE devices SET local_key_enc = $1, updated_at = CURRENT_TIMESTAMP WHERE device_uuid = $2 AND home_id IS NULL',
         [newKeyEnc, cleanUuid]

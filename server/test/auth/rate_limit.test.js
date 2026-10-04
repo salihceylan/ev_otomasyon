@@ -106,3 +106,26 @@ test('rate_limit: clientIp IPv4-mapped adresi sadeleştirir ve X-Forwarded-For o
   );
   assert.strictEqual(clientIp({ socket: { remoteAddress: '5.6.7.8' } }), '5.6.7.8');
 });
+
+test('rate_limit: limitKey IPv6 adresini /64 onekine indirger; IPv4 ve ::ffff: eslemesi aynen (M1-01)', () => {
+  const { limitKey } = require('../../src/middlewares/rate_limit');
+  assert.strictEqual(limitKey({ ip: '1.2.3.4' }), '1.2.3.4');
+  assert.strictEqual(limitKey({ ip: '::ffff:10.0.0.5' }), '10.0.0.5');
+  assert.strictEqual(limitKey({ ip: '2001:db8:1:2::1' }), '2001:db8:1:2::/64');
+  assert.strictEqual(limitKey({ ip: '2001:DB8:1:2:aaaa:bbbb:cccc:dddd' }), '2001:db8:1:2::/64');
+  assert.strictEqual(limitKey({ ip: '2001:0db8:0001:0002::32' }), '2001:db8:1:2::/64', 'bastaki sifirlar ayni onek');
+  assert.strictEqual(limitKey({ ip: '2001:db8::1' }), '2001:db8:0:0::/64');
+  assert.strictEqual(limitKey({ ip: '::1' }), '0:0:0:0::/64');
+  assert.strictEqual(limitKey({ ip: 'fe80::1%eth0' }), 'fe80:0:0:0::/64', 'bolge kimligi atilir');
+  assert.strictEqual(limitKey({ ip: '64:ff9b::192.0.2.1' }), '64:ff9b:0:0::/64', 'gomulu IPv4 kuyrugu');
+  assert.notStrictEqual(limitKey({ ip: '2001:db8:1:2::1' }), limitKey({ ip: '2001:db8:1:3::1' }));
+  assert.strictEqual(limitKey({}), 'unknown');
+  assert.strictEqual(limitKey(null), 'unknown');
+});
+
+test('rate_limit: keys() sayac anahtarlarini dondurur (bellek denetimi)', () => {
+  const l = rateLimit({ max: 5 });
+  l.consume('a');
+  l.consume('b');
+  assert.deepStrictEqual(l.keys(), ['a', 'b']);
+});

@@ -21,6 +21,7 @@ library;
 
 import 'dart:async';
 
+import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/common/confirm_dialogs.dart';
 import 'package:ev_otomasyon/ui/motion/ambient_clock.dart';
@@ -218,6 +219,8 @@ void main() {
 
         testWidgets('giriş ($tag)', (tester) async {
           final env = e2Env(authenticated: false);
+          // Tüm giriş yöntemleri görünsün: SMS satırı yalnız sunucu yeteneği bildirirse çizilir (UYELIK-04).
+          env.cloud.authCapabilities = const AuthCapabilities(smsOtp: true, google: true, apple: true);
           final key = GlobalKey();
           await _pumpScreen(
             tester,

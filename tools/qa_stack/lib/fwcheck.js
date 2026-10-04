@@ -1,6 +1,7 @@
 // Firmware kaynak SURUKLENMESI denetimi: simulator (sim/fw/*, sim/local_api.js) belirli firmware kaynak dosyalarindan PORTLANMISTIR.
-// Bu dosya, portlanirken okunan her kaynagin SHA-256 ozetini (sim/fw/SOURCES.json) tutar; `node run.js fwcheck` suanki dosyalari
-// karsilastirir ve degisen dosyalari listeler (degisti = simulatoru yeniden esitle: ilgili modul + test/fw_*.test.js). `--update` ozetleri yeniler.
+// Bu dosya, portlanirken okunan her kaynagin SHA-256 ozetini (sim/fw/SOURCES.json; satir sonu normallestirilmis) tutar; `node run.js fwcheck`
+// suanki dosyalari karsilastirir ve degisen dosyalari listeler (degisti = simulatoru yeniden esitle: ilgili modul + test/fw_*.test.js).
+// `--update` ozetleri yeniler. test/fwcheck.test.js ozetlerin guncel oldugunu `npm test` icinde de denetler.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -48,12 +49,18 @@ export const SOURCES = {
  */
 export const NOT_PORTED = Object.freeze(['src/WebPortalPage.h']);
 
-const sha = (file) => {
-  try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (_) { return null; }
-};
+/**
+ * Kaynak ozeti (SHA-256): CRLF -> LF normallestirilerek hesaplanir. Ana agac core.autocrlf=true ile calisir; ayni kaynak bir checkout'ta
+ * CRLF, digerinde LF olabilir ve bu fark firmware degisikligi SAYILMAZ. Dosya yoksa null.
+ */
+export function sourceHash(file) {
+  let buf;
+  try { buf = fs.readFileSync(file); } catch (_) { return null; }
+  return crypto.createHash('sha256').update(Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1')).digest('hex');
+}
 
 export function currentHashes() {
-  return Object.fromEntries(Object.keys(SOURCES).map((rel) => [rel, sha(path.join(FIRMWARE_DIR, rel))]));
+  return Object.fromEntries(Object.keys(SOURCES).map((rel) => [rel, sourceHash(path.join(FIRMWARE_DIR, rel))]));
 }
 
 export function writeManifest() {

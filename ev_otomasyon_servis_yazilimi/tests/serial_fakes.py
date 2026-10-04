@@ -148,12 +148,15 @@ class FakeFirmwareCli:
             if not self.drop_factoryinit:
                 self._factory_init(cmd)
         elif upper == "RESETKEY":
+            # main.cpp ile AYNI satır (tests/test_serial_provision.py FirmwareSerialOutputContractTests denetler)
+            reply = ("[CLI-SONUC] Yerel anahtar %s. Cihaz artik PROVIZYONSUZ (FACTORYINIT <local_key> <ap_pass> ya da "
+                     "/api/factory/init). AP gerekirse: AP ON")
             if self.reset_fails:
-                self._say("[CLI-SONUC] Yerel anahtar SILINEMEDI. Cihaz artik PROVIZYONSUZ (yalnizca /api/factory/init). AP gerekirse: AP ON")
+                self._say(reply % "SILINEMEDI")
             else:
                 self.provisioned = False
                 self.local_key = ""
-                self._say("[CLI-SONUC] Yerel anahtar SILINDI. Cihaz artik PROVIZYONSUZ (yalnizca /api/factory/init). AP gerekirse: AP ON")
+                self._say(reply % "SILINDI")
         elif upper in ("HELP", "?"):
             self._say("[CLI] Komutlar: STATUS, MQTT, ... FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY, REBOOT")
         else:

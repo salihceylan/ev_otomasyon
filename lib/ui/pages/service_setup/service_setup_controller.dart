@@ -76,7 +76,7 @@ class ServiceSetupController extends ChangeNotifier {
     customer = CustomerLogic(ctx, identify);
     claim = ClaimLogic(ctx, identify, customer);
     wifi = WifiLogic(ctx);
-    cloud = CloudLogic(ctx, canReuseOnline: () => isExistingDevice);
+    cloud = CloudLogic(ctx);
     conn = ConnectionLogic(ctx);
     ctx.onLanVerified = wifi.markConnectedOnLan;
     relays = RelayLogic(ctx);

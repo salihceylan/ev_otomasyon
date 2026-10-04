@@ -30,13 +30,14 @@ const GENERIC_SERVER_MESSAGE = 'Sunucu hatası oluştu. Lütfen daha sonra tekra
 const DEADLOCK_MESSAGE = 'Eşzamanlı işlem çakışması oluştu. Lütfen tekrar deneyin.';
 
 // Yanita eklenmesine izin verilen ek alanlar (beyaz liste; ic bilgi sizmasin).
-const EXPOSED_EXTRA_KEYS = Object.freeze(['retry_after', 'remaining_attempts', 'device_online', 'offline_devices']);
+const EXPOSED_EXTRA_KEYS = Object.freeze(['retry_after', 'remaining_attempts', 'device_online', 'offline_devices', 'reason']);
 
 /**
  * @param {number} status
  * @param {string} message  kullaniciya gosterilebilir (ASCII Turkce)
  * @param {string} [code]   makine kodu (varsayilan: duruma gore)
- * @param {object} [extra]  { retry_after, remaining_attempts, device_online, offline_devices }
+ * @param {object} [extra]  { retry_after, remaining_attempts, device_online, offline_devices, reason }
+ *                          reason: ayni kodun (or. 409 CONFLICT) altinda makine-okur ayirici (NOT_APPLIED | TYPE_CHANGED)
  */
 function httpError(status, message, code = null, extra = null) {
   const err = new HttpError(status, message, code);

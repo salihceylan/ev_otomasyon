@@ -1376,6 +1376,38 @@ class AutomationState extends ChangeNotifier {
   // Giriş / kayıt / çıkış
   // ---------------------------------------------------------------------------
 
+  // Sunucunun giriş yöntemi yetenekleri (UYELIK-04): yalnız BAŞARILI yanıt bellekte tutulur (uygulama oturumu
+  // boyunca; sunucu düzeyinde bilgidir, kullanıcıya bağlı değildir). 404 (eski sunucu) / ağ hatası önbelleğe alınmaz:
+  // giriş ekranı bir sonraki açılışta yeniden sorar; o ana kadar isteğe bağlı yöntemler gizlidir (fail-closed).
+  AuthCapabilities? _authCapabilities;
+  Future<AuthCapabilities>? _authCapabilitiesFlight;
+
+  /// Bu uygulama oturumunda sunucudan alınmış giriş yetenekleri; henüz alınmadıysa / alınamadıysa `null`.
+  AuthCapabilities? get authCapabilities => _authCapabilities;
+
+  /// Giriş ekranı açılışında çağrılır (`GET /auth/capabilities`): önbellekte varsa istek atılmaz; eşzamanlı
+  /// çağrılar tek istekte birleşir. Fırlatmaz: uç yok (404) / hata -> [AuthCapabilities.none].
+  Future<AuthCapabilities> loadAuthCapabilities() {
+    final cached = _authCapabilities;
+    if (cached != null) return Future<AuthCapabilities>.value(cached);
+    return _authCapabilitiesFlight ??= _fetchAuthCapabilities();
+  }
+
+  Future<AuthCapabilities> _fetchAuthCapabilities() async {
+    try {
+      final caps = await cloudApi.fetchAuthCapabilities();
+      _authCapabilities = caps;
+      return caps;
+    } on ApiException catch (e) {
+      _log('Giriş yetenekleri alınamadı (${e.statusCode})');
+      return AuthCapabilities.none;
+    } catch (_) {
+      return AuthCapabilities.none;
+    } finally {
+      _authCapabilitiesFlight = null;
+    }
+  }
+
   Future<bool> login(String identifier, String password) async {
     final previous = cloudApi.currentRefreshToken;
     final res = await cloudApi.login(identifier, password);
@@ -1438,6 +1470,9 @@ class AutomationState extends ChangeNotifier {
   /// OTP kodu **veya** sihirli bağlantı belirteci ile yeni şifre. Kodla sıfırlamada [identifier]
   /// zorunludur; bağlantı [token]'ı ile gerekmez. Yanıt oturum taşıyorsa otomatik giriş yapılır.
   /// Hatalı kodda [ApiException.remainingAttempts] kalan hakkı verir.
+  ///
+  /// Dönüş: `true` = yanıt oturum taşıdı ve o oturum açıldı (açık oturum varsa değişti); `false` = yalnız şifre
+  /// yenilendi, oturum DEĞİŞMEDİ.
   Future<bool> resetPassword({
     String? identifier,
     String? code,
@@ -1445,16 +1480,19 @@ class AutomationState extends ChangeNotifier {
     required String newPassword,
   }) async {
     final previous = cloudApi.currentRefreshToken;
-    final res = await cloudApi.resetPassword(
-      identifier: identifier,
-      code: code,
-      token: token,
-      newPassword: newPassword,
+    // Açık oturumun hesabı sıfırlanıyorsa sunucu bu cihazın MQTT bağlantısını da atar (bkz. [_credentialRotation]).
+    final res = await _duringCredentialRotation(
+      () => cloudApi.resetPassword(
+        identifier: identifier,
+        code: code,
+        token: token,
+        newPassword: newPassword,
+      ),
     );
     if (res['user'] != null && (res['access_token'] != null || res['token'] != null)) {
       return _handleAuthSuccess(res, previousRefreshToken: previous);
     }
-    return true;
+    return false;
   }
 
   /// Sihirli bağlantı ile tek seferlik giriş (`POST /auth/magic-login`). [token], bağlantının
@@ -1483,9 +1521,13 @@ class AutomationState extends ChangeNotifier {
       throw ApiException.validation('Yeni parola mevcut parolayla aynı olamaz.');
     }
     final epoch = _sessionEpoch;
-    final res = await cloudApi.changePassword(
-      currentPassword: currentPassword,
-      newPassword: newPassword,
+    // Sunucu bu cihazın MQTT kimliğini de silip bağlantıyı atar: atılan bağlantı taze kimliği YENİ belirteçle ister
+    // (bkz. [_credentialRotation]); sonra kendiliğinden yeni kimlikle yeniden bağlanır.
+    final res = await _duringCredentialRotation(
+      () => cloudApi.changePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+      ),
     );
     if (epoch != _sessionEpoch) return; // bu arada oturum kapandı
     final access = cloudApi.authToken;
@@ -1576,7 +1618,8 @@ class AutomationState extends ChangeNotifier {
   Future<void> logoutAll() async {
     if (!isAuthenticated) return;
     if (!isServiceSession) {
-      await cloudApi.logoutAll(); // başarıda yerel belirteçler de silinir
+      // Sunucu bu cihazın MQTT bağlantısını da atar: yanıt beklenmeden eski belirteçle kimlik istenmez.
+      await _duringCredentialRotation(cloudApi.logoutAll); // başarıda yerel belirteçler de silinir
     }
     await logout();
   }
@@ -2478,6 +2521,24 @@ class AutomationState extends ChangeNotifier {
     _mqttStatusSub = mqttService.statusMessages.listen(_onDevicePresence);
   }
 
+  /// Oturum kimliği döndürülürken (parola değişimi / sıfırlama, tüm cihazlardan çıkış) tamamlanacak gelecek
+  /// (UYELIK-02). Sunucu bu işlemlerde kullanıcının TÜM uygulama MQTT kimliklerini (bu cihazınki dahil) silip
+  /// bağlantıları atar ve eski erişim belirtecini geçersiz kılar. Atılan bağlantı yeniden kurulurken taze kimlik
+  /// işlem yanıtı (yeni belirteçler) gelmeden ESKİ belirteçle istenirse 401 -> iptal edilmiş refresh -> yanlışlıkla
+  /// oturum sonu yarışı olurdu: MQTT kimlik sağlayıcısı işlem bitene kadar bekler.
+  Future<void>? _credentialRotation;
+
+  Future<T> _duringCredentialRotation<T>(Future<T> Function() action) async {
+    final done = Completer<void>();
+    _credentialRotation = done.future;
+    try {
+      return await action();
+    } finally {
+      if (identical(_credentialRotation, done.future)) _credentialRotation = null;
+      done.complete();
+    }
+  }
+
   Future<void> _startRealtime() async {
     if (_isDisposed || // dispose sırasında süren zincir sonradan MQTT bağlantısı kurmasın (PF-34)
         _mode != AppMode.cloud ||
@@ -2491,12 +2552,18 @@ class AutomationState extends ChangeNotifier {
     final home = _activeHome!;
     final epoch = _homeEpoch;
     _realtimeEpoch = epoch;
+    Future<MqttCredentials> fetchCredentials() {
+      if (epoch != _homeEpoch) {
+        throw const ApiException(statusCode: 404, code: 'STALE', message: 'Ev değişti.');
+      }
+      return cloudApi.mqttCredentials(home.id);
+    }
+
     await mqttService.start(
       credentialsProvider: () {
-        if (epoch != _homeEpoch) {
-          throw const ApiException(statusCode: 404, code: 'STALE', message: 'Ev değişti.');
-        }
-        return cloudApi.mqttCredentials(home.id);
+        // Kimlik döndürme sürüyorsa yanıt beklenir (bkz. [_credentialRotation]); yoksa zamanlama aynen.
+        final rotation = _credentialRotation;
+        return rotation == null ? fetchCredentials() : rotation.then((_) => fetchCredentials());
       },
       installId: _installId,
       fallbackTopicId: home.mqttTopicId,
@@ -4181,12 +4248,15 @@ class AutomationState extends ChangeNotifier {
   // Arayüz paketi E2 tarafından eklenen AYRIK blok (D çekirdeğinin dışında).
 
   /// Hesabı kalıcı olarak siler; başarıda yerel oturum tamamen temizlenir (çıkış). Parolalı hesapta
-  /// [password], sosyal giriş hesabında [confirm] (`SİL`) gerekir. Kullanıcı bazı evlerin tek sahibi
-  /// ise [ApiException.isSoleOwner] fırlatılır ve **hiçbir şey silinmez** (önce devir).
-  Future<void> deleteAccount({String? password, String? confirm}) async {
+  /// [password], sosyal giriş hesabında [confirm] (`SİL`) gerekir. Kullanıcı, başka üyesi ya da panosu olan
+  /// bazı evlerin tek sahibi ise [ApiException.isSoleOwner] fırlatılır ve **hiçbir şey silinmez** (önce devir).
+  /// Üyesiz + panosuz tek sahipli daireler engel değildir; sunucu onları da siler
+  /// ([AccountDeletionResult.releasedHomes]).
+  Future<AccountDeletionResult> deleteAccount({String? password, String? confirm}) async {
     if (!isAuthenticated || isServiceSession) throw ApiException.forbidden();
-    await cloudApi.deleteAccount(password: password, confirm: confirm);
+    final result = await cloudApi.deleteAccount(password: password, confirm: confirm);
     await logout();
+    return result;
   }
 
   /// Davet / devir kodunun önizlemesi (ev adı, sakin sayısı). Sunucu ucu yoksa `null`.

@@ -43,6 +43,36 @@ class UserModel {
   bool get isServiceSession => globalRole == GlobalRole.serviceSession;
   bool get isServiceManagerOrSuper => isSuperUser || isServiceUser;
 
+  /// Sunucunun TEKNİK yer tutucu e-posta alan adları (UYELIK-07): telefonla açılmış hesap
+  /// (`phone_<no>@ahbu.local`), e-postasını gizleyen Apple hesabı (`apple.<özet>@users.noreply.invalid`) ve
+  /// silinmiş hesap (`deleted+<id>@deleted.invalid`). Gerçek posta kutusu değildir; kullanıcıya gösterilmez.
+  static const List<String> _placeholderEmailDomains = <String>[
+    '@ahbu.local',
+    '@users.noreply.invalid',
+    '@deleted.invalid',
+  ];
+
+  /// [email] sunucunun teknik yer tutucusu mu? (Büyük/küçük harf ve baş/son boşluk duyarsız.) Yeni sunucu bu
+  /// hesaplarda `email:null` döndürür; eski sunucuya karşı istemci de aynı kuralı uygular (savunma).
+  static bool isPlaceholderEmail(String? email) {
+    final value = email?.trim().toLowerCase() ?? '';
+    if (value.isEmpty) return false;
+    for (final domain in _placeholderEmailDomains) {
+      if (value.endsWith(domain)) return true;
+    }
+    return false;
+  }
+
+  /// Sunucu e-posta alanını uygulamanın tuttuğu biçime çevirir: `null` / metin dışı / yer tutucu -> boş metin
+  /// ("e-posta yok"; profil "Belirtilmedi" gösterir).
+  static String contactEmailFrom(Object? raw) {
+    final value = asString(raw) ?? '';
+    return isPlaceholderEmail(value) ? '' : value;
+  }
+
+  /// Gösterilebilir e-posta (kırpılmış): yoksa ya da yer tutucuysa boş metin.
+  String get contactEmail => isPlaceholderEmail(email) ? '' : email.trim();
+
   factory UserModel.fromJson(Map<String, dynamic> json) {
     final id = asNonEmptyString(json['id'] ?? json['user_id']);
     if (id == null) throw const FormatException('Kullanıcı kimliği yok');
@@ -50,7 +80,9 @@ class UserModel {
     final parsed = GlobalRole.parse(rawRole);
     return UserModel(
       id: id,
-      email: asString(json['email']) ?? '',
+      // Yeni sunucu yer tutucu yerine `null` döner; eski sunucunun yer tutucusu da (ve eski sürümün sakladığı kayıt
+      // geri yüklenirken) boş sayılır: karşılama adı, ayarlar ve profil teknik adresi göstermez.
+      email: contactEmailFrom(json['email']),
       fullName: asString(json['full_name'] ?? json['fullName'] ?? json['name']) ?? '',
       phone: asString(json['phone']) ?? '',
       // Tanınan rol normalleştirilir; tanınmayan rol olduğu gibi (küçük harf) tutulur ve
@@ -93,6 +125,41 @@ class UserModel {
         mustChangePassword: mustChangePassword ?? this.mustChangePassword,
         emailVerified: emailVerified ?? this.emailVerified,
       );
+}
+
+/// Sunucunun giriş yöntemi yetenekleri (`GET /auth/capabilities`, kimliksiz; UYELIK-04).
+///
+/// Eksik / tanınmayan alan `false`'tur (fail-closed). Uç olmayan eski sunucu (404) ve ağ hatası çağıranda
+/// [none] sayılır: giriş ekranı sunucunun desteklemediği bir yolu (ör. SMS göndericisi bağlı olmayan sunucuda
+/// telefonla giriş) sunmaz.
+class AuthCapabilities {
+  const AuthCapabilities({this.smsOtp = false, this.google = false, this.apple = false});
+
+  /// Hiçbir isteğe bağlı yöntem yok (uç yok / hata).
+  static const AuthCapabilities none = AuthCapabilities();
+
+  /// Telefon numarasıyla SMS kodu (OTP) girişi.
+  final bool smsOtp;
+  final bool google;
+  final bool apple;
+
+  factory AuthCapabilities.fromJson(Map<String, dynamic> json) => AuthCapabilities(
+        smsOtp: asBool(json['sms_otp']) ?? false,
+        google: asBool(json['google']) ?? false,
+        apple: asBool(json['apple']) ?? false,
+      );
+
+  @override
+  String toString() => 'AuthCapabilities(smsOtp: $smsOtp, google: $google, apple: $apple)';
+}
+
+/// `DELETE /auth/account` başarı yanıtı (UYELIK-03).
+class AccountDeletionResult {
+  const AccountDeletionResult({this.releasedHomes = 0});
+
+  /// Hesapla birlikte silinen, başka üyesi ve panosu olmayan (tek sahipli) daire sayısı (`released_homes`).
+  /// Eski sunucu bu alanı vermez: 0.
+  final int releasedHomes;
 }
 
 /// `GET /homes` → `access_state`: eve erişimin **o anki** durumu (sunucu saatiyle).
@@ -517,7 +584,8 @@ class HomeMember {
     return HomeMember(
       userId: userId,
       fullName: asString(json['full_name'] ?? json['fullName']) ?? '',
-      email: asString(json['email']) ?? '',
+      // Telefonla açılmış üyenin yer tutucu e-postası gösterilmez (üye kartı telefona düşer; UYELIK-07).
+      email: UserModel.contactEmailFrom(json['email']),
       phone: asString(json['phone']) ?? '',
       role: parsed == HomeRole.unknown ? rawRole.toLowerCase() : parsed.wire,
       validFrom: asDate(json['valid_from'] ?? json['validFrom']),

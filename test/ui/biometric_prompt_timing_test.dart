@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/ui/pages/auth/auth_gate.dart';
 import 'package:ev_otomasyon/ui/pages/auth/phone_otp_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/auth/register_page.dart';
@@ -59,6 +60,8 @@ void main() {
     testWidgets('telefon kodu: kod diyaloğu kapanır (panonun üstünde kalmaz), istem açık kalır', (tester) async {
       final env = signedOut();
       env.cloud.fetchHomesGate = Completer<void>();
+      // SMS ile giriş düğmesi yalnız sunucu yeteneği bildirirse görünür (UYELIK-04).
+      env.cloud.authCapabilities = const AuthCapabilities(smsOtp: true);
       await pumpApp(tester, state: env.state, child: const AuthGate());
       await settle(tester);
 

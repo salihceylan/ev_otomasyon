@@ -17,6 +17,7 @@ Test çıktısı cp1254 konsollarda bozulmasın diye ad/ileti metinlerinde emoji
 
 import ast
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -129,6 +130,78 @@ class SerialLineTests(unittest.TestCase):
         other = fc.SerialStatus()
         other.absorb("rastgele satir (MAC: yok)")
         self.assertEqual((other.mac, other.provisioned), (None, None))
+
+
+# ============================================================================================================
+# Gerçek firmware kaynağıyla eşlik (CONTRACTS §3c "Fabrika aracının bağımlı olduğu seri çıktı kalıpları"): sahte
+# firmware'in satırı main.cpp'deki satırın AYNISI olmalı ve aracın ayrıştırıcısı gerçek satırı tanımalı.
+# ============================================================================================================
+MAIN_CPP = os.path.join(TOOL_DIR, "waveshare_s3_demo", "src", "main.cpp")
+
+
+def resetkey_reply_template(test):
+    """main.cpp RESETKEY dalındaki yanıt biçimi (printf biçim dizgisi; bitişik C dizgileri birleştirilir, sondaki
+    \\r\\n hariç, tek ``%s``)."""
+    if not os.path.isfile(MAIN_CPP):
+        test.skipTest("firmware kaynağı yok")
+    with open(MAIN_CPP, encoding="utf-8") as handle:
+        source = handle.read()
+    block = re.search(r'eq\(first, "RESETKEY"\)\)\s*\{(.*?)\n  \}', source, re.S)
+    test.assertIsNotNone(block, "RESETKEY dalı bulunamadı: firmware yeniden düzenlenmiş olabilir; seri çıktı kalıbını denetleyin")
+    for call in re.finditer(r'Serial\.printf\(((?:\s*"(?:[^"\\]|\\.)*")+)', block.group(1)):
+        text = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', call.group(1)))
+        if "Yerel anahtar %s" in text:
+            test.assertTrue(text.endswith("\\r\\n"), text)
+            return text[: -len("\\r\\n")]
+    test.fail("RESETKEY yanıt satırı (Serial.printf 'Yerel anahtar %s') bulunamadı")
+    return ""
+
+
+class FirmwareSerialOutputContractTests(unittest.TestCase):
+    def test_resetkey_reply_is_parsed_by_the_tool_and_names_factoryinit(self):
+        template = resetkey_reply_template(self)
+        self.assertEqual(template.count("%"), 1, template)
+        for word in ("SILINDI", "SILINEMEDI"):
+            line = template.replace("%s", word)
+            match = fc._RESETKEY_RESULT.search(line)
+            self.assertIsNotNone(match, line)
+            self.assertEqual(match.group(1), word)
+            self.assertIsNone(fc.parse_factory_init_result(line), "RESETKEY satırı FACTORYINIT sonucu sanılmamalı")
+        # Tercih edilen yol (aynı seri hattan FACTORYINIT) ile yedek yol (factory/init) birlikte söylenir.
+        self.assertIn("FACTORYINIT <local_key> <ap_pass>", template)
+        self.assertIn("/api/factory/init", template)
+        self.assertNotIn("yalnizca /api/factory/init", template)
+
+    def test_fake_firmware_prints_the_real_resetkey_line(self):
+        template = resetkey_reply_template(self)
+        for reset_fails, word in ((False, "SILINDI"), (True, "SILINEMEDI")):
+            firmware = FakeFirmwareCli(provisioned=True, reset_fails=reset_fails)
+            firmware.feed(b"RESETKEY\r\n")
+            lines = firmware.pull(4096).decode("latin-1").splitlines()
+            self.assertIn(template.replace("%s", word), lines)
+
+    def test_every_factoryinit_reply_in_the_firmware_is_known_to_the_tool(self):
+        if not os.path.isfile(MAIN_CPP):
+            self.skipTest("firmware kaynağı yok")
+        with open(MAIN_CPP, encoding="utf-8") as handle:
+            main_source = handle.read()
+        with open(os.path.join(os.path.dirname(MAIN_CPP), "CliParse.h"), encoding="utf-8") as handle:
+            cli_source = handle.read()
+        reply_fn = re.search(r"static const char\* factoryInitReply\([^)]*\)\s*\{(.*?)\n\}", main_source, re.S)
+        self.assertIsNotNone(reply_fn, "factoryInitReply() bulunamadı: FACTORYINIT yanıt kalıplarını denetleyin")
+        replies = re.findall(r'return "([^"]*)";', reply_fn.group(1))
+        self.assertEqual(
+            sorted(replies),
+            sorted(["OK factory_init", "ERR already_provisioned", "ERR invalid_local_key", "ERR invalid_ap_pass", "ERR persist_failed"]),
+        )
+        error_fn = re.search(r"factoryInitErrorText\([^)]*\)\s*\{(.*?)\n\}", cli_source, re.S)
+        self.assertIsNotNone(error_fn, "CliParse.h factoryInitErrorText() bulunamadı")
+        replies += ["ERR " + code for code in re.findall(r'return "([a-z_]+)";', error_fn.group(1))]
+        for reply in replies:
+            parsed = fc.parse_factory_init_result(reply)
+            self.assertIsNotNone(parsed, reply)
+            if not parsed[0]:
+                self.assertNotEqual(fc.serial_provision_error(parsed[1]).code, "unexpected", reply)
 
 
 # ============================================================================================================

@@ -211,8 +211,11 @@ class E2Cloud extends FakeCloudApi {
   Completer<void>? deleteGate;
   final List<Map<String, Object?>> deleteAccountArgs = <Map<String, Object?>>[];
 
+  /// Başarı yanıtındaki `released_homes` (üyesiz + panosuz tek sahipli, hesapla silinen daireler; UYELIK-03).
+  int deleteReleasedHomes = 0;
+
   @override
-  Future<void> deleteAccount({String? password, String? confirm}) async {
+  Future<AccountDeletionResult> deleteAccount({String? password, String? confirm}) async {
     calls.add('deleteAccount');
     deleteAccountArgs.add(<String, Object?>{
       'hasPassword': password != null,
@@ -223,6 +226,7 @@ class E2Cloud extends FakeCloudApi {
     if (gate != null) await gate.future;
     final error = deleteAccountError;
     if (error != null) throw error;
+    return AccountDeletionResult(releasedHomes: deleteReleasedHomes);
   }
 
   // --- sihirli bağlantı (belirteç yalnızca sahte test değeridir) ---

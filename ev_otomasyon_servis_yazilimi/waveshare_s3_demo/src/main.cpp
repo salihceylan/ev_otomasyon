@@ -206,6 +206,17 @@ static void secureZero(void* p, size_t n) {
   while (n--) *v++ = 0;
 }
 
+// ConfigManager::provisionIfEmpty sonucu -> seri FACTORYINIT yanıtı (fabrika aracı bu metinleri ayrıştırır; CONTRACTS §3c).
+static const char* factoryInitReply(ConfigManager::ProvisionResult r) {
+  switch (r) {
+    case ConfigManager::PROVISION_OK:              return "OK factory_init";
+    case ConfigManager::PROVISION_ALREADY:         return "ERR already_provisioned";
+    case ConfigManager::PROVISION_INVALID_KEY:     return "ERR invalid_local_key";
+    case ConfigManager::PROVISION_INVALID_AP_PASS: return "ERR invalid_ap_pass";
+    default:                                       return "ERR persist_failed";   // NVS: cihaz provizyonsuz kalır
+  }
+}
+
 static void handleCliLine(String cmd) {
   cmd.trim();
   if (cmd.isEmpty()) return;
@@ -501,30 +512,32 @@ static void handleCliLine(String cmd) {
     secureZero(key, sizeof(key));
     secureZero(pass, sizeof(pass));
     {
-      ConfigManager::ConfigLock lk(cfgMgr);   // denetim + yazma tek blok (HTTP /api/factory/init ile yarış yok)
+      // Denetim + yazma, ConfigManager::provisionIfEmpty içinde TEK kilit altındadır ve HTTP POST /api/factory/init de
+      // AYNI yöntemi kullanır: iki yol yarışamaz (önce yazan kazanır, diğeri already_provisioned alır). Buradaki dış kilit
+      // ayrıştırmadaki "provizyonlu mu" okumasını da aynı bölüme alır (özyinelemeli mutex).
+      ConfigManager::ConfigLock lk(cfgMgr);
       const cliparse::FactoryInitStatus st =
           cliparse::parseFactoryInit(cmd.c_str(), cfg.hasLocalKey(), key, sizeof(key), pass, sizeof(pass));
       if (st != cliparse::FI_OK) {
         Serial.printf("ERR %s\r\n", cliparse::factoryInitErrorText(st));
-      } else if (!cfgMgr.setApPass(pass)) {
-        Serial.printf("ERR persist_failed\r\n");
-      } else if (!cfgMgr.setLocalKey(key)) {
-        // ap_pass yazıldı ama local_key yazılamadı (geri alındı): cihaz PROVİZYONSUZ kalır, yeniden denenebilir.
-        Serial.printf("ERR persist_failed\r\n");
       } else {
-        WiFiManager::instance().applyApConfigChange();   // AP ilkesi WPA2 + ap_pass'e döner
-        Serial.printf("OK factory_init\r\n");
+        // Önce ap_pass, sonra local_key; local_key yazılamazsa ap_pass geri alınır, cihaz PROVİZYONSUZ kalır (yeniden denenebilir).
+        const ConfigManager::ProvisionResult pr = cfgMgr.provisionIfEmpty(key, pass);
+        if (pr == ConfigManager::PROVISION_OK) WiFiManager::instance().applyApConfigChange();   // AP ilkesi WPA2 + ap_pass'e döner
+        Serial.printf("%s\r\n", factoryInitReply(pr));
       }
     }
     secureZero(key, sizeof(key));
     secureZero(pass, sizeof(pass));
     scrubString(cmd);
   } else if (eq(first, "RESETKEY")) {
-    // Fiziksel erişimle kurtarma yolu (CONTRACTS §3): yerel anahtarı siler. Cihaz "provizyonsuz" olur ve
-    // yalnızca POST /api/factory/init ile yeniden anahtarlanabilir.
+    // Fiziksel erişimle kurtarma yolu (CONTRACTS §3): yerel anahtarı siler; cihaz "provizyonsuz" olur. Yeniden
+    // anahtarlama TERCİHEN aynı seri hattan FACTORYINIT ile yapılır (anahtar kablosuz ağdan geçmez); yedek yol açık
+    // kurulum AP'si üzerinden POST /api/factory/init'tir. Fabrika aracı yanıtta "Yerel anahtar SILINDI|SILINEMEDI" arar.
     bool ok = cfgMgr.clearLocalKey();
     if (ok) WiFiManager::instance().applyApConfigChange();   // provizyon durumu değişti: AP ilkesi hemen yeniden değerlendirilir
-    Serial.printf("[CLI-SONUC] Yerel anahtar %s. Cihaz artik PROVIZYONSUZ (yalnizca /api/factory/init). AP gerekirse: AP ON\r\n",
+    Serial.printf("[CLI-SONUC] Yerel anahtar %s. Cihaz artik PROVIZYONSUZ (FACTORYINIT <local_key> <ap_pass> ya da "
+                  "/api/factory/init). AP gerekirse: AP ON\r\n",
                   ok ? "SILINDI" : "SILINEMEDI");
   } else if (eq(first, "REBOOT") || eq(first, "RESTART")) {
     Serial.printf("[CLI-SONUC] Panjurlar durdurulup cihaz yeniden baslatiliyor...\r\n");

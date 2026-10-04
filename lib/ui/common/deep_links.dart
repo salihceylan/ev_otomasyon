@@ -91,6 +91,8 @@ Route<dynamic>? deepLinkOnGenerateRoute(RouteSettings settings) {
   const safe = RouteSettings(name: '/deep-link');
   switch (link.kind) {
     case DeepLinkKind.magicLink:
+      // Giriş VE şifre sıfırlama kolu: sayfa açılış / biyometrik kilit sürerken bekler (istek atılmaz, kilit
+      // atlatılmaz) ve açık oturumu onaysız değiştirmez (UYELIK-K2 / UYELIK-05; bkz. MagicLinkPage).
       return MaterialPageRoute<void>(settings: safe, builder: (_) => MagicLinkPage(link: link.magicLink!));
     case DeepLinkKind.claim:
       return MaterialPageRoute<void>(

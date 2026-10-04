@@ -16,9 +16,9 @@ import { HOME_WIFI_SSID } from '../lib/config.js';
 import { isValidApPass, isValidLocalKey } from './command_schema.js';
 import { createLocalApiServer, PortalState } from './local_api.js';
 import { Automation, CmdSource, RS485_BAUDS } from './fw/automation.js';
-import { ConfigManager, NvsImage } from './fw/config_manager.js';
+import { ConfigManager, NvsImage, ProvisionResult } from './fw/config_manager.js';
 import { MqttManager, QA_TIMING, FIRMWARE_TIMING } from './fw/mqtt_manager.js';
-import { WifiManager, WifiWorld, AUTH_FAIL_REASONS, AP_IP } from './fw/wifi_manager.js';
+import { WifiManager, WifiWorld, AUTH_FAIL_REASONS, AP_IP, FW_VERSION_DEFAULT } from './fw/wifi_manager.js';
 import { MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, RelayType, DIMode } from './fw/sysconfig.js';
 import { clientOnSoftAp, ipToU32, u32ToIp } from './fw/ap_access.js';
 import { PhysicalObserver } from './fw/observer.js';
@@ -55,7 +55,7 @@ const DEFAULTS = {
   apPass: '',
   timeScale: 1,
   deviceName: null,
-  fw: '1.1.1',
+  fw: FW_VERSION_DEFAULT,
   homeWifi: { ssid: HOME_WIFI_SSID, pass: '' },
   wifiConnected: false,
   stateFile: null,
@@ -78,6 +78,8 @@ const DEFAULTS = {
 };
 
 export const CLIENT_NET_MODES = Object.freeze(['ap', 'lan']);
+/** QA NVS yazma arizasi enjekte edilebilen kimlik anahtarlari (firmware ConfigManager: "lk" = local_key, "ap_pw" = ap_pass). */
+export const NVS_FAILABLE_KEYS = Object.freeze(['ap_pw', 'lk']);
 const CLIENT_AP_IP = '192.168.4.2';   // SoftAP DHCP'sinin ilk istemci adresi
 
 const isoNow = () => new Date().toISOString();
@@ -478,18 +480,19 @@ export class DeviceSimulator {
     this.event('qa_unprovisioned', {});
   }
 
-  /** QA: provizyonsuzsa factory/init gibi yazar; provizyonluysa yerel anahtari degistirir. */
+  /** QA: provizyonsuzsa factory/init gibi yazar (ayni atomik cm.provisionIfEmpty); provizyonluysa yerel anahtari degistirir (rekey gibi). */
   qaProvision(localKey, apPass) {
     const fw = this.fw;
     if (!fw) return { ok: false, status: 503, error: 'booting' };
     if (!isValidLocalKey(localKey)) return { ok: false, status: 400, error: 'invalid_key' };
     if (fw.cm.hasLocalKey()) {
-      if (!fw.cm.setLocalKey(localKey)) return { ok: false, status: 500, error: 'storage_error' };
+      if (!fw.cm.setLocalKey(localKey)) return { ok: false, status: 503, error: 'storage' };
       this.event('rekeyed', {});
       return { ok: true, rekeyed: true };
     }
     const ap = isValidApPass(apPass) ? apPass : `ap-${localKey}-pass`.slice(0, 32);
-    if (!fw.cm.setLocalKey(localKey) || !fw.cm.setApPass(ap)) return { ok: false, status: 400, error: 'invalid_ap_pass' };
+    const r = fw.cm.provisionIfEmpty(localKey, ap);
+    if (r !== ProvisionResult.OK) return { ok: false, status: r === ProvisionResult.STORAGE ? 503 : 400, error: r };
     fw.wifi.applyApConfigChange();
     this.event('provisioned', {});
     return { ok: true };
@@ -609,15 +612,21 @@ export class DeviceSimulator {
    * QA: role surucusu (I2C) ve ek modul yazma arizasi enjeksiyonu. `i2c`: hat tamamen olu (boolean); `ext_module`: ek modul susar (boolean);
    * `tca_fail_reads` / `tca_fail_writes`: bir sonraki N TCA9554 yazmac okuma/yazma erisimi gecici basarisiz olur (tamsayi >= 0; firmware'in
    * "3 deneme" yeniden deneme mantigini sinar: 1-2 hata tolere edilir, 3 hata "okunamadi/yazilamadi" olur).
+   * `nvs_fail_keys`: yazmasi/silmesi basarisiz olacak NVS kimlik anahtarlari (dizi; yalniz 'lk' | 'ap_pw'; [] arizayi kaldirir). Bozuk/dolu NVS
+   * modeli: factory/init ve rekey 503 {"error":"storage"} doner (SERVIS-03). Ariza yeniden acilista da surer (donanim durumu).
    */
-  setHwFail({ i2c, ext_module, tca_fail_reads: failReads, tca_fail_writes: failWrites } = {}) {
+  setHwFail({ i2c, ext_module, tca_fail_reads: failReads, tca_fail_writes: failWrites, nvs_fail_keys: nvsFailKeys } = {}) {
     for (const [k, v] of [['tca_fail_reads', failReads], ['tca_fail_writes', failWrites]]) {
       if (v !== undefined && (!Number.isInteger(v) || v < 0 || v > 1000)) throw new RangeError(`${k} 0..1000 tamsayi olmali`);
+    }
+    if (nvsFailKeys !== undefined && (!Array.isArray(nvsFailKeys) || !nvsFailKeys.every((k) => NVS_FAILABLE_KEYS.includes(k)))) {
+      throw new RangeError(`nvs_fail_keys dizi olmali (${NVS_FAILABLE_KEYS.join(' | ')})`);
     }
     if (typeof i2c === 'boolean' && this.fw) this.fw.automation.tca.i2cFail = i2c;
     if (typeof ext_module === 'boolean') this.ext.failWrites = ext_module;
     if (failReads !== undefined && this.fw) this.fw.automation.tca.failReads = failReads;
     if (failWrites !== undefined && this.fw) this.fw.automation.tca.failWrites = failWrites;
+    if (nvsFailKeys !== undefined) this.nvs.failKeys = new Set(nvsFailKeys);
     const out = this.#hwFail();
     this.event('qa_hw_fail', out);
     return out;
@@ -625,7 +634,10 @@ export class DeviceSimulator {
 
   #hwFail() {
     const t = this.fw ? this.fw.automation.tca : null;
-    return { i2c: t ? t.i2cFail : null, ext_module: this.ext.failWrites, tca_fail_reads: t ? t.failReads : null, tca_fail_writes: t ? t.failWrites : null };
+    return {
+      i2c: t ? t.i2cFail : null, ext_module: this.ext.failWrites, tca_fail_reads: t ? t.failReads : null, tca_fail_writes: t ? t.failWrites : null,
+      nvs_fail_keys: [...this.nvs.failKeys].sort(),
+    };
   }
 
   /** QA: ek modul donanimini degistirir (var/yok, Modbus adresi, baud, kanal sayisi). Gecersiz deger RangeError. */

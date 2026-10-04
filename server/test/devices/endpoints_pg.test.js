@@ -112,11 +112,12 @@ function getCtx() {
       },
     };
 
-    const bridge = {
+    // Cihaz onayi (expectAck, DAIRE-03): pano yayinlanan komutu uygular ('auto').
+    const bridge = require('./_ack_bridge').withAckSupport({
       commands: [],
       isConnected() { return true; },
       async publishCommand(topic, obj) { this.commands.push({ topic, obj: JSON.parse(JSON.stringify(obj)) }); return {}; },
-    };
+    });
     const { EndpointService } = require('../../src/services/endpoint_service');
     const endpointService = new EndpointService({ db, deviceService: {}, mqttBridge: bridge });
     return { pool, db, hooks, bridge, endpointService };

@@ -264,7 +264,8 @@ class MqttClientTransport implements MqttTransport {
 /// * Uygulama MQTT'ye **yayın yapmaz** (yayın yolları yoktur): tüm komutlar REST ile gider.
 /// * Kimlik **sunucudan** gelir ([MqttCredentialsProvider] -> `POST /homes/:id/mqtt-credentials`);
 ///   gömülü parola yoktur. Kimlik süre dolmadan yenilenir; kopmada **taze** kimlikle üstel
-///   geri çekilme + jitter ile yeniden bağlanılır.
+///   geri çekilme + jitter ile yeniden bağlanılır. Aracı kimliği reddederse (sunucuda silinmiş / süresi dolmuş)
+///   bayat kimlik atılır ve beklemeden **bir kez** taze kimlik alınır; sağlayıcı 401/403/404 verirse döngü durur.
 /// * İstemci kimliği: sunucunun verdiği `client_id`; yoksa `app_<kalıcı kurulum kimliği>_<oturum eki>`.
 /// * Canlı [linkStates]; abonelik grubundaki **tüm** iletiler işlenir; bozuk yük atılır ve sayılır.
 class EvMqttService {
@@ -488,6 +489,8 @@ class EvMqttService {
     String sessionSuffix,
   ) async {
     var attempt = 0;
+    // Kimlik reddinden sonra BEKLEMESİZ tek taze-kimlik hakkı (UYELIK-02): başarılı bağlantıda yeniden kazanılır.
+    var rejectRetryUsed = false;
     while (_isActive(generation)) {
       if (_everConnected || attempt > 0) _setLink(MqttLinkState.reconnecting);
 
@@ -530,7 +533,15 @@ class EvMqttService {
         _lastFailure = outcome.failure;
         _closeTransport();
         _setLink(MqttLinkState.reconnecting);
-        // Kimlik reddedildiyse bir sonraki turda taze kimlik alınır (süre dolmuş olabilir).
+        // Kimlik reddi (CONNACK bad username/password / not authorized): bu kimlik ATILIR, sonraki tur her zaman
+        // sunucudan taze kimlik ister (süresi dolmuş ya da sunucuda silinmiş olabilir: oturum iptali / parola
+        // değişimi tüm uygulama kimliklerini siler). İlk retten sonra BEKLEMEDEN bir kez taze kimlik alınır; REST
+        // 401 verirse oturum-sonu akışı (API istemcisi) işler ve döngü durur ([_isPermanent]). Taze kimlik de
+        // reddedilirse olağan üstel geri çekilme sürer (sıkı döngü yok).
+        if (outcome.failure == MqttFailure.authRejected && !rejectRetryUsed) {
+          rejectRetryUsed = true;
+          continue;
+        }
         await _sleep(_backoff(attempt++), generation);
         continue;
       }
@@ -539,6 +550,7 @@ class EvMqttService {
       // döngüye (ve her turda kimlik isteğine) yol açardı. Sayaç, kararlı bağlantının kopmasında sıfırlanır.
       final connectedAt = _clock.now();
       _everConnected = true;
+      rejectRetryUsed = false;
       _lastFailure = MqttFailure.none;
       _topicId = topic;
       final ended = Completer<void>();

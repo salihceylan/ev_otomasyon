@@ -1625,6 +1625,9 @@ void WebPortal::handleApiAuthCheck() {
 }
 
 // Provizyonsuz cihazin ilk kurulumu (fabrika araci / servis). local_key bosken calisir.
+// Bastaki denetim yalniz HIZLI RET'tir (govde okunmadan). KESIN denetim, yazmayla AYNI kilit altinda
+// ConfigManager::provisionIfEmpty icindedir (seri FACTORYINIT de ayni yontemi kullanir): govde ayristirilirken loopTask
+// seri FACTORYINIT ile anahtari yazarsa bu istek 403 already_provisioned alir, yeni anahtar EZILMEZ (TOCTOU yok).
 void WebPortal::handleApiFactoryInit() {
   ConfigManager& cm = ConfigManager::instance();
   if (cm.hasLocalKey()) {
@@ -1652,14 +1655,23 @@ void WebPortal::handleApiFactoryInit() {
     return;
   }
 
-  if (!cm.setLocalKey(key)) {
-    sendError(400, "invalid_key");
-    return;
-  }
-  if (!cm.setApPass(ap)) {
-    cm.clearLocalKey();   // atomik: yarim provizyon kalmaz
-    sendError(400, "invalid_ap_pass");
-    return;
+  // Bicim hatalari 400 (ap_pass karakter araligi 0x20..0x7E provisionIfEmpty'de denetlenir); bicim gecip NVS'e
+  // yazilamazsa 503 storage (CONTRACTS §3b): cihaz provizyonsuz kalir, yarim provizyon kalmaz (provisionIfEmpty geri alir).
+  switch (cm.provisionIfEmpty(key, ap)) {
+    case ConfigManager::PROVISION_OK:
+      break;
+    case ConfigManager::PROVISION_ALREADY:
+      sendError(403, "already_provisioned");
+      return;
+    case ConfigManager::PROVISION_INVALID_KEY:
+      sendError(400, "invalid_key");
+      return;
+    case ConfigManager::PROVISION_INVALID_AP_PASS:
+      sendError(400, "invalid_ap_pass");
+      return;
+    default:
+      sendError(503, "storage");
+      return;
   }
   printf("[WEB] Cihaz provizyonlandi (yerel anahtar ve AP parolasi yazildi).\r\n");
   WiFiManager::instance().applyApConfigChange();   // acik kurulum AP'si WPA2 + ap_pass ile yeniden baslar
@@ -1683,8 +1695,10 @@ void WebPortal::handleApiRekey() {
     sendError(400, "invalid_key");
     return;
   }
+  // Bicim yukarida dogrulandi (SystemConfig::setLocalKey ile ayni kural): false yalniz NVS kalicilastirma hatasidir ->
+  // 503 storage (CONTRACTS §3b). RAM geri alinir: eski anahtar gecerli kalir.
   if (!ConfigManager::instance().setLocalKey(key)) {
-    sendError(500, "storage_error");
+    sendError(503, "storage");
     return;
   }
   printf("[WEB] Yerel anahtar degistirildi.\r\n");

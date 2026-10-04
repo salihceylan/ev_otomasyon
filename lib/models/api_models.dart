@@ -892,8 +892,14 @@ class ResetNewOwner {
 /// * [isUnclaimed] (`UNCLAIMED`): cihaz stoğa alındı; [setupPin] **tek seferlik** yeni kurulum PIN'i.
 /// * [isReassigned] (`REASSIGNED`): cihaz [newOwner]'a devredildi; [deviceCredential] **tek seferlik**
 ///   yeni bulut kimliği (servis sihirbazı panoya `AutomationApiService.configureMqtt` ile yazar).
-/// * [localKeyPublish] / [childLockReset]: `published | failed | skipped_offline | skipped`.
-/// * [localKey]: yerel anahtar panoya iletilemediyse **tek seferlik** döner (yerinde yazılır).
+/// * [localKeyPublish]: `published | pending | skipped`. `pending` ([localKeyPending]): pano çevrimdışı ya da sunucunun
+///   bulut (broker) bağlantısı yok; yeni yerel anahtar pano buluta bağlanınca sunucu tarafından **otomatik** iletilir,
+///   o zamana kadar panonun mevcut anahtarı geçerlidir (sunucunun verdiği anahtar odur; "Panoyu şimdi bağla"
+///   sihirbazı 6. adımda onunla çalışır). Bu durumda yanıtta `local_key` YOKTUR. Eski sunucular `failed |
+///   skipped_offline` + [localKey] dönebilir.
+/// * [childLockReset]: `published | failed | skipped_offline | skipped`.
+/// * [localKey]: yalnızca ESKİ sunucu yanıtında (anahtar panoya iletilemedi) **tek seferlik** döner. Ağ üzerinden
+///   panoya yazılamaz: seri konsolda `RESETKEY` + `FACTORYINIT` (fabrika aracı) ile yazılır ([needsManualLocalKey]).
 /// * Kısmi başarısızlıkta **HTTP 200 + [warnings] + [partial]=true**: arayüz uyarıları göstermelidir.
 ///
 /// Gizli değerler ([setupPin], [localKey], [deviceCredential]) `toString`'e yazılmaz; saklanmamalıdır.
@@ -932,11 +938,29 @@ class EmergencyResetResult {
   bool get isUnclaimed => action == 'UNCLAIMED';
   bool get isReassigned => action == 'REASSIGNED';
 
-  /// Uyarı var (kısmi başarı) — kullanıcıya gösterilmelidir.
-  bool get hasWarnings => partial || warnings.isNotEmpty;
+  /// Uyarı var (kısmi başarı) — kullanıcıya gösterilmelidir. Yalnız bekleyen anahtar uyarı SAYILMAZ (bkz. [isPartial]).
+  bool get hasWarnings => isPartial || displayWarnings.isNotEmpty;
 
-  /// Yerel anahtar cihaza **iletilmedi**: [localKey] yerinde yazılmalıdır.
-  bool get needsManualLocalKey => localKey != null;
+  /// Kullanıcıya uyarı satırı olarak gösterilecek uyarılar. Anahtar bekliyorsa ([localKeyPending]) yerel anahtarla
+  /// ilgili bilgi ayrı bir bilgi notunda verilir: ESKİ sunucunun `warnings` içine koyduğu bekleyen anahtar uyarısı
+  /// burada tekrar edilmez (aynı bilgi biri hata tonunda iki kez görünmesin). Bekleyen durumda sunucunun yerel
+  /// anahtarla ilgili ürettiği tek uyarı budur (iletilemeyen anahtar uyarısı yalnız `failed` iken gelir).
+  List<String> get displayWarnings =>
+      localKeyPending ? warnings.where((w) => !_localKeyWarning.hasMatch(w)).toList(growable: false) : warnings;
+
+  /// Kısmi başarı. Yeni sunucu bekleyen anahtar için `partial` döndürmez; ESKİ sunucu döndürür: uyarılarının
+  /// TAMAMI bekleyen anahtar bilgisiyse (hepsi [displayWarnings]'ten süzüldüyse) sıfırlama kısmi sayılmaz.
+  bool get isPartial => partial && (warnings.isEmpty || displayWarnings.isNotEmpty);
+
+  static final RegExp _localKeyWarning = RegExp('yerel anahtar', caseSensitive: false);
+
+  /// Eski sunucu yanıtı: yerel anahtar cihaza **iletilmedi** ve [localKey] döndü; seri konsolda `RESETKEY` +
+  /// `FACTORYINIT` (fabrika aracı) ile yazılmalıdır. Anahtar bekliyorsa ([localKeyPending]) sunucu onu kendisi
+  /// iletir: elle yazılacak anahtar yoktur (yanıtta yine de gelmişse gösterilmez).
+  bool get needsManualLocalKey => localKey != null && !localKeyPending;
+
+  /// Yeni yerel anahtar panoya henüz iletilmedi; pano buluta bağlanınca sunucu otomatik iletecek (`pending`).
+  bool get localKeyPending => localKeyPublish == 'pending';
 
   factory EmergencyResetResult.fromJson(Map<String, dynamic> json) {
     final owner = asMap(json['new_owner']);

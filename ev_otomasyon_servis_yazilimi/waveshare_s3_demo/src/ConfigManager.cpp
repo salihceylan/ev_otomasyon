@@ -424,6 +424,38 @@ bool ConfigManager::clearLocalKey() {
   return prefs.remove("lk");
 }
 
+// Denetim + biçim + yazma TEK kilit altında (ConfigLock özyinelemeli: setApPass/setLocalKey aynı kilidi yeniden alır).
+ConfigManager::ProvisionResult ConfigManager::provisionIfEmpty(const char* key, const char* pass) {
+  ConfigLock lk(*this);
+  if (config.hasLocalKey()) return PROVISION_ALREADY;
+  if (!isAsciiRange(key, LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN, 0x21, 0x7E)) return PROVISION_INVALID_KEY;
+  if (!isAsciiRange(pass, AP_PASS_MIN_LEN, AP_PASS_MAX_LEN, 0x20, 0x7E)) return PROVISION_INVALID_AP_PASS;
+
+  char oldPass[sizeof(config.ap_pass)];
+  memcpy(oldPass, config.ap_pass, sizeof(oldPass));
+  ProvisionResult r = PROVISION_STORAGE;
+  if (setApPass(pass)) {          // 1) ap_pass (yazılamazsa setApPass RAM'i geri aldı: hiçbir şey değişmedi)
+    if (setLocalKey(key)) {       // 2) local_key (yazılamazsa setLocalKey RAM'i geri aldı: local_key boş)
+      r = PROVISION_OK;
+    } else {
+      restoreApPass(oldPass);     // yarım provizyon kalmasın: ap_pass da önceki hâline
+    }
+  }
+  memset(oldPass, 0, sizeof(oldPass));
+  return r;
+}
+
+// ap_pass'i önceki değerine döndürür. RAM, NVS'i izler: NVS geri yazılamazsa RAM de yeni değerde kalır (yeniden açılışta
+// aynı değer okunur). Provizyonsuz cihazda ap_pass kullanılmaz (kurulum AP'si açıktır); yeniden deneme üstüne yazar.
+void ConfigManager::restoreApPass(const char* old) {
+  if (old[0] != '\0') {
+    setApPass(old);               // RAM + NVS birlikte ya da hiçbiri
+    return;
+  }
+  if (!_prefsOk) return;
+  if (!prefs.isKey("ap_pw") || prefs.remove("ap_pw")) memset(config.ap_pass, 0, sizeof(config.ap_pass));
+}
+
 bool ConfigManager::setMqttCredentials(const char* server, uint16_t port, const char* user, const char* pass) {
   // Sunucu: 1..63 karakter, kontrol karakteri/boşluk yok. Kimlik: 1..47 / 1..63 yazdırılabilir ASCII.
   if (!isAsciiRange(server, 1, sizeof(config.mqtt_server) - 1, 0x21, 0x7E)) return false;

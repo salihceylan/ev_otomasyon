@@ -28,6 +28,8 @@
 // Zamanlayici (setInterval) kullanilmaz; suresi dolan kayitlar istek sirasinda temizlenir,
 // bu yuzden testlerde/kapanista acik kalan tutamac (handle) birakmaz.
 
+const net = require('node:net');
+
 const DEFAULT_WINDOW_MS = 15 * 60 * 1000;
 const DEFAULT_MAX = 10;
 const DEFAULT_MAX_KEYS = 50000;
@@ -43,6 +45,31 @@ function clientIp(req) {
   if (!ip) return 'unknown';
   // IPv4-mapped IPv6 (::ffff:1.2.3.4) -> 1.2.3.4
   return String(ip).replace(/^::ffff:/i, '');
+}
+
+/**
+ * Sinirlayici anahtari icin istemci agi (M1-01): IPv4 (ve ::ffff: eslemesi) aynen; IPv6 /64 onekine indirgenir.
+ * Tek bir IPv6 abonesi tipik olarak bir /64 alir (2^64 adres): tam adresle anahtarlama adres dondurerek her
+ * IP basina sinirin ve (kimlik | IP) kilidinin etrafindan dolasilmasina izin verirdi. Denetim kaydi (ip) icin
+ * `clientIp` (tam adres) kullanilir; bu yardimci YALNIZ sayac anahtarlari icindir.
+ * Ornek: '2001:db8:1:2::1' -> '2001:db8:1:2::/64'.
+ */
+function limitKey(req) {
+  const ip = clientIp(req);
+  if (ip === 'unknown' || net.isIPv4(ip)) return ip;
+  const addr = ip.split('%')[0]; // bolge kimligi (fe80::1%eth0)
+  if (!net.isIPv6(addr)) return ip;
+  let text = addr.toLowerCase();
+  const v4 = text.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/); // gomulu IPv4 kuyrugu -> iki hextet
+  if (v4) {
+    const o = v4[2].split('.').map(Number);
+    text = `${v4[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const [head, tail] = text.includes('::') ? text.split('::') : [text, null];
+  const headParts = head ? head.split(':') : [];
+  const tailParts = tail ? tail.split(':') : [];
+  const groups = tail === null ? headParts : [...headParts, ...Array(8 - headParts.length - tailParts.length).fill('0'), ...tailParts];
+  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
 }
 
 function defaultMessage(retryAfterSec) {
@@ -205,6 +232,7 @@ function rateLimit(opts = {}) {
   middleware.resetKey = resetKey;
   middleware.reset = reset;
   middleware.size = () => hits.size;
+  middleware.keys = () => Array.from(hits.keys()); // tani/test: tutulan anahtarlar (bellek denetimi)
   middleware.options = Object.freeze({ windowMs, max, code, statusCode });
   return middleware;
 }
@@ -212,3 +240,4 @@ function rateLimit(opts = {}) {
 module.exports = rateLimit;
 module.exports.rateLimit = rateLimit;
 module.exports.clientIp = clientIp;
+module.exports.limitKey = limitKey;

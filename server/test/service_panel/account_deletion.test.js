@@ -3,7 +3,8 @@
 // WP-B2 / gorev 3: DELETE /api/v1/auth/account
 //   - yumusak silme + anonimlestirme; ESKI E-POSTA SERBEST KALIR (ayni adresle yeniden kayit)
 //   - yeniden dogrulama: parola (sifreli hesap) / "SİL" (sosyal-sifresiz hesap); staff/super 403
-//   - TEK SAHIBI oldugu ev -> 409 SOLE_OWNER + ev listesi (once devir)
+//   - TEK SAHIBI oldugu ve baska uyesi/cihazi olan ev -> 409 SOLE_OWNER + ev listesi (once devir);
+//     bos (uyesiz + cihazsiz) tek-sahipli ev silinir: account_deletion_bos_daire.test.js (UYELIK-03)
 //   - tum oturumlar / refresh / push token / MQTT uygulama kimlikleri / uyelikler iptal; denetim kaydi; tek transaction
 
 const test = require('node:test');
@@ -14,6 +15,9 @@ const { createEnv, uid } = require('./_world');
 const env = createEnv();
 const { h, state, api, tokenOf, world } = env;
 const { AccountDeletionService, isDeleteConfirmation, isPasswordless } = env.SRC('services/account_deletion_service');
+const realMqtt = env.SRC('services/mqtt_credential_service');
+/** Gercek MQTT kimlik servisi (sahte dunya DB'si) + sahte kick (EMQX REST). */
+const mqttWithKick = (kickUsernames) => Object.assign(Object.create(realMqtt), { kickUsernames });
 
 const URL = '/api/v1/auth/account';
 const PASSWORD = 'Sifre-Test-12345';
@@ -66,7 +70,7 @@ const rejects = async (promise, status, code, extra = {}) => {
 
 test('parola ile silme: anonimleştirme + tüm bağlı veriler iptal; e-posta/telefon/sosyal kimlik SERBEST; denetim kaydı', async () => {
   const kicked = [];
-  const svc = new AccountDeletionService({ mqtt: { kickUsernames: async (l) => { kicked.push(...l); return { kicked: l.length, failed: 0, skipped: false }; } } });
+  const svc = new AccountDeletionService({ mqtt: mqttWithKick(async (l) => { kicked.push(...l); return { kicked: l.length, failed: 0, skipped: false }; }) });
   const t = richUser(pwUser({ google_id: 'google-sub-1' }));
   const { user } = t;
   const email = user.email;
@@ -113,7 +117,8 @@ test('parola ile silme: anonimleştirme + tüm bağlı veriler iptal; e-posta/te
   const audit = state.device_audit_logs.find((a) => a.event === 'account_deleted');
   assert.equal(audit.actor_user_id, user.id);
   assert.equal(audit.ip_address, '198.51.100.9');
-  assert.deepEqual(audit.details, { released_memberships: 2, revoked_app_credentials: 2, reauth: 'password' });
+  assert.deepEqual(audit.details, { released_memberships: 2, revoked_app_credentials: 2, released_homes: 0, reauth: 'password' });
+  assert.equal(r.released_homes, 0);
   assert.ok(!JSON.stringify(audit).includes(email));
   assert.ok(!JSON.stringify(audit).includes(PASSWORD));
 });
@@ -181,7 +186,7 @@ test('sosyal / sifresiz hesap: "SİL" yazarak onay (Türkçe büyük-küçük ha
     assert.deepEqual(state.device_audit_logs.at(-1).details.reauth, 'confirm');
   }
   // onay ifadesi varyantları
-  for (const word of ['SİL', 'sil', 'Sil', 'SIL', 'sİl', ' SİL ', 'SİL'.normalize('NFD')]) assert.equal(isDeleteConfirmation(word), true, JSON.stringify(word));
+  for (const word of ['SİL', 'sil', 'Sil', 'SIL', 'sİl', ' SİL ', 'SİL'.normalize('NFD')]) assert.equal(isDeleteConfirmation(word), true, JSON.stringify(word));
   for (const word of ['', 'S', 'SİLL', 'delete', null, undefined, 5, ['SİL']]) assert.equal(isDeleteConfirmation(word), false, String(word));
 });
 
@@ -214,7 +219,7 @@ test('staff ve super_user hesabını bu uçtan SİLEMEZ (doğru parola ile bile 
   assert.equal((await api('delete', URL, null, { password: PASSWORD })).status, 401);
 });
 
-test('SOLE_OWNER: tek sahibi olduğu ev varsa 409 + ev listesi (id, name, other_member_count, device_count); hiçbir şey silinmez; ortak sahipli ev engel DEĞİL', async () => {
+test('SOLE_OWNER: tek sahibi olduğu ve üyesi/cihazı olan ev varsa 409 + (yalnız engelleyen) ev listesi (id, name, other_member_count, device_count); hiçbir şey silinmez (boş ev dahil); ortak sahipli ev engel DEĞİL', async () => {
   const user = pwUser();
   const alone = h.home({ name: 'Yalnız Ev', owner: user });
   const alone2 = h.home({ name: 'Boş Ev', owner: user });
@@ -232,10 +237,11 @@ test('SOLE_OWNER: tek sahibi olduğu ev varsa 409 + ev listesi (id, name, other_
   assert.equal(r.body.success, false);
   assert.equal(r.body.code, 'SOLE_OWNER');
   assert.ok(r.body.message.includes('devredin'));
+  // Boş ev (üyesiz + cihazsız) engel değildir: listelenmez (UYELIK-03); işlem geri alındığı için o da silinmez
   assert.deepEqual(r.body.homes, [
-    { id: alone2.id, name: 'Boş Ev', other_member_count: 0, device_count: 0 },
     { id: alone.id, name: 'Yalnız Ev', other_member_count: 2, device_count: 2 },
   ]);
+  assert.ok(state.homes.some((x) => x.id === alone2.id), 'boş ev korunur');
   assert.equal(user.account_status, 'active');
   assert.equal(state.home_users.filter((m) => m.user_id === user.id).length, 3, 'üyelik silinmedi');
   assert.ok(state.mqtt_credentials.includes(cred), 'MQTT kimliği korundu');
@@ -326,11 +332,11 @@ test('MQTT bağlantısı atılamazsa silme YİNE başarılı (uyarı döner)', a
   const home = h.home({ name: 'Kick Evi', owner: h.user() });
   h.member(home, u, 'resident');
   h.appCredential(home, u);
-  const svc = new AccountDeletionService({ mqtt: { kickUsernames: async () => ({ kicked: 0, failed: 1, skipped: false }) } });
+  const svc = new AccountDeletionService({ mqtt: mqttWithKick(async () => ({ kicked: 0, failed: 1, skipped: false })) });
   const r = await svc.deleteAccount({ userId: u.id, password: PASSWORD });
   assert.equal(r.deleted, true);
   assert.equal(r.warnings.length, 1);
-  const svc2 = new AccountDeletionService({ mqtt: { kickUsernames: async () => { throw new Error('ag'); } } });
+  const svc2 = new AccountDeletionService({ mqtt: mqttWithKick(async () => { throw new Error('ag'); }) });
   const u2 = pwUser();
   h.member(home, u2, 'resident');
   h.appCredential(home, u2);

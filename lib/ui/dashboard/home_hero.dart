@@ -8,6 +8,7 @@ import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/surface_card.dart';
+import 'connection_status.dart' show deviceKnownOffline;
 
 /// HomeHero görünüm verisi (değer eşitliği: `context.select` ile kullanılır).
 @immutable
@@ -18,6 +19,7 @@ class HomeHeroVm {
     required this.lightsTotal,
     required this.shuttersMoving,
     required this.shuttersTotal,
+    this.offline = false,
   });
 
   final String name;
@@ -26,6 +28,9 @@ class HomeHeroVm {
   final int shuttersMoving;
   final int shuttersTotal;
 
+  /// Pano KESİN çevrimdışı ([deviceKnownOffline]): lamba/panjur sayıları son bilinendir, kesin gibi gösterilmez.
+  final bool offline;
+
   @override
   bool operator ==(Object other) =>
       other is HomeHeroVm &&
@@ -33,10 +38,11 @@ class HomeHeroVm {
       other.lightsOn == lightsOn &&
       other.lightsTotal == lightsTotal &&
       other.shuttersMoving == shuttersMoving &&
-      other.shuttersTotal == shuttersTotal;
+      other.shuttersTotal == shuttersTotal &&
+      other.offline == offline;
 
   @override
-  int get hashCode => Object.hash(name, lightsOn, lightsTotal, shuttersMoving, shuttersTotal);
+  int get hashCode => Object.hash(name, lightsOn, lightsTotal, shuttersMoving, shuttersTotal, offline);
 }
 
 /// Durumdan [HomeHeroVm] türetir. Ev adı: bulutta aktif ev, yerel modda cihaz adı.
@@ -51,6 +57,7 @@ HomeHeroVm homeHeroVmOf(AutomationState s) {
     lightsTotal: s.relayItems.length,
     shuttersMoving: shutters.where((x) => x.isMoving).length,
     shuttersTotal: shutters.length,
+    offline: deviceKnownOffline(s),
   );
 }
 
@@ -61,6 +68,9 @@ HomeHeroVm homeHeroVmOf(AutomationState s) {
 /// Yerleşim genişliğe göre iki kiptir: dar (telefon) = ad + silüet üstte, sayaçlar altta (aralarında boşluk;
 /// büyük yazıda sözcük ortasından bölünme olmasın diye yığılır); geniş (>= 560 dp) = ad + sayaçlar solda toplu,
 /// büyük silüet sağda (sayaçlar 1000+ dp'ye yayılmaz).
+///
+/// Pano **kesin** çevrimdışıyken ([deviceKnownOffline]; D16, durum şeridi ve huzur bandıyla aynı ölçüt) "Açık lamba"
+/// ve "Hareketli panjur" sayaçları çizilmez ve silüetin pencereleri sönük kalır: son bilinen durum kesin gibi sunulmaz.
 ///
 /// Anahtar: `Key('home_hero')`.
 class HomeHero extends StatelessWidget {
@@ -74,9 +84,13 @@ class HomeHero extends StatelessWidget {
     final vm = context.select<AutomationState, HomeHeroVm>(homeHeroVmOf);
     final dark = AppTheme.isDark(context);
 
+    // Kesin çevrimdışıyken lamba/panjur durumu bilinmez: yalnız durumdan bağımsız kontrol noktası sayısı kalır.
+    final lit = vm.offline ? 0 : vm.lightsOn;
     final counters = <_CounterSpec>[
-      _CounterSpec(vm.lightsOn, 'Açık lamba', AppFamilies.amber),
-      _CounterSpec(vm.shuttersMoving, 'Hareketli panjur', AppFamilies.sky),
+      if (!vm.offline) ...[
+        _CounterSpec(vm.lightsOn, 'Açık lamba', AppFamilies.amber),
+        _CounterSpec(vm.shuttersMoving, 'Hareketli panjur', AppFamilies.sky),
+      ],
       _CounterSpec(vm.lightsTotal + vm.shuttersTotal, 'Kontrol noktası', AppFamilies.cyan),
     ];
 
@@ -96,7 +110,7 @@ class HomeHero extends StatelessWidget {
             width: width,
             height: height,
             child: CustomPaint(
-              painter: HouseSilhouettePainter(windows: vm.lightsTotal, lit: vm.lightsOn, dark: dark),
+              painter: HouseSilhouettePainter(windows: vm.lightsTotal, lit: lit, dark: dark),
             ),
           ),
         );
@@ -104,11 +118,13 @@ class HomeHero extends StatelessWidget {
     return SurfaceCard(
       key: const Key('home_hero'),
       accent: AppFamilies.cyan.base,
-      active: vm.lightsOn > 0,
+      active: lit > 0,
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       child: Semantics(
         container: true,
-        label: '${vm.name}. ${vm.lightsOn} lamba açık, ${vm.shuttersMoving} panjur hareketli.',
+        label: vm.offline
+            ? '${vm.name}. Pano çevrimdışı; lamba ve panjur durumu bilinmiyor.'
+            : '${vm.name}. ${vm.lightsOn} lamba açık, ${vm.shuttersMoving} panjur hareketli.',
         child: ExcludeSemantics(
           child: LayoutBuilder(
             builder: (context, constraints) {

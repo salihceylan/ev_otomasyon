@@ -32,6 +32,7 @@ const GOOD_PW = 'Dogru-Parola-2026';
 function resetLimiters() {
   for (const l of Object.values(authRoutes.limiters)) l.reset();
   authRoutes.loginFailures.reset();
+  authRoutes.loginFailuresTotal.reset();
 }
 
 async function register(email, password = GOOD_PW, extra = {}) {
@@ -127,7 +128,8 @@ test('giris: ayni telefona bagli iki hesap -> giris reddedilir (rastgele hesaba 
   assert.strictEqual(res.status, 401);
 });
 
-test('giris: kimlik basina 10 basarisiz deneme -> 429 (bicim farklari ayni sayaci paylasir)', async () => {
+// Iki katmanli kilit (UYELIK-10): (kimlik|IP) 10 + kimlik toplami 50; farkli IP senaryolari uyelik_giris_kilidi.test.js
+test('giris: AYNI IP\'den kimlik basina 10 basarisiz deneme -> 429 (bicim farklari ayni sayaci paylasir)', async () => {
   await register('kaba@example.com');
   for (let i = 0; i < 10; i++) {
     const email = i % 2 === 0 ? 'kaba@example.com' : '  KABA@Example.com ';

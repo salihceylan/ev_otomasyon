@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { DeviceSimulator } from '../sim/device_sim.js';
 import { isLoopbackAddress, isAllowedHost, originMatchesHost, ROUTES } from '../sim/local_api.js';
+import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
 import { safeEqual } from '../lib/util.js';
 import { sleep, waitFor } from './_helpers.js';
 
@@ -149,7 +150,7 @@ test('kimlik: anahtarsiz/yanlis anahtar 401; dogru anahtar 200; anahtarsiz yalni
     assert.deepEqual(Object.keys(restricted.json).sort(), ['device', 'fw', 'name', 'provisioned', 'wifi_connected']);
     assert.equal(restricted.json.device, UID);
     assert.equal(restricted.json.provisioned, true);
-    assert.equal(restricted.json.fw, '1.1.1');
+    assert.equal(restricted.json.fw, FW_VERSION_DEFAULT, 'firmware surumu (= WiFiManager.h FW_VERSION; sim_device.test.js "surum:")');
 
     await waitFor(() => sim.qaState().wifi.time_synced, { timeoutMs: 3000 });
     const full = (await j('GET', '/api/status')).json;
@@ -287,6 +288,107 @@ test('auth/check ve rekey: local_key|new_key kabul; gecersiz anahtar 400; yeni a
     assert.equal((await j('GET', '/api/auth/check', { key: 'yeni-anahtar-99' })).status, 200);
     assert.equal((await j('POST', '/api/auth/rekey', { key: 'yeni-anahtar-99', body: { local_key: 'ucuncu-anahtar-77' } })).status, 200);
     assert.equal((await j('GET', '/api/auth/check', { key: 'ucuncu-anahtar-77' })).status, 200);
+  } finally {
+    await sim.stop();
+  }
+});
+
+const nvsFail = (j, keys) => j('POST', '/__sim/hw-fail', { key: null, body: { nvs_fail_keys: keys } });
+
+test('factory/init (SERVIS-03): bicim gecerli ama NVS yazilamadi -> 503 {"error":"storage"} (400 invalid_* DEGIL); cihaz provizyonsuz kalir; ariza gidince yeniden denenir', async () => {
+  const { sim, j } = await startSim({ localKey: '', wifiConnected: false });
+  try {
+    const init = (body) => j('POST', '/api/factory/init', { key: null, body });
+    for (const keys of [['lk'], ['ap_pw'], ['ap_pw', 'lk']]) {
+      assert.equal((await nvsFail(j, keys)).status, 200);
+      const r = await init({ local_key: 'abcdefgh12', ap_pass: 'appass1234' });
+      assert.deepEqual([r.status, r.json], [503, { error: 'storage' }], keys.join('+'));
+      assert.equal(sim.isProvisioned(), false, `${keys.join('+')}: yarim provizyon kalmaz`);
+      assert.equal((sim.nvs.get('cfg') || {}).lk || '', '', `${keys.join('+')}: NVS'te anahtar yok`);
+    }
+    // bicim hatalari bugunku 400 kodlarini korur (ariza suruyorken de: yazmaya gelinmez)
+    assert.deepEqual((await init({ local_key: 'kisa', ap_pass: 'appass1234' })).json, { error: 'invalid_key' });
+    assert.deepEqual((await init({ local_key: 'abcdefgh12', ap_pass: 'kisa' })).json, { error: 'invalid_ap_pass' });
+    assert.deepEqual((await init({ local_key: 'abcdefgh12', ap_pass: `appass${String.fromCharCode(7)}1234` })).json, { error: 'invalid_ap_pass' },
+      'yalniz ConfigManager\'in yakaladigi bicim hatasi (kontrol karakteri) da 400');
+    assert.equal(sim.isProvisioned(), false);
+
+    await nvsFail(j, []);
+    const ok = await init({ local_key: 'abcdefgh12', ap_pass: 'appass1234' });
+    assert.deepEqual([ok.status, ok.json], [200, { status: 'ok' }]);
+    assert.equal(sim.isProvisioned(), true);
+    assert.deepEqual([sim.nvs.get('cfg').lk, sim.nvs.get('cfg').ap_pw], ['abcdefgh12', 'appass1234']);
+  } finally {
+    await sim.stop();
+  }
+});
+
+test('rekey (SERVIS-03): NVS yazilamadi -> 503 {"error":"storage"} (500 storage_error DEGIL); eski anahtar gecerli kalir', async () => {
+  const { sim, j } = await startSim();
+  try {
+    await nvsFail(j, ['lk']);
+    const r = await j('POST', '/api/auth/rekey', { body: { local_key: 'yeni-anahtar-99' } });
+    assert.deepEqual([r.status, r.json], [503, { error: 'storage' }]);
+    assert.equal((await j('GET', '/api/auth/check')).status, 200, 'eski anahtar gecerli');
+    assert.equal(sim.nvs.get('cfg').lk, KEY);
+    assert.deepEqual((await j('POST', '/api/auth/rekey', { body: { new_key: 'kisa' } })).json, { error: 'invalid_key' }, 'bicim hatasi yine 400');
+    await nvsFail(j, []);
+    assert.equal((await j('POST', '/api/auth/rekey', { body: { local_key: 'yeni-anahtar-99' } })).status, 200);
+    assert.equal((await j('GET', '/api/auth/check', { key: 'yeni-anahtar-99' })).status, 200);
+  } finally {
+    await sim.stop();
+  }
+});
+
+test('factory/init TOCTOU (SERVIS-04): govde ayristirilirken seri FACTORYINIT anahtari yazarsa istek 403 already_provisioned; seri anahtar EZILMEZ', async () => {
+  const { sim, j } = await startSim({ localKey: '', wifiConnected: false });
+  try {
+    // firmware: WebTask hizli denetimi (provizyonsuz) gecti ve govdeyi ayristiriyor; bu arada loopTask seri FACTORYINIT'i yazar
+    sim.fw.portal.qaBeforeProvision = () => {
+      assert.equal(sim.fw.cm.setApPass('seri-parola-01'), true);
+      assert.equal(sim.fw.cm.setLocalKey('seri-anahtar-01'), true);
+    };
+    const r = await j('POST', '/api/factory/init', { key: null, body: { local_key: 'http-anahtar-02', ap_pass: 'http-parola-02' } });
+    assert.deepEqual([r.status, r.json], [403, { error: 'already_provisioned' }]);
+    assert.equal(sim.fw.portal.qaBeforeProvision, null, 'kanca tek seferlik');
+    assert.deepEqual([sim.fw.cm.config.local_key, sim.fw.cm.config.ap_pass], ['seri-anahtar-01', 'seri-parola-01']);
+    assert.deepEqual([sim.nvs.get('cfg').lk, sim.nvs.get('cfg').ap_pw], ['seri-anahtar-01', 'seri-parola-01']);
+    assert.equal((await j('GET', '/api/auth/check', { key: 'seri-anahtar-01' })).status, 200);
+  } finally {
+    await sim.stop();
+  }
+});
+
+test('QA ucu /__sim/hw-fail nvs_fail_keys: NVS yazma arizasi enjeksiyonu (yalniz lk | ap_pw); gecersiz deger 400; /__sim/state hw_fail.nvs_fail_keys', async () => {
+  const { sim, j } = await startSim();
+  try {
+    assert.deepEqual((await nvsFail(j, ['lk', 'ap_pw'])).json.hw_fail.nvs_fail_keys, ['ap_pw', 'lk']);
+    assert.deepEqual((await j('GET', '/__sim/state', { key: null })).json.hw_fail.nvs_fail_keys, ['ap_pw', 'lk']);
+    for (const bad of [{ nvs_fail_keys: 'lk' }, { nvs_fail_keys: ['mq_pwd'] }, { nvs_fail_keys: [1] }, { nvs_fail_keys: null }]) {
+      assert.equal((await j('POST', '/__sim/hw-fail', { key: null, body: bad })).status, 400, JSON.stringify(bad));
+    }
+    assert.deepEqual(sim.qaState().hw_fail.nvs_fail_keys, ['ap_pw', 'lk'], 'gecersiz istek durumu degistirmez');
+    assert.deepEqual((await j('POST', '/__sim/hw-fail', { key: null, body: { tca_fail_reads: 0 } })).json.hw_fail.nvs_fail_keys, ['ap_pw', 'lk'],
+      'alan verilmezse ariza korunur');
+    assert.deepEqual((await nvsFail(j, [])).json.hw_fail.nvs_fail_keys, []);
+  } finally {
+    await sim.stop();
+  }
+});
+
+test('QA ucu /__sim/provision: provizyonsuzda factory/init ile AYNI atomik yol, provizyonluysa rekey; NVS arizasi 503 storage', async () => {
+  const { sim, j } = await startSim({ localKey: '', wifiConnected: false });
+  try {
+    const prov = (body) => j('POST', '/__sim/provision', { key: null, body });
+    await nvsFail(j, ['lk']);
+    assert.deepEqual([(await prov({ local_key: 'qa-anahtar-001', ap_pass: 'qa-parola-001' })).status, sim.isProvisioned()], [503, false]);
+    assert.equal(sim.fw.cm.config.ap_pass, '', 'ap_pass geri alindi');
+    await nvsFail(j, []);
+    assert.deepEqual((await prov({ local_key: 'qa-anahtar-001', ap_pass: 'qa-parola-001' })).json, { ok: true, rekeyed: false });
+    await nvsFail(j, ['lk']);
+    const rk = await prov({ local_key: 'qa-anahtar-002' });
+    assert.deepEqual([rk.status, rk.json], [503, { error: 'storage' }]);
+    assert.equal(sim.fw.cm.config.local_key, 'qa-anahtar-001');
   } finally {
     await sim.stop();
   }
