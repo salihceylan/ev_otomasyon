@@ -4,11 +4,17 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../../common/confirm_dialogs.dart';
+import '../../../theme/app_theme.dart';
+import '../../../widgets/orb/glass_icon_button.dart';
+import '../../../widgets/settings/accent_button.dart';
 import '../service_target.dart';
 import '../setup_steps.dart';
 import '../setup_store.dart';
 import '../setup_style.dart';
+import '../../../theme/tokens.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
+import '../../../theme/feature_accent.dart';
 
 /// "Devam eden kurulumlar": bu telefonda **bu teknisyene / bu oturuma** ait yarım kalmış kurulumlar.
 ///
@@ -83,13 +89,14 @@ class _SetupResumeListState extends State<SetupResumeList> {
       children: [
         const SetupSectionTitle('Devam eden kurulumlar'),
         if (records == null)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 16),
-            child: Center(child: CircularProgressIndicator(key: Key('resume_loading'))),
+          Semantics(
+            label: 'Kurulumlar yükleniyor',
+            liveRegion: true,
+            child: ServiceListSkeleton(key: Key('resume_loading'), count: 1),
           )
         else ...[
           if (_failed)
-            SetupCard(
+            ServiceCard(
               key: const Key('resume_error'),
               accent: SetupColors.error,
               child: Row(
@@ -106,11 +113,15 @@ class _SetupResumeListState extends State<SetupResumeList> {
               ),
             ),
           if (records.isEmpty && !_failed)
-            SetupCard(
+            // Orb'lu ortak boş durum (eskiden simgesiz düz metin kartı; pano boş durumlarıyla aynı dil).
+            ServiceCard(
               key: const Key('resume_empty'),
-              child: Text(
-                'Yarım kalan kurulum yok. "Yeni Kurulum Başlat" ile başlayabilirsiniz.',
-                style: TextStyle(color: SetupColors.muted(context), height: 1.35),
+              child: ServiceEmptyState(
+                icon: Icons.assignment_turned_in_rounded,
+                title: 'Yarım kalan kurulum yok',
+                message: '"Yeni Kurulum Başlat" ile başlayabilirsiniz.',
+                // Boş durum orb'u servis modu ailesi (nötr slate): boş listeler pano boş durumlarıyla aynı sakin dilde.
+                family: AppFeature.commissioning.accentFamily,
               ),
             ),
           for (final record in records) _RecordCard(record: record, onOpen: widget.onOpen, onDiscard: _discard),
@@ -127,27 +138,51 @@ class _RecordCard extends StatelessWidget {
   final Future<void> Function(SetupProgressRecord record) onOpen;
   final Future<void> Function(SetupProgressRecord record) onDiscard;
 
+  /// "Son işlem" tarihi biçimi (her kayıt kartı kurulumunda yeniden oluşturulmaz).
+  static final DateFormat _updatedFormat = DateFormat('dd.MM.yyyy HH:mm');
+
   @override
   Widget build(BuildContext context) {
     final step = record.currentStep;
     final info = SetupSteps.of(step);
     final title = record.homeName.isEmpty ? record.deviceUuid : record.homeName;
-    final updated = DateFormat('dd.MM.yyyy HH:mm').format(record.updatedAt.toLocal());
-    return SetupCard(
+    final updated = _updatedFormat.format(record.updatedAt.toLocal());
+    return ServiceCard(
       key: Key('card_setup_${record.deviceUuid}'),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            record.deviceUuid,
-            style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: SetupColors.muted(context)),
+          Row(
+            children: [
+              ServiceProgressRing(
+                value: ((step - 1) / SetupSteps.total).clamp(0.0, 1.0),
+                color: AppTheme.accentTone(context, AppFamilies.sky),
+                size: 46,
+                child: Text(
+                  '$step',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      record.deviceUuid,
+                      style: SetupText.mono(fontSize: AppText.badge, color: SetupColors.muted(context)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Text(
@@ -157,33 +192,29 @@ class _RecordCard extends StatelessWidget {
           if (record.customerHint.isNotEmpty)
             Text('Müşteri: ${record.customerHint}', style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context))),
           Text('Son işlem: $updated', style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context))),
-          const SizedBox(height: 8),
-          LinearProgressIndicator(
-            value: ((step - 1) / SetupSteps.total).clamp(0.0, 1.0),
-            minHeight: 6,
-            borderRadius: BorderRadius.circular(3),
-          ),
           const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
-                child: SizedBox(
-                  height: 48,
-                  child: ElevatedButton.icon(
-                    key: Key('btn_resume_${record.deviceUuid}'),
-                    onPressed: () => onOpen(record),
-                    icon: const Icon(Icons.play_arrow_rounded),
-                    label: const Text('Devam Et'),
-                  ),
+                // Sabit yükseklik YOK (eskiden SizedBox(height: 48): 1.5 yazı ölçeğinde etiket "Devam Ft" diye alttan
+                // kırpılıyordu): düğme en az 48 dp, etiket kadar büyür.
+                // İkincil eylem: çerçeveli hap (sayfadaki TEK gradyan birincil eylem "Yeni Kurulum Başlat"tır).
+                child: OutlinedButton.icon(
+                  key: Key('btn_resume_${record.deviceUuid}'),
+                  onPressed: () => onOpen(record),
+                  icon: Icon(Icons.play_arrow_rounded, size: accentIconSize(context, base: 20)),
+                  label: const Text('Devam Et'),
+                  style: accentOutlinedButtonStyle(context, AppFamilies.sky, minimumSize: const Size(64, AppTouch.minTarget)),
                 ),
               ),
               const SizedBox(width: 8),
-              IconButton(
+              // Çöp kutusu cam disk (rose simge): eskiden çıplak IconButton'du ("Devam Et" hapının yanında düz Material simgesi).
+              GlassIconButton(
                 key: Key('btn_discard_setup_${record.deviceUuid}'),
-                tooltip: 'Kaydı sil',
-                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                onPressed: () => onDiscard(record),
-                icon: const Icon(Icons.delete_outline_rounded, color: SetupColors.error),
+                icon: Icons.delete_outline_rounded,
+                iconColor: SetupColors.readable(context, SetupColors.error),
+                semanticLabel: 'Kaydı sil',
+                onTap: () => onDiscard(record),
               ),
             ],
           ),

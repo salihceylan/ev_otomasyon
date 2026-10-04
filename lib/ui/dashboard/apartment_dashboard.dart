@@ -6,10 +6,13 @@ import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
 import '../pages/device_settings_page.dart';
 import '../pages/wifi_recovery_dialog.dart';
+import '../motion/motion.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
 import '../widgets/quick_scenario_bar.dart';
 import 'dashboard_states.dart';
 import 'endpoint_sections.dart';
+import 'home_hero.dart';
 import 'peace_banner.dart';
 import 'status_pills.dart';
 import 'welcome_cards.dart';
@@ -66,6 +69,9 @@ ApartmentPhase apartmentPhaseOf(AutomationState s) {
   return ApartmentPhase.loadingDevices;
 }
 
+/// Geniş ekranda pano içeriğinin en büyük genişliği (dp).
+const double kDashboardMaxWidth = 1200;
+
 /// Daire sakini / ev sahibi / misafir / servis oturumu panosu (konsol olmayan roller).
 class ApartmentDashboard extends StatelessWidget {
   const ApartmentDashboard({super.key});
@@ -80,8 +86,21 @@ class ApartmentDashboard extends StatelessWidget {
       child: SingleChildScrollView(
         key: const Key('view_apartment'),
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 30),
-        child: _PhaseBody(phase: phase),
+        padding: EdgeInsets.fromLTRB(
+          MediaQuery.sizeOf(context).width >= 900 ? 24 : 16,
+          12,
+          MediaQuery.sizeOf(context).width >= 900 ? 24 : 16,
+          30,
+        ),
+        // Geniş ekran (tablet/masaüstü): içerik en çok [kDashboardMaxWidth] genişliğinde, ortalı.
+        child: Align(
+          key: const Key('view_apartment_content'),
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: kDashboardMaxWidth),
+            child: _PhaseBody(phase: phase),
+          ),
+        ),
       ),
     );
   }
@@ -95,22 +114,23 @@ class _PhaseBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.read<AutomationState>();
+    final Widget body;
     switch (phase) {
       case ApartmentPhase.guestExpired:
-        return const GuestExpiredView();
+        body = const GuestExpiredView();
       case ApartmentPhase.loadingHomes:
-        return TimedLoadingView(
+        body = TimedLoadingView(
           message: 'Daireleriniz yükleniyor…',
           onRetry: () => unawaited(state.fetchHomes()),
         );
       case ApartmentPhase.homesFailed:
-        return const _HomesFailedView();
+        body = const _HomesFailedView();
       case ApartmentPhase.homeless:
-        return const HomelessWelcome();
+        body = const HomelessWelcome();
       case ApartmentPhase.pickHome:
-        return const _PickHomeView();
+        body = const _PickHomeView();
       case ApartmentPhase.loadingDevices:
-        return Column(
+        body = Column(
           children: [
             const OfflineBanner(),
             TimedLoadingView(
@@ -120,12 +140,33 @@ class _PhaseBody extends StatelessWidget {
           ],
         );
       case ApartmentPhase.devicesFailed:
-        return const _DevicesFailedView();
+        body = const _DevicesFailedView();
       case ApartmentPhase.content:
         return const _CloudContent();
       case ApartmentPhase.direct:
         return const _DirectContent();
     }
+    // Tek sütunlu durum ekranları (yükleme / hata / boş / karşılama / erişim bitti / daire seç) geniş ekranda 1200 dp'lik
+    // çubuğa dönüşmez: ortalı ve [kDashboardStateMaxWidth] ile sınırlı.
+    return _StateColumn(child: body);
+  }
+}
+
+/// Tek sütunlu durum ekranı kabı: üstte ortalı, en çok [kDashboardStateMaxWidth] genişliğinde.
+class _StateColumn extends StatelessWidget {
+  const _StateColumn({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: kDashboardStateMaxWidth),
+        child: child,
+      ),
+    );
   }
 }
 
@@ -233,12 +274,18 @@ class _CloudContentState extends State<_CloudContent> {
     final effective = rooms.any((r) => r.key == _room) ? _room : null;
     final roomText = effective == null ? null : rooms.firstWhere((r) => r.key == effective).label;
 
-    return Column(
+    final column = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const OfflineBanner(),
-        const DashboardStatusBar(),
-        const SizedBox(height: 16),
+        if (!vm.empty) ...[
+          const StaggeredEntrance(index: 0, child: HomeHero()),
+          const SizedBox(height: 12),
+          const StaggeredEntrance(index: 1, child: DashboardStatusBar()),
+          const SizedBox(height: 16),
+        ],
+        // Hiç cihaz yokken durum şeridi YOK: "Tüm Işıklar Kapalı / Sistem Hazır" kurulumu tamamlamamış kullanıcıya
+        // sistemin hazır olduğunu söylerdi ve ilk-çalıştırma eylemini (karekod eşleme) aşağı iterdi.
         if (vm.empty) ...[
           if (vm.isOwner)
             const WelcomeClaimCard()
@@ -252,7 +299,7 @@ class _CloudContentState extends State<_CloudContent> {
         ] else ...[
           const PeaceBanner(),
           if (vm.canGroup) ...[
-            const QuickScenarioBar(),
+            const StaggeredEntrance(index: 2, child: QuickScenarioBar()),
             const SizedBox(height: 20),
           ],
           RoomFilterChips(
@@ -268,6 +315,8 @@ class _CloudContentState extends State<_CloudContent> {
         ],
       ],
     );
+    // Cihazsız durum tek sütunlu bir durum ekranıdır: geniş ekranda ortalı ve sınırlı genişlikte.
+    return vm.empty ? _StateColumn(child: column) : column;
   }
 }
 
@@ -278,8 +327,9 @@ class _DirectContent extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.read<AutomationState>();
-    final vm = context.select<AutomationState, ({bool hasStatus, ConnectionStateEnum conn, String? error, String host, bool canWifi, bool canSwitch, bool canGroup})>(
+    final vm = context.select<AutomationState, ({bool hasStatus, ConnectionStateEnum conn, String? error, String host, bool canWifi, bool canSwitch, bool canGroup, bool blocked})>(
       (s) => (
+        blocked: s.directBlockedUntil != null && s.clock.now().isBefore(s.directBlockedUntil!),
         hasStatus: s.status != null,
         conn: s.connState,
         error: s.directError,
@@ -313,27 +363,49 @@ class _DirectContent extends StatelessWidget {
         onRetry: () => unawaited(state.refresh()),
       );
     } else if (vm.conn == ConnectionStateEnum.connected) {
-      // Cihaza ulaşıldı ama kontrol edilemiyor (anahtar gerekli / cihaz kurulmamış).
+      // Cihaza ulaşıldı ama kontrol edilemiyor (anahtar gerekli / cihaz kurulmamış / geçici kilit). Uyarı = amber.
+      // Anahtar eksik/geçersizken yeniden denemek işe yaramaz: birincil eylem "Ayarları aç", "Yeniden dene" ikincil.
+      // Geçici kilitte ise yeniden deneme anlamlıdır (süre dolunca): birincil kalır.
+      void openSettings() {
+        unawaited(
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(builder: (_) => const DeviceSettingsPage()),
+          ),
+        );
+      }
+
       body = ErrorRetryCard(
         title: 'Cihaz kontrol edilemiyor',
-        message: vm.error ?? 'Cihaz anahtarı gerekli. Ayarlardan cihaz anahtarını girin.',
-        icon: Icons.vpn_key_outlined,
+        message: vm.blocked
+            ? (vm.error ?? 'Çok fazla hatalı deneme yapıldı. Cihaz kısa süre sonra yeniden denenecek.')
+            : (vm.error ?? 'Cihaz anahtarı gerekli. Ayarlardan cihaz anahtarını girin.'),
+        icon: vm.blocked ? Icons.lock_clock_outlined : Icons.vpn_key_outlined,
+        family: AppFamilies.amber,
+        primaryRetry: vm.blocked,
         onRetry: () => unawaited(state.refresh()),
         actions: [
-          OutlinedButton.icon(
-            key: const Key('btn_open_settings'),
-            style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const DeviceSettingsPage()),
+          if (vm.blocked)
+            OutlinedButton.icon(
+              key: const Key('btn_open_settings'),
+              style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
+              onPressed: openSettings,
+              icon: const Icon(Icons.settings_outlined, size: 18),
+              label: const Text('Ayarları aç'),
+            )
+          else
+            FilledButton.icon(
+              key: const Key('btn_open_settings'),
+              style: FilledButton.styleFrom(minimumSize: const Size(48, 48)),
+              onPressed: openSettings,
+              icon: const Icon(Icons.settings_outlined, size: 18),
+              label: const Text('Ayarları aç'),
             ),
-            icon: const Icon(Icons.settings_outlined, size: 18),
-            label: const Text('Ayarları aç'),
-          ),
         ],
       );
     } else {
       body = ErrorRetryCard(
         title: 'Cihaza ulaşılamıyor',
+        family: AppFamilies.amber,
         message: vm.host.isEmpty
             ? 'Cihaz adresi ayarlanmadı. Ayarlardan cihazın yerel IP adresini girin.'
             : 'Cihaza bağlanılamıyor (${vm.host}). Yerel Wi-Fi ağına bağlı olduğunuzdan emin olun.',
@@ -368,13 +440,21 @@ class _DirectContent extends StatelessWidget {
       );
     }
 
-    return Column(
+    final column = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const DashboardStatusBar(),
+        if (vm.hasStatus) ...[
+          const StaggeredEntrance(index: 0, child: HomeHero()),
+          const SizedBox(height: 12),
+        ],
+        // Durum verisi yokken (erişilemiyor / anahtar gerekli / kilitli) şeritte yalnız sistem durumu hapı kalır
+        // (ışık/panjur sayaçları [DashboardStatusBar] içinde gizlenir).
+        const StaggeredEntrance(index: 1, child: DashboardStatusBar()),
         const SizedBox(height: 16),
         body,
       ],
     );
+    // Durum verisi olmayan kipler (hata / yükleme) tek sütunlu durum ekranıdır: geniş ekranda ortalı ve sınırlı.
+    return vm.hasStatus ? column : _StateColumn(child: column);
   }
 }

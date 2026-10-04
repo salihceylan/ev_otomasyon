@@ -7,6 +7,8 @@ import '../../services/automation_state.dart';
 import '../../services/peace_notice_controller.dart';
 import '../../services/push/peace_notice.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import 'orb/orb.dart';
 
 typedef _BannerHandle =
     ScaffoldFeatureController<MaterialBanner, MaterialBannerClosedReason>;
@@ -19,7 +21,7 @@ typedef _SnackHandle =
 /// [PeaceNoticeController]'ı dinler ve [ScaffoldMessenger] üzerinden gösterir:
 /// * bekleyen bildirim afişi ve yumuşak izin istemi = [MaterialBanner]. Sayfa içeriğini AŞAĞI iter (üstüne
 ///   binmez: AppBar eylemleri ve dokunuşlar çalışır), rotanın odak kapsamındadır (Tab ile "Hepsini kapat" /
-///   "Kapat"a ulaşılır) ve standart canlı bölge semantiğini taşır. Öncelik: bildirim afişi > yumuşak istem.
+///   "Gizle"ye ulaşılır) ve standart canlı bölge semantiğini taşır. Öncelik: bildirim afişi > yumuşak istem.
 /// * [PeaceNoticeController.closeMessage] = [SnackBar]; gösterilince denetleyiciden TÜKETİLİR (bir kez).
 ///   Kalıcı DEĞİLDİR (8 sn; sayfaların kendi SnackBar'ları kuyrukta beklemesin), eylem yerine kapatma
 ///   simgesi taşır, metni yazı ölçeğinde 1.5 ile ve 6 satırla sınırlıdır (büyük yazıda ekranı kaplamaz).
@@ -234,18 +236,20 @@ class _PeaceNoticeHostState extends State<PeaceNoticeHost> {
   MaterialBanner _noticeBanner() {
     return MaterialBanner(
       key: const Key('banner_peace_notice'),
-      backgroundColor: AppTheme.getCardColor(context),
+      // Amber "bloom": açık temada kartın üstüne ılık krem tını; koyu temada tını lacivert kartı kirletir (gri/kahve),
+      // bu yüzden koyuda zemin kart rengi KALIR ve bloom orb parıltısı + amber ayırıcı çizgiyle verilir.
+      backgroundColor: AppTheme.isDark(context)
+          ? AppTheme.getCardColor(context)
+          : Color.alphaBlend(AppFamilies.amber.base.withValues(alpha: 0.16), AppTheme.getCardColor(context)),
       surfaceTintColor: Colors.transparent,
       dividerColor: AppTheme.accentAmber.withValues(alpha: 0.65),
-      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 4),
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 12, 8),
       leadingPadding: const EdgeInsetsDirectional.only(end: 12),
-      leading: Icon(
-        Icons.lightbulb_outline,
-        size: 22,
-        color: AppTheme.warningText(context),
-      ),
+      leading: const _NoticeOrb(),
       forceActionsBelow: true,
-      minActionBarHeight: 48,
+      // 48 dp düğme çubukta ortalanır (üst/alt 8 dp): düğme alttaki ayırıcı çizgiye yapışmaz; renkli düğme gölgesi de
+      // afiş içinde kalır.
+      minActionBarHeight: 64,
       content: const _NoticeText(),
       actions: const [_CloseAllAction(), _DismissAction()],
     );
@@ -257,15 +261,17 @@ class _PeaceNoticeHostState extends State<PeaceNoticeHost> {
       backgroundColor: AppTheme.getCardColor(context),
       surfaceTintColor: Colors.transparent,
       dividerColor: AppTheme.primaryBlue.withValues(alpha: 0.65),
-      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 8, 4),
+      padding: const EdgeInsetsDirectional.fromSTEB(16, 12, 12, 8),
       leadingPadding: const EdgeInsetsDirectional.only(end: 12),
-      leading: Icon(
-        Icons.notifications_active_outlined,
-        size: 22,
-        color: AppTheme.infoText(context),
+      leading: const OrbIconBadge(
+        icon: Icons.notifications_active_rounded,
+        family: AppFamilies.sky,
+        active: true,
       ),
       forceActionsBelow: true,
-      minActionBarHeight: 48,
+      // 48 dp düğme çubukta ortalanır (üst/alt 8 dp): düğme alttaki ayırıcı çizgiye yapışmaz; renkli düğme gölgesi de
+      // afiş içinde kalır.
+      minActionBarHeight: 64,
       content: const _TextBlock(
         title: 'Gece hatırlatması',
         body: 'Açık kalan lambalar için gece bildirimi almak ister misiniz?',
@@ -456,6 +462,22 @@ class _TextBlock extends StatelessWidget {
   }
 }
 
+/// Bildirim afişinin amber orb'u; "Hepsini kapat" sürerken çevresinde dönen yay (bekliyor) gösterir.
+class _NoticeOrb extends StatelessWidget {
+  const _NoticeOrb();
+
+  @override
+  Widget build(BuildContext context) {
+    final closing = context.select<PeaceNoticeController, bool>((c) => c.closing);
+    return OrbIconBadge(
+      icon: Icons.lightbulb_rounded,
+      family: AppFamilies.amber,
+      active: true,
+      pending: closing,
+    );
+  }
+}
+
 class _NoticeText extends StatelessWidget {
   const _NoticeText();
 
@@ -545,8 +567,10 @@ class _DismissAction extends StatelessWidget {
         key: const Key('btn_peace_notice_dismiss'),
         style: _textButtonStyle(context),
         onPressed: controller.dismiss,
-        // "Kapat" tek başına belirsiz (lambayı mı kapatır?): bildirimi kapattığını söyler.
-        child: const Text('Kapat', semanticsLabel: 'Bildirimi kapat'),
+        // Yanındaki eylem "Hepsini kapat" (lamba/panjur): iki görünür etiketin de "kapat" olması neyin kapandığını belirsiz
+        // bırakıyordu (ayrım yalnız ekran okuyucu etiketindeydi). Bildirimi KALDIRAN eylem "Gizle"dir; anlam etiketi görünen
+        // metni barındırır (WCAG 2.5.3).
+        child: const Text('Gizle', semanticsLabel: 'Bildirimi gizle'),
       ),
     );
   }

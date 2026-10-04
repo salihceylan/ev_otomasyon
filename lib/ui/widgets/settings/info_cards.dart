@@ -7,7 +7,12 @@ import '../../../services/automation_state.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../dashboard/labels.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
+import '../orb/orb.dart';
+import '../surface_card.dart';
 import '../user_profile_dialog.dart';
+import 'accent_button.dart';
 import 'settings_card.dart';
 
 /// Donanım & motor koruma bilgilendirmesi. Anahtar: `Key('card_hardware_notice')`.
@@ -16,20 +21,18 @@ class HardwareNoticeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final blue = AppTheme.primaryBlue;
-    return Container(
+    // Statik bilgi kartı: kart KENARI vurgusuz (nötr), başlık kart başlığı dili (15/700, birincil metin). Kart kenarı yalnız
+    // canlı (active) durumda vurgulanır; sürekli sky kenarlı + mavi başlıklı statik kart "seçili/etkin" gibi görünüp sayfanın
+    // ilk ekranındaki en vurgulu kart oluyordu. Mavi ton yalnız orb'da kalır.
+    return SurfaceCard(
       key: const Key('card_hardware_notice'),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: blue.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: blue.withValues(alpha: 0.3)),
-      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.security_outlined, color: AppTheme.infoText(context), size: 22),
-          const SizedBox(width: 10),
+          // Etkileşimsiz bilgi kartı: soluk parıltı (glow) ama "active" değil; sayfanın en parlak öğesi asıl
+          // kontroller (çocuk kilidi, servis PIN'i …) olmalıdır.
+          const OrbIconBadge(icon: Icons.security_rounded, family: AppFamilies.sky, glow: true),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -37,9 +40,9 @@ class HardwareNoticeCard extends StatelessWidget {
                 Text(
                   'Donanım & Motor Koruması',
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13.5,
-                    color: AppTheme.infoText(context),
+                    fontWeight: FontWeight.w700,
+                    fontSize: AppText.cardTitle,
+                    color: AppTheme.getTextPrimary(context),
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -78,18 +81,14 @@ class RoleNoticeCard extends StatelessWidget {
     if (text == null) return const SizedBox.shrink();
 
     final color = AppTheme.warningText(context);
-    return Container(
+    return SurfaceCard(
       key: const Key('notice_role'),
+      accent: AppFamilies.amber.base,
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.accentAmber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.35)),
-      ),
       child: Row(
         children: [
-          Icon(Icons.lock_outline, color: color, size: 20),
-          const SizedBox(width: 10),
+          const OrbIconBadge(icon: Icons.lock_rounded, family: AppFamilies.amber),
+          const SizedBox(width: 12),
           Expanded(child: Text(text, style: TextStyle(fontSize: 12, color: color, height: 1.35))),
         ],
       ),
@@ -117,7 +116,7 @@ class TelemetryCard extends StatelessWidget {
       child: SettingsCard(
         icon: Icons.memory_rounded,
         title: 'Cihaz Telemetrisi',
-        accent: AppTheme.accentCyan,
+        accent: AppFeature.telemetry.accentFamily.base,
         children: [
           InfoRow(label: 'Cihaz adı', value: status.deviceName),
           if (status.ip.isNotEmpty) InfoRow(label: 'Cihaz IP adresi', value: status.ip),
@@ -160,9 +159,9 @@ class AccountCard extends StatelessWidget {
     return KeyedSubtree(
       key: const Key('card_account'),
       child: SettingsCard(
-        icon: Icons.account_circle_outlined,
+        icon: Icons.account_circle_rounded,
         title: 'Kullanıcı Hesabı',
-        accent: AppTheme.primaryBlue,
+        accent: AppFamilies.sky.base,
         children: [
           InfoRow(label: 'Ad Soyad', value: vm.name.trim().isEmpty ? '—' : vm.name.trim()),
           InfoRow(label: 'E-posta', value: vm.email.trim().isEmpty ? '—' : vm.email.trim()),
@@ -174,26 +173,22 @@ class AccountCard extends StatelessWidget {
             child: OutlinedButton.icon(
               key: const Key('btn_profile'),
               onPressed: () => UserProfileDialog.show(context),
-              icon: const Icon(Icons.manage_accounts_outlined, size: 18),
-              label: const Text('Profili Yönet'),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+              icon: Icon(Icons.manage_accounts_rounded, size: accentIconSize(context)),
+              label: const Text('Profili Yönet', style: TextStyle(fontWeight: FontWeight.bold)),
+              style: accentOutlinedButtonStyle(context, AppFamilies.sky),
             ),
           ),
           const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
-            child: TextButton.icon(
+            // Çıkış eylemi ortak dilde: çerçeveli rose hap (servis paneli "Çıkış Yap" ve profil diyaloğuyla aynı); eskiden
+            // bu kartta çıplak kırmızı metin düğmesiydi (aynı anlam, dört ayrı stil).
+            child: OutlinedButton.icon(
               key: const Key('btn_logout'),
               onPressed: () => confirmAndLogout(context, state),
-              icon: const Icon(Icons.logout, size: 18),
-              label: const Text('Oturumu Kapat'),
-              style: TextButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                foregroundColor: AppTheme.dangerText(context),
-              ),
+              icon: Icon(Icons.logout_rounded, size: accentIconSize(context)),
+              label: const Text('Oturumu Kapat', style: TextStyle(fontWeight: FontWeight.bold)),
+              style: accentOutlinedButtonStyle(context, AppFamilies.rose),
             ),
           ),
         ],

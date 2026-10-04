@@ -7,7 +7,12 @@ import '../../common/auth_form.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
+import '../../motion/motion.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/neon_app_bar.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/surface_card.dart';
 
 /// Parola değiştirme ekranı.
 ///
@@ -18,6 +23,10 @@ import '../../theme/app_theme.dart';
 ///
 /// Parolalar **kırpılmaz**. Sunucu diğer tüm cihazların oturumlarını kapatır ve bu cihaza yeni
 /// belirteçler verir (durum katmanı yazar).
+///
+/// Görünüm: uyarı/açıklama metni, üç alan ve düğme TEK cam plakada ([SurfaceCard]) durur (açık temada devre
+/// fotoğrafı uyarı kutusunun altından geçiyordu). Etiketler kısadır; "en az 10 karakter" kuralı yardımcı
+/// metindedir ("Yeni Şifre (En a…" gibi kesilmez). Her parola alanının KENDİ göster/gizle düğmesi vardır.
 class ChangePasswordPage extends StatefulWidget {
   const ChangePasswordPage({super.key, this.forced = false});
 
@@ -33,7 +42,9 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
   final _newController = TextEditingController();
   final _confirmController = TextEditingController();
 
-  bool _obscure = true;
+  bool _obscureCurrent = true;
+  bool _obscureNew = true;
+  bool _obscureConfirm = true;
   bool _busy = false;
   String? _error;
   String? _currentFieldError;
@@ -62,15 +73,13 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
       _error = null;
     });
     try {
-      await state.changePassword(
-        currentPassword: _currentController.text,
-        newPassword: _newController.text,
-      );
+      await state.changePassword(currentPassword: _currentController.text, newPassword: _newController.text);
       if (!mounted) return;
       messenger?.showSnackBar(
-        const SnackBar(
-          content: Text('Şifreniz değiştirildi. Diğer cihazlardaki oturumlar kapatıldı.'),
-          backgroundColor: AppTheme.accentGreen,
+        SnackBar(
+          content: const Text('Şifreniz değiştirildi. Diğer cihazlardaki oturumlar kapatıldı.'),
+          // Beyaz iletiyle AA (ham #10B981 ile ~2.5:1'di).
+          backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -91,23 +100,28 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
+    // PF-06: durum yalnız çıkış dokunuşunda gerekir (okuma); sayfa durum bildirimleriyle yeniden kurulmaz.
     final primary = AppTheme.getTextPrimary(context);
     final muted = AppTheme.getTextMuted(context);
 
     return PopScope(
       canPop: !widget.forced && !_busy,
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(widget.forced ? 'Şifrenizi Değiştirin' : 'Şifre Değiştir'),
+        // Ortak Neon Glass üst çubuk (cam geri diski + 18/700 başlık): çıplak Material `AppBar` ve mavi "Çıkış" metin
+        // düğmesi doğrudan devre fotoğrafı üzerinde duruyordu. Davranış AYNEN: zorunlu kipte (ve işlem sürerken) geri
+        // düğmesi YOK (üstte `PopScope` sistem geri tuşunu da kapatır); zorunlu kipte tek çıkış yolu "Çıkış" eylemidir
+        // (anahtar `btn_forced_logout`; cam disk + ipucu/anlam etiketi "Çıkış"). Sayfa gövdesinde büyük orb olduğundan
+        // çubukta özellik orb'u YOK.
+        appBar: NeonAppBar(
+          title: widget.forced ? 'Şifrenizi Değiştirin' : 'Şifre Değiştir',
           automaticallyImplyLeading: !widget.forced && !_busy,
           actions: [
             if (widget.forced)
-              TextButton.icon(
+              NeonBarAction(
                 key: const Key('btn_forced_logout'),
-                onPressed: _busy ? null : () => confirmAndLogout(context, state),
-                icon: const Icon(Icons.logout_rounded, size: 18),
-                label: const Text('Çıkış'),
+                icon: Icons.logout_rounded,
+                tooltip: 'Çıkış',
+                onTap: _busy ? null : () => confirmAndLogout(context, context.read<AutomationState>()),
               ),
           ],
         ),
@@ -123,93 +137,125 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(widget.forced ? Icons.password_rounded : Icons.lock_reset_rounded,
-                          size: 56, color: AppTheme.primaryBlueLight),
-                      const SizedBox(height: 16),
-                      if (widget.forced)
-                        const InlineMessage.warning(
-                          'Güvenliğiniz için devam etmeden önce size verilen geçici şifreyi değiştirmeniz gerekiyor.',
-                          key: Key('forced_notice'),
-                        )
-                      else
-                        Text(
-                          'Şifrenizi değiştirdiğinizde diğer tüm cihazlardaki oturumlarınız kapatılır.',
-                          style: TextStyle(color: muted, fontSize: 13, height: 1.4),
+                      Center(
+                        child: OrbIconBadge(
+                          // Zorunlu kipte dolu güvenlik simgesi: `password_rounded` ('***' + alt çizgi) amber orb içinde
+                          // "kapalı gözlü yüz" gibi okunuyordu.
+                          icon: widget.forced ? Icons.shield_rounded : Icons.lock_reset_rounded,
+                          family: widget.forced ? AppFamilies.amber : AppFamilies.sky,
+                          size: OrbSize.xl,
+                          glow: true,
                         ),
-                      const SizedBox(height: 20),
-                      TextFormField(
-                        key: const Key('field_current_password'),
-                        controller: _currentController,
-                        enabled: !_busy,
-                        obscureText: _obscure,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        autofillHints: const [AutofillHints.password],
-                        style: TextStyle(color: primary),
-                        decoration: authInputDecoration(
-                          context,
-                          label: widget.forced ? 'Geçici / Mevcut Şifre' : 'Mevcut Şifre',
-                          prefixIcon: Icons.lock_outline,
-                        ).copyWith(errorText: _currentFieldError),
-                        validator: (v) => (v == null || v.isEmpty) ? 'Lütfen mevcut şifrenizi girin' : null,
                       ),
-                      const SizedBox(height: 14),
-                      TextFormField(
-                        key: const Key('field_new_password'),
-                        controller: _newController,
-                        enabled: !_busy,
-                        obscureText: _obscure,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        autofillHints: const [AutofillHints.newPassword],
-                        style: TextStyle(color: primary),
-                        decoration: authInputDecoration(
-                          context,
-                          label: 'Yeni Şifre (En az ${AuthValidators.passwordMinLength} karakter)',
-                          prefixIcon: Icons.lock_reset,
-                          suffixIcon: passwordVisibilityButton(
-                            context: context,
-                            obscured: _obscure,
-                            onToggle: () => setState(() => _obscure = !_obscure),
+                      const SizedBox(height: 16),
+                      StaggeredEntrance(
+                        index: 1,
+                        step: const Duration(milliseconds: 70),
+                        child: SurfaceCard(
+                          padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (widget.forced)
+                                const InlineMessage.warning(
+                                  'Güvenliğiniz için devam etmeden önce size verilen geçici şifreyi değiştirmeniz gerekiyor.',
+                                  key: Key('forced_notice'),
+                                )
+                              else
+                                Text(
+                                  'Şifrenizi değiştirdiğinizde diğer tüm cihazlardaki oturumlarınız kapatılır.',
+                                  style: TextStyle(color: muted, fontSize: 13, height: 1.4),
+                                ),
+                              const SizedBox(height: 18),
+                              TextFormField(
+                                key: const Key('field_current_password'),
+                                controller: _currentController,
+                                enabled: !_busy,
+                                obscureText: _obscureCurrent,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                autofillHints: const [AutofillHints.password],
+                                style: TextStyle(color: primary),
+                                decoration: authInputDecoration(
+                                  context,
+                                  label: widget.forced ? 'Geçici Şifre' : 'Mevcut Şifre',
+                                  prefixIcon: Icons.lock_outline_rounded,
+                                  errorText: _currentFieldError,
+                                  suffixIcon: passwordVisibilityButton(
+                                    context: context,
+                                    obscured: _obscureCurrent,
+                                    onToggle: () => setState(() => _obscureCurrent = !_obscureCurrent),
+                                  ),
+                                ),
+                                validator: (v) => (v == null || v.isEmpty) ? 'Lütfen mevcut şifrenizi girin' : null,
+                              ),
+                              const SizedBox(height: 14),
+                              TextFormField(
+                                key: const Key('field_new_password'),
+                                controller: _newController,
+                                enabled: !_busy,
+                                obscureText: _obscureNew,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                autofillHints: const [AutofillHints.newPassword],
+                                style: TextStyle(color: primary),
+                                // Kural etikette değil yardımcı metinde: "Yeni Şifre (En a…" gibi kesilmez.
+                                decoration: authInputDecoration(
+                                  context,
+                                  label: 'Yeni Şifre',
+                                  helper: 'En az ${AuthValidators.passwordMinLength} karakter',
+                                  prefixIcon: Icons.lock_outline_rounded,
+                                  suffixIcon: passwordVisibilityButton(
+                                    context: context,
+                                    obscured: _obscureNew,
+                                    onToggle: () => setState(() => _obscureNew = !_obscureNew),
+                                  ),
+                                ),
+                                validator: (v) {
+                                  final policy = AuthValidators.passwordPolicyError(v, emptyMessage: 'Lütfen yeni şifrenizi girin');
+                                  if (policy != null) return policy;
+                                  if (v == _currentController.text) return 'Yeni şifre mevcut şifreyle aynı olamaz';
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                              TextFormField(
+                                key: const Key('field_confirm_password'),
+                                controller: _confirmController,
+                                enabled: !_busy,
+                                obscureText: _obscureConfirm,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                style: TextStyle(color: primary),
+                                decoration: authInputDecoration(
+                                  context,
+                                  label: 'Yeni Şifre Tekrar',
+                                  prefixIcon: Icons.verified_user_outlined,
+                                  suffixIcon: passwordVisibilityButton(
+                                    context: context,
+                                    obscured: _obscureConfirm,
+                                    onToggle: () => setState(() => _obscureConfirm = !_obscureConfirm),
+                                  ),
+                                ),
+                                validator: (v) {
+                                  if (v == null || v.isEmpty) return 'Lütfen yeni şifrenizi tekrar girin';
+                                  if (v != _newController.text) return 'Şifreler eşleşmiyor';
+                                  return null;
+                                },
+                              ),
+                              if (_error != null) ...[
+                                const SizedBox(height: 14),
+                                InlineMessage.error(_error!, key: const Key('change_password_error')),
+                              ],
+                              const SizedBox(height: 22),
+                              ElevatedButton(
+                                key: const Key('btn_change_password'),
+                                onPressed: _busy ? null : _submit,
+                                child: _busy ? buttonSpinner() : authPrimaryLabel('Şifreyi Değiştir'),
+                              ),
+                            ],
                           ),
                         ),
-                        validator: (v) {
-                          final policy = AuthValidators.passwordPolicyError(v, emptyMessage: 'Lütfen yeni şifrenizi girin');
-                          if (policy != null) return policy;
-                          if (v == _currentController.text) return 'Yeni şifre mevcut şifreyle aynı olamaz';
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 14),
-                      TextFormField(
-                        key: const Key('field_confirm_password'),
-                        controller: _confirmController,
-                        enabled: !_busy,
-                        obscureText: _obscure,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        style: TextStyle(color: primary),
-                        decoration: authInputDecoration(context, label: 'Yeni Şifre Tekrar', prefixIcon: Icons.lock_clock_outlined),
-                        validator: (v) {
-                          if (v == null || v.isEmpty) return 'Lütfen yeni şifrenizi tekrar girin';
-                          if (v != _newController.text) return 'Şifreler eşleşmiyor';
-                          return null;
-                        },
-                      ),
-                      if (_error != null) ...[
-                        const SizedBox(height: 14),
-                        InlineMessage.error(_error!, key: const Key('change_password_error')),
-                      ],
-                      const SizedBox(height: 22),
-                      ElevatedButton(
-                        key: const Key('btn_change_password'),
-                        onPressed: _busy ? null : _submit,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.primaryBlue,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
-                        ),
-                        child: _busy ? buttonSpinner() : const Text('Şifreyi Değiştir', style: TextStyle(fontWeight: FontWeight.bold)),
                       ),
                     ],
                   ),

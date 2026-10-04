@@ -246,15 +246,16 @@ class HomeModel {
       );
 }
 
+// Düzenli ifade bir kez derlenir (PF-25): `shutterBaseName` panjur kartı/öğesi türetiminde her çağrıda çalışır.
+final RegExp _shutterDirectionSuffix = RegExp(
+  r'\s*\(?\s*(yukar[ıi]|a[sş]a[gğ][ıi]|yukari|asagi|up|down)\s*\)?\s*$',
+  caseSensitive: false,
+  unicode: true,
+);
+
 /// Panjur adındaki yön ekini ("Salon Panjur Yukarı" -> "Salon Panjur") atar.
 String shutterBaseName(String name, {String fallback = 'Panjur'}) {
-  final cleaned = name
-      .replaceAll(
-        RegExp(r'\s*\(?\s*(yukar[ıi]|a[sş]a[gğ][ıi]|yukari|asagi|up|down)\s*\)?\s*$',
-            caseSensitive: false, unicode: true),
-        '',
-      )
-      .trim();
+  final cleaned = name.replaceAll(_shutterDirectionSuffix, '').trim();
   return cleaned.isEmpty ? fallback : cleaned;
 }
 

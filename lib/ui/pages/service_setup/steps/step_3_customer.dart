@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../widgets/settings/accent_button.dart';
 import '../service_setup_controller.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
@@ -58,12 +59,7 @@ class _Step3CustomerState extends State<Step3Customer> {
       body = SetupCard(
         key: const Key('step3_done_card'),
         accent: SetupColors.ok,
-        child: SetupInfoRow(
-          icon: Icons.check_circle_rounded,
-          color: SetupColors.ok,
-          bold: true,
-          text: 'Müşteri doğrulandı${customer.hint.isEmpty ? '' : ': ${customer.hint}'}',
-        ),
+        child: SetupResultHeader(text: 'Müşteri doğrulandı${customer.hint.isEmpty ? '' : ': ${customer.hint}'}'),
       );
     } else {
       body = _form(context, c);
@@ -88,8 +84,10 @@ class _Step3CustomerState extends State<Step3Customer> {
         SetupTextField(
           key: const Key('field_customer'),
           controller: _customer,
-          label: 'Müşteri e-posta veya telefon',
+          // Kısa etiket (yüzen etiket 1.5 yazı ölçeğinde "Müşteri e-posta veya …" diye kesiliyordu); örnek metin ipucunda.
+          label: 'E-posta veya telefon',
           hint: 'musteri@ornek.com veya 0555 123 45 67',
+          helperText: 'Cihazın bağlanacağı müşterinin bilgisi',
           prefixIcon: Icons.person_outline_rounded,
           keyboardType: TextInputType.emailAddress,
           textInputAction: TextInputAction.done,
@@ -105,13 +103,14 @@ class _Step3CustomerState extends State<Step3Customer> {
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               key: const Key('btn_change_customer'),
+              style: setupInlineActionStyle(),
               onPressed: customer.busy
                   ? null
                   : () {
                       _otp.clear();
                       customer.resetCustomer();
                     },
-              icon: const Icon(Icons.edit_rounded, size: 18),
+              icon: Icon(Icons.edit_rounded, size: accentIconSize(context, base: 18)),
               label: const Text('Müşteriyi değiştir'),
             ),
           ),
@@ -124,7 +123,7 @@ class _Step3CustomerState extends State<Step3Customer> {
             final left = customer.resendRemaining(now);
             final label = !sent
                 ? 'Kod Gönder'
-                : (canResend ? 'Kodu Yeniden Gönder' : 'Yeniden gönder: ${left.inSeconds + 1} sn sonra');
+                : (canResend ? 'Kodu Yeniden Gönder' : 'Yeniden gönder: ${(left.inMilliseconds / 1000).ceil()} sn sonra');
             return SetupPrimaryButton(
               key: const Key('btn_send_otp'),
               label: label,
@@ -138,17 +137,17 @@ class _Step3CustomerState extends State<Step3Customer> {
           SetupCard(
             key: const Key('otp_sent_card'),
             accent: SetupColors.ok,
-            child: SetupInfoRow(
+            child: SetupResultHeader(
               icon: Icons.mark_email_read_rounded,
-              color: SetupColors.ok,
               text: customer.sentMessage ?? 'Doğrulama kodu müşteriye gönderildi.',
             ),
           ),
           SetupTextField(
             key: const Key('field_otp'),
             controller: _otp,
-            label: 'Müşterinin söylediği 6 haneli kod',
-            prefixIcon: Icons.pin_rounded,
+            label: '6 haneli kod',
+            helperText: 'Müşterinin söylediği kod',
+            prefixIcon: Icons.password_rounded,
             keyboardType: TextInputType.number,
             textInputAction: TextInputAction.done,
             maxLength: 6,

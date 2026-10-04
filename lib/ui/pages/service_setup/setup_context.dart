@@ -18,6 +18,37 @@ class SetupCancelled implements Exception {
   const SetupCancelled();
 }
 
+/// İki **bağımsız** işi (ör. pano yerel ağ okuması + sunucu isteği) aynı anda başlatır ve ikisi de bitince sonuçlarını
+/// verir: toplam bekleme iki sürenin toplamı yerine uzun olanıdır (telefon pano ağında değilken LAN kolu 4 sn'lik
+/// bağlantı zaman aşımına kadar sürebilir; sunucu isteği bunun arkasında beklemesin).
+///
+/// Hata önceliği sıralı koddaki gibidir: [first] hata verdiyse onun hatası, yoksa [second]'ın hatası fırlatılır. Her iki
+/// işin hatası da işlenmiş sayılır (işlenmemiş bir hata kalmaz); biri hata verince diğeri sonuna kadar beklenir, böylece
+/// çağıran `run` bittiğinde uçuşta iş kalmaz.
+Future<(A, B)> awaitBoth<A, B>(Future<A> first, Future<B> second) async {
+  A? a;
+  B? b;
+  Object? firstError;
+  StackTrace? firstTrace;
+  Object? secondError;
+  StackTrace? secondTrace;
+  await Future.wait<void>(<Future<void>>[
+    first.then<void>((value) => a = value, onError: (Object error, StackTrace trace) {
+      firstError = error;
+      firstTrace = trace;
+    }),
+    second.then<void>((value) => b = value, onError: (Object error, StackTrace trace) {
+      secondError = error;
+      secondTrace = trace;
+    }),
+  ]);
+  final failure = firstError ?? secondError;
+  if (failure != null) {
+    Error.throwWithStackTrace(failure, (firstError != null ? firstTrace : secondTrace) ?? StackTrace.current);
+  }
+  return (a as A, b as B);
+}
+
 /// Adım mantıklarının ortak bağlamı: durum, saat, bulut istemcisi, pano bağlantısı ve hedef.
 ///
 /// **Aktif ev okunmaz.** Claim sonrası tüm bulut çağrıları [target]'taki `homeId` ile yapılır.

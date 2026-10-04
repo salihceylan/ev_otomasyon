@@ -11,6 +11,7 @@ import '../../common/auth_form.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../common/inline_message.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
 import '../family/transfer_ownership_dialog.dart';
 import 'social_sign_in.dart';
 
@@ -21,6 +22,8 @@ import 'social_sign_in.dart';
 /// * Kullanıcı bazı evlerin **tek sahibi** ise sunucu `409 SOLE_OWNER` döndürür: hiçbir şey silinmez,
 ///   ilgili daireler listelenir ve **önce devir** yönlendirmesi yapılır.
 /// * Başarıda yerel oturum tamamen temizlenir ve uygulama giriş ekranına döner.
+///
+/// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]).
 class DeleteAccountDialog extends StatefulWidget {
   const DeleteAccountDialog({super.key});
 
@@ -29,10 +32,7 @@ class DeleteAccountDialog extends StatefulWidget {
     return showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
-        value: state,
-        child: const DeleteAccountDialog(),
-      ),
+      builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(value: state, child: const DeleteAccountDialog()),
     );
   }
 
@@ -83,17 +83,15 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
       _soleOwned = null;
     });
     try {
-      await state.deleteAccount(
-        password: password.isEmpty ? null : password,
-        confirm: password.isEmpty ? _phrase : null,
-      );
+      await state.deleteAccount(password: password.isEmpty ? null : password, confirm: password.isEmpty ? _phrase : null);
       unawaited(SocialSignIn.signOutGoogle());
       // Oturum temizlendi: açık tüm sayfalar kapanır, kapı giriş ekranını gösterir.
       navigator.popUntil((route) => route.isFirst);
       messenger?.showSnackBar(
-        const SnackBar(
-          content: Text('Hesabınız silindi.'),
-          backgroundColor: AppTheme.accentGreen,
+        SnackBar(
+          content: const Text('Hesabınız silindi.'),
+          // Beyaz iletiyle AA (ham #10B981 ile ~2.5:1'di).
+          backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -142,60 +140,36 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
 
     return PopScope(
       canPop: !_busy,
-      child: AlertDialog(
-        backgroundColor: AppTheme.getSurfaceColor(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: AppTheme.getCardBorder(context)),
+      child: AuthDialogShell(
+        icon: Icons.delete_forever_rounded,
+        family: AppFamilies.rose,
+        title: 'Hesabı Sil',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [if (soleOwned != null) ..._buildSoleOwnerPanel(soleOwned) else ..._buildForm(muted, primary)],
         ),
-        title: Row(
-          children: [
-            const Icon(Icons.delete_forever_rounded, color: AppTheme.accentRed, size: 26),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Hesabı Sil',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: primary),
-              ),
-            ),
-          ],
-        ),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (soleOwned != null) ..._buildSoleOwnerPanel(soleOwned) else ..._buildForm(muted, primary),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
+        actions: AuthDialogActions(
+          secondaryLabel: soleOwned != null ? 'Kapat' : 'Vazgeç',
+          secondary: TextButton(
             key: const Key('btn_delete_cancel'),
             onPressed: _busy ? null : () => Navigator.of(context).pop(),
-            child: Text(soleOwned != null ? 'Kapat' : 'Vazgeç', style: TextStyle(color: muted)),
+            child: authSecondaryLabel(context, soleOwned != null ? 'Kapat' : 'Vazgeç'),
           ),
-          if (soleOwned == null)
-            ElevatedButton(
-              key: const Key('btn_delete_account'),
-              onPressed: _canDelete ? _delete : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.accentRed,
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: AppTheme.accentRed.withValues(alpha: 0.25),
-              ),
-              child: _busy ? buttonSpinner() : const Text('Hesabı Kalıcı Olarak Sil', style: TextStyle(fontWeight: FontWeight.bold)),
-            )
-          else
-            ElevatedButton(
-              key: const Key('btn_delete_retry'),
-              onPressed: _busy ? null : () => setState(() => _soleOwned = null),
-              child: const Text('Tekrar Dene'),
-            ),
-        ],
+          primaryLabel: soleOwned == null ? 'Hesabı Kalıcı Olarak Sil' : 'Tekrar Dene',
+          primary: soleOwned == null
+              ? ElevatedButton(
+                  key: const Key('btn_delete_account'),
+                  onPressed: _canDelete ? _delete : null,
+                  style: destructiveButtonStyle(),
+                  child: _busy ? buttonSpinner() : authPrimaryLabel('Hesabı Kalıcı Olarak Sil'),
+                )
+              : ElevatedButton(
+                  key: const Key('btn_delete_retry'),
+                  onPressed: _busy ? null : () => setState(() => _soleOwned = null),
+                  child: authPrimaryLabel('Tekrar Dene'),
+                ),
+        ),
       ),
     );
   }
@@ -219,23 +193,23 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
         decoration: authInputDecoration(
           context,
           label: 'Şifreniz',
-          prefixIcon: Icons.lock_outline,
+          prefixIcon: Icons.lock_outline_rounded,
           helper: 'Google, Apple veya SMS ile giriş yapıyorsanız boş bırakın.',
-          suffixIcon: passwordVisibilityButton(
-            context: context,
-            obscured: _obscure,
-            onToggle: () => setState(() => _obscure = !_obscure),
-          ),
+          suffixIcon: passwordVisibilityButton(context: context, obscured: _obscure, onToggle: () => setState(() => _obscure = !_obscure)),
         ),
       ),
       const SizedBox(height: 14),
       Text.rich(
         TextSpan(
           style: TextStyle(color: primary, fontSize: 13),
-          children: const [
-            TextSpan(text: 'Onaylamak için '),
-            TextSpan(text: _phrase, style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.accentRed)),
-            TextSpan(text: ' yazın:'),
+          children: [
+            const TextSpan(text: 'Onaylamak için '),
+            TextSpan(
+              text: _phrase,
+              // Anahtar sözcük AA kontrastlı kırmızı (ham #EF4444 açık zeminde ~3.8:1'di).
+              style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.dangerText(context)),
+            ),
+            const TextSpan(text: ' yazın:'),
           ],
         ),
       ),
@@ -247,12 +221,16 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
         autocorrect: false,
         enableSuggestions: false,
         textCapitalization: TextCapitalization.characters,
-        decoration: const InputDecoration(isDense: true, hintText: _phrase),
+        style: TextStyle(color: primary),
+        decoration: authInputDecoration(
+          context,
+          hint: _phrase,
+          suffixIcon: confirmPhraseMatches(_phraseController.text, _phrase)
+              ? Icon(Icons.check_circle_rounded, color: AppTheme.successText(context), size: 20)
+              : null,
+        ),
       ),
-      if (_error != null) ...[
-        const SizedBox(height: 12),
-        InlineMessage.error(_error!, key: const Key('delete_error')),
-      ],
+      if (_error != null) ...[const SizedBox(height: 12), InlineMessage.error(_error!, key: const Key('delete_error'))],
     ];
   }
 
@@ -285,7 +263,7 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: AppTheme.getCardColor(context),
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(AppRadius.r12),
             border: Border.all(color: AppTheme.getCardBorder(context)),
           ),
           // Devret düğmesi metnin ALTINDA, sağa hizalıdır: yan yana Row dar ekranda / büyük yazıda taşardı.
@@ -295,9 +273,9 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 2),
-                    child: Icon(Icons.home_outlined, size: 20, color: AppTheme.primaryBlueLight),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Icon(Icons.home_outlined, size: 20, color: AppTheme.infoText(context)),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -314,7 +292,7 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
                           Text(
                             _homeDetail(home)!,
                             key: Key('sole_home_detail_${home.id}'),
-                            style: TextStyle(fontSize: 11.5, color: AppTheme.getTextMuted(context)),
+                            style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context)),
                           ),
                       ],
                     ),
@@ -332,10 +310,7 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
             ],
           ),
         ),
-      if (_error != null) ...[
-        const SizedBox(height: 8),
-        InlineMessage.error(_error!, key: const Key('delete_error')),
-      ],
+      if (_error != null) ...[const SizedBox(height: 8), InlineMessage.error(_error!, key: const Key('delete_error'))],
     ];
   }
 }

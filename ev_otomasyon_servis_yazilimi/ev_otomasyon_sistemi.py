@@ -30,6 +30,7 @@ Ortam değişkenleri (hepsi isteğe bağlı):
                      liste için yeter, durum değiştirme/silme için e-posta + parola gerekir). Değer asla gösterilmez.
   ESPTOOL_PATH       esptool.py / esptool.exe yolu (yoksa PlatformIO paketi, PATH ve `python -m esptool` aranır).
   EV_TOOL_DEBUG=1    Hata ayıklama: yalnızca istisna sınıf adları stderr'e yazılır (gizli değer içermez).
+  EV_TOOL_THEME      Görünüm: dark | light (tercih dosyasını geçersiz kılar; görünüm belirteçleri tool_theme.py'dedir).
 """
 
 from __future__ import annotations
@@ -98,6 +99,14 @@ from factory_client import (  # noqa: E402
     provision_urgency_notice,
     select_serial_backend,
     uid_from_mac,
+)
+from tool_theme import (  # noqa: E402 - görsel tema: belirteçler/ttk stili/widget rolleri (iş mantığı içermez)
+    THEME_DARK,
+    THEME_LIGHT,
+    ThemeManager,
+    load_theme_preference,
+    log_line_tag,
+    theme_of,
 )
 
 DEMO_DIR = os.path.join(BASE_DIR, "waveshare_s3_demo")
@@ -564,71 +573,54 @@ class ServerLoginDialog(tk.Toplevel):
         note: str = "",
     ) -> None:
         super().__init__(parent)
+        theme = theme_of(parent)  # ana pencerenin teması (koyu/açık) diyalogda da geçerlidir
+        self.theme = theme
         self.title("🔐 Sunucu Kimlik Doğrulama")
         self.transient(parent)
         self.resizable(False, False)
-        self.configure(bg="#ffffff", padx=20, pady=16)
+        theme.register(self, "root")
+        self.configure(padx=16, pady=14)
         self.result: Optional[LoginRequest] = None
         self._parent = parent
 
-        tk.Label(self, text="🔐 Süper Kullanıcı Girişi", font=("Segoe UI", 12, "bold"), fg="#0f172a", bg="#ffffff").pack(anchor="w")
+        card, body = theme.card(self, "🔐 Süper Kullanıcı Girişi", accent="cyan", padx=16, pady=14)
+        card.pack(fill=tk.BOTH, expand=True)
         intro = note or "Cihazı sunucu envanterine kaydetmek için süper kullanıcı hesabıyla giriş yapın."
-        tk.Label(
-            self,
+        theme.label(
+            body,
+            "label.muted",
             text=intro + "\nParola kaydedilmez; yalnızca bu oturum için kullanılır.",
-            font=("Segoe UI", 9),
-            fg="#475569",
-            bg="#ffffff",
+            size=9,
             wraplength=400,
             justify="left",
-        ).pack(anchor="w", pady=(4, 10))
+        ).pack(anchor="w", pady=(2, 10))
 
-        form = tk.Frame(self, bg="#ffffff")
+        form = theme.frame(body, "frame.surface")
         form.pack(fill=tk.X)
-        tk.Label(form, text="Sunucu adresi:", font=("Segoe UI", 9, "bold"), bg="#ffffff").grid(row=0, column=0, sticky="w", pady=3)
-        self.url_entry = tk.Entry(form, width=38, font=("Segoe UI", 10))
+        theme.label(form, "label.field", text="Sunucu adresi:").grid(row=0, column=0, sticky="w", pady=4)
+        self.url_entry = theme.entry(form, width=38)
         self.url_entry.insert(0, server_url)
-        self.url_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=3, padx=(8, 0))
+        self.url_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=4, padx=(10, 0))
 
-        tk.Label(form, text="E-posta:", font=("Segoe UI", 9, "bold"), bg="#ffffff").grid(row=1, column=0, sticky="w", pady=3)
-        self.email_entry = tk.Entry(form, width=38, font=("Segoe UI", 10))
+        theme.label(form, "label.field", text="E-posta:").grid(row=1, column=0, sticky="w", pady=4)
+        self.email_entry = theme.entry(form, width=38)
         self.email_entry.insert(0, email)
-        self.email_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=3, padx=(8, 0))
+        self.email_entry.grid(row=1, column=1, columnspan=2, sticky="ew", pady=4, padx=(10, 0))
 
-        tk.Label(form, text="Parola:", font=("Segoe UI", 9, "bold"), bg="#ffffff").grid(row=2, column=0, sticky="w", pady=3)
-        self.pwd_entry = tk.Entry(form, show="•", width=32, font=("Segoe UI", 10))
-        self.pwd_entry.grid(row=2, column=1, sticky="ew", pady=3, padx=(8, 0))
+        theme.label(form, "label.field", text="Parola:").grid(row=2, column=0, sticky="w", pady=4)
+        self.pwd_entry = theme.entry(form, show="•", width=32)
+        self.pwd_entry.grid(row=2, column=1, sticky="ew", pady=4, padx=(10, 0))
         self._show_pwd = False
-        self.toggle_btn = tk.Button(form, text="👁️", width=3, command=self._toggle_pwd, font=("Segoe UI", 9), relief="groove")
-        self.toggle_btn.grid(row=2, column=2, padx=(4, 0))
+        self.toggle_btn = theme.button(form, role="ghost", size="sm", text="👁️", width=3, command=self._toggle_pwd)
+        self.toggle_btn.grid(row=2, column=2, padx=(6, 0))
 
-        btn_box = tk.Frame(self, bg="#ffffff")
-        btn_box.pack(fill=tk.X, pady=(14, 0))
-        tk.Button(btn_box, text="İptal", width=10, command=self._on_cancel, font=("Segoe UI", 9), bg="#f1f5f9", relief="groove").pack(side=tk.RIGHT, padx=(6, 0))
-        self.btn_ok = tk.Button(
-            btn_box,
-            text="✓ Giriş Yap",
-            command=self._on_ok,
-            font=("Segoe UI", 9, "bold"),
-            bg="#1565c0",
-            fg="#ffffff",
-            activebackground="#0d47a1",
-            activeforeground="#ffffff",
-            relief="groove",
-            padx=10,
-            pady=4,
-        )
+        btn_box = theme.frame(body, "frame.surface")
+        btn_box.pack(fill=tk.X, pady=(16, 0))
+        theme.button(btn_box, role="secondary", size="md", text="İptal", width=10, command=self._on_cancel).pack(side=tk.RIGHT, padx=(8, 0))
+        self.btn_ok = theme.button(btn_box, role="primary", size="md", text="✓ Giriş Yap", command=self._on_ok)
         self.btn_ok.pack(side=tk.RIGHT)
         if api_key_available:
-            self.btn_api = tk.Button(
-                btn_box,
-                text="ADMIN_API_KEY ile devam",
-                command=self._on_api_key,
-                font=("Segoe UI", 8),
-                bg="#fff7ed",
-                fg="#9a3412",
-                relief="groove",
-            )
+            self.btn_api = theme.button(btn_box, role="tint.amber", size="sm", text="ADMIN_API_KEY ile devam", command=self._on_api_key)
             self.btn_api.pack(side=tk.LEFT)
 
         self.bind("<Return>", lambda _event: self._on_ok())
@@ -735,20 +727,13 @@ class EvOtomasyonServisApp(tk.Tk):
             self.device = DeviceClient(DEFAULT_DEVICE_HOST, transport=device_transport)
 
         self.title("AHBU - Ev Otomasyon Sistemi | Servis & Üretim Konsolu")
-        self.geometry("980x820")
+        self.geometry("1024x860")  # kartlar (rim + iç boşluk) ve 10 punto yazıyla üç sekme de kırpılmadan sığar
         self.minsize(900, 720)
 
-        # Renk teması
-        self.bg_color = "#f4f6f9"
-        self.card_bg = "#ffffff"
-        self.primary_color = "#0f172a"
-        self.accent_blue = "#1565c0"
-        self.accent_green = "#2e7d32"
-        self.accent_orange = "#e65100"
-        self.danger_color = "#c62828"
-        self.text_color = "#1e293b"
-
-        self.configure(bg=self.bg_color)
+        # Görsel tema ("Neon Glass"): tüm renk belirteçleri ve ttk stili tool_theme.py'dedir; tercih (koyu/açık)
+        # ortam değişkeninden ya da kullanıcı ayar dosyasından okunur, anahtarla değiştirilince kaydedilir.
+        self.theme = ThemeManager(self, load_theme_preference(), persist=True)
+        self.theme.register(self, "root")
         self.is_flashing = False
         self.current_label_img = None
         self.saved_label_path: Optional[str] = None
@@ -890,72 +875,93 @@ class EvOtomasyonServisApp(tk.Tk):
     # Arayüz iskeleti
     # =========================================================================
     def _create_main_layout(self) -> None:
-        header_frame = tk.Frame(self, bg=self.primary_color, padx=15, pady=10)
+        theme = self.theme
+        # Üst başlık şeridi: marka + alt başlık (sol), firmware sürüm rozeti + tema anahtarı (sağ)
+        header_frame = theme.frame(self, "frame.header", padx=16, pady=10)
         header_frame.pack(fill=tk.X)
-        title_row = tk.Frame(header_frame, bg=self.primary_color)
+        title_row = theme.frame(header_frame, "frame.header")
         title_row.pack(fill=tk.X)
-        tk.Label(title_row, text="🏠 AHBU AKILLI EV SİSTEMLERİ", font=("Segoe UI", 14, "bold"), fg="#38bdf8", bg=self.primary_color).pack(side=tk.LEFT)
-        tk.Label(
+        theme.label(title_row, "label.brand", text="🏠 AHBU AKILLI EV SİSTEMLERİ").pack(side=tk.LEFT)
+        theme.label(
             title_row,
+            "label.header.sub",
             text="Üretim, Firmware Yükleme, Envanter ve Provizyon Konsolu",
-            font=("Segoe UI", 10),
-            fg="#94a3b8",
-            bg=self.primary_color,
-            padx=10,
-        ).pack(side=tk.LEFT, pady=(3, 0))
+            padx=12,
+        ).pack(side=tk.LEFT, pady=(4, 0))
+        self._theme_dark_var = tk.BooleanVar(value=theme.is_dark)
+        self._theme_label_var = tk.StringVar()
+        self.theme_switch = ttk.Checkbutton(
+            title_row,
+            style="Switch.TCheckbutton",
+            variable=self._theme_dark_var,
+            textvariable=self._theme_label_var,
+            command=self._on_theme_switch,
+            cursor="hand2",
+        )
+        self.theme_switch.pack(side=tk.RIGHT, padx=(8, 0))
+        self.lbl_fw_version = theme.label(
+            title_row, "label.badge", text=f"Firmware v{self.version_data.get('current_version', '1.0.0')}", size=9, weight="bold"
+        )
+        self.lbl_fw_version.pack(side=tk.RIGHT, padx=(8, 0))
+        self._update_theme_switch_text()
+        theme.frame(self, "frame.header.line", height=2).pack(fill=tk.X)
 
         self._build_session_bar()
 
-        style = ttk.Style()
-        style.theme_use("default")
-        style.configure("TNotebook", background=self.bg_color)
-        style.configure("TNotebook.Tab", padding=[16, 8], font=("Segoe UI", 10, "bold"))
-
         self.notebook = ttk.Notebook(self)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=(10, 12))
+        try:
+            self.notebook.enable_traversal()  # Ctrl+Tab / Ctrl+Shift+Tab ile sekme gezinimi
+        except tk.TclError:
+            pass
 
-        self.tab_flasher = tk.Frame(self.notebook, bg=self.bg_color)
+        self.tab_flasher = theme.frame(self.notebook, "frame.bg")
         self.notebook.add(self.tab_flasher, text="⚡ 1. Firmware Yükleyici (Flasher)")
-        self.tab_inventory = tk.Frame(self.notebook, bg=self.bg_color)
+        self.tab_inventory = theme.frame(self.notebook, "frame.bg")
         self.notebook.add(self.tab_inventory, text="🏷️ 2. Karekod Üret & Etiket Bas (Envanter)")
-        self.tab_provision = tk.Frame(self.notebook, bg=self.bg_color)
+        self.tab_provision = theme.frame(self.notebook, "frame.bg")
         self.notebook.add(self.tab_provision, text="📡 3. Cihaz Provizyonu (USB / Wi-Fi)")
 
         self._build_flasher_tab()
         self._build_inventory_tab()
         self._build_provision_tab()
 
+    def _update_theme_switch_text(self) -> None:
+        self._theme_label_var.set("🌙 Koyu tema" if self.theme.is_dark else "☀️ Açık tema")
+
+    def _on_theme_switch(self) -> None:
+        """Tema anahtarı: koyu <-> açık; tercih kullanıcı ayar dosyasına yazılır (gizli bilgi içermez)."""
+        self.theme.set_theme(THEME_DARK if self._theme_dark_var.get() else THEME_LIGHT)
+        self._update_theme_switch_text()
+
     def _build_session_bar(self) -> None:
-        bar = tk.Frame(self, bg="#e2e8f0", padx=12, pady=6)
+        theme = self.theme
+        bar = theme.frame(self, "frame.session", padx=16, pady=7)
         bar.pack(fill=tk.X)
-        self.lbl_server = tk.Label(bar, text="", font=("Segoe UI", 9), bg="#e2e8f0", fg="#334155")
+        self.lbl_server = theme.label(bar, "label.session.text", text="", size=9)
         self.lbl_server.pack(side=tk.LEFT)
-        self.btn_logout = tk.Button(
-            bar, text="🚪 Oturumu Kapat", command=self.logout_clicked, font=("Segoe UI", 8), bg="#f1f5f9", relief="groove", state=tk.DISABLED
-        )
-        self.btn_logout.pack(side=tk.RIGHT, padx=(6, 0))
-        self.btn_login = tk.Button(
-            bar, text="🔐 Sunucuya Giriş", command=self.login_clicked, font=("Segoe UI", 8, "bold"), bg="#dbeafe", fg="#1e3a8a", relief="groove"
-        )
+        self.btn_logout = theme.button(bar, role="header", size="sm", text="🚪 Oturumu Kapat", command=self.logout_clicked, state=tk.DISABLED)
+        self.btn_logout.pack(side=tk.RIGHT, padx=(8, 0))
+        self.btn_login = theme.button(bar, role="header.primary", size="sm", text="🔐 Sunucuya Giriş", command=self.login_clicked)
         self.btn_login.pack(side=tk.RIGHT)
-        self.lbl_session = tk.Label(bar, text="", font=("Segoe UI", 9, "bold"), bg="#e2e8f0", fg="#b45309")
+        self.lbl_session = theme.label(bar, "label.badge.amber", text="", size=9, weight="bold")
         self.lbl_session.pack(side=tk.RIGHT, padx=12)
 
     def update_session_bar(self) -> None:
         url = self.client.base_url
         custom = url != DEFAULT_SERVER_URL
-        self.lbl_server.config(
-            text=f"🌐 Sunucu: {url}" + ("   (özel / QA adresi)" if custom else ""),
-            fg="#b45309" if custom else "#334155",
-        )
+        self.lbl_server.config(text=f"🌐 Sunucu: {url}" + ("   (özel / QA adresi)" if custom else ""))
+        self.theme.restyle(self.lbl_server, "label.session.accent.amber" if custom else "label.session.text", size=9)
         if self.client.is_authenticated:
             who = self.client.user_email or "oturum açık"
             how = "API anahtarı" if self.client.auth_mode == "api_key" else "süper kullanıcı"
-            self.lbl_session.config(text=f"👤 {who} ({how})", fg="#166534")
+            self.lbl_session.config(text=f"👤 {who} ({how})")
+            self.theme.restyle(self.lbl_session, "label.badge.emerald", size=9, weight="bold")
             self.btn_login.config(text="🔄 Hesap Değiştir", state=tk.NORMAL)
             self.btn_logout.config(state=tk.NORMAL)
         else:
-            self.lbl_session.config(text="👤 Giriş yapılmadı", fg="#b45309")
+            self.lbl_session.config(text="👤 Giriş yapılmadı")
+            self.theme.restyle(self.lbl_session, "label.badge.amber", size=9, weight="bold")
             self.btn_login.config(text="🔐 Sunucuya Giriş", state=tk.NORMAL)
             self.btn_logout.config(state=tk.DISABLED)
 
@@ -963,122 +969,84 @@ class EvOtomasyonServisApp(tk.Tk):
     # SEKME 1: FİRMWARE YÜKLEYİCİ (FLASHER)
     # =========================================================================
     def _build_flasher_tab(self) -> None:
-        content_frame = tk.Frame(self.tab_flasher, bg=self.bg_color, padx=10, pady=10)
+        theme = self.theme
+        content_frame = theme.frame(self.tab_flasher, "frame.bg", padx=12, pady=12)
         content_frame.pack(fill=tk.BOTH, expand=True)
 
-        conn_frame = tk.LabelFrame(
-            content_frame, text=" 🔌 Bağlantı ve Çip Ayarları ", font=("Segoe UI", 10, "bold"), bg=self.card_bg, fg=self.text_color, padx=10, pady=8
-        )
-        conn_frame.pack(fill=tk.X, pady=(0, 10))
+        conn_card, conn_frame = theme.card(content_frame, "🔌 Bağlantı ve Çip Ayarları", accent="cyan")
+        conn_card.pack(fill=tk.X, pady=(0, 10))
 
-        tk.Label(conn_frame, text="COM Port:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=0, column=0, sticky="w", pady=4)
+        theme.label(conn_frame, "label.field", text="COM Port:").grid(row=0, column=0, sticky="w", pady=4)
         self.port_combo = ttk.Combobox(conn_frame, width=32, state="readonly")
-        self.port_combo.grid(row=0, column=1, padx=(5, 10), pady=4, sticky="w")
-        tk.Button(conn_frame, text="🔄 Portları Yenile", command=self.refresh_ports, font=("Segoe UI", 8), bg="#e0e0e0", relief="groove").grid(
+        self.port_combo.grid(row=0, column=1, padx=(8, 10), pady=4, sticky="w")
+        theme.on_change(lambda _tokens: theme.retint_combobox_popdown(self.port_combo))
+        theme.button(conn_frame, role="secondary", size="sm", text="🔄 Portları Yenile", command=self.refresh_ports).grid(
             row=0, column=2, padx=5, pady=4
         )
 
-        tk.Label(conn_frame, text="Hedef Donanım:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=1, column=0, sticky="w", pady=4)
-        tk.Label(
+        theme.label(conn_frame, "label.field", text="Hedef Donanım:").grid(row=1, column=0, sticky="w", pady=4)
+        theme.label(
             conn_frame,
+            "label.chip.sky",
             text="Waveshare ESP32-S3 (8DI-8RO Pano Modülü) | 460.800 bps Yüksek Hız",
-            font=("Segoe UI", 9),
-            bg="#e8eaf6",
-            fg="#1a237e",
-            padx=8,
-            pady=2,
-            relief="groove",
-        ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(5, 0), pady=4)
+            size=9,
+        ).grid(row=1, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=4)
 
-        fw_frame = tk.LabelFrame(
-            content_frame, text=" 📦 Yüklenecek Firmware Seçimi ", font=("Segoe UI", 10, "bold"), bg=self.card_bg, fg=self.text_color, padx=10, pady=8
-        )
-        fw_frame.pack(fill=tk.X, pady=(0, 10))
+        fw_card, fw_frame = theme.card(content_frame, "📦 Yüklenecek Firmware Seçimi", accent="violet")
+        fw_card.pack(fill=tk.X, pady=(0, 10))
 
-        r1_frame = tk.Frame(fw_frame, bg=self.card_bg)
+        r1_frame = theme.frame(fw_frame, "frame.surface")
         r1_frame.pack(fill=tk.X, pady=(2, 4))
-        self.r_custom = tk.Radiobutton(
+        self.r_custom = theme.radio(
             r1_frame,
             text="🚀 Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)",
             variable=self.mode_var,
             value="custom",
             command=self.apply_mode_selection,
-            font=("Segoe UI", 10, "bold"),
-            fg="#0d47a1",
-            bg=self.card_bg,
-            activebackground=self.card_bg,
+            weight="bold",
+            accent="sky",
         )
         self.r_custom.pack(side=tk.LEFT)
-        self.inc_ver_btn = tk.Button(
-            r1_frame, text="➕ Versiyon Arttır", command=self.inc_version, font=("Segoe UI", 8, "bold"), bg="#e8f5e9", fg="#2e7d32", relief="groove"
-        )
+        self.inc_ver_btn = theme.button(r1_frame, role="tint.emerald", size="sm", text="➕ Versiyon Arttır", command=self.inc_version)
         self.inc_ver_btn.pack(side=tk.RIGHT, padx=5)
-        self.ver_label = tk.Label(
-            r1_frame, text=f"Mevcut: v{self.version_data.get('current_version', '1.0.0')}", font=("Segoe UI", 9, "bold"), fg="#2e7d32", bg=self.card_bg
+        self.ver_label = theme.label(
+            r1_frame, "label.accent.emerald", text=f"Mevcut: v{self.version_data.get('current_version', '1.0.0')}", weight="bold"
         )
         self.ver_label.pack(side=tk.RIGHT, padx=5)
 
-        r2_frame = tk.Frame(fw_frame, bg=self.card_bg)
+        r2_frame = theme.frame(fw_frame, "frame.surface")
         r2_frame.pack(fill=tk.X, pady=(2, 6))
-        self.r_factory = tk.Radiobutton(
+        self.r_factory = theme.radio(
             r2_frame,
             text="🛡️ Fabrika Çıkış Orijinal Yazılımı (Test / Kurtarma Modu)",
             variable=self.mode_var,
             value="factory",
             command=self.apply_mode_selection,
-            font=("Segoe UI", 9),
-            fg="#424242",
-            bg=self.card_bg,
-            activebackground=self.card_bg,
         )
         self.r_factory.pack(side=tk.LEFT)
 
-        path_frame = tk.Frame(fw_frame, bg=self.card_bg)
+        path_frame = theme.frame(fw_frame, "frame.surface")
         path_frame.pack(fill=tk.X, pady=(4, 2))
-        tk.Label(path_frame, text="Dosya:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).pack(side=tk.LEFT, padx=(0, 5))
-        self.file_entry = tk.Entry(path_frame, font=("Segoe UI", 9))
-        self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.browse_btn = tk.Button(path_frame, text="📁 Gözat...", command=self.browse_custom_file, font=("Segoe UI", 8), bg="#f5f5f5")
+        theme.label(path_frame, "label.field", text="Dosya:").pack(side=tk.LEFT, padx=(0, 8))
+        self.file_entry = theme.entry(path_frame)
+        self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self.browse_btn = theme.button(path_frame, role="secondary", size="sm", text="📁 Gözat...", command=self.browse_custom_file)
         self.browse_btn.pack(side=tk.RIGHT)
 
-        btn_frame = tk.Frame(content_frame, bg=self.bg_color)
+        btn_frame = theme.frame(content_frame, "frame.bg")
         btn_frame.pack(fill=tk.X, pady=(0, 10))
-        self.btn_flash = tk.Button(
-            btn_frame,
-            text="⚡ FİRMWARE'İ KARTA YÜKLE (FLASH)",
-            command=self.start_flash,
-            font=("Segoe UI", 11, "bold"),
-            bg=self.accent_blue,
-            fg="#ffffff",
-            activebackground="#0d47a1",
-            activeforeground="#ffffff",
-            pady=8,
-            cursor="hand2",
-        )
-        self.btn_flash.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.btn_read_info = tk.Button(
-            btn_frame, text="🔍 Çip Bilgisi Oku", command=self.start_read_info, font=("Segoe UI", 9, "bold"), bg="#cfd8dc", pady=8, cursor="hand2"
-        )
-        self.btn_read_info.pack(side=tk.LEFT, padx=5)
-        self.btn_erase = tk.Button(
-            btn_frame,
-            text="🗑️ Hafızayı Sil (Erase Flash)",
-            command=self.start_erase,
-            font=("Segoe UI", 9, "bold"),
-            bg="#ffcdd2",
-            fg="#b71c1c",
-            pady=8,
-            cursor="hand2",
-        )
-        self.btn_erase.pack(side=tk.LEFT, padx=(5, 0))
+        self.btn_flash = theme.button(btn_frame, role="primary", size="lg", text="⚡ FİRMWARE'İ KARTA YÜKLE (FLASH)", command=self.start_flash)
+        self.btn_flash.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.btn_read_info = theme.button(btn_frame, role="secondary", size="md", text="🔍 Çip Bilgisi Oku", command=self.start_read_info)
+        self.btn_read_info.pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self.btn_erase = theme.button(btn_frame, role="danger", size="md", text="🗑️ Hafızayı Sil (Erase Flash)", command=self.start_erase)
+        self.btn_erase.pack(side=tk.LEFT, fill=tk.Y, padx=(6, 0))
 
-        log_frame = tk.LabelFrame(
-            content_frame, text=" 📋 İşlem Log Çıktısı ", font=("Segoe UI", 9, "bold"), bg=self.card_bg, fg=self.text_color, padx=8, pady=6
-        )
-        log_frame.pack(fill=tk.BOTH, expand=True)
-        self.log_text = tk.Text(log_frame, wrap=tk.WORD, font=("Consolas", 9), bg="#1e1e1e", fg="#00e676", insertbackground="#ffffff")
+        log_card, log_frame = theme.card(content_frame, "📋 İşlem Log Çıktısı", accent="emerald", padx=10, pady=10)
+        log_card.pack(fill=tk.BOTH, expand=True)
+        self.log_text = theme.text(log_frame, "text.log", wrap=tk.WORD)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar = tk.Scrollbar(log_frame, command=self.log_text.yview)
+        scrollbar = theme.scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
 
@@ -1086,155 +1054,99 @@ class EvOtomasyonServisApp(tk.Tk):
     # SEKME 2: KAREKOD ÜRET & ETİKET BAS (CİHAZ ENVANTERİ)
     # =========================================================================
     def _build_inventory_tab(self) -> None:
-        inv_content = tk.Frame(self.tab_inventory, bg=self.bg_color, padx=10, pady=8)
+        theme = self.theme
+        inv_content = theme.frame(self.tab_inventory, "frame.bg", padx=12, pady=10)
         inv_content.pack(fill=tk.BOTH, expand=True)
 
-        top_split = tk.Frame(inv_content, bg=self.bg_color)
-        top_split.pack(fill=tk.X, pady=(0, 8))
+        top_split = theme.frame(inv_content, "frame.bg")
+        top_split.pack(fill=tk.X, pady=(0, 10))
 
-        form_frame = tk.LabelFrame(
-            top_split,
-            text=" ⚙️ Cihaz Tanımlama & Otomatik Kimlik Üretimi ",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.card_bg,
-            fg=self.text_color,
-            padx=12,
-            pady=10,
-        )
-        form_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
+        form_card, form_frame = theme.card(top_split, "⚙️ Cihaz Tanımlama & Otomatik Kimlik Üretimi", accent="sky")
+        form_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
 
-        tk.Label(form_frame, text="1. Donanım MAC:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=0, column=0, sticky="w", pady=4)
-        mac_row = tk.Frame(form_frame, bg=self.card_bg)
+        theme.label(form_frame, "label.field", text="1. Donanım MAC:").grid(row=0, column=0, sticky="w", pady=4)
+        mac_row = theme.frame(form_frame, "frame.surface")
         mac_row.grid(row=0, column=1, sticky="ew", pady=4)
-        self.inv_mac_entry = tk.Entry(mac_row, width=20, font=("Consolas", 10, "bold"), fg="#0d47a1")
+        self.inv_mac_entry = theme.entry(mac_row, "entry.mono", width=18, weight="bold", accent="sky")
         self.inv_mac_entry.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_read_mac = tk.Button(
-            mac_row,
-            text="📡 Karttan MAC Oku",
-            command=self.read_mac_from_board,
-            font=("Segoe UI", 8, "bold"),
-            bg="#e3f2fd",
-            fg="#0d47a1",
-            relief="groove",
-            cursor="hand2",
-        )
+        self.btn_read_mac = theme.button(mac_row, role="tint.sky", size="sm", text="📡 Karttan MAC Oku", command=self.read_mac_from_board)
         self.btn_read_mac.pack(side=tk.LEFT)
 
-        tk.Label(form_frame, text="2. Cihaz Seri No (UID):", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=1, column=0, sticky="w", pady=4)
-        uuid_row = tk.Frame(form_frame, bg=self.card_bg)
+        theme.label(form_frame, "label.field", text="2. Cihaz Seri No (UID):").grid(row=1, column=0, sticky="w", pady=4)
+        uuid_row = theme.frame(form_frame, "frame.surface")
         uuid_row.grid(row=1, column=1, sticky="ew", pady=4)
-        self.inv_uuid_entry = tk.Entry(uuid_row, width=24, font=("Consolas", 10, "bold"), fg="#1565c0")
+        self.inv_uuid_entry = theme.entry(uuid_row, "entry.mono", width=18, weight="bold", accent="sky")
         self.inv_uuid_entry.pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(uuid_row, text="🔄 UID Üret (MAC'ten)", command=self.generate_device_uuid, font=("Segoe UI", 8), bg="#f5f5f5", relief="groove").pack(side=tk.LEFT)
+        theme.button(uuid_row, role="secondary", size="sm", text="🔄 UID Üret (MAC'ten)", command=self.generate_device_uuid).pack(side=tk.LEFT)
 
-        tk.Label(form_frame, text="3. Kurulum PIN (6 Hane):", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=2, column=0, sticky="w", pady=4)
-        pin_row = tk.Frame(form_frame, bg=self.card_bg)
+        theme.label(form_frame, "label.field", text="3. Kurulum PIN (6 Hane):").grid(row=2, column=0, sticky="w", pady=4)
+        pin_row = theme.frame(form_frame, "frame.surface")
         pin_row.grid(row=2, column=1, sticky="ew", pady=4)
-        self.inv_pin_entry = tk.Entry(pin_row, width=12, font=("Consolas", 11, "bold"), fg="#b71c1c", show="•")
+        self.inv_pin_entry = theme.entry(pin_row, "entry.mono", width=9, size=11, weight="bold", accent="rose", show="•")
         self.inv_pin_entry.pack(side=tk.LEFT, padx=(0, 6))
-        tk.Button(pin_row, text="🎲 Rastgele PIN Üret", command=self.generate_random_pin, font=("Segoe UI", 8), bg="#f5f5f5", relief="groove").pack(side=tk.LEFT)
-        tk.Button(pin_row, text="👁️", command=self._toggle_pin_visibility, font=("Segoe UI", 8), bg="#f5f5f5", relief="groove", width=3).pack(side=tk.LEFT, padx=(6, 0))
+        theme.button(pin_row, role="secondary", size="sm", text="🎲 Rastgele PIN Üret", command=self.generate_random_pin).pack(side=tk.LEFT)
+        theme.button(pin_row, role="ghost", size="sm", text="👁️", command=self._toggle_pin_visibility, width=3).pack(side=tk.LEFT, padx=(6, 0))
 
-        tk.Label(form_frame, text="4. Donanım Modeli:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=3, column=0, sticky="w", pady=4)
-        self.inv_model_entry = tk.Entry(form_frame, width=28, font=("Segoe UI", 9))
+        theme.label(form_frame, "label.field", text="4. Donanım Modeli:").grid(row=3, column=0, sticky="w", pady=4)
+        self.inv_model_entry = theme.entry(form_frame, width=28)
         self.inv_model_entry.insert(0, DEFAULT_MODEL)
         self.inv_model_entry.grid(row=3, column=1, sticky="w", pady=4)
 
-        tk.Label(form_frame, text="5. Üretim Partisi:", font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=4, column=0, sticky="w", pady=4)
-        self.inv_batch_entry = tk.Entry(form_frame, width=28, font=("Segoe UI", 9))
+        theme.label(form_frame, "label.field", text="5. Üretim Partisi:").grid(row=4, column=0, sticky="w", pady=4)
+        self.inv_batch_entry = theme.entry(form_frame, width=28)
         self.inv_batch_entry.insert(0, datetime.now().strftime("BATCH-%Y-%m"))
         self.inv_batch_entry.grid(row=4, column=1, sticky="w", pady=4)
 
-        tk.Label(
+        theme.label(
             form_frame,
+            "label.note.emerald",
             text="🛡️ Aynı MAC veya UID sunucuya 2. kez eklenemez.\nℹ️ PIN ve yerel anahtar yalnızca BİR KEZ gelir: etiketi kaydetmeden/provizyon bitmeden pencereyi kapatmayın.\n⚠ Sıra: kaydet -> firmware yükle -> HEMEN provizyon (kurulum ağı parolasızdır).",
-            font=("Segoe UI", 8, "italic"),
-            fg="#2e7d32",
-            bg=self.card_bg,
+            slant="italic",
             justify="left",
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 8))
+            wraplength=440,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(8, 10))
 
-        self.btn_register_device = tk.Button(
-            form_frame,
-            text="☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET",
-            command=self.register_device_and_generate_label,
-            font=("Segoe UI", 10, "bold"),
-            bg=self.accent_green,
-            fg="#ffffff",
-            activebackground="#1b5e20",
-            activeforeground="#ffffff",
-            pady=8,
-            cursor="hand2",
+        self.btn_register_device = theme.button(
+            form_frame, role="primary", size="md", text="☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET", command=self.register_device_and_generate_label
         )
         self.btn_register_device.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(2, 0))
 
-        preview_frame = tk.LabelFrame(
-            top_split, text=" 🖨️ Termal Etiket & Karekod Önizleme ", font=("Segoe UI", 10, "bold"), bg=self.card_bg, fg=self.text_color, padx=12, pady=10
-        )
-        preview_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False, padx=(6, 0))
+        preview_card, preview_frame = theme.card(top_split, "🖨️ Termal Etiket & Karekod Önizleme", accent="cyan")
+        preview_card.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False, padx=(6, 0))
 
-        self.label_canvas_img = tk.Label(
-            preview_frame,
-            text=LABEL_PLACEHOLDER_TEXT,
-            font=("Segoe UI", 9),
-            bg="#f8fafc",
-            fg="#64748b",
-            width=50,
-            height=12,
-            relief="groove",
-        )
-        self.label_canvas_img.pack(pady=(0, 8))
+        self.label_canvas_img = theme.label(preview_frame, "label.preview", text=LABEL_PLACEHOLDER_TEXT, size=9, width=50, height=12)
+        self.label_canvas_img.pack(pady=(0, 10))
 
-        btn_label_row = tk.Frame(preview_frame, bg=self.card_bg)
+        btn_label_row = theme.frame(preview_frame, "frame.surface")
         btn_label_row.pack(fill=tk.X)
-        self.btn_save_label = tk.Button(
-            btn_label_row, text="💾 Etiketi Kaydet (PNG)", command=self.save_label_file, font=("Segoe UI", 8, "bold"), bg="#e2e8f0", state=tk.DISABLED
+        self.btn_save_label = theme.button(
+            btn_label_row, role="secondary", size="sm", text="💾 Etiketi Kaydet (PNG)", command=self.save_label_file, state=tk.DISABLED
         )
         self.btn_save_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
-        self.btn_print_label = tk.Button(
-            btn_label_row,
-            text="🖨️ Yazdır (Barkod / Termal)",
-            command=self.print_label_file,
-            font=("Segoe UI", 8, "bold"),
-            bg="#e0f2fe",
-            fg="#0284c7",
-            state=tk.DISABLED,
+        self.btn_print_label = theme.button(
+            btn_label_row, role="tint.cyan", size="sm", text="🖨️ Yazdır (Barkod / Termal)", command=self.print_label_file, state=tk.DISABLED
         )
         self.btn_print_label.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(4, 0))
 
-        table_frame = tk.LabelFrame(
-            inv_content,
-            text=" 📊 Sunucu Cihaz Envanteri & Durum Yönetimi (Süper Yönetici) ",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.card_bg,
-            fg=self.text_color,
-            padx=10,
-            pady=6,
+        table_card, table_frame = theme.card(
+            inv_content, "📊 Sunucu Cihaz Envanteri & Durum Yönetimi (Süper Yönetici)", accent="violet", padx=10, pady=8
         )
-        table_frame.pack(fill=tk.BOTH, expand=True)
+        table_card.pack(fill=tk.BOTH, expand=True)
 
-        table_action_row = tk.Frame(table_frame, bg=self.card_bg)
+        table_action_row = theme.frame(table_frame, "frame.surface")
         table_action_row.pack(fill=tk.X, pady=(0, 6))
-        tk.Button(table_action_row, text="🔄 Listeyi Yenile", command=self.refresh_inventory_list, font=("Segoe UI", 8, "bold"), bg="#e2e8f0").pack(
+        theme.button(table_action_row, role="secondary", size="sm", text="🔄 Listeyi Yenile", command=self.refresh_inventory_list).pack(
             side=tk.LEFT, padx=(0, 6)
         )
-        self.btn_suspend = tk.Button(
-            table_action_row, text="⏸️ Askıya Al (Kilit)", command=self.suspend_selected_device, font=("Segoe UI", 8, "bold"), bg="#fff3e0", fg="#e65100"
-        )
+        self.btn_suspend = theme.button(table_action_row, role="tint.amber", size="sm", text="⏸️ Askıya Al (Kilit)", command=self.suspend_selected_device)
         self.btn_suspend.pack(side=tk.LEFT, padx=4)
-        self.btn_activate = tk.Button(
-            table_action_row, text="▶️ Aktif Et (Stok)", command=self.activate_selected_device, font=("Segoe UI", 8, "bold"), bg="#e8f5e9", fg="#2e7d32"
-        )
+        self.btn_activate = theme.button(table_action_row, role="tint.emerald", size="sm", text="▶️ Aktif Et (Stok)", command=self.activate_selected_device)
         self.btn_activate.pack(side=tk.LEFT, padx=4)
-        self.btn_delete_device = tk.Button(
-            table_action_row, text="🗑️ Envanterden Sil", command=self.delete_selected_device, font=("Segoe UI", 8, "bold"), bg="#ffebee", fg="#c62828"
-        )
+        self.btn_delete_device = theme.button(table_action_row, role="danger", size="sm", text="🗑️ Envanterden Sil", command=self.delete_selected_device)
         self.btn_delete_device.pack(side=tk.LEFT, padx=4)
 
         self.inv_status_var = tk.StringVar(value="")
-        tk.Label(table_frame, textvariable=self.inv_status_var, font=("Segoe UI", 8), bg=self.card_bg, fg="#475569", anchor="w", justify="left").pack(
-            fill=tk.X, pady=(0, 4)
-        )
+        theme.label(table_frame, "label.status", textvariable=self.inv_status_var, anchor="w", justify="left").pack(fill=tk.X, pady=(0, 6))
 
         columns = ("serial_no", "device_uuid", "mac_address", "model", "status", "created_at", "claimed_at")
         self.inv_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=6, selectmode="browse")
@@ -1250,46 +1162,44 @@ class EvOtomasyonServisApp(tk.Tk):
         for key, (text, width, anchor) in headings.items():
             self.inv_tree.heading(key, text=text)
             self.inv_tree.column(key, width=width, anchor=anchor)
-        tree_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.inv_tree.yview)
+        tree_scroll = theme.scrollbar(table_frame, orient="vertical", command=self.inv_tree.yview)
         self.inv_tree.configure(yscrollcommand=tree_scroll.set)
         self.inv_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self._apply_tree_tags()
+        theme.on_change(lambda _tokens: self._apply_tree_tags())
 
         self.generate_random_pin()
+
+    def _apply_tree_tags(self) -> None:
+        """Envanter satır durum renkleri (tema belirteçlerinden; tema değişince yeniden uygulanır)."""
+        for status, color in self.theme.tree_status_colors().items():
+            self.inv_tree.tag_configure(status, foreground=color)
 
     # =========================================================================
     # SEKME 3: CİHAZ PROVİZYONU
     # =========================================================================
     def _build_provision_tab(self) -> None:
-        outer = tk.Frame(self.tab_provision, bg=self.bg_color, padx=10, pady=10)
+        theme = self.theme
+        outer = theme.frame(self.tab_provision, "frame.bg", padx=12, pady=10)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        info = tk.LabelFrame(outer, text=" 📟 Provizyon Bekleyen Cihaz ", font=("Segoe UI", 10, "bold"), bg=self.card_bg, fg=self.text_color, padx=10, pady=8)
-        info.pack(fill=tk.X, pady=(0, 8))
+        info_card, info = theme.card(outer, "📟 Provizyon Bekleyen Cihaz", accent="cyan", pady=8)
+        info_card.pack(fill=tk.X, pady=(0, 8))
         self.prov_device_var = tk.StringVar(value="")
-        tk.Label(info, textvariable=self.prov_device_var, font=("Segoe UI", 9, "bold"), bg=self.card_bg, fg="#0f172a", justify="left", anchor="w").pack(fill=tk.X)
+        theme.label(info, "label.field", textvariable=self.prov_device_var, justify="left", anchor="w").pack(fill=tk.X)
 
-        steps = tk.LabelFrame(outer, text=" 🧭 Adım Adım ", font=("Segoe UI", 10, "bold"), bg=self.card_bg, fg=self.text_color, padx=10, pady=8)
-        steps.pack(fill=tk.X, pady=(0, 8))
+        steps_card, steps = theme.card(outer, "🧭 Adım Adım", accent="violet", pady=8)
+        steps_card.pack(fill=tk.X, pady=(0, 8))
         self.prov_warn_var = tk.StringVar(value="")
-        tk.Label(
-            steps, textvariable=self.prov_warn_var, font=("Segoe UI", 9, "bold"), bg="#fef2f2", fg="#b91c1c", justify="left", anchor="w", wraplength=900, padx=6, pady=4
+        theme.label(
+            steps, "label.panel.rose", textvariable=self.prov_warn_var, size=9, weight="bold", justify="left", anchor="w", wraplength=880
         ).pack(fill=tk.X, pady=(0, 6))
         self.prov_steps_var = tk.StringVar(value="")
-        tk.Label(
-            steps, textvariable=self.prov_steps_var, font=("Segoe UI", 9), bg=self.card_bg, fg="#334155", justify="left", anchor="w", wraplength=900
-        ).pack(fill=tk.X)
+        theme.label(steps, "label.body", textvariable=self.prov_steps_var, size=9, justify="left", anchor="w", wraplength=920).pack(fill=tk.X)
 
-        secrets_frame = tk.LabelFrame(
-            outer,
-            text=" 🔐 Gizli Bilgiler (yalnızca bellekte; diske yazılmaz) ",
-            font=("Segoe UI", 10, "bold"),
-            bg=self.card_bg,
-            fg=self.text_color,
-            padx=10,
-            pady=8,
-        )
-        secrets_frame.pack(fill=tk.X, pady=(0, 8))
+        secrets_card, secrets_frame = theme.card(outer, "🔐 Gizli Bilgiler (yalnızca bellekte; diske yazılmaz)", accent="rose", pady=6)
+        secrets_card.pack(fill=tk.X, pady=(0, 8))
         self.prov_key_var = tk.StringVar(value="")
         self.prov_ap_var = tk.StringVar(value="")
         self._prov_secret_entries: list[tk.Entry] = []
@@ -1299,66 +1209,48 @@ class EvOtomasyonServisApp(tk.Tk):
                 ("AP parolası:", self.prov_ap_var, self.copy_ap_pass, "📋 AP parolasını kopyala"),
             )
         ):
-            tk.Label(secrets_frame, text=label, font=("Segoe UI", 9, "bold"), bg=self.card_bg).grid(row=row, column=0, sticky="w", pady=3)
-            entry = tk.Entry(secrets_frame, textvariable=var, show="•", state="readonly", width=34, font=("Consolas", 10))
-            entry.grid(row=row, column=1, padx=8, pady=3, sticky="w")
+            theme.label(secrets_frame, "label.field", text=label).grid(row=row, column=0, sticky="w", pady=2)
+            entry = theme.entry(secrets_frame, "entry.mono", textvariable=var, show="•", state="readonly", width=34)
+            entry.grid(row=row, column=1, padx=8, pady=2, sticky="w")
             self._prov_secret_entries.append(entry)
-            tk.Button(secrets_frame, text=btn_text, command=command, font=("Segoe UI", 8), bg="#f1f5f9", relief="groove").grid(row=row, column=2, padx=4)
+            theme.button(secrets_frame, role="secondary", size="sm", text=btn_text, command=command).grid(row=row, column=2, padx=4)
         self._prov_show_secrets = tk.BooleanVar(value=False)
-        tk.Checkbutton(
+        theme.check(
             secrets_frame,
             text="Değerleri göster",
             variable=self._prov_show_secrets,
             command=self._toggle_prov_secret_visibility,
-            font=("Segoe UI", 8),
-            bg=self.card_bg,
-            activebackground=self.card_bg,
+            size=9,
         ).grid(row=0, column=3, rowspan=2, padx=12)
 
-        buttons = tk.Frame(outer, bg=self.bg_color)
+        buttons = theme.frame(outer, "frame.bg")
         buttons.pack(fill=tk.X, pady=(0, 4))
-        self.btn_prov_serial = tk.Button(
-            buttons,
-            text="🔌 Seri (USB) ile Provizyonla (Önerilen)",
-            command=self.start_serial_provision,
-            font=("Segoe UI", 10, "bold"),
-            bg=self.accent_green,
-            fg="#ffffff",
-            activebackground="#1b5e20",
-            activeforeground="#ffffff",
-            pady=6,
+        self.btn_prov_serial = theme.button(
+            buttons, role="primary", size="md", text="🔌 Seri (USB) ile Provizyonla (Önerilen)", command=self.start_serial_provision
         )
         self.btn_prov_serial.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_prov_cancel = tk.Button(buttons, text="⏹ Beklemeyi İptal Et", command=self.cancel_provision, font=("Segoe UI", 9), bg="#fff7ed", fg="#9a3412", pady=6, state=tk.DISABLED)
+        self.btn_prov_cancel = theme.button(buttons, role="secondary", size="md", text="⏹ Beklemeyi İptal Et", command=self.cancel_provision, state=tk.DISABLED)
         self.btn_prov_cancel.pack(side=tk.LEFT, padx=6)
-        self.btn_prov_manual = tk.Button(buttons, text="📖 Elle Provizyon Talimatı", command=self.show_manual_provision_help, font=("Segoe UI", 9), bg="#f1f5f9", pady=6)
+        self.btn_prov_manual = theme.button(buttons, role="secondary", size="md", text="📖 Elle Provizyon Talimatı", command=self.show_manual_provision_help)
         self.btn_prov_manual.pack(side=tk.LEFT, padx=6)
-        self.btn_prov_forget = tk.Button(
-            buttons, text="🧹 Kaydı Bellekten Sil / Yeni Cihaz", command=self.forget_record, font=("Segoe UI", 9), bg="#fee2e2", fg="#991b1b", pady=6
-        )
+        self.btn_prov_forget = theme.button(buttons, role="danger", size="md", text="🧹 Kaydı Bellekten Sil / Yeni Cihaz", command=self.forget_record)
         self.btn_prov_forget.pack(side=tk.RIGHT)
 
-        fallback = tk.Frame(outer, bg=self.bg_color)
+        fallback = theme.frame(outer, "frame.bg")
         fallback.pack(fill=tk.X, pady=(0, 8))
-        tk.Label(fallback, text="Yedek (güvensiz) yol:", font=("Segoe UI", 9, "bold"), bg=self.bg_color, fg="#92400e").pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_prov_start = tk.Button(
-            fallback,
-            text="📶 Wi-Fi ile Provizyonla (güvensiz yedek yol)",
-            command=self.provision_via_wifi_clicked,
-            font=("Segoe UI", 9, "bold"),
-            bg="#fef3c7",
-            fg="#92400e",
-            pady=4,
+        theme.label(fallback, "label.accent_bg.amber", text="Yedek (güvensiz) yol:", weight="bold").pack(side=tk.LEFT, padx=(0, 8))
+        self.btn_prov_start = theme.button(
+            fallback, role="tint.amber", size="sm", text="📶 Wi-Fi ile Provizyonla (güvensiz yedek yol)", command=self.provision_via_wifi_clicked
         )
         self.btn_prov_start.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_prov_verify = tk.Button(fallback, text="✅ Wi-Fi ile Doğrula", command=self.verify_provision, font=("Segoe UI", 9, "bold"), bg="#dcfce7", fg="#166534", pady=4)
+        self.btn_prov_verify = theme.button(fallback, role="tint.emerald", size="sm", text="✅ Wi-Fi ile Doğrula", command=self.verify_provision)
         self.btn_prov_verify.pack(side=tk.LEFT, padx=6)
 
-        result_frame = tk.LabelFrame(outer, text=" 📋 Sonuç ", font=("Segoe UI", 9, "bold"), bg=self.card_bg, fg=self.text_color, padx=8, pady=6)
-        result_frame.pack(fill=tk.BOTH, expand=True)
-        self.prov_log = tk.Text(result_frame, wrap=tk.WORD, height=8, font=("Segoe UI", 9), bg="#f8fafc", fg="#0f172a", state=tk.DISABLED)
+        result_card, result_frame = theme.card(outer, "📋 Sonuç", accent="emerald", padx=10, pady=10)
+        result_card.pack(fill=tk.BOTH, expand=True)
+        self.prov_log = theme.text(result_frame, "text.log", wrap=tk.WORD, height=6, state=tk.DISABLED)
         self.prov_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        prov_scroll = tk.Scrollbar(result_frame, command=self.prov_log.yview)
+        prov_scroll = theme.scrollbar(result_frame, orient="vertical", command=self.prov_log.yview)
         prov_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.prov_log.config(yscrollcommand=prov_scroll.set)
 
@@ -1369,8 +1261,13 @@ class EvOtomasyonServisApp(tk.Tk):
 
     def _prov_say(self, text: str) -> None:
         """Provizyon sonuç alanına (gizli değer içermeyen) satır ekler."""
+        line = self.scrubber.scrub(text) + "\n"
+        tag = log_line_tag(line)  # yalnızca renk etiketi; metin aynen yazılır
         self.prov_log.config(state=tk.NORMAL)
-        self.prov_log.insert(tk.END, self.scrubber.scrub(text) + "\n")
+        if tag:
+            self.prov_log.insert(tk.END, line, tag)
+        else:
+            self.prov_log.insert(tk.END, line)
         self.prov_log.see(tk.END)
         self.prov_log.config(state=tk.DISABLED)
 
@@ -2149,10 +2046,7 @@ class EvOtomasyonServisApp(tk.Tk):
                 ),
                 tags=(status,),
             )
-        self.inv_tree.tag_configure("IN_STOCK", foreground="#2e7d32")
-        self.inv_tree.tag_configure("CLAIMED", foreground="#1565c0")
-        self.inv_tree.tag_configure("SUSPENDED", foreground="#e65100")
-        self.inv_tree.tag_configure("REVOKED", foreground="#c62828")
+        self._apply_tree_tags()
 
     def _selected_uid(self) -> Optional[str]:
         selected = self.inv_tree.selection()
@@ -2295,6 +2189,7 @@ class EvOtomasyonServisApp(tk.Tk):
             self.ui_error("Versiyon Arttırılamadı", "Sürüm klasörü/dosyası yazılamadı (yol veya izin sorunu).")
             return
         self.ver_label.config(text=f"Mevcut: v{next_ver}")
+        self.lbl_fw_version.config(text=f"Firmware v{next_ver}")
         self.apply_mode_selection()
         self.log(f"\n[VERSİYON] Sürüm v{next_ver} olarak güncellendi: {new_bin_path}")
 
@@ -2319,7 +2214,12 @@ class EvOtomasyonServisApp(tk.Tk):
 
     def log(self, text: str) -> None:
         """Log alanına satır ekler (yalnızca arayüz iş parçacığı; bellekteki gizli değerler maskelenir)."""
-        self.log_text.insert(tk.END, self.scrubber.scrub(str(text)) + "\n")
+        line = self.scrubber.scrub(str(text)) + "\n"
+        tag = log_line_tag(line)  # hata rose / uyarı amber / başarı emerald / komut sky; metin değişmez
+        if tag:
+            self.log_text.insert(tk.END, line, tag)
+        else:
+            self.log_text.insert(tk.END, line)
         try:
             if int(self.log_text.index("end-1c").split(".")[0]) > 3000:
                 self.log_text.delete("1.0", "500.0")

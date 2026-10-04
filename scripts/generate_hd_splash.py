@@ -1,9 +1,17 @@
+"""Native Android açılış bitmap'ini (drawable-nodpi/splash_screen_full.webp) üretir.
+
+* Çıktı drawable-nodpi/ altındadır: drawable/ (yoğunluksuz) içindeki bitmap'i sistem yoğunluk oranıyla büyütür.
+* Biçim kayıplı WebP (kalite 90): görünüm aynı, PNG'ye göre yaklaşık 10 kat küçük.
+* Kök dizin bu dosyanın konumundan türetilir (ana ağaç / geliştirme kopyası fark etmez).
+"""
 import os
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-bg_path = r"g:\site\ev_otomasyon\assets\images\ai_circuit_bg.jpg"
-logo_path = r"g:\site\ev_otomasyon\assets\images\round_app_logo.png"
-out_path = r"g:\site\ev_otomasyon\android\app\src\main\res\drawable\splash_screen_full.png"
+ROOT = Path(__file__).resolve().parent.parent
+bg_path = ROOT / "assets" / "images" / "ai_circuit_bg.jpg"
+logo_path = ROOT / "assets_src" / "round_app_logo.png"  # tam boyutlu ana kopya (pakete girmez)
+out_path = ROOT / "android" / "app" / "src" / "main" / "res" / "drawable-nodpi" / "splash_screen_full.webp"
 
 # Hedef çözünürlük: Modern telefon standardı (1080 x 2400)
 W, H = 1080, 2400
@@ -102,7 +110,8 @@ draw_canvas.arc([spin_cx - spin_r, spin_cy - spin_r, spin_cx + spin_r, spin_cy +
 
 draw_canvas.text(((W - c_w) // 2 + 15, card_y + (card_h - (bbox_card[3] - bbox_card[1])) // 2), card_text, fill=(203, 213, 225, 255), font=font_card)
 
-# Kaydet
-canvas.convert("RGB").save(out_path, "PNG", quality=95)
+# Kaydet (kayıplı WebP; drawable-nodpi/ altında)
+out_path.parent.mkdir(parents=True, exist_ok=True)
+canvas.convert("RGB").save(out_path, "WEBP", quality=90, method=6)
 print(f"Yüksek çözünürlüklü Android native splash başarıyla üretildi: {out_path} ({W}x{H})")
 

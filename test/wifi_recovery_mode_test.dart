@@ -4,8 +4,10 @@ import 'package:ev_otomasyon/config/app_config.dart';
 import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/services/automation_api_service.dart';
 import 'package:ev_otomasyon/ui/common/wifi_provision_panel.dart';
+import 'package:ev_otomasyon/ui/common/wifi_signal_bars.dart';
 import 'package:ev_otomasyon/ui/pages/wifi_recovery_dialog.dart';
-import 'package:ev_otomasyon/ui/theme/app_theme.dart';
+import 'package:ev_otomasyon/ui/theme/tokens.dart';
+import 'package:ev_otomasyon/ui/widgets/orb/orb.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -121,11 +123,11 @@ void main() {
         expect(detail, contains('1.1.0'));
         expect(detail, contains('192.168.4.1'));
 
-        // Yeşil onay simgesi (renk + simge birlikte; SnackBar değil, kalıcı kart).
-        expect(
-          tester.widget<Icon>(find.byIcon(Icons.check_circle)).color,
-          AppTheme.accentGreen,
-        );
+        // Yeşil onay orb'u ✓ (renk + simge birlikte; SnackBar değil, kalıcı kart). WP-V6: eski `Icons.check_circle`
+        // simgesi yerine emerald `OrbIconBadge` (onay simgesi `Icons.check_rounded`).
+        final orb = tester.widget<OrbIconBadge>(find.byKey(const Key('wifi_connection_orb')));
+        expect(orb.family, AppFamilies.emerald);
+        expect(orb.icon, Icons.check_rounded);
         expect(find.byType(SnackBar), findsNothing);
 
         final status = dev.api.requests.firstWhere(
@@ -359,25 +361,20 @@ void main() {
         await connectAndScan(tester, env);
 
         expect(textOf(tester, 'wifi_24ghz_note'), contains('2,4 GHz'));
-        for (final entry in <int, (String, IconData, IconData)>{
-          0: ('-48 dBm', Icons.wifi, Icons.lock_outline), // güçlü + şifreli
-          1: ('-70 dBm', Icons.wifi_2_bar, Icons.lock_open), // orta + açık
-          2: (
-            '-88 dBm',
-            Icons.wifi_1_bar,
-            Icons.lock_outline,
-          ), // zayıf + şifreli
+        // WP-V6: sinyal simgeleri (`Icons.wifi*`) yerine animasyonlu `WifiSignalBars` (dolu çubuk sayısı).
+        for (final entry in <int, (String, int, IconData)>{
+          0: ('-48 dBm', 4, Icons.lock_outline), // güçlü + şifreli
+          1: ('-70 dBm', 2, Icons.lock_open), // orta + açık
+          2: ('-88 dBm', 1, Icons.lock_outline), // zayıf + şifreli
         }.entries) {
           final tile = find.byKey(Key('wifi_network_${entry.key}'));
           expect(
             find.descendant(of: tile, matching: find.text(entry.value.$1)),
             findsOneWidget,
           );
-          expect(
-            find.descendant(of: tile, matching: find.byIcon(entry.value.$2)),
-            findsOneWidget,
-            reason: 'sinyal çubuğu ${entry.key}',
-          );
+          final bars = find.descendant(of: tile, matching: find.byType(WifiSignalBars));
+          expect(bars, findsOneWidget, reason: 'sinyal çubukları ${entry.key}');
+          expect(tester.widget<WifiSignalBars>(bars).level, entry.value.$2, reason: 'çubuk sayısı ${entry.key}');
           expect(
             find.descendant(of: tile, matching: find.byIcon(entry.value.$3)),
             findsOneWidget,

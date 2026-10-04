@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../theme/tokens.dart';
+import '../../../widgets/settings/accent_button.dart';
 import '../device_connection_panel.dart';
 import '../logic/cloud_logic.dart';
+import '../panel/service_glass.dart';
 import '../service_setup_controller.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
@@ -13,6 +16,9 @@ class Step6Cloud extends StatelessWidget {
   const Step6Cloud({super.key, required this.controller});
 
   final ServiceSetupController controller;
+
+  /// "Son görülme" saati biçimi (her kurulumda yeniden oluşturulmaz).
+  static final DateFormat _seenFormat = DateFormat('dd.MM.yyyy HH:mm:ss');
 
   @override
   Widget build(BuildContext context) {
@@ -27,12 +33,20 @@ class Step6Cloud extends StatelessWidget {
       6,
       continueHint: 'Devam etmek için panonun sunucuda çevrimiçi olması gerekir.',
       statusText: cloud.online ? 'Çevrimiçi' : null,
+      // Bekleme kartı (halka + geri sayım) varken sabit alandaki "kuruluyor" hapı aynı bilgiyi ikinci kez yazmasın.
+      showBusy: !cloud.waiting,
+      // Bu adımın birincil eylemi "Buluta Bağla ve Bekle"dir ("Tekrar dene" aynı işi yapar): hata kutusundaki yeniden deneme
+      // çerçeveli ikincil olur, ekranda tek gradyan birincil kalır.
+      retrySecondary: true,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (!cloud.online) ...[
-            _homeWifiCard(context, c),
-            DeviceConnectionPanel(controller: c),
+            // Bekleme sürerken "telefonu ev ağına alın" uyarısı bayattır (pano zaten bağlı, yanıt bekleniyor): gizlenir.
+            if (!cloud.waiting) _homeWifiCard(context, c),
+            // "Panoya Bağlan" burada İKİNCİL (çerçeveli): adım pano bağlantısını kendisi kurar ("Buluta Bağla ve Bekle"); elle
+            // adres/anahtar yolu yardımcıdır. Eskiden iki gradyan birincil yan yana duruyordu ve hangisinin basılacağı belli değildi.
+            DeviceConnectionPanel(controller: c, primaryConnect: false),
             SetupCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -46,7 +60,8 @@ class Step6Cloud extends StatelessWidget {
                     key: const Key('btn_cloud_connect'),
                     label: cloud.credentialWritten ? 'Tekrar Bekle' : 'Buluta Bağla ve Bekle',
                     icon: Icons.cloud_sync_rounded,
-                    busy: cloud.busy,
+                    // Bekleme kartı kendi göstergesini taşır: düğmede ikinci bir dönen yay çizilmez.
+                    busy: cloud.busy && !cloud.waiting,
                     onPressed: cloud.busy ? null : () => cloud.connectAndWait(),
                   ),
                   if (cloud.credentialWritten && !cloud.busy)
@@ -55,9 +70,9 @@ class Step6Cloud extends StatelessWidget {
                       child: OutlinedButton.icon(
                         key: const Key('btn_rewrite_credential'),
                         onPressed: () => cloud.rewriteCredential(),
-                        icon: const Icon(Icons.vpn_key_rounded, size: 18),
+                        icon: Icon(Icons.vpn_key_rounded, size: accentIconSize(context, base: 18)),
                         label: const Text('Kimliği Yeniden Yaz'),
-                        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                        style: accentOutlinedButtonStyle(context, AppFamilies.sky),
                       ),
                     ),
                 ],
@@ -101,36 +116,68 @@ class Step6Cloud extends StatelessWidget {
     );
   }
 
+  /// Tek bekleme kartı: **belirli** halka (kalan süre / 90 sn boşalır) + ortada tabular `mm:ss` + açıklama. (Eskiden yalnız
+  /// dönen belirsiz yay + "Kalan bekleme süresi" ayrı satırdı; sürenin ne kadar ilerlediği görünmüyordu.)
   Widget _waitingCard(BuildContext context, ServiceSetupController c, CloudLogic cloud) {
+    final family = AppFamilies.sky;
+    final ink = SetupColors.readable(context, family.base);
+    Duration remaining() {
+      final started = cloud.waitStartedAt;
+      if (started == null) return Duration.zero;
+      return CloudLogic.waitLimit - c.ctx.clock.now().difference(started);
+    }
+
     return SetupCard(
       key: const Key('cloud_waiting_card'),
       accent: SetupColors.primaryLight,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Row(
-            children: [
-              const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
+          ValueListenableBuilder<int>(
+            valueListenable: c.clockTick,
+            builder: (context, _, _) {
+              final left = remaining();
+              final fraction = (left.inMilliseconds / CloudLogic.waitLimit.inMilliseconds).clamp(0.0, 1.0);
+              return ServiceProgressRing(
+                value: fraction,
+                color: ink,
+                size: 64,
+                strokeWidth: 5,
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: CountdownText(
+                      key: const Key('cloud_waiting_countdown'),
+                      tick: c.clockTick,
+                      remaining: remaining,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        color: SetupColors.text(context),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
                   'Pano sunucuya bağlanıyor, bekleniyor...',
                   style: TextStyle(fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                 ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          CountdownText(
-            key: const Key('cloud_waiting_countdown'),
-            tick: c.clockTick,
-            remaining: () {
-              final started = cloud.waitStartedAt;
-              if (started == null) return Duration.zero;
-              return CloudLogic.waitLimit - c.ctx.clock.now().difference(started);
-            },
-            prefix: 'Kalan bekleme süresi: ',
-            style: TextStyle(fontSize: 13, color: SetupColors.muted(context)),
+                const SizedBox(height: 4),
+                Text(
+                  'Kalan bekleme süresi (en çok ${CloudLogic.waitLimit.inSeconds} sn).',
+                  style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -141,16 +188,32 @@ class Step6Cloud extends StatelessWidget {
     final lan = cloud.lanStatus!;
     Widget chip(String label, bool? ok) {
       final color = ok == null ? SetupColors.warn : (ok ? SetupColors.ok : SetupColors.error);
-      return Chip(
-        avatar: Icon(
-          ok == null ? Icons.help_outline_rounded : (ok ? Icons.check_rounded : Icons.close_rounded),
-          size: 16,
-          color: SetupColors.readable(context, color),
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
         ),
-        label: Text(label, style: TextStyle(fontSize: 12.5, color: SetupColors.readable(context, color))),
-        backgroundColor: color.withValues(alpha: 0.12),
-        side: BorderSide(color: color.withValues(alpha: 0.4)),
-        visualDensity: VisualDensity.compact,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(6, 5, 12, 5),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SetupMiniOrb(
+                family: SetupColors.family(color),
+                icon: ok == null ? Icons.question_mark_rounded : (ok ? Icons.check_rounded : Icons.close_rounded),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: SetupColors.readable(context, color)),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
     }
 
@@ -187,10 +250,8 @@ class Step6Cloud extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SetupInfoRow(
+          SetupResultHeader(
             icon: Icons.cloud_done_rounded,
-            color: SetupColors.ok,
-            bold: true,
             text: cloud.alreadyOnline
                 ? 'Pano sunucuda zaten çevrimiçi: çalışan panonun bulut kimliği DEĞİŞTİRİLMEDİ.'
                 : 'Pano sunucuda çevrimiçi: bulut bağlantısı doğrulandı.',
@@ -198,7 +259,7 @@ class Step6Cloud extends StatelessWidget {
           if (seen != null)
             SetupInfoRow(
               icon: Icons.schedule_rounded,
-              text: 'Son görülme: ${DateFormat('dd.MM.yyyy HH:mm:ss').format(seen.toLocal())}',
+              text: 'Son görülme: ${_seenFormat.format(seen.toLocal())}',
             ),
         ],
       ),

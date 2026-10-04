@@ -83,9 +83,14 @@ class WifiLogic extends SetupLogic {
   @override
   bool get isComplete => _connected;
 
+  // Arayüz oluşturulurken / her tuş vuruşunda çalışan doğrulamalar için bir kez derlenen kalıplar.
+  static final RegExp _uidPattern = RegExp(r'^AHBU-S3-([0-9A-F]{6})$');
+  static final RegExp _schemePattern = RegExp(r'^https?://', caseSensitive: false);
+  static final RegExp _forbiddenHostChars = RegExp(r'[/?#@\s]');
+
   /// Telefonun bağlanacağı kurulum ağının tahmini adı (UID'den): `AHBU-S3-A1B2C3` -> `AHBU-A1B2C3`.
   static String? apSsidFor(String uid) {
-    final match = RegExp(r'^AHBU-S3-([0-9A-F]{6})$').firstMatch(uid.toUpperCase());
+    final match = _uidPattern.firstMatch(uid.toUpperCase());
     return match == null ? null : 'AHBU-${match.group(1)}';
   }
 
@@ -97,8 +102,8 @@ class WifiLogic extends SetupLogic {
     var text = raw.trim();
     const invalid = 'Adres geçersiz. Yerel ağ IP adresi yazın (ör. 192.168.1.40).';
     if (text.isEmpty) return 'Panonun IP adresini yazın (ör. 192.168.1.40).';
-    text = text.replaceFirst(RegExp(r'^https?://', caseSensitive: false), '');
-    if (text.contains(RegExp(r'[/?#@\s]'))) return invalid;
+    text = text.replaceFirst(_schemePattern, '');
+    if (text.contains(_forbiddenHostChars)) return invalid;
     final uri = Uri.tryParse('http://$text');
     if (uri == null || uri.host.isEmpty || uri.hasQuery) return invalid;
     return AutomationApiService.isAllowedDeviceHost(uri.host) ? null : invalid;

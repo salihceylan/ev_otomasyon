@@ -4,7 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../services/automation_state.dart';
+import '../../../services/biometric_auth_service.dart';
+import '../../motion/motion_scope.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
 import 'settings_card.dart';
 
 /// Görünüm (tema) seçici kartı: Koyu / Açık / Sistem. Anahtarlar: `Key('card_theme')`,
@@ -22,7 +26,7 @@ class ThemeSelectorCard extends StatelessWidget {
       child: SettingsCard(
         icon: Icons.palette_outlined,
         title: 'Görünüm & Tema Modu',
-        accent: AppTheme.primaryBlue,
+        accent: AppFeature.appearance.accentFamily.base,
         children: [
           Text(
             switch (mode) {
@@ -99,15 +103,29 @@ class _ThemeChoice extends StatelessWidget {
       child: InkWell(
         key: choiceKey,
         onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
+        borderRadius: BorderRadius.circular(AppRadius.r12),
+        child: AnimatedContainer(
+          duration: MotionScope.durationOf(context, AppMotion.fast),
+          curve: AppMotion.standard,
           constraints: const BoxConstraints(minHeight: 56),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
-            color: selected ? AppTheme.primaryBlue.withValues(alpha: 0.2) : AppTheme.getInsetColor(context),
-            borderRadius: BorderRadius.circular(10),
+            gradient: selected
+                ? LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppFamilies.sky.base.withValues(alpha: 0.30),
+                      AppFamilies.cyan.base.withValues(alpha: 0.16),
+                    ],
+                  )
+                : null,
+            color: selected ? null : AppTheme.getInsetColor(context),
+            borderRadius: BorderRadius.circular(AppRadius.r12),
             border: Border.all(
-              color: selected ? AppTheme.primaryBlue : AppTheme.getCardBorder(context),
+              // Seçili olmayan kutucuk bir KONTROLDÜR: sınırı ≥ 3:1 (alan çerçevesiyle aynı dil). Dekoratif kart kenarı
+              // (getCardBorder açıkta 1.4:1) kontrol sınırı olarak yetmez.
+              color: selected ? AppFamilies.sky.base : AppTheme.getFieldBorder(context),
               width: selected ? 1.5 : 1.0,
             ),
           ),
@@ -133,8 +151,20 @@ class _ThemeChoice extends StatelessWidget {
   }
 }
 
+/// Biyometrik türün etiketine ([AutomationState.biometricLabel]: "Face ID", "Parmak İzi", "Biyometrik Giriş") uyan simge:
+/// YÜZ tanıma ("Face ID", "Yüz ...") -> yüz simgesi; aksi halde parmak izi (karma "Face ID / Parmak İzi", donanım
+/// çözülemediğinde "Biyometrik Giriş" ve bilinmeyen etiketler dahil). Başlık "Face ID ile Giriş" iken simge parmak izi
+/// olmasın: kart simgesi ile etiket aynı türü anlatır.
+IconData biometricIconFor(String label) {
+  final text = label.toLowerCase();
+  final face = text.contains('face') || text.contains('yüz');
+  final finger = text.contains('parmak') || text.contains('finger');
+  return face && !finger ? Icons.face_unlock_rounded : Icons.fingerprint_rounded;
+}
+
 /// Biyometrik giriş kartı. **Açmak ve kapatmak kimlik doğrulaması ister**
-/// (`AutomationState.toggleBiometric`); doğrulanamazsa ayar değişmez ve kullanıcıya söylenir.
+/// (`AutomationState.toggleBiometric`); doğrulanamazsa ayar değişmez ve kullanıcıya söylenir. Kart simgesi biyometrik
+/// türü izler ([biometricIconFor]).
 ///
 /// Anahtarlar: `Key('card_biometric')`, `Key('switch_biometric')`, `Key('text_biometric_status')`.
 class BiometricCard extends StatefulWidget {
@@ -159,13 +189,19 @@ class _BiometricCardState extends State<BiometricCard> {
         // Kapatmak da doğrulama ister (toggleBiometric içinde).
         : await state.toggleBiometric(false);
     if (!mounted) return;
+    // Vazgeçmede genel açıklama; kilitlenme, kayıt yok gibi durumlarda neden söylenir.
+    final why = biometricFailureMessage(
+      state.biometricService.lastFailure,
+      label: state.biometricLabel,
+      fallback: 'Kimlik doğrulanamadı.',
+    );
     setState(() {
       _busy = false;
       _message = ok
           ? null
           : (value
-              ? 'Kimlik doğrulanamadı. Biyometrik giriş açılmadı.'
-              : 'Kimlik doğrulanamadı. Biyometrik giriş açık kalıyor.');
+              ? '$why Biyometrik giriş açılmadı.'
+              : '$why Biyometrik giriş açık kalıyor.');
     });
   }
 
@@ -174,14 +210,21 @@ class _BiometricCardState extends State<BiometricCard> {
     final vm = context.select<AutomationState, ({bool supported, bool enabled, String label})>(
       (s) => (supported: s.isBiometricSupported, enabled: s.isBiometricEnabled, label: s.biometricLabel),
     );
-    final green = AppTheme.accentGreen;
+    final green = AppFeature.biometric.accentFamily.base;
 
     return KeyedSubtree(
       key: const Key('card_biometric'),
       child: SettingsCard(
-        icon: Icons.fingerprint_rounded,
-        title: '${vm.label} Girişi',
+        icon: biometricIconFor(vm.label),
+        // Etiket zaten "Giriş" ile bitiyorsa ('Biyometrik Giriş': tür çözülemediğinde varsayılan) ek eklenmez.
+        title: vm.label.endsWith('Giriş') ? vm.label : '${vm.label} ile Giriş',
         accent: green,
+        active: vm.enabled,
+        pending: _busy,
+        enabled: vm.supported,
+        // Destekleniyor ama KAPALI: orb solgun (aile korunur). Tam doygun parlak zümrüt orb anahtar kapalıyken de "açık"
+        // gibi okunuyordu (açık/kapalı ayrımını yalnız kart kenarı veriyordu).
+        dimmed: vm.supported && !vm.enabled,
         children: [
           MergeSemantics(
             child: Semantics(
@@ -201,7 +244,6 @@ class _BiometricCardState extends State<BiometricCard> {
                     key: const Key('switch_biometric'),
                     value: vm.enabled,
                     materialTapTargetSize: MaterialTapTargetSize.padded,
-                    activeThumbColor: green,
                     onChanged: (vm.supported && !_busy) ? (value) => unawaited(_toggle(value)) : null,
                   ),
                 ],

@@ -149,6 +149,8 @@ void main() {
       await http.runWithClient(() async {
         await openDialog(tester, env);
         await testConnection(tester, env);
+        // Diyalog içeriği kaydırılır: ağ satırı (yönerge kartı büyüdüğü için) ilk ekranın altında kalabilir.
+        await tester.ensureVisible(find.byKey(const Key('wifi_network_0')));
         await tester.tap(find.byKey(const Key('wifi_network_0')));
         await tester.pump();
         await typeInto(tester, 'field_wifi_password', 'yeni-evagi-sifresi');
@@ -175,6 +177,8 @@ void main() {
       await http.runWithClient(() async {
         await openDialog(tester, env);
         await testConnection(tester, env);
+        // Diyalog içeriği kaydırılır: ağ satırı (yönerge kartı büyüdüğü için) ilk ekranın altında kalabilir.
+        await tester.ensureVisible(find.byKey(const Key('wifi_network_0')));
         await tester.tap(find.byKey(const Key('wifi_network_0')));
         await tester.pump();
         await typeInto(tester, 'field_wifi_password', 'yeni-evagi-sifresi');

@@ -226,9 +226,38 @@ void main() {
       await fillReset(tester);
       await tapKey(tester, 'btn_reset_password');
 
-      expect(textOf(tester, 'forgot_error'), 'Kod hatalı. Kalan deneme: 2.');
-      expect(textOf(tester, 'forgot_remaining_attempts'), 'Kalan deneme hakkı: 2');
+      // Kalan hak TEK yerde (iletinin içinde); sözcükler bölünmeyen boşlukla bağlı: "2." yetim satır kalmaz.
+      expect(textOf(tester, 'forgot_error'), 'Kod hatalı. Kalan deneme: 2.');
+      expect(find.byKey(const Key('forgot_remaining_attempts')), findsNothing, reason: 'ikinci "Kalan deneme hakkı" satırı yok');
+      expect(find.textContaining('Kalan deneme hakkı'), findsNothing);
       expect(tester.widget<TextField>(find.byKey(const Key('field_new_password'))).controller!.text, 'yepyeni-parola-1');
+
+      // Kod alanı HATALI çizilir (kırmızı çerçeve) ve ileti kod alanının hemen altındadır (şifre alanlarının altında değil).
+      final decoration = tester.widget<TextField>(find.byKey(const Key('field_code'))).decoration!;
+      final danger = (decoration.errorBorder! as OutlineInputBorder).borderSide.color;
+      expect((decoration.enabledBorder! as OutlineInputBorder).borderSide.color, danger);
+      expect((decoration.focusedBorder! as OutlineInputBorder).borderSide.color, danger);
+      final code = tester.getRect(find.byKey(const Key('field_code')));
+      final message = tester.getRect(find.byKey(const Key('forgot_error')));
+      final password = tester.getRect(find.byKey(const Key('field_new_password')));
+      expect(message.top, greaterThanOrEqualTo(code.bottom), reason: 'ileti kod alanının altında');
+      expect(message.bottom, lessThanOrEqualTo(password.top), reason: 'ileti şifre alanlarının ÜSTÜNDE (kod alanına yakın)');
+    });
+
+    testWidgets('şifre hatası (uyuşmazlık) kod alanını kırmızı yapmaz; ileti formun sonunda kalır', (tester) async {
+      final env = await atStepTwo(tester);
+
+      await fillReset(tester, confirm: 'baska-parola-9');
+      await tapKey(tester, 'btn_reset_password');
+
+      expect(textOf(tester, 'forgot_error'), 'Girdiğiniz şifreler birbiriyle uyuşmuyor');
+      final decoration = tester.widget<TextField>(find.byKey(const Key('field_code'))).decoration!;
+      final danger = (decoration.errorBorder! as OutlineInputBorder).borderSide.color;
+      expect((decoration.enabledBorder! as OutlineInputBorder).borderSide.color, isNot(danger), reason: 'hata kodla ilgili değil');
+      final message = tester.getRect(find.byKey(const Key('forgot_error')));
+      final confirm = tester.getRect(find.byKey(const Key('field_confirm_password')));
+      expect(message.top, greaterThanOrEqualTo(confirm.bottom), reason: 'şifre iletisi şifre alanlarının altında');
+      expect(env.cloud.resetArgs, isEmpty);
     });
 
     testWidgets('süresi dolmuş kod (410) açık mesajla gösterilir', (tester) async {

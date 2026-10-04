@@ -46,6 +46,9 @@ class HandoverLogic extends SetupLogic {
 
   static const int maxNotesLength = 800;
 
+  /// Rapor tarihi biçimi (her çağrıda yeniden kurulmaz).
+  static final DateFormat _reportDate = DateFormat('dd.MM.yyyy HH:mm');
+
   String _notes = '';
   String _receiver = '';
   bool _ownerApproved = false;
@@ -145,12 +148,18 @@ class HandoverLogic extends SetupLogic {
   /// Teslimden hemen önce güncel durumu okur: sunucuda çevrimiçi mi, pano ev ağında mı (en iyi çaba).
   Future<void> _refresh() async {
     final t = ctx.requireTarget;
-    final devices = await ctx.cloud.devices(t.homeId);
+    // Sunucu listesi ve pano yerel durumu birbirine bağlı değil: birlikte beklenir (telefon pano ağında değilken yerel
+    // kol 4 sn'lik bağlantı zaman aşımına kadar sürebilir; sunucu isteği onun arkasında beklemez).
+    final (devices, _) = await awaitBoth(ctx.cloud.devices(t.homeId), _readLan());
     _cloudOnlineNow = devices.any((d) => d.deviceUuid.toUpperCase() == t.deviceUuid.toUpperCase() && d.online);
+  }
+
+  /// Panonun yerel durumunu [_lan]'a okur (en iyi çaba): yerel bağlantı yoksa (telefon başka ağda) `null` olur ve
+  /// yalnızca sunucu bilgisiyle devam edilir. İptal ve oturum bitişi yukarı verilir.
+  Future<void> _readLan() async {
     try {
       _lan = await ctx.deviceCall((api) => api.fetchStatus());
     } catch (error) {
-      // Yerel bağlantı yoksa (telefon başka ağda) yalnızca sunucu bilgisiyle devam edilir.
       if (error is SetupCancelled || error is SetupSessionExpiredException) rethrow;
       _lan = null;
     }
@@ -253,7 +262,7 @@ class HandoverLogic extends SetupLogic {
   String buildReport({String? technician, String? roleLabel}) {
     final t = ctx.target;
     final when = _completedAt ?? ctx.clock.now();
-    final date = DateFormat('dd.MM.yyyy HH:mm').format(when.toLocal());
+    final date = _reportDate.format(when.toLocal());
     final checks = buildChecks();
     String mark(bool ok) => ok ? '[TAMAM]' : '[EKSİK]';
     final lan = _lan;

@@ -5,10 +5,18 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../../models/json_utils.dart';
+import '../motion/skeleton.dart';
+import '../theme/tokens.dart';
+import '../widgets/orb/glass_icon_button.dart';
+import '../widgets/orb/orb_core.dart';
+import '../widgets/orb/orb_icon_badge.dart';
+import '../widgets/settings/accent_button.dart';
+import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/doctor_report.dart';
 import 'service_setup/setup_style.dart';
 import 'service_setup/setup_widgets.dart';
 import 'wifi_recovery_dialog.dart';
+import '../theme/feature_accent.dart';
 
 /// Sistem doktoru: bulut / ev ağı / pano gücü için 3 katmanlı tanı.
 ///
@@ -161,7 +169,13 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
     }
   }
 
+  /// Kurtarma sihirbazı bir kez açıldı (PF-47): aynı karede gelen ikinci etkinleştirme (erişilebilirlik eylemi,
+  /// klavye Enter tekrarı) `pop()` ile az önce açılan kurtarma penceresini kapatıp yenisini açardı.
+  bool _recoveryOpened = false;
+
   void _openRecovery() {
+    if (_recoveryOpened) return;
+    _recoveryOpened = true;
     final navigator = Navigator.of(context);
     navigator.pop();
     unawaited(WifiRecoveryDialog.show(navigator.context));
@@ -175,18 +189,54 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final noHome = state.activeHome == null && _report == null;
+    // Tüm durumu izlemek yerine yalnızca gösterilen değerler seçilir (PF-06): tanı açıkken gelen ilgisiz bildirimler
+    // (canlı durum, çevrimiçi/çevrimdışı geçişleri) pencereyi yeniden kurmaz.
+    final view = context.select<AutomationState, ({bool hasHome, String homeName, bool isSuper, bool canRecover})>((s) {
+      final caps = s.capabilities;
+      return (
+        hasHome: s.activeHome != null,
+        homeName: s.activeHome?.name ?? '',
+        isSuper: caps.isSuperUser,
+        canRecover: caps.canOpenWifiRecovery,
+      );
+    });
+    final noHome = !view.hasHome && _report == null;
+    // Başlık orb'u rapor SEVİYESİNE bağlıdır (eskiden her durumda yeşil kalkan: uyarı/sorun teşhisinde "sağlıklı" sinyali
+    // veriyordu): ok zümrüt, uyarı amber, sorun gül; yükleniyor/bilinmiyor doktor ailesi.
+    final level = _loading ? null : _report?.level;
+    final AccentFamily headFamily;
+    final IconData headIcon;
+    switch (level) {
+      case 'ok':
+        headFamily = AppFamilies.emerald;
+        headIcon = Icons.health_and_safety_rounded;
+      case 'warning':
+        headFamily = AppFamilies.amber;
+        headIcon = Icons.warning_amber_rounded;
+      case 'error':
+        headFamily = AppFamilies.rose;
+        headIcon = Icons.error_outline_rounded;
+      default:
+        headFamily = AppFeature.doctor.accentFamily;
+        headIcon = Icons.health_and_safety_rounded;
+    }
     return Dialog(
-      backgroundColor: SetupColors.surface(context),
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      shadowColor: Colors.transparent,
+      elevation: 0,
+      // Kenarı yalnız içteki [ServiceCard] çizer: `dialogTheme` şekli cyan kenarlıklı idi ve kartın kenarıyla köşelerde çift
+      // kontur oluşturuyordu. Yarıçap [AppRadius.dialog] (24; şartname "diyalog 24": tema dialogTheme, AuthDialogShell ve
+      // ConfirmDestructiveDialog ile AYNI — eskiden 28 dp [AppRadius.sheet]'ti).
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(AppRadius.dialog))),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: SetupColors.border(context)),
-      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
-        child: SingleChildScrollView(
+        child: ServiceCard(
+          margin: EdgeInsets.zero,
+          padding: EdgeInsets.zero,
+          radius: AppRadius.dialog,
+          child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -194,8 +244,13 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.health_and_safety_outlined, color: SetupColors.primaryLight, size: 24),
-                  const SizedBox(width: 10),
+                  OrbIconBadge(
+                    icon: headIcon,
+                    family: headFamily,
+                    pending: _loading,
+                    status: !_loading && _report?.level == 'ok' ? OrbStatus.success : OrbStatus.none,
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -205,27 +260,26 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
                           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                         ),
                         Text(
-                          state.activeHome == null ? 'Daire seçili değil' : 'Daire: ${state.activeHome!.name}',
+                          view.hasHome ? 'Daire: ${view.homeName}' : 'Daire seçili değil',
                           key: const Key('doctor_home_name'),
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, color: SetupColors.muted(context)),
+                          style: TextStyle(fontSize: AppText.badge, color: SetupColors.muted(context)),
                         ),
                       ],
                     ),
                   ),
-                  IconButton(
+                  GlassIconButton(
                     key: const Key('btn_doctor_close'),
-                    tooltip: 'Kapat',
-                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icons.close_rounded,
+                    semanticLabel: 'Kapat',
+                    onTap: () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
-              Divider(color: SetupColors.border(context)),
+              Divider(color: SetupColors.border(context), height: 24),
               if (noHome)
-                _NoHome(isSuper: state.capabilities.isSuperUser)
+                _NoHome(isSuper: view.isSuper)
               else if (_loading)
                 const _Loading()
               else if (_failure != null)
@@ -233,7 +287,7 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
               else if (_report != null)
                 _ReportView(
                   report: _report!,
-                  canRecover: state.capabilities.canOpenWifiRecovery,
+                  canRecover: view.canRecover,
                   onRecovery: _openRecovery,
                   onRerun: _run,
                 )
@@ -241,6 +295,7 @@ class _SystemDoctorDialogState extends State<SystemDoctorDialog> {
                 const SizedBox.shrink(),
             ],
           ),
+        ),
         ),
       ),
     );
@@ -254,7 +309,7 @@ class _NoHome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SetupCard(
+    return ServiceCard(
       key: const Key('doctor_no_home'),
       accent: SetupColors.warn,
       margin: EdgeInsets.zero,
@@ -281,8 +336,9 @@ class _Loading extends StatelessWidget {
       child: Column(
         key: const Key('doctor_loading'),
         children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 16),
+          for (var i = 0; i < 3; i++)
+            const Padding(padding: EdgeInsets.only(bottom: 10), child: SkeletonCard(lines: 1)),
+          const SizedBox(height: 6),
           Text(
             'Sistem katmanları denetleniyor...\n(bulut, ev ağı, pano gücü)',
             textAlign: TextAlign.center,
@@ -307,16 +363,16 @@ class _FailureView extends StatelessWidget {
       key: Key('doctor_error_${failure.kind.name}'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SetupCard(
+        ServiceCard(
           key: const Key('doctor_error'),
           accent: SetupColors.error,
           margin: EdgeInsets.zero,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: failure.title),
+              ServiceCardHeader(icon: Icons.error_outline_rounded, family: AppFamilies.rose, title: failure.title),
               Padding(
-                padding: const EdgeInsets.only(left: 26, top: 2),
+                padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   failure.hint,
                   style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.text(context)),
@@ -417,16 +473,16 @@ class _ReportView extends StatelessWidget {
     switch (r.level) {
       case 'ok':
         summaryColor = SetupColors.ok;
-        summaryIcon = Icons.check_circle_outline_rounded;
+        summaryIcon = Icons.check_rounded;
       case 'warning':
         summaryColor = SetupColors.warn;
         summaryIcon = Icons.warning_amber_rounded;
       case 'error':
         summaryColor = SetupColors.error;
-        summaryIcon = Icons.error_outline_rounded;
+        summaryIcon = Icons.priority_high_rounded;
       default:
         summaryColor = SetupColors.info;
-        summaryIcon = Icons.help_outline_rounded;
+        summaryIcon = Icons.question_mark_rounded;
     }
     return Column(
       key: const Key('doctor_report'),
@@ -454,7 +510,7 @@ class _ReportView extends StatelessWidget {
           level: r.powerLevel,
         ),
         if (r.devices.length > 1)
-          SetupCard(
+          ServiceCard(
             key: const Key('doctor_devices'),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -474,7 +530,7 @@ class _ReportView extends StatelessWidget {
               ],
             ),
           ),
-        SetupCard(
+        ServiceCard(
           key: const Key('doctor_summary'),
           accent: summaryColor,
           child: Column(
@@ -482,8 +538,12 @@ class _ReportView extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(summaryIcon, color: SetupColors.readable(context, summaryColor), size: 22),
-                  const SizedBox(width: 8),
+                  OrbIconBadge(
+                    icon: summaryIcon,
+                    family: serviceFamilyOf(summaryColor),
+                    status: r.level == 'ok' ? OrbStatus.success : OrbStatus.none,
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       r.title ?? 'Teşhis özeti: $_noData',
@@ -514,13 +574,16 @@ class _ReportView extends StatelessWidget {
           OutlinedButton.icon(
             key: const Key('btn_doctor_recovery'),
             onPressed: onRecovery,
-            icon: const Icon(Icons.wifi_find_rounded, size: 18),
-            label: const Text('Modem veya şifre değiştiyse: Wi-Fi kurtarma'),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(52),
-              foregroundColor: SetupColors.readable(context, SetupColors.warn),
-              side: const BorderSide(color: SetupColors.warn),
+            icon: Icon(Icons.wifi_rounded, size: accentIconSize(context, base: 18)),
+            label: const Text(
+              'Modem veya şifre değiştiyse: Wi-Fi kurtarma',
+              textAlign: TextAlign.center,
+              textWidthBasis: TextWidthBasis.longestLine,
             ),
+            // Metin + simge + çerçeve AYNI amber ailesinden (AA); sabit 52 dp yükseklik YOK: etiket 3 satıra çıkarsa düğme büyür
+            // ve köşe yarıçapı 28 dp ile sınırlıdır (tam stadium 96 dp'lik düğmede "yumurta" oluyordu).
+            style: accentOutlinedButtonStyle(context, AppFamilies.amber, minimumSize: const Size.fromHeight(52))
+                .copyWith(shape: serviceTallButtonShapeProperty),
           ),
           const SizedBox(height: 8),
         ],
@@ -571,39 +634,76 @@ class _TierRow extends StatelessWidget {
         color = SetupColors.info;
         badge = 'Pano yok';
     }
-    final readable = SetupColors.readable(context, color);
-    return SetupCard(
+    final orb = OrbIconBadge(
+      icon: icon,
+      family: serviceFamilyOf(color),
+      status: level == DoctorLevel.ok ? OrbStatus.success : OrbStatus.none,
+      enabled: level != DoctorLevel.notApplicable,
+    );
+    final pill = ServiceStatusPill(
+      label: badge,
+      labelKey: Key('${cardKey}_badge'),
+      color: color,
+      icon: level == DoctorLevel.ok
+          ? Icons.check_circle_rounded
+          : (level == DoctorLevel.warning
+                ? Icons.warning_amber_rounded
+                : (level == DoctorLevel.error ? Icons.error_rounded : Icons.remove_circle_outline_rounded)),
+    );
+    final titleText = Text(
+      title,
+      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+    );
+    final detail = Text(
+      subtitle,
+      style: TextStyle(fontSize: AppText.badge, height: 1.35, color: SetupColors.muted(context)),
+    );
+    return ServiceCard(
       key: Key(cardKey),
       margin: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        children: [
-          Icon(icon, color: readable, size: 24),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Telefon genişliğinde (kart içi ≈ 256 dp) orb + hap + metin yan yana sığmaz: metin sütunu ≈ 100 dp'ye düşüp sözcükler
+          // ("donanı / m") ve IP adresi harf ortasından kırılıyordu. Dar genişlikte / büyük yazıda DİKEY düzen: orb + başlık
+          // (hap başlığın altında), ayrıntı TAM genişlikte (IP bölünmez).
+          final stacked = SetupText.isLargeText(context) || constraints.maxWidth < 340;
+          if (!stacked) {
+            return Row(
               children: [
-                Text(title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800, color: SetupColors.text(context))),
-                const SizedBox(height: 2),
-                Text(subtitle, style: TextStyle(fontSize: 12, height: 1.3, color: SetupColors.muted(context))),
+                orb,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [titleText, const SizedBox(height: 2), detail],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                pill,
               ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: color.withValues(alpha: 0.5)),
-            ),
-            child: Text(
-              badge,
-              key: Key('${cardKey}_badge'),
-              style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: readable),
-            ),
-          ),
-        ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  orb,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [titleText, const SizedBox(height: 6), Wrap(children: [pill])],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              detail,
+            ],
+          );
+        },
       ),
     );
   }

@@ -7,9 +7,15 @@ import '../../../../models/capabilities.dart';
 import '../../../../models/json_utils.dart';
 import '../../../../services/automation_state.dart';
 import '../../../../utils/friendly_error.dart';
+import '../../../common/arc_spinner.dart';
 import '../../../common/validators.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
+import '../../../theme/app_theme.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/app_pill.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
 import 'admin_account.dart';
 
@@ -164,7 +170,13 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
       canPop: !_busy,
       child: AlertDialog(
         key: const Key('dialog_create_account'),
-        title: Text(_title),
+        title: Row(
+          children: [
+            OrbIconBadge(icon: Icons.person_add_alt_1_rounded, family: AppFamilies.violet, pending: _busy),
+            const SizedBox(width: 12),
+            Expanded(child: Text(_title)),
+          ],
+        ),
         content: SizedBox(
           width: 460,
           child: SingleChildScrollView(
@@ -173,20 +185,21 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (widget.actorIsSuper) ...[
-                  Text('Hesap türü', style: TextStyle(fontSize: 12.5, color: muted)),
+                  Text('Hesap türü', style: TextStyle(fontSize: AppText.caption, color: muted)),
                   const SizedBox(height: 6),
                   Wrap(
                     spacing: 8,
-                    runSpacing: 8,
+                    // Çip dokunma hedefi 48 dp'ye genişlediğinden satır arası görünür boşluk zaten ≈ 15 dp: ek aralık YOK.
+                    runSpacing: 0,
                     children: [
                       for (final role in const <GlobalRole>[GlobalRole.superUser, GlobalRole.serviceUser, GlobalRole.user])
-                        ChoiceChip(
+                        AppChip(
                           key: Key('chip_role_${role.wire}'),
-                          label: Text(role == GlobalRole.superUser
+                          label: role == GlobalRole.superUser
                               ? 'Süper yönetici'
-                              : (role == GlobalRole.serviceUser ? 'Servis sorumlusu' : 'Müşteri')),
+                              : (role == GlobalRole.serviceUser ? 'Servis sorumlusu' : 'Müşteri'),
                           selected: _role == role,
-                          onSelected: _busy ? null : (_) => setState(() => _role = role),
+                          onTap: _busy ? null : () => setState(() => _role = role),
                         ),
                     ],
                   ),
@@ -202,7 +215,7 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
                   controller: _name,
                   label: 'Ad soyad',
                   errorText: _nameError,
-                  prefixIcon: Icons.person_outline_rounded,
+                  prefixIcon: Icons.person_rounded,
                   textCapitalization: TextCapitalization.words,
                   enabled: !_busy,
                 ),
@@ -212,38 +225,41 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
                   label: 'E-posta',
                   errorText: _emailError,
                   keyboardType: TextInputType.emailAddress,
-                  prefixIcon: Icons.email_outlined,
+                  prefixIcon: Icons.email_rounded,
                   enabled: !_busy,
                 ),
                 SetupTextField(
                   key: const Key('field_account_phone'),
                   controller: _phone,
-                  label: 'Telefon (isteğe bağlı)',
+                  // Niteleyici etikete değil yardımcı metne (dar diyalogda "Telefon (isteğ…" diye kesiliyordu).
+                  label: 'Telefon',
+                  helperText: 'İsteğe bağlı',
                   errorText: _phoneError,
                   keyboardType: TextInputType.phone,
-                  prefixIcon: Icons.phone_outlined,
+                  prefixIcon: Icons.phone_rounded,
                   enabled: !_busy,
                 ),
                 if (widget.actorIsSuper)
                   SecretField(
                     key: const Key('field_account_password'),
                     controller: _password,
-                    label: 'Geçici parola (isteğe bağlı)',
-                    helperText: 'Boş bırakırsanız kullanıcıya hesap etkinleştirme e-postası gider (önerilir). '
-                        'En az 10 karakter.',
+                    label: 'Geçici parola',
+                    helperText: 'İsteğe bağlı. Boş bırakırsanız kullanıcıya hesap etkinleştirme e-postası gider '
+                        '(önerilir). En az 10 karakter.',
                     errorText: _passwordError,
-                    prefixIcon: Icons.key_outlined,
+                    prefixIcon: Icons.key_rounded,
                   ),
                 SetupTextField(
                   key: const Key('field_account_notes'),
                   controller: _notes,
-                  label: 'Görev / bölge notu (isteğe bağlı)',
+                  label: 'Görev / bölge notu',
+                  helperText: 'İsteğe bağlı',
                   prefixIcon: Icons.notes_rounded,
                   maxLines: 2,
                   enabled: !_busy,
                 ),
                 if (_error != null)
-                  SetupCard(
+                  ServiceCard(
                     key: const Key('account_error'),
                     accent: SetupColors.error,
                     child: SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
@@ -255,6 +271,7 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
         actions: [
           TextButton(
             key: const Key('btn_account_cancel'),
+            style: AppTheme.quietTextButtonStyle(context),
             onPressed: _busy ? null : () => Navigator.of(context).pop(),
             child: const Text('Vazgeç'),
           ),
@@ -262,7 +279,7 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
             key: const Key('btn_account_save'),
             onPressed: _busy ? null : _submit,
             child: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const ArcSpinner(size: 18, color: Colors.white, strokeWidth: 2.4)
                 : const Text('Kaydet'),
           ),
         ],
@@ -409,7 +426,13 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
       canPop: !_busy,
       child: AlertDialog(
         key: const Key('dialog_edit_account'),
-        title: Text('${widget.account.fullName} - Düzenle'),
+        title: Row(
+          children: [
+            OrbIconBadge(icon: Icons.edit_rounded, family: AppFamilies.sky, pending: _busy),
+            const SizedBox(width: 12),
+            Expanded(child: Text('${widget.account.fullName} - Düzenle')),
+          ],
+        ),
         content: SizedBox(
           width: 460,
           child: SingleChildScrollView(
@@ -417,13 +440,13 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.account.email, style: TextStyle(fontSize: 12.5, color: muted)),
+                Text(widget.account.email, style: TextStyle(fontSize: AppText.caption, color: muted)),
                 SetupTextField(
                   key: const Key('field_edit_name'),
                   controller: _name,
                   label: 'Ad soyad',
                   errorText: _nameError,
-                  prefixIcon: Icons.person_outline_rounded,
+                  prefixIcon: Icons.person_rounded,
                   textCapitalization: TextCapitalization.words,
                   enabled: !_busy,
                 ),
@@ -433,7 +456,7 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
                   label: 'Telefon',
                   errorText: _phoneError,
                   keyboardType: TextInputType.phone,
-                  prefixIcon: Icons.phone_outlined,
+                  prefixIcon: Icons.phone_rounded,
                   enabled: !_busy,
                 ),
                 SetupTextField(
@@ -448,10 +471,11 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
                   SecretField(
                     key: const Key('field_edit_password'),
                     controller: _password,
-                    label: 'Yeni parola (değiştirmeyecekseniz boş bırakın)',
-                    helperText: 'En az 10 karakter. Kullanıcı ilk girişte parolasını değiştirmek zorunda kalır.',
+                    label: 'Yeni parola',
+                    helperText: 'Değiştirmeyecekseniz boş bırakın. En az 10 karakter. Kullanıcı ilk girişte parolasını '
+                        'değiştirmek zorunda kalır.',
                     errorText: _passwordError,
-                    prefixIcon: Icons.key_outlined,
+                    prefixIcon: Icons.key_rounded,
                     onChanged: (_) => setState(() {}),
                   ),
                   if (_needsCurrent)
@@ -461,7 +485,7 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
                       label: 'Kendi mevcut parolanız',
                       helperText: 'Başka bir süper yöneticinin parolasını değiştirmek için kimliğinizi doğrulayın.',
                       errorText: _currentError,
-                      prefixIcon: Icons.verified_user_outlined,
+                      prefixIcon: Icons.verified_user_rounded,
                     ),
                 ] else if (widget.isSelf)
                   const SetupInfoRow(
@@ -477,7 +501,7 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
                         'gönderin.',
                   ),
                 if (_error != null)
-                  SetupCard(
+                  ServiceCard(
                     key: const Key('account_error'),
                     accent: SetupColors.error,
                     child: SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
@@ -489,6 +513,7 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
         actions: [
           TextButton(
             key: const Key('btn_account_cancel'),
+            style: AppTheme.quietTextButtonStyle(context),
             onPressed: _busy ? null : () => Navigator.of(context).pop(false),
             child: const Text('Vazgeç'),
           ),
@@ -496,7 +521,7 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
             key: const Key('btn_account_save'),
             onPressed: _busy ? null : _submit,
             child: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const ArcSpinner(size: 18, color: Colors.white, strokeWidth: 2.4)
                 : const Text('Güncelle'),
           ),
         ],

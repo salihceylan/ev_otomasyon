@@ -7,6 +7,9 @@ import '../../../config/app_config.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
+import 'accent_button.dart';
 import 'settings_card.dart';
 
 /// Cihaz yerel adresi (IP) ve yerel anahtar kartı (`canEditDeviceHost`).
@@ -134,13 +137,22 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
       (s) => (hasKey: s.hasLocalKey, lastIp: s.lastKnownDeviceIp, direct: s.mode == AppMode.direct),
     );
     final apHost = AppConfig.current.deviceApHost;
-    final blue = AppTheme.primaryBlue;
+    // Metin/simge yalnız okunur tonla (açık temada ham royal mavi/yeşil/amber ≈2–4.9:1 kalırdı).
+    final blue = AppTheme.readableFamily(context, AppFeature.deviceHost.accentFamily);
+    final muted = AppTheme.getTextMuted(context);
 
-    Widget chip(Key key, String label, String value) => ActionChip(
+    // Hızlı adres çipi: hap + aile simgesi (dokunulabilirlik ipucu) + okunur etiket; sınırı bir KONTROL sınırı olarak ≥ 3:1
+    // (alan çerçevesiyle aynı dil; dekoratif kart kenarı açıkta 1.4:1'di). Dokunma hedefi padded (≥ 48 dp).
+    Widget chip(Key key, String label, String value, {IconData icon = Icons.wifi_tethering_rounded}) => ActionChip(
           key: key,
-          label: Text(label, style: const TextStyle(fontSize: 11.5)),
+          avatar: Icon(icon, size: 16, color: blue),
+          label: Text(
+            label,
+            style: TextStyle(fontSize: AppText.caption, fontWeight: FontWeight.w600, color: AppTheme.getTextPrimary(context)),
+          ),
           backgroundColor: AppTheme.getInsetColor(context),
-          side: BorderSide(color: AppTheme.getCardBorder(context)),
+          side: BorderSide(color: AppTheme.getFieldBorder(context)),
+          shape: const StadiumBorder(),
           materialTapTargetSize: MaterialTapTargetSize.padded,
           onPressed: () => setState(() {
             _hostCtrl.text = value;
@@ -151,9 +163,9 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
     return KeyedSubtree(
       key: const Key('card_host'),
       child: SettingsCard(
-        icon: Icons.lan_outlined,
+        icon: Icons.lan_rounded,
         title: 'Cihaz Yerel Adresi (IP)',
-        accent: blue,
+        accent: AppFeature.deviceHost.accentFamily.base,
         children: [
           const CardCaption(
             'Cihazın ev modeminizden aldığı yerel IP adresini ya da kurtarma (AP) adresini girin. '
@@ -178,6 +190,8 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
             onSubmitted: (_) => unawaited(_saveHost()),
             decoration: InputDecoration(
               labelText: 'Cihaz adresi',
+              // Boşken etiket de ikincil metin tonunda (tam metin rengi alan dolu gibi görünüyordu).
+              labelStyle: TextStyle(color: muted),
               hintText: 'Örn: 192.168.1.20 veya $apHost',
               errorText: _hostError,
               errorMaxLines: 3,
@@ -191,7 +205,7 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
             children: [
               chip(const Key('chip_host_ap'), '$apHost (kurtarma ağı)', apHost),
               if (vm.lastIp != null && vm.lastIp!.isNotEmpty)
-                chip(const Key('chip_host_last'), 'Son bilinen: ${vm.lastIp}', vm.lastIp!),
+                chip(const Key('chip_host_last'), 'Son bilinen: ${vm.lastIp}', vm.lastIp!, icon: Icons.history_rounded),
             ],
           ),
           const SizedBox(height: 12),
@@ -211,12 +225,7 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
                 vm.direct ? 'Kaydet ve Bağlan' : 'Adresi Kaydet',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryBlue,
-                foregroundColor: Colors.white,
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
+              style: accentButtonStyle(null),
             ),
           ),
           if (_result != null) ...[
@@ -273,7 +282,11 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
               if (_keyError != null) setState(() => _keyError = null);
             },
             decoration: InputDecoration(
-              labelText: 'Cihaz anahtarı (8–32 karakter)',
+              // Uzun etiket 1.0'da bile "…" ile kesiliyordu: ayrıntı yardımcı metne taşındı.
+              labelText: 'Cihaz anahtarı',
+              helperText: '8–32 karakter',
+              labelStyle: TextStyle(color: muted),
+              helperStyle: TextStyle(color: muted),
               errorText: _keyError,
               errorMaxLines: 3,
               prefixIcon: Icon(Icons.vpn_key_outlined, color: blue),
@@ -293,12 +306,9 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
               onPressed: _keyBusy ? null : () => unawaited(_saveKey()),
               icon: _keyBusy
                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.save_outlined, size: 18),
-              label: const Text('Anahtarı Kaydet'),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
+                  : Icon(Icons.save_outlined, size: accentIconSize(context)),
+              label: const Text('Anahtarı Kaydet', style: TextStyle(fontWeight: FontWeight.bold)),
+              style: accentOutlinedButtonStyle(context, AppFeature.deviceHost.accentFamily),
             ),
           ),
         ],

@@ -103,6 +103,17 @@ async function withFixture(opts, fn) {
 
 const one = async (db, sql, params) => (await db.query(sql, params)).rows[0];
 
+/** replaceBoard'un yazdigi anlik goruntu satirlari (eski panonun panjur ciftleri): [[pair, sec], ...] -> kanal 2p-1, 2p. */
+function snapshotShutters(pairs) {
+  const rows = [];
+  for (const [pair, sec] of pairs) {
+    for (const ch of [2 * pair - 1, 2 * pair]) {
+      rows.push({ channel_index: ch, name: `P${pair}`, type: 'shutter', room: 'Genel', shutter_pair_index: pair, shutter_duration_sec: sec, current_state: false, current_position: 0 });
+    }
+  }
+  return rows;
+}
+
 // ------------------------------------------------------------------------------
 // SQL anlamlari (gercek PostgreSQL)
 // ------------------------------------------------------------------------------
@@ -173,7 +184,7 @@ test('SQL.runtimePending / runtimeShutters / runtimeDone: replaceBoard isareti (
     const replacedAt = new Date().toISOString();
     // replaceBoard'in yazdigi bicim: JSON METNI parametre olarak (jsonb kolonuna)
     await db.query('UPDATE devices SET config_snapshot = $2 WHERE id = $1', [dev.id, JSON.stringify({
-      replaced_at: replacedAt, old_device_uuid: 'AHBU-OLD', new_device_uuid: dev.device_uuid, home_id: fx.homeId, runtime_sync: 'pending', endpoints: [{ channel_index: 1 }],
+      replaced_at: replacedAt, old_device_uuid: 'AHBU-OLD', new_device_uuid: dev.device_uuid, home_id: fx.homeId, runtime_sync: 'pending', endpoints: snapshotShutters([[1, 24], [2, 31]]),
     })]);
     await db.query('UPDATE devices SET is_online = TRUE, last_seen_at = CURRENT_TIMESTAMP WHERE id = $1', [dev.id]);
 
@@ -194,9 +205,39 @@ test('SQL.runtimePending / runtimeShutters / runtimeDone: replaceBoard isareti (
     const after = await one(db, "SELECT config_snapshot ->> 'runtime_sync' AS s, config_snapshot ->> 'runtime_synced_at' AS at, jsonb_array_length(config_snapshot -> 'endpoints') AS n FROM devices WHERE id = $1", [dev.id]);
     assert.equal(after.s, 'synced');
     assert.ok(after.at, 'uygulanma zamani yazilmali');
-    assert.equal(after.n, 1, 'anlik goruntunun geri kalani korunur');
+    assert.equal(after.n, 4, 'anlik goruntunun geri kalani korunur');
     assert.equal((await db.query(SQL.runtimePending, [fx.topic, 120])).rows.length, 0, 'artik bekleyen yok');
     assert.equal((await db.query(SQL.runtimeDone, [dev.id, replacedAt])).rowCount, 0, 'ikinci temizleme etkisiz');
+  });
+});
+
+test('D7 SQL.runtimeShutters: YALNIZ anlik goruntudeki (eski panonun) panjur ciftleri VE iki satiri hala panjur olanlar; sure GUNCEL satirdan', { skip: SKIP }, async () => {
+  await withFixture({ devices: 1, shutters: [[1, 26], [2, 31], [3, 20]] }, async (db, fx) => {
+    const dev = fx.devices[0];
+    const marker = (endpoints) => db.query('UPDATE devices SET config_snapshot = $2 WHERE id = $1', [dev.id, JSON.stringify({
+      replaced_at: new Date().toISOString(), old_device_uuid: 'AHBU-OLD', new_device_uuid: dev.device_uuid, home_id: fx.homeId, runtime_sync: 'pending', endpoints,
+    })]);
+    const pairs = async () => (await db.query(SQL.runtimeShutters, [dev.id])).rows.map((r) => [r.pair, r.sec]);
+
+    // eski pano: cift 1 (24 sn; sihirbaz yeni olcumu 26 yazdi) + cift 2; cift 3'u esitleme acti (yer tutucu 20 sn)
+    await marker([...snapshotShutters([[1, 24], [2, 31]]), { channel_index: 5, name: 'Lamba', type: 'light', room: 'Genel', shutter_pair_index: null, shutter_duration_sec: null }]);
+    assert.deepEqual(await pairs(), [[1, 26], [2, 31]], 'cift 3 (anlik goruntude yok) gonderilmez; sure guncel satirdan');
+
+    // cift 2'nin bir satiri artik role (esitleme dondurdu): cift 2 de gonderilmez
+    await db.query("UPDATE endpoints SET type = 'light', shutter_pair_index = NULL, shutter_duration_sec = NULL WHERE device_id = $1 AND channel_index = 4", [dev.id]);
+    assert.deepEqual(await pairs(), [[1, 26]]);
+
+    // anlik goruntude ayni cift baska kanallardaysa eslesmez: kanal + cift birlikte
+    await marker(snapshotShutters([[1, 24]]).map((r) => ({ ...r, channel_index: r.channel_index + 2 })));
+    assert.deepEqual(await pairs(), []);
+
+    // anlik goruntu yok / bozuk / panjursuz: hicbir sey gonderilmez (sorgu hata vermez)
+    for (const endpoints of [[], null, 'bozuk', { channel_index: 1 }, [{ channel_index: 1 }], [{ channel_index: 'x', type: 'shutter', shutter_pair_index: 'y' }]]) {
+      await marker(endpoints);
+      assert.deepEqual(await pairs(), [], JSON.stringify(endpoints));
+    }
+    await db.query("UPDATE devices SET config_snapshot = '{}'::jsonb WHERE id = $1", [dev.id]);
+    assert.deepEqual(await pairs(), []);
   });
 });
 
@@ -273,7 +314,7 @@ test('UCTAN UCA (panjur): pano degisimi isareti olan yeni pano cevrimici olunca 
   await withFixture({ devices: 1, shutters: [[1, 24], [2, 31]] }, async (db, fx) => {
     const dev = fx.devices[0];
     await db.query('UPDATE devices SET config_snapshot = $2 WHERE id = $1', [dev.id, JSON.stringify({
-      replaced_at: new Date().toISOString(), old_device_uuid: 'AHBU-OLD', new_device_uuid: dev.device_uuid, home_id: fx.homeId, runtime_sync: 'pending', endpoints: [],
+      replaced_at: new Date().toISOString(), old_device_uuid: 'AHBU-OLD', new_device_uuid: dev.device_uuid, home_id: fx.homeId, runtime_sync: 'pending', endpoints: snapshotShutters([[1, 24], [2, 31]]),
     })]);
     const ctx = makeBridge(db);
     await connect(ctx);
@@ -299,6 +340,49 @@ test('UCTAN UCA (panjur): pano degisimi isareti olan yeni pano cevrimici olunca 
       assert.equal(ctx.client.published.length, 2);
     } finally {
       await ctx.bridge.end({ force: true, timeoutMs: 50 });
+    }
+  });
+});
+
+test('D7 UCTAN UCA (esitleme + uzlastirici): esitlemenin actigi cift 3 un 20 sn yer tutucusu panoya YAZILMAZ; yalniz eski panonun ciftleri 1-2 gonderilir', { skip: SKIP }, async () => {
+  const { fwState } = require('../layout/_helpers');
+  await withFixture({ devices: 1, shutters: [[1, 24], [2, 31]] }, async (db, fx) => {
+    const dev = fx.devices[0];
+    for (let ch = 5; ch <= 8; ch += 1) {
+      await db.query(
+        `INSERT INTO endpoints (home_id, device_id, channel_index, name, type, room) VALUES ($1, $2, $3, $4, 'light', 'Genel')`,
+        [fx.homeId, dev.id, ch, `Lamba ${ch}`]
+      );
+    }
+    await db.query('UPDATE devices SET config_snapshot = $2 WHERE id = $1', [dev.id, JSON.stringify({
+      replaced_at: new Date().toISOString(), old_device_uuid: 'AHBU-OLD', new_device_uuid: dev.device_uuid, home_id: fx.homeId, runtime_sync: 'pending', endpoints: snapshotShutters([[1, 24], [2, 31]]),
+    })]);
+    const timers = makeFakeTimers();
+    const client = makeFakeClient();
+    const bridge = new MqttBridge({
+      db, logger: silent, env: { MQTT_BACKEND_USER: 'u', MQTT_BACKEND_PASS: 'p' }, timers, mqttLib: makeFakeMqttLib(client), reconcile: true, layoutSync: true,
+    });
+    const ctx = { bridge, timers, client };
+    await connect(ctx);
+    bridge._getReconciler();
+    bridge._reconciler._sleep = async () => {};
+    try {
+      // yeni pano: servis sorumlusu 5-6'yi panjur yapmis (cift 3); sure state'te yok
+      const state = { ...fwState({ set: { 5: { type: 'shutter_up' }, 6: { type: 'shutter_down' } } }), uid: dev.device_uuid };
+      await bridge.handleIncomingMessage(`ev/${fx.topic}/state`, Buffer.from(JSON.stringify(state)), { retain: false });
+      assert.ok(bridge._layoutSync, 'esitleme servisi kuruldu');
+      assert.equal(await bridge._layoutSync.whenIdle(5000), true);
+      const rows = (await db.query('SELECT channel_index AS c, type, shutter_pair_index AS p, shutter_duration_sec AS d FROM endpoints WHERE device_id = $1 ORDER BY channel_index', [dev.id])).rows;
+      assert.deepEqual(rows.filter((r) => r.c >= 5 && r.c <= 6).map((r) => [r.c, r.type, r.p, r.d]), [[5, 'shutter', 3, 20], [6, 'shutter', 3, 20]], 'esitleme cift 3 u 20 sn yer tutucuyla acti');
+
+      await fire(ctx);
+      const cmds = client.published.map((p) => JSON.parse(p.payload)).filter((c) => c.cmd === 'set_runtime');
+      assert.deepEqual(cmds.map((c) => [c.shutter, c.sec]), [[1, 24], [2, 31]], 'cift 3 yer tutucusu panoya yazilmaz');
+      const s = await one(db, "SELECT config_snapshot ->> 'runtime_sync' AS s FROM devices WHERE id = $1", [dev.id]);
+      assert.equal(s.s, 'synced');
+    } finally {
+      await bridge.end({ force: true, timeoutMs: 50 });
+      await db.query('DELETE FROM device_audit_logs WHERE device_uuid = $1', [dev.device_uuid]).catch(() => {});
     }
   });
 });

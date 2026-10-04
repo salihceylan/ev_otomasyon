@@ -133,13 +133,10 @@ class CloudLogic extends SetupLogic {
     try {
       while (true) {
         ctx.ensureActive();
-        // Yerel tanı (en iyi çaba): hata beklemeyi bozmaz.
-        try {
-          _lanStatus = await ctx.deviceCall((api) => api.fetchStatus());
-        } on LocalApiException {
-          _lanStatus = null;
-        }
-        final device = _find(await ctx.cloud.devices(homeId), uid);
+        // Yerel tanı (en iyi çaba) ve sunucu listesi birbirine bağlı değil: birlikte beklenir. Telefon pano ağında
+        // değilken yerel kol 4 sn'lik bağlantı zaman aşımına kadar sürebilir; sunucu isteği onun arkasında beklemez.
+        final (_, devices) = await awaitBoth(_readLan(), ctx.cloud.devices(homeId));
+        final device = _find(devices, uid);
         if (device != null && _isFresh(device)) {
           _online = true;
           _lastSeenAt = device.lastSeenAt;
@@ -153,6 +150,16 @@ class CloudLogic extends SetupLogic {
       _waitStartedAt = null;
     }
     throw SetupProblemException(_timeoutProblem());
+  }
+
+  /// Panonun yerel durumunu [_lanStatus]'a okur (en iyi çaba): panoya ulaşılamıyorsa `null` olur (hata beklemeyi
+  /// bozmaz). Anahtar/kimlik sorunları ([SetupProblemException]) ve iptal/oturum bitişi olduğu gibi yukarı verilir.
+  Future<void> _readLan() async {
+    try {
+      _lanStatus = await ctx.deviceCall((api) => api.fetchStatus());
+    } on LocalApiException {
+      _lanStatus = null;
+    }
   }
 
   SetupProblem _timeoutProblem() {

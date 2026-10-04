@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:http/http.dart' as http;
 
 import '../config/app_config.dart';
@@ -105,8 +105,26 @@ class AutomationApiService {
     this._clock = const SystemClock(),
     this._boardNetwork,
   })  : baseUrl = baseUrl ?? AppConfig.current.deviceApBaseUrl,
-        _client = client ?? http.Client(),
+        _client = client ?? _createDefaultClient(),
         _ownsClient = client == null;
+
+  /// Varsayılan (enjekte EDİLMEMİŞ) istemcide cihaza TCP bağlanma denemesinin üst sınırı (PF-36).
+  static const Duration _connectionTimeout = Duration(seconds: 4);
+
+  /// Enjekte edilmemiş istemci: bağlanma süresi sınırlıdır. `http.Client()`'ın `HttpClient`'ında
+  /// `connectionTimeout` yoktur; `_sendOnce`'ın `future.timeout(...)`'u yalnızca bekleyen kodu bırakır, dart:io'nun
+  /// bağlantı denemesini İPTAL ETMEZ: yönlendirilemeyen ağda (ör. cihaz kapalı/başka alt ağ) her yoklama
+  /// işletim sistemi zaman aşımına kadar yaşayan bir soket bırakabilirdi (Windows VM'de ölçülen: Dart düzeyi
+  /// 4 sn zaman aşımından sonra SYN_SENT ≈16 sn daha sürdü; Android için tahmin 75-130 sn, ÖLÇÜLMEDİ).
+  /// `HttpClient.connectionTimeout` dolunca dart:io bağlantı görevini iptal eder ve `SocketException` fırlatır
+  /// (`_sendOnce` bunu [LocalApiException.network]'e çevirir; aynı ölçümde 4 sn'de iptal, SYN_SENT kalmadı).
+  ///
+  /// İstemci yine `http.Client()` ile kurulur (doğrudan `IOClient` DEĞİL): `http.runWithClient` ile verilen istemci
+  /// (testler buna dayanır) ve web'deki tarayıcı istemcisi aynen korunur; yalnızca bu çağrının oluşturduğu dart:io
+  /// `HttpClient`'a süre sınırı verilir ([_ConnectionTimeoutOverrides]).
+  static http.Client _createDefaultClient() => kIsWeb
+      ? http.Client()
+      : HttpOverrides.runWithHttpOverrides(http.Client.new, _ConnectionTimeoutOverrides(_connectionTimeout));
 
   /// Kurtarma / yerel kurulum AP'si (`AppConfig.deviceApHost`, varsayılan `192.168.4.1`) için istemci.
   /// Sihirbazlar bu fabrikayı kullanır (kendi örneği; ana durumun adresini değiştirmez).
@@ -927,6 +945,20 @@ class WifiConnectResult {
         return 'Bağlanılamadı (kod: $reason). Ağ adını ve şifreyi kontrol edip tekrar deneyin.';
     }
   }
+}
+
+/// Kapsam içinde oluşturulan dart:io [HttpClient]'a `connectionTimeout` verir (PF-36). Önceki geçersiz kılmalar
+/// (testlerin `HttpOverrides.global`'ı, `HttpOverrides.runZoned`) korunur: istemci önce onlarla oluşturulur,
+/// sonra süre sınırı atanır.
+class _ConnectionTimeoutOverrides extends HttpOverrides {
+  _ConnectionTimeoutOverrides(this._timeout) : _previous = HttpOverrides.current;
+
+  final Duration _timeout;
+  final HttpOverrides? _previous;
+
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      (_previous?.createHttpClient(context) ?? super.createHttpClient(context))..connectionTimeout = _timeout;
 }
 
 /// Bir [AutomationApiService] örneğinin açık pano ağı kirası: eşzamanlı / iç içe çağrılar TEK kirayı paylaşır;

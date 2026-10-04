@@ -8,7 +8,11 @@ import '../../../../utils/friendly_error.dart';
 import '../../../common/confirm_dialogs.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
+import '../../../theme/feature_accent.dart';
 
 /// Ev sahibinin verdiği 6 haneli **geçici servis PIN'i** ile oturum açma.
 ///
@@ -110,7 +114,7 @@ class _ServicePinLoginCardState extends State<ServicePinLoginCard> {
 
   @override
   Widget build(BuildContext context) {
-    return SetupCard(
+    return ServiceCard(
       key: const Key('card_service_login'),
       margin: EdgeInsets.zero,
       child: Column(
@@ -118,27 +122,28 @@ class _ServicePinLoginCardState extends State<ServicePinLoginCard> {
         children: [
           Row(
             children: [
-              Icon(Icons.lock_open_rounded, color: SetupColors.readable(context, SetupColors.warn), size: 22),
-              const SizedBox(width: 8),
+              OrbIconBadge(icon: Icons.lock_open_rounded, family: AppFeature.servicePin.accentFamily, pending: _busy),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Servis Girişi',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                  style: TextStyle(fontSize: AppText.cardTitle, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             'Ev sahibinin uygulamasından aldığı 6 haneli servis PIN\'ini girin. PIN yalnızca o daire için ve '
             '2 saat geçerlidir.',
-            style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.muted(context)),
+            style: TextStyle(fontSize: AppText.body, height: 1.35, color: SetupColors.muted(context)),
           ),
           SetupTextField(
             key: const Key('field_technician_name'),
             controller: _name,
-            label: 'Adınız Soyadınız (isteğe bağlı)',
-            prefixIcon: Icons.badge_outlined,
+            label: 'Adınız Soyadınız',
+            helperText: 'İsteğe bağlı',
+            prefixIcon: Icons.badge_rounded,
             textInputAction: TextInputAction.next,
             enabled: !_busy,
           ),
@@ -156,7 +161,7 @@ class _ServicePinLoginCardState extends State<ServicePinLoginCard> {
             onSubmitted: (_) => _login(),
           ),
           if (_error != null)
-            SetupCard(
+            ServiceCard(
               key: const Key('service_login_error'),
               accent: SetupColors.error,
               margin: const EdgeInsets.only(top: 12),

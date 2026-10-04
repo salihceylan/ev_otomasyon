@@ -5,11 +5,14 @@ import 'package:provider/provider.dart';
 import '../../../models/api_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/auth_form.dart';
+import '../../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../../common/cooldown.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
 
 /// Telefon numarasıyla şifresiz giriş (SMS kodu).
 ///
@@ -17,15 +20,15 @@ import '../../theme/app_theme.dart';
 /// * "Yeniden gönder", sunucunun `resend_after` süresi dolana kadar kapalıdır (429'da
 ///   `resend_after` / `retry_after` ile de); kodun geçerlilik süresi geri sayılır.
 /// * Hatalı kodda kalan deneme hakkı (`remaining_attempts`) gösterilir; deneme bitince bekleme.
+///
+/// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]). İki alan (telefon, kod) aynı alan
+/// dilini kullanır: soluk 14 sp etiket, çizgisel soluk ön ek simgesi, aynı çerçeve; kilitli telefon alanı etkin
+/// kod alanından daha soluk çerçevelidir.
 class PhoneOtpDialog extends StatefulWidget {
   const PhoneOtpDialog({super.key});
 
   static Future<void> show(BuildContext context) {
-    return showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const PhoneOtpDialog(),
-    );
+    return showDialog(context: context, barrierDismissible: false, builder: (_) => const PhoneOtpDialog());
   }
 
   @override
@@ -45,14 +48,15 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
   String? _phoneError;
   String? _error;
   String? _info;
-  int? _remainingAttempts;
 
   @override
   void initState() {
     super.initState();
     final clock = context.read<AutomationState>().clock;
-    _resend = Cooldown(clock, _refresh);
-    _expiry = Cooldown(clock, _refresh);
+    // PF-23: tikler diyaloğu kurmaz; geri sayım metinleri `remaining` ile yalnız küçük builder'larda güncellenir,
+    // düğme kilidi başlangıç/bitişte `_refresh` ile yeniden kurulur.
+    _resend = Cooldown(clock, _refresh, notifyOnTick: false);
+    _expiry = Cooldown(clock, _refresh, notifyOnTick: false);
   }
 
   void _refresh() {
@@ -90,7 +94,6 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
       setState(() {
         _isCodeSent = true;
         _phone = phone;
-        _remainingAttempts = null;
         _codeController.clear();
         _info = challenge.message.isNotEmpty ? challenge.message : 'Doğrulama kodu gönderildi.';
       });
@@ -136,194 +139,161 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
           text = 'Kodun süresi dolmuş. Yeni bir kod isteyin.';
         } else if (e.isRateLimited) {
           final wait = e.retryAfter ?? e.resendAfter;
-          text = 'Çok fazla hatalı deneme yapıldı. '
+          text =
+              'Çok fazla hatalı deneme yapıldı. '
               '${wait == null ? 'Biraz bekleyip' : '${formatCountdown(wait.inSeconds)} sonra'} yeni kod isteyin.';
           if (wait != null) _resend.start(wait);
         }
       }
-      setState(() {
-        _error = remaining == null ? text : '$text Kalan deneme: $remaining.';
-        _remainingAttempts = remaining;
-      });
+      // Kalan hak TEK yerde: iletinin içinde (bölünmeyen boşlukla; "2." yetim kalmaz). Alan altında ikinci satır yok.
+      setState(() => _error = remaining == null ? text : '$text ${remainingAttemptsText(remaining)}');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  InputDecoration _decoration(String label, String hint, IconData icon, Color accent, {String? errorText, String? counter}) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      counterText: counter,
-      errorText: errorText,
-      errorMaxLines: 3,
-      hintStyle: const TextStyle(color: AppTheme.textMuted, letterSpacing: 1),
-      prefixIcon: Icon(icon, color: accent, size: 20),
-      filled: true,
-      fillColor: AppTheme.cardDark,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppTheme.cardBorder),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: accent, width: 1.8),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final expiryText = _expiry.isActive
-        ? 'Kod süresi: ${formatCountdown(_expiry.remainingSeconds)}'
-        : (_hasExpiry ? 'Kodun süresi doldu' : '');
+    final muted = AppTheme.getTextMuted(context);
+    final primary = AppTheme.getTextPrimary(context);
+    // Hata iletisi: kod adımındayken (kod alanı görünür) hata o alanındır ve alanın HEMEN altında durur (eskiden
+    // geri sayım satırının altında, alandan ~95 dp uzaktaydı); telefon adımında formun sonundadır.
+    final errorBox = _error == null ? null : InlineMessage.error(_error!, key: const Key('otp_error'));
     return PopScope(
       canPop: !_isLoading,
-      child: AlertDialog(
-        backgroundColor: AppTheme.surfaceDark,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: const BorderSide(color: AppTheme.cardBorder, width: 1.2),
-        ),
-        titlePadding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
-        title: Row(
+      child: AuthDialogShell(
+        icon: Icons.sms_rounded,
+        family: AppFamilies.violet,
+        title: 'Şifresiz SMS Girişi',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: AppTheme.primaryBlue.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Icon(Icons.sms_rounded, color: AppTheme.primaryBlueLight, size: 24),
+            Text(
+              !_isCodeSent
+                  ? 'Telefon numaranızı girin, size 6 haneli tek kullanımlık doğrulama kodu gönderelim.'
+                  : '${_info ?? 'Doğrulama kodu gönderildi.'} $_phone numarasına gelen 6 haneli kodu girin.',
+              key: const Key('otp_info'),
+              style: TextStyle(color: muted, fontSize: 13, height: 1.4),
             ),
-            const SizedBox(width: 12),
-            const Expanded(
-              child: Text(
-                'Şifresiz SMS Girişi',
-                style: TextStyle(color: AppTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
+            const SizedBox(height: 18),
+            TextField(
+              key: const Key('field_phone'),
+              controller: _phoneController,
+              enabled: !_isCodeSent && !_isLoading,
+              keyboardType: TextInputType.phone,
+              autofillHints: const [AutofillHints.telephoneNumber],
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+\-\s().]')), LengthLimitingTextInputFormatter(20)],
+              onChanged: (_) {
+                if (_phoneError != null) setState(() => _phoneError = null);
+              },
+              onSubmitted: (_) => _handleSendCode(),
+              style: TextStyle(color: primary, fontSize: 15),
+              decoration: authInputDecoration(
+                context,
+                label: 'Telefon Numarası',
+                hint: '0555 123 45 67',
+                prefixIcon: Icons.phone_outlined,
+                errorText: _phoneError,
               ),
             ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const SizedBox(height: 8),
-              Text(
-                !_isCodeSent
-                    ? 'Telefon numaranızı girin, size 6 haneli tek kullanımlık doğrulama kodu gönderelim.'
-                    : '${_info ?? 'Doğrulama kodu gönderildi.'} $_phone numarasına gelen 6 haneli kodu girin.',
-                key: const Key('otp_info'),
-                style: const TextStyle(color: AppTheme.textMuted, fontSize: 13, height: 1.4),
-              ),
-              const SizedBox(height: 18),
+            if (_isCodeSent) ...[
+              const SizedBox(height: 16),
               TextField(
-                key: const Key('field_phone'),
-                controller: _phoneController,
-                enabled: !_isCodeSent && !_isLoading,
-                keyboardType: TextInputType.phone,
-                autofillHints: const [AutofillHints.telephoneNumber],
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[0-9+\-\s().]')),
-                  LengthLimitingTextInputFormatter(20),
-                ],
-                onChanged: (_) {
-                  if (_phoneError != null) setState(() => _phoneError = null);
-                },
-                onSubmitted: (_) => _handleSendCode(),
-                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 15),
-                decoration: _decoration('Telefon Numarası', '0555 123 45 67', Icons.phone_iphone_rounded, AppTheme.primaryBlue,
-                    errorText: _phoneError),
+                key: const Key('field_code'),
+                controller: _codeController,
+                enabled: !_isLoading,
+                keyboardType: TextInputType.number,
+                maxLength: 6,
+                textAlign: TextAlign.center,
+                autocorrect: false,
+                enableSuggestions: false,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
+                onSubmitted: (_) => _handleVerifyCode(),
+                style: authCodeTextStyle(context),
+                // Hata varken alan KIRMIZI çizilir (odak halkası cyan kalıp yanlış kodu "geçerli" göstermesin).
+                decoration: authCodeInputDecoration(context, label: 'Doğrulama Kodu', hint: '••••••', hasError: errorBox != null),
               ),
-              if (_isCodeSent) ...[
-                const SizedBox(height: 16),
-                TextField(
-                  key: const Key('field_code'),
-                  controller: _codeController,
-                  enabled: !_isLoading,
-                  keyboardType: TextInputType.number,
-                  maxLength: 6,
-                  textAlign: TextAlign.center,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
-                  onSubmitted: (_) => _handleVerifyCode(),
-                  style: const TextStyle(color: AppTheme.textPrimary, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 8),
-                  decoration: _decoration('Doğrulama Kodu', '••••••', Icons.pin_rounded, AppTheme.accentGreen, counter: ''),
-                ),
-                if (_remainingAttempts != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      'Kalan deneme hakkı: $_remainingAttempts',
-                      key: const Key('otp_remaining_attempts'),
-                      style: const TextStyle(fontSize: 12, color: AppTheme.accentAmber, fontWeight: FontWeight.w600),
+              if (errorBox != null) ...[const SizedBox(height: 8), errorBox],
+              const SizedBox(height: 8),
+              // Wrap: dar ekranda / büyük yazıda "Tekrar Kod İste" düğmesi alt satıra geçer (Row taşardı).
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                children: [
+                  ValueListenableBuilder<int>(
+                    valueListenable: _expiry.remaining,
+                    builder: (context, seconds, _) {
+                      final active = seconds > 0;
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (active) ...[
+                            CooldownArc(remaining: _expiry.remaining, color: AppTheme.infoText(context)),
+                            const SizedBox(width: 6),
+                          ],
+                          Flexible(
+                            child: Text(
+                              active ? 'Kod süresi: ${formatCountdown(seconds)}' : (_hasExpiry ? 'Kodun süresi doldu' : ''),
+                              key: const Key('otp_expiry'),
+                              style: TextStyle(
+                                color: (_hasExpiry && !active) ? AppTheme.dangerText(context) : muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  TextButton(
+                    key: const Key('btn_resend_code'),
+                    onPressed: (_isLoading || _resend.isActive)
+                        ? null
+                        : () async {
+                            // Yeni kod isteği: önceki kod girişi sıfırlanır, telefon aynı kalır.
+                            setState(() => _isCodeSent = false);
+                            await _handleSendCode();
+                          },
+                    style: TextButton.styleFrom(padding: EdgeInsets.zero),
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: _resend.remaining,
+                      builder: (context, seconds, _) => Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (seconds > 0) ...[CooldownArc(remaining: _resend.remaining, color: muted), const SizedBox(width: 6)],
+                          Flexible(
+                            child: Text(
+                              seconds > 0 ? 'Tekrar Kod İste (${formatCountdown(seconds)})' : 'Tekrar Kod İste',
+                              // Bekleme sürerken düğme pasif: bağlantı rengi değil soluk metin (çelişkili sinyal yok).
+                              style: TextStyle(color: seconds > 0 ? muted : AppTheme.infoText(context), fontSize: 12, fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                const SizedBox(height: 8),
-                // Wrap: dar ekranda / büyük yazıda "Tekrar Kod İste" düğmesi alt satıra geçer (Row taşardı).
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 8,
-                  children: [
-                    Text(
-                      expiryText,
-                      key: const Key('otp_expiry'),
-                      style: TextStyle(
-                        color: (_hasExpiry && !_expiry.isActive) ? AppTheme.accentRed : AppTheme.textMuted,
-                        fontSize: 12,
-                      ),
-                    ),
-                    TextButton(
-                      key: const Key('btn_resend_code'),
-                      onPressed: (_isLoading || _resend.isActive) ? null : () async {
-                        // Yeni kod isteği: önceki kod girişi sıfırlanır, telefon aynı kalır.
-                        setState(() => _isCodeSent = false);
-                        await _handleSendCode();
-                      },
-                      style: TextButton.styleFrom(padding: EdgeInsets.zero),
-                      child: Text(
-                        _resend.isActive ? 'Tekrar Kod İste (${formatCountdown(_resend.remainingSeconds)})' : 'Tekrar Kod İste',
-                        style: const TextStyle(color: AppTheme.primaryBlueLight, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              if (_error != null) ...[
-                const SizedBox(height: 8),
-                InlineMessage.error(_error!, key: const Key('otp_error')),
-              ],
+                ],
+              ),
             ],
-          ),
+            if (!_isCodeSent && errorBox != null) ...[const SizedBox(height: 8), errorBox],
+          ],
         ),
-        actions: [
-          TextButton(
+        actions: AuthDialogActions(
+          secondaryLabel: 'İptal',
+          secondary: TextButton(
             key: const Key('btn_otp_cancel'),
             onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
-            child: const Text('İptal', style: TextStyle(color: AppTheme.textMuted)),
+            child: authSecondaryLabel(context, 'İptal'),
           ),
-          ElevatedButton(
+          primaryLabel: 'Kod Gönder',
+          primary: ElevatedButton(
             key: Key(_isCodeSent ? 'btn_otp_verify' : 'btn_otp_send'),
             onPressed: _isLoading ? null : (!_isCodeSent ? (_resend.isActive ? null : _handleSendCode) : _handleVerifyCode),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: !_isCodeSent ? AppTheme.primaryBlue : AppTheme.accentGreen,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            ),
-            child: _isLoading
-                ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                : Text(!_isCodeSent ? 'Kod Gönder' : 'Giriş Yap', style: const TextStyle(fontWeight: FontWeight.bold)),
+            child: _isLoading ? buttonSpinner() : authPrimaryLabel(!_isCodeSent ? 'Kod Gönder' : 'Giriş Yap'),
           ),
-        ],
+        ),
       ),
     );
   }

@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import '../../pages/replace_board_dialog.dart';
 import '../../pages/system_doctor_dialog.dart';
 import '../../pages/wifi_recovery_dialog.dart';
-import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import 'accent_button.dart';
 import 'settings_card.dart';
 
 /// Sistem doktoru (teşhis) kartı. Yetki sayfada denetlenir (`canChangeChildLock`: tanılama
@@ -18,7 +19,7 @@ class SystemDoctorCard extends StatelessWidget {
       child: SettingsCard(
         icon: Icons.health_and_safety,
         title: 'Sistem Doktoru (Teşhis & Analiz)',
-        accent: Colors.cyanAccent,
+        accent: AppFeature.doctor.accentFamily.base,
         children: [
           const CardCaption(
             'Uygulama veya otomasyon panosunda sorun mu yaşıyorsunuz? Bulut, internet ve pano '
@@ -30,17 +31,12 @@ class SystemDoctorCard extends StatelessWidget {
             child: OutlinedButton.icon(
               key: const Key('btn_system_doctor'),
               onPressed: () => SystemDoctorDialog.show(context),
-              icon: const Icon(Icons.medical_services_outlined, size: 16),
+              icon: Icon(Icons.medical_services_outlined, size: accentIconSize(context)),
               label: const Text(
                 'Sistem Doktorunu Çalıştır',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                foregroundColor: AppTheme.readableAccent(context, Colors.cyanAccent),
-                side: const BorderSide(color: Colors.cyanAccent),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+              style: accentOutlinedButtonStyle(context, AppFeature.doctor.accentFamily),
             ),
           ),
         ],
@@ -59,9 +55,10 @@ class WifiRecoveryCard extends StatelessWidget {
     return KeyedSubtree(
       key: const Key('card_wifi_recovery'),
       child: SettingsCard(
-        icon: Icons.wifi_find_rounded,
+        // Dolu/kalın glif (wifi_find ince "göz + büyüteç" okunuyordu): Wi-Fi + kilit = şifre değişimi.
+        icon: Icons.wifi_password_rounded,
         title: 'Wi-Fi Şifre Değişimi & Kurtarma',
-        accent: Colors.amber,
+        accent: AppFeature.wifiRecovery.accentFamily.base,
         children: [
           const CardCaption(
             'Evinizdeki modem veya Wi-Fi şifresi değiştiyse panoya yeni bilgileri aktarmak için '
@@ -73,17 +70,12 @@ class WifiRecoveryCard extends StatelessWidget {
             child: OutlinedButton.icon(
               key: const Key('btn_wifi_recovery'),
               onPressed: () => WifiRecoveryDialog.show(context),
-              icon: const Icon(Icons.settings_ethernet, size: 16),
+              icon: Icon(Icons.settings_ethernet, size: accentIconSize(context)),
               label: const Text(
                 'Kurtarma Modu Sihirbazını Aç',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                foregroundColor: AppTheme.readableAccent(context, Colors.amber),
-                side: const BorderSide(color: Colors.amber),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+              style: accentOutlinedButtonStyle(context, AppFeature.wifiRecovery.accentFamily),
             ),
           ),
         ],
@@ -102,9 +94,9 @@ class ReplaceBoardCard extends StatelessWidget {
     return KeyedSubtree(
       key: const Key('card_replace_board'),
       child: SettingsCard(
-        icon: Icons.swap_horizontal_circle_outlined,
+        icon: Icons.swap_horiz_rounded,
         title: 'Felaket Kurtarma & Pano Değişimi',
-        accent: Colors.deepPurpleAccent,
+        accent: AppFeature.boardReplace.accentFamily.base,
         children: [
           const CardCaption(
             'Arızalanan veya yıldırım düşen panoyu yenisiyle değiştirdiğinizde oda isimleri ve '
@@ -116,17 +108,12 @@ class ReplaceBoardCard extends StatelessWidget {
             child: OutlinedButton.icon(
               key: const Key('btn_replace_board'),
               onPressed: () => ReplaceBoardDialog.show(context),
-              icon: const Icon(Icons.settings_backup_restore, size: 16),
+              icon: Icon(Icons.settings_backup_restore, size: accentIconSize(context)),
               label: const Text(
                 'Pano Değişimi Sihirbazını Aç',
                 style: TextStyle(fontWeight: FontWeight.bold),
               ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                foregroundColor: AppTheme.readableAccent(context, Colors.deepPurpleAccent),
-                side: const BorderSide(color: Colors.deepPurpleAccent),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+              style: accentOutlinedButtonStyle(context, AppFeature.boardReplace.accentFamily),
             ),
           ),
         ],

@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../../../../services/api_exception.dart';
 import '../setup_style.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
 
 /// Yıkıcı ve tekrarlanamaz bir sunucu işleminin (acil sıfırlama, pano değişimi) **sonucu bilinmiyor**:
@@ -43,25 +46,27 @@ class UncertainOutcomeCard extends StatelessWidget {
       container: true,
       liveRegion: true,
       label: title,
-      child: SetupCard(
+      child: ServiceCard(
         accent: SetupColors.warn,
+        active: true,
         margin: const EdgeInsets.only(top: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(
-                  Icons.help_outline_rounded,
-                  color: SetupColors.warn,
-                  size: 22,
+                OrbIconBadge(
+                  icon: Icons.question_mark_rounded,
+                  family: AppFamilies.amber,
+                  pending: checking,
+                  active: true,
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     title,
                     style: TextStyle(
-                      fontSize: 15,
+                      fontSize: AppText.cardTitle,
                       fontWeight: FontWeight.w800,
                       color: SetupColors.readable(context, SetupColors.warn),
                     ),
@@ -69,11 +74,11 @@ class UncertainOutcomeCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               message,
               style: TextStyle(
-                fontSize: 13.5,
+                fontSize: AppText.body,
                 height: 1.4,
                 color: SetupColors.text(context),
               ),
@@ -91,7 +96,7 @@ class UncertainOutcomeCard extends StatelessWidget {
             SetupPrimaryButton(
               key: checkButtonKey,
               label: 'Durumu Kontrol Et',
-              icon: Icons.fact_check_outlined,
+              icon: Icons.fact_check_rounded,
               busy: checking,
               onPressed: checking ? null : onCheck,
             ),

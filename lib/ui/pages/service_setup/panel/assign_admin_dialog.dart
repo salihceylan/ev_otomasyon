@@ -6,10 +6,16 @@ import 'package:provider/provider.dart';
 import '../../../../models/json_utils.dart';
 import '../../../../services/automation_state.dart';
 import '../../../../utils/friendly_error.dart';
+import '../../../common/arc_spinner.dart';
 import '../../../common/confirm_dialogs.dart';
 import '../logic/customer_logic.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
+import '../../../theme/app_theme.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import '../../../widgets/settings/accent_button.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
 import 'subscriber_models.dart';
 
@@ -67,11 +73,11 @@ class AssignWarningsDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return AlertDialog(
       key: const Key('assign_warnings'),
-      title: const Row(
+      title: Row(
         children: [
-          Icon(Icons.warning_amber_rounded, color: SetupColors.warn),
-          SizedBox(width: 8),
-          Expanded(child: Text('Atama tamamlandı, ancak uyarılar var')),
+          Icon(Icons.warning_amber_rounded, color: SetupColors.readable(context, SetupColors.warn)),
+          const SizedBox(width: 8),
+          const Expanded(child: Text('Atama tamamlandı, ancak uyarılar var')),
         ],
       ),
       content: SingleChildScrollView(
@@ -248,6 +254,7 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
         actions: [
           TextButton(
             key: const Key('btn_assign_cancel_confirm'),
+            style: AppTheme.quietTextButtonStyle(ctx),
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Vazgeç'),
           ),
@@ -421,10 +428,24 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
       child: AlertDialog(
         title: Row(
           children: [
-            const Icon(Icons.assignment_ind_outlined, color: SetupColors.primary),
-            const SizedBox(width: 8),
+            OrbIconBadge(icon: Icons.assignment_ind_rounded, family: AppFamilies.sky, pending: _busy),
+            const SizedBox(width: 12),
             Expanded(
-              child: Text(owner != null ? 'Home Admin Devret' : 'Home Admin Ata', maxLines: 1, overflow: TextOverflow.ellipsis),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Başlık KESİLMEZ (1.5 yazıda "Home Admin …" diye eylem sözcüğü kayboluyordu): en çok 2 satıra sarar.
+                  Text(owner != null ? 'Home Admin Devret' : 'Home Admin Ata', maxLines: 2, overflow: TextOverflow.ellipsis),
+                  if (owner != null) ...[
+                    const SizedBox(height: 6),
+                    ServiceStepDots(
+                      current: _phase == _Phase.form ? 1 : 2,
+                      total: 2,
+                      label: _phase == _Phase.form ? 'Adım 1 / 2: yeni yönetici bilgisi' : 'Adım 2 / 2: onay kodu',
+                    ),
+                  ],
+                ],
+              ),
             ),
           ],
         ),
@@ -435,23 +456,30 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SetupCard(
+                ServiceCard(
                   margin: EdgeInsets.zero,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(_s.homeName, style: const TextStyle(fontWeight: FontWeight.w800)),
                       if (_s.deviceUuid.isNotEmpty)
-                        Text(
-                          'Pano: ${_s.deviceUuid}',
-                          style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: SetupColors.muted(context)),
+                        // Kimlik tek satır: tireden bölünüp iki satıra yayılmaz, sığmazsa küçülür.
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: AlignmentDirectional.centerStart,
+                          child: Text(
+                            'Pano: ${_s.deviceUuid}',
+                            maxLines: 1,
+                            softWrap: false,
+                            style: SetupText.mono(fontSize: AppText.badge, color: SetupColors.muted(context)),
+                          ),
                         ),
                       if (owner != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 4),
                           child: Text(
                             'Mevcut yönetici: ${owner.fullName} (${owner.contact})',
-                            style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
+                            style: TextStyle(fontSize: AppText.caption, color: SetupColors.muted(context)),
                           ),
                         ),
                     ],
@@ -461,8 +489,9 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                   SetupTextField(
                     key: const Key('field_admin_name'),
                     controller: _name,
-                    label: 'Yeni yönetici adı soyadı *',
-                    prefixIcon: Icons.person_outline,
+                    label: 'Yeni yönetici adı',
+                    hint: 'Ad Soyad',
+                    prefixIcon: Icons.person_rounded,
                     errorText: _nameError,
                     textInputAction: TextInputAction.next,
                     enabled: !_busy,
@@ -472,7 +501,7 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                     controller: _email,
                     label: 'E-posta adresi',
                     hint: 'ornek@mail.com',
-                    prefixIcon: Icons.email_outlined,
+                    prefixIcon: Icons.email_rounded,
                     keyboardType: TextInputType.emailAddress,
                     textInputAction: TextInputAction.next,
                     enabled: !_busy,
@@ -482,14 +511,14 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                     controller: _phone,
                     label: 'Telefon numarası',
                     hint: '05XXXXXXXXX',
-                    prefixIcon: Icons.phone_outlined,
+                    prefixIcon: Icons.phone_rounded,
                     keyboardType: TextInputType.phone,
                     errorText: _contactError,
-                    helperText: '* En az bir iletişim yöntemi (e-posta veya telefon) girilmelidir.',
+                    helperText: 'E-posta ya da telefondan en az birini girin.',
                     enabled: !_busy,
                   ),
                 ] else ...[
-                  SetupCard(
+                  ServiceCard(
                     accent: SetupColors.ok,
                     child: SetupInfoRow(
                       icon: Icons.mark_email_read_rounded,
@@ -500,8 +529,9 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                   SetupTextField(
                     key: const Key('field_assign_otp'),
                     controller: _otp,
-                    label: 'Mevcut yöneticinin söylediği 6 haneli kod',
-                    prefixIcon: Icons.pin_rounded,
+                    label: '6 haneli onay kodu',
+                    helperText: 'Mevcut yöneticinin size söylediği kod',
+                    prefixIcon: Icons.password_rounded,
                     keyboardType: TextInputType.number,
                     maxLength: 6,
                     inputFormatters: [digitsOnly],
@@ -509,9 +539,10 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                     enabled: !_busy,
                   ),
                   Align(
-                    alignment: Alignment.centerLeft,
+                    alignment: AlignmentDirectional.centerStart,
                     child: TextButton(
                       key: const Key('btn_assign_resend'),
+                      style: setupInlineActionStyle(),
                       onPressed: (_busy || !canResend) ? null : _requestOtp,
                       child: Text(canResend ? 'Kodu yeniden gönder' : 'Yeniden gönder: ${left.inSeconds + 1} sn sonra'),
                     ),
@@ -523,20 +554,26 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                     child: Text(
                       _error!,
                       key: const Key('assign_error'),
-                      style: const TextStyle(color: SetupColors.error, fontSize: 13),
+                      style: TextStyle(
+                        color: SetupColors.readable(context, SetupColors.error),
+                        fontSize: AppText.caption,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
                     ),
                   ),
                 if (showForceLink)
                   Align(
-                    alignment: Alignment.centerLeft,
+                    alignment: AlignmentDirectional.centerStart,
                     child: TextButton(
                       key: const Key('btn_assign_force_toggle'),
+                      style: setupInlineActionStyle(),
                       onPressed: _busy ? null : () => setState(() => _showForce = true),
                       child: const Text('Sahibe ulaşılamıyor mu? (süper yönetici)'),
                     ),
                   ),
                 if (_showForce && isSuper && owner != null)
-                  SetupCard(
+                  ServiceCard(
                     key: const Key('assign_force_card'),
                     accent: SetupColors.error,
                     child: Column(
@@ -551,7 +588,8 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                         SetupTextField(
                           key: const Key('field_force_reason'),
                           controller: _reason,
-                          label: 'Gerekçe (en az $_forceReasonMin karakter)',
+                          label: 'Gerekçe',
+                          helperText: 'En az $_forceReasonMin karakter',
                           errorText: _reasonError,
                           maxLines: 2,
                           enabled: !_busy,
@@ -560,12 +598,9 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                         OutlinedButton(
                           key: const Key('btn_assign_force'),
                           onPressed: _busy ? null : _forceAssign,
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(48),
-                            foregroundColor: SetupColors.error,
-                            side: const BorderSide(color: SetupColors.error),
-                          ),
-                          child: const Text('Gerekçeyle Zorla Ata'),
+                          // Çerçeve + metin AYNI aileden ve AA okunur (ham kırmızı koyu temada ≈ 3.8:1'di).
+                          style: accentOutlinedButtonStyle(context, AppFamilies.rose),
+                          child: const Text('Gerekçeyle Zorla Ata', textAlign: TextAlign.center),
                         ),
                       ],
                     ),
@@ -577,6 +612,7 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
         actions: [
           TextButton(
             key: const Key('btn_assign_cancel'),
+            style: AppTheme.quietTextButtonStyle(context),
             onPressed: _busy ? null : () => Navigator.of(context).pop(),
             child: const Text('İptal'),
           ),
@@ -584,7 +620,7 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
             key: _phase == _Phase.form ? const Key('btn_assign_next') : const Key('btn_assign_submit'),
             onPressed: _busy ? null : (_phase == _Phase.form ? _next : _submit),
             child: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                ? const ArcSpinner(size: 18, color: Colors.white, strokeWidth: 2.4)
                 : Text(_phase == _Phase.form ? 'Devam' : 'Devret'),
           ),
         ],

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../logic/identify_logic.dart';
 import '../service_setup_controller.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/settings/accent_button.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
@@ -100,9 +102,10 @@ class _Step2IdentifyState extends State<Step2Identify> {
                 onTap: () => identify.selectHomeDevice(d.deviceUuid),
                 child: Row(
                   children: [
-                    Icon(
-                      selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                      color: selected ? SetupColors.ok : SetupColors.muted(context),
+                    SetupMiniOrb(
+                      family: selected ? AppFamilies.emerald : AppFamilies.slate,
+                      icon: selected ? Icons.check_rounded : Icons.circle_outlined,
+                      size: 28,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -111,8 +114,7 @@ class _Step2IdentifyState extends State<Step2Identify> {
                         children: [
                           Text(
                             d.deviceUuid,
-                            style: TextStyle(
-                              fontFamily: 'monospace',
+                            style: SetupText.mono(
                               fontWeight: FontWeight.w800,
                               color: SetupColors.text(context),
                             ),
@@ -138,14 +140,17 @@ class _Step2IdentifyState extends State<Step2Identify> {
   // ---------------------------------------------------------------------------
   Widget _staffBody(BuildContext context, ServiceSetupController c, IdentifyLogic identify) {
     if (c.claim.isComplete) {
+      final uid = c.target?.deviceUuid ?? '';
       return SetupCard(
         key: const Key('step2_done_card'),
         accent: SetupColors.ok,
-        child: SetupInfoRow(
-          icon: Icons.check_circle_rounded,
-          color: SetupColors.ok,
-          bold: true,
-          text: 'Cihaz tanındı ve daireye bağlandı: ${c.target?.deviceUuid ?? ''}',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SetupResultHeader(text: 'Cihaz tanındı ve daireye bağlandı'),
+            // Kimlik ayrı satırda, tek satır mono: cümlenin içinde 1.5 ölçekte tireden bölünüyordu.
+            if (uid.isNotEmpty) SetupUidLine(uid),
+          ],
         ),
       );
     }
@@ -165,8 +170,12 @@ class _Step2IdentifyState extends State<Step2Identify> {
         const SizedBox(height: 8),
         TextButton.icon(
           key: const Key('btn_toggle_manual'),
+          style: setupInlineActionStyle(),
           onPressed: () => setState(() => _manual = !_manual),
-          icon: Icon(_manual ? Icons.expand_less_rounded : Icons.keyboard_rounded),
+          icon: Icon(
+            _manual ? Icons.expand_less_rounded : Icons.keyboard_rounded,
+            size: accentIconSize(context, base: 18),
+          ),
           label: Text(_manual ? 'Elle yazmayı gizle' : 'Karekodu okutamıyorum: elle yazacağım'),
         ),
         if (_manual)
@@ -191,7 +200,7 @@ class _Step2IdentifyState extends State<Step2Identify> {
                   maxLength: 6,
                   keyboardType: TextInputType.number,
                   inputFormatters: [digitsOnly],
-                  prefixIcon: Icons.pin_rounded,
+                  prefixIcon: Icons.password_rounded,
                   textInputAction: TextInputAction.done,
                   onSubmitted: (_) => _submitManual(),
                 ),
@@ -242,16 +251,23 @@ class _Step2IdentifyState extends State<Step2Identify> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SetupInfoRow(icon: Icons.developer_board_rounded, text: 'Cihaz: ${identify.uid}', bold: true),
-          const SetupInfoRow(icon: Icons.pin_rounded, text: 'Kurulum PIN: ••••••  (gizli tutulur)'),
+          SetupResultHeader(
+            icon: Icons.developer_board_rounded,
+            text: 'Cihaz bilgisi alındı',
+            color: identify.inventory == InventoryCheck.inStock ? SetupColors.ok : SetupColors.info,
+          ),
+          // Kimlik ayrı satırda, tek satır mono: "Cihaz: AHBU-S3-A1B2C3" cümlesi 1.5 ölçekte tireden bölünüyordu.
+          SetupUidLine(identify.uid ?? ''),
+          const SetupInfoRow(icon: Icons.password_rounded, text: 'Kurulum PIN: ••••••  (gizli tutulur)'),
           SetupInfoRow(icon: icon, color: color, text: text),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             key: const Key('btn_reset_label'),
             onPressed: identify.busy ? null : identify.reset,
-            icon: const Icon(Icons.swap_horiz_rounded),
+            icon: Icon(Icons.swap_horiz_rounded, size: accentIconSize(context, base: 18)),
             label: const Text('Başka Cihaz Seç'),
-            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+            // Çerçeve + metin + simge AYNI aileden ve AA (tema varsayılan çerçevesi açıkta ≈ 2.4:1'di).
+            style: accentOutlinedButtonStyle(context, AppFamilies.sky),
           ),
         ],
       ),

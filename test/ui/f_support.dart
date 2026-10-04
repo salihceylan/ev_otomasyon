@@ -6,6 +6,7 @@ import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_api_service.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
+import 'package:ev_otomasyon/services/clock.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_controller.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_target.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/setup_store.dart';
@@ -152,6 +153,11 @@ class FakeDevice {
   bool rejectRuntimeApply = false;
   int wrongKeyAttempts = 0;
 
+  /// Erişilemeyen adrese (telefon o ağda değil / AP kapandı) giden istek, bu süre **sanal saatle** (FakeClock)
+  /// beklendikten sonra ağ hatasıyla düşer: gerçek istemcideki bağlantı zaman aşımını (`AutomationApiService`
+  /// 4 sn) taklit eder. Varsayılan sıfır: eski davranış (hata hemen gelir).
+  Duration unreachableDelay = Duration.zero;
+
   // Gözlem (testler)
   String? receivedMqttServer;
   int? receivedMqttPort;
@@ -169,18 +175,34 @@ class FakeDevice {
   void Function(String server, int port, String user, String pass)? onMqttConfigured;
 
   void _install() {
-    api.on('GET', '/api/status', _status);
-    api.on('GET', '/api/auth/check', _authCheck);
-    api.on('POST', '/api/factory/init', _factoryInit);
-    api.on('POST', '/api/wifi/connect', _wifiConnect);
-    api.on('GET', '/api/wifi/scan', _wifiScan);
-    api.on('GET', '/api/wifi/status', _wifiStatus);
-    api.on('POST', '/api/mqtt/config', _mqttConfig);
-    api.on('POST', '/api/relay', _relayCmd);
-    api.on('POST', '/api/all', _all);
-    api.on('GET', '/api/config', _config);
-    api.on('GET', '/api/child-lock', _childLockGet);
-    api.on('POST', '/api/child-lock', _childLockPost);
+    _route('GET', '/api/status', _status);
+    _route('GET', '/api/auth/check', _authCheck);
+    _route('POST', '/api/factory/init', _factoryInit);
+    _route('POST', '/api/wifi/connect', _wifiConnect);
+    _route('GET', '/api/wifi/scan', _wifiScan);
+    _route('GET', '/api/wifi/status', _wifiStatus);
+    _route('POST', '/api/mqtt/config', _mqttConfig);
+    _route('POST', '/api/relay', _relayCmd);
+    _route('POST', '/api/all', _all);
+    _route('GET', '/api/config', _config);
+    _route('GET', '/api/child-lock', _childLockGet);
+    _route('POST', '/api/child-lock', _childLockPost);
+  }
+
+  /// Ucu kaydeder. [unreachableDelay] > 0 iken erişilemeyen adrese giden istek önce o süre (sanal saat) bekler;
+  /// aksi halde işleyici eskisi gibi eşzamanlı çalışır.
+  void _route(String method, String path, http.Response Function(RecordedRequest r) handler) {
+    api.on(method, path, (r) {
+      if (unreachableDelay == Duration.zero || _isReachable(r)) return handler(r);
+      return _failAfterDelay(r, handler);
+    });
+  }
+
+  Future<http.Response> _failAfterDelay(RecordedRequest r, http.Response Function(RecordedRequest r) handler) async {
+    final gate = Completer<void>();
+    clock.timer(unreachableDelay, gate.complete);
+    await gate.future;
+    return handler(r); // hâlâ erişilemezse işleyicinin `_reach`'i ağ hatası fırlatır
   }
 
   // --- yardımcılar ---
@@ -189,12 +211,15 @@ class FakeDevice {
   http.Response _err(int status, String error, {Map<String, dynamic>? extra}) =>
       jsonResponse(<String, dynamic>{'error': error, ...?extra}, status: status);
 
-  /// Adres erişilebilir değilse ağ hatası (telefon o ağda değil / AP kapandı).
-  void _reach(RecordedRequest r) {
+  bool _isReachable(RecordedRequest r) {
     _advance(); // zaman geçtiyse Wi-Fi bağlanma sonucu / AP kapanışı bu istek yanıtlanmadan ÖNCE işlenir
     final host = r.url.host;
-    final ok = (host == apHost && apReachable) || (host == staIp && staIp.isNotEmpty && wifiConnected && lanReachable);
-    if (!ok) throw const SocketException('Bağlantı kurulamadı');
+    return (host == apHost && apReachable) || (host == staIp && staIp.isNotEmpty && wifiConnected && lanReachable);
+  }
+
+  /// Adres erişilebilir değilse ağ hatası (telefon o ağda değil / AP kapandı).
+  void _reach(RecordedRequest r) {
+    if (!_isReachable(r)) throw const SocketException('Bağlantı kurulamadı');
   }
 
   String? _key(RecordedRequest r) => r.headers['X-Device-Key'] ?? r.headers['x-device-key'];
@@ -553,7 +578,14 @@ class FakeDevice {
 // =============================================================================
 
 class ServiceFakeCloud extends FakeCloudApi {
-  ServiceFakeCloud({super.clock});
+  // `clock` hem üst sınıfa iletilir hem [_delayClock]'a alınır: süper parametre bunu yapamaz.
+  // ignore: use_super_parameters
+  ServiceFakeCloud({Clock clock = const SystemClock()})
+      : _delayClock = clock,
+        super(clock: clock);
+
+  /// Gecikme kancalarının ([devicesDelay]) zamanlayıcıları için saat (testte [FakeClock]).
+  final Clock _delayClock;
 
   /// Telefonun interneti var mı: telefon panonun kurulum ağındayken (AP) internet YOKTUR; sunucu çağrıları
   /// ağ hatasıyla ([ApiException.network]) düşer.
@@ -561,6 +593,13 @@ class ServiceFakeCloud extends FakeCloudApi {
 
   void _net() {
     if (!internetUp) throw ApiException.network();
+  }
+
+  /// [duration] kadar **sanal saatle** bekler (saat ilerletilmedikçe tamamlanmaz).
+  Future<void> _wait(Duration duration) {
+    final gate = Completer<void>();
+    _delayClock.timer(duration, gate.complete);
+    return gate.future;
   }
 
   /// Sunucu tarafındaki "doğru" değerler.
@@ -572,8 +611,25 @@ class ServiceFakeCloud extends FakeCloudApi {
   Object? claimErrorOnce;
   Object? commissionError;
   Object? updateEndpointError;
+  // Üst sınıf (FakeCloudApi) da aynı kancayı tanımlayabilir; burada bu sınıf tek başına çalışsın diye korunur.
+  // ignore: overridden_fields, annotate_overrides
   Object? devicesError;
   Object? fetchHomesErrorOnce;
+
+  /// Atanırsa `updateEndpoint` bu kapı açılana kadar bekler (sunucu isteği "uçuşta": ör. panjur ölçüm hazırlığı
+  /// 300 sn'yi yazarken sihirbazdan çıkış denemesi). Pano tarafındaki etki (`onRuntime`) kapı açılınca uygulanır.
+  Completer<void>? updateEndpointGate;
+
+  /// `devices` yanıtı bu süre (sanal saat) sonra gelir (varsayılan sıfır: hemen).
+  Duration devicesDelay = Duration.zero;
+
+  /// `true` ise bir sonraki claim sunucuda **uygulanır** (ev + cihaz + servis üyeliği oluşur, `claimApplied`
+  /// olur), ama yanıt telefona ulaşmaz: istemci [ApiException.network] görür (kopan bağlantı).
+  bool claimLosesResponseOnce = false;
+
+  /// Cihaz sunucuda artık sahiplenilmiş (yanıtı kaybolan claim uygulandı). Sunucu **idempotent değildir**: bundan
+  /// sonraki her claim isteği (tek kullanımlık PIN/OTP) `409` ile reddedilir ve [claimCalls] artar.
+  bool claimApplied = false;
 
   int otpRequests = 0;
   int claimCalls = 0;
@@ -709,6 +765,9 @@ class ServiceFakeCloud extends FakeCloudApi {
       claimErrorOnce = null;
       throw once;
     }
+    if (claimApplied) {
+      throw const ApiException(statusCode: 409, code: 'CONFLICT', message: 'Cihaz zaten sahiplenilmiş.');
+    }
     if (setupPin != expectedPin) {
       wrongPinCount++;
       throw ApiException(
@@ -729,6 +788,16 @@ class ServiceFakeCloud extends FakeCloudApi {
     }
     endpoints[claimedHomeId] = _claimedEndpoints();
     devicesByHome[claimedHomeId] = <DeviceInfo>[];
+    if (claimLosesResponseOnce) {
+      // Sunucu claim'i tamamladı (servis personeline 72 saatlik üyelik verildi) ama yanıt telefona ulaşmadı.
+      claimLosesResponseOnce = false;
+      claimApplied = true;
+      homes = <HomeModel>[
+        ...homes,
+        HomeModel(id: claimedHomeId, name: homeName ?? 'Yeni Daire', role: 'service_user'),
+      ];
+      throw ApiException.network();
+    }
     return ClaimResult(
       homeId: claimedHomeId,
       homeName: homeName ?? 'Yeni Daire',
@@ -745,6 +814,7 @@ class ServiceFakeCloud extends FakeCloudApi {
     _net();
     calls.add('devices:$homeId');
     homeIdsUsed.add(homeId);
+    if (devicesDelay > Duration.zero) await _wait(devicesDelay);
     final error = devicesError;
     if (error != null) throw error;
     final base = devicesByHome[homeId];
@@ -782,6 +852,8 @@ class ServiceFakeCloud extends FakeCloudApi {
     _net();
     calls.add('updateEndpoint:$endpointId');
     homeIdsUsed.add(homeId);
+    final gate = updateEndpointGate;
+    if (gate != null) await gate.future;
     final error = updateEndpointError;
     if (error != null) throw error;
     if (shutterDurationSec != null && (shutterDurationSec < 1 || shutterDurationSec > 300)) {

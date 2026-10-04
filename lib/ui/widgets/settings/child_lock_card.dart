@@ -6,11 +6,18 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../services/automation_state.dart';
+import '../../../services/biometric_auth_service.dart';
 import '../../dashboard/child_lock_status.dart';
 import '../../dashboard/command_retry.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
+import '../orb/orb.dart';
+import '../surface_card.dart';
+import 'appearance_cards.dart' show biometricIconFor;
 import 'child_lock_info_sheet.dart';
 import 'hold_to_confirm_button.dart';
+import 'settings_card.dart';
 
 /// Ayarlar sayfasındaki **Çocuk Kilidi** kartı.
 ///
@@ -129,58 +136,28 @@ class _ChildLockCardState extends State<ChildLockCard> {
                 ? 'Kilidi kaldırmak için doğrulama gerekir'
                 : 'Kilitlemek için dokunun';
 
-    return Container(
+    // Bekliyor halkası: komut uygulanıyor, durum alınıyor ya da çevrimdışı pano kilidi bekliyor.
+    final waiting = vm.pending || (unknown && !_gaveUp) || vm.awaitingDevices || vm.offlineDeviceCount > 0;
+
+    return SurfaceCard(
       key: const Key('card_child_lock'),
-      padding: const EdgeInsets.all(16),
-      decoration: AppTheme.cardDecoration(
-        context,
-        accent: locked ? Colors.amber : null,
-        radius: 16,
-        emphasized: locked,
-      ),
+      accent: locked ? AppFeature.childLock.accentFamily.base : null,
+      active: locked,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: locked
-                      ? Colors.amber.withValues(alpha: 0.2)
-                      : AppTheme.primaryBlue.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 200),
-                  child: Icon(
-                    locked ? Icons.lock_rounded : Icons.lock_open_rounded,
-                    key: ValueKey<bool>(locked),
-                    color: locked ? amber : AppTheme.infoText(context),
-                    size: 22,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Çocuk Kilidi',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: AppTheme.getTextPrimary(context),
-                  ),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              IconButton(
-                key: const Key('btn_child_lock_info'),
-                tooltip: 'Çocuk kilidi nedir?',
-                icon: Icon(Icons.info_outline, color: AppTheme.infoText(context)),
-                onPressed: () => showChildLockInfoSheet(context),
-              ),
-            ],
+          SettingsCardHeader(
+            icon: locked ? Icons.lock_rounded : Icons.lock_open_rounded,
+            title: 'Çocuk Kilidi',
+            family: locked ? AppFeature.childLock.accentFamily : AppFamilies.sky,
+            active: locked,
+            pending: waiting,
+            trailing: IconButton(
+              key: const Key('btn_child_lock_info'),
+              tooltip: 'Çocuk kilidi nedir?',
+              icon: Icon(Icons.info_outline, color: AppTheme.infoText(context)),
+              onPressed: () => showChildLockInfoSheet(context),
+            ),
           ),
           const SizedBox(height: 6),
           MergeSemantics(
@@ -193,24 +170,14 @@ class _ChildLockCardState extends State<ChildLockCard> {
                   Expanded(
                     child: Row(
                       children: [
-                        if (vm.pending || (unknown && !_gaveUp)) ...[
-                          SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: AppTheme.infoText(context),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
                         Flexible(
                           child: Text(
                             label,
                             key: const Key('text_child_lock_status'),
                             style: TextStyle(
                               fontSize: 13,
-                              color: locked && !vm.stale ? amber : muted,
+                              // "Uygulanıyor…" her yerde bilgi tonudur (amber = kilit/uyarı: yanlış alarm olmasın).
+                              color: vm.pending ? AppTheme.infoText(context) : (locked && !vm.stale ? amber : muted),
                               fontWeight: locked ? FontWeight.w700 : FontWeight.w500,
                             ),
                           ),
@@ -222,8 +189,9 @@ class _ChildLockCardState extends State<ChildLockCard> {
                   Switch(
                     key: const Key('switch_child_lock'),
                     value: locked,
+                    // Başparmak/iz rengi TEMADAN gelir (seçili: beyaz başparmak + emerald iz); ham `Colors.amber`
+                    // başparmak zümrüt izde ≈1.6:1 kontrast veriyordu.
                     materialTapTargetSize: MaterialTapTargetSize.padded,
-                    activeThumbColor: Colors.amber,
                     onChanged: canToggle
                         ? (value) {
                             if (value) {
@@ -332,9 +300,14 @@ class _ChildLockDisableSheetState extends State<ChildLockDisableSheet> {
     if (ok) {
       Navigator.of(context).pop(true);
     } else {
+      final why = biometricFailureMessage(
+        state.biometricService.lastFailure,
+        label: state.biometricLabel,
+        fallback: 'Kimlik doğrulanamadı.',
+      );
       setState(() {
         _verifying = false;
-        _error = 'Kimlik doğrulanamadı. Çocuk kilidi kaldırılmadı.';
+        _error = '$why Çocuk kilidi kaldırılmadı.';
       });
     }
   }
@@ -354,8 +327,8 @@ class _ChildLockDisableSheetState extends State<ChildLockDisableSheet> {
         children: [
           Row(
             children: [
-              Icon(Icons.lock_open_rounded, color: AppTheme.warningText(context), size: 26),
-              const SizedBox(width: 10),
+              OrbIconBadge(icon: Icons.lock_open_rounded, family: AppFeature.childLock.accentFamily, active: true),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Çocuk kilidi kaldırılsın mı?',
@@ -386,7 +359,7 @@ class _ChildLockDisableSheetState extends State<ChildLockDisableSheet> {
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
-                  : const Icon(Icons.fingerprint_rounded),
+                  : Icon(biometricIconFor(label)),
               label: Text('$label ile doğrula'),
             )
           else

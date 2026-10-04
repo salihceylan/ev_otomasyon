@@ -1,5 +1,6 @@
 import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
+import 'package:ev_otomasyon/ui/widgets/orb/orb.dart';
 import 'package:ev_otomasyon/ui/widgets/shutter_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -132,7 +133,8 @@ void main() {
       await flush(tester);
       expect(h.state.capabilities.canControlDevices, isFalse);
       expect(tester.widget<Slider>(byKeyName('slider_shutter_2')).onChanged, isNull);
-      expect(tester.widget<InkWell>(byKeyName('btn_shutter_up_2')).onTap, isNull);
+      // InkWell -> OrbButton (v2): pasif orb onTap taşımaz.
+      expect(tester.widget<OrbButton>(byKeyName('btn_shutter_up_2')).onTap, isNull);
     });
   });
 

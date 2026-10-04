@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
@@ -72,6 +73,23 @@ final class GuestExpiredEvent extends SessionEvent {
   final String? homeName;
 }
 
+/// Kaynak nesnesi (kimlik) değişmedikçe aynı türetilmiş değeri döndüren küçük önbellek (PF-20): salt-okunur liste
+/// görünümleri atama başına BİR kez kurulur (eskiden her `get` listeyi baştan kopyalardı). Kaynak listeler yerinde
+/// DEĞİŞTİRİLMEZ, atamayla değiştirilir (kimlik değişir).
+class _IdentityMemo<S extends Object, V extends Object> {
+  S? _source;
+  V? _value;
+
+  V of(S source, V Function(S source) build) {
+    final cached = _value;
+    if (cached != null && identical(_source, source)) return cached;
+    final built = build(source);
+    _source = source;
+    _value = built;
+    return built;
+  }
+}
+
 /// Panjur komutlarının iyimser hedefi (yalnızca iç kullanım).
 class _ShutterTarget {
   const _ShutterTarget({this.pos, this.moving, this.direction});
@@ -79,6 +97,15 @@ class _ShutterTarget {
   final int? pos;
   final bool? moving;
   final int? direction;
+}
+
+/// Bir panonun uç nokta listesiyle UYUŞMAYAN yerleşiminin izlenmesi (yalnızca iç kullanım; WP-STATE2): en son görülen
+/// yerleşim (imzası aynı kaldıkça) ve bu imza için harcanan sessiz yenileme denemesi.
+class _LayoutWatch {
+  _LayoutWatch(this.layout);
+
+  final ReportedLayout layout;
+  int attempts = 0;
 }
 
 /// Uygulamanın tek durum kaynağı (oturum, ev, bulut/yerel durum, komutlar).
@@ -101,8 +128,8 @@ class AutomationState extends ChangeNotifier {
   })  : clock = clock ?? const SystemClock(),
         cloudApi = cloudApi ?? EvCloudApiService(clock: clock ?? const SystemClock()),
         mqttService = mqttService ?? EvMqttService(clock: clock ?? const SystemClock()),
-        secureStorage = secureStorage ?? SecureStorageService(),
-        biometricService = biometricService ?? BiometricAuthService(),
+        secureStorage = secureStorage ?? SecureStorageService(clock: clock ?? const SystemClock()),
+        biometricService = biometricService ?? BiometricAuthService(clock: clock ?? const SystemClock()),
         directApi = directApi ??
             AutomationApiService(baseUrl: '', clock: clock ?? const SystemClock()),
         _ownsCloudApi = cloudApi == null,
@@ -180,6 +207,20 @@ class AutomationState extends ChangeNotifier {
   int _directFailures = 0;
   String? _directError;
   bool _localKeyRefreshTried = false;
+
+  // LAN yoklaması durdurma/duraklatma (PF-01): kalıcı koşul (401/403 unprovisioned/anahtarsız özet) için
+  // `_pollHalted`, süreli koşul (423) için `_pollNotBefore`. Periyodik zamanlayıcı tek kalır; geri çağrısı
+  // erken döner. Kullanıcı eylemi / ön plana dönüş / yeni adres-anahtar `_resumeDirectPolling` ile sürdürür.
+  bool _pollHalted = false;
+  DateTime? _pollNotBefore;
+
+  // Uçuştaki LAN isteğinin hedefi (PF-32): adres/anahtar değişirse eski uçuş devralınmaz, sonucu atılır.
+  String? _pollFlightBase;
+  String? _pollFlightKey;
+
+  // Telemetri bildirim eşiği (PF-33): `uptime`/RSSI için SON BİLDİRİLEN değerler.
+  int _telemetryUptimeSec = 0;
+  int _telemetryRssi = 0;
 
   // Bulut / çok kiracılı durum
   UserModel? _currentUser;
@@ -287,6 +328,33 @@ class AutomationState extends ChangeNotifier {
   StreamSubscription<CommandFailure>? _failureSub;
   Future<void> _storageQueue = Future<void>.value();
 
+  // Görünüm önbelleği (PF-20): `relayItems`/`shutterItems`/`status`/`cloudEndpoints` girdileri değişmedikçe AYNI
+  // nesneyi döndürür (kart başına yeniden türetme yok). `_viewGen`, görünüm girdileri (uç noktalar, canlı panjur
+  // durumu, LAN durumu, bekleyen komutlar) her değiştiğinde [_invalidateViews] ile artar: girdiyi değiştiren HER
+  // yer onu çağırmalıdır (kaçırılırsa bayat görünüm; testler: `state_memo_test.dart`). Kaynak `_mode` anahtardadır.
+  int _viewGen = 0;
+  List<RelayItem>? _relayItemsMemo;
+  int _relayItemsGen = -1;
+  AppMode? _relayItemsMode;
+  List<ShutterItem>? _shutterItemsMemo;
+  int _shutterItemsGen = -1;
+  AppMode? _shutterItemsMode;
+  DeviceStatus? _statusMemo;
+  int _statusGen = -1;
+
+  // `capabilities` önbelleği: kullanıcı, aktif ev (kimlik) ve misafir penceresinin O ANKİ sonucu aynı kaldıkça.
+  Capabilities? _capsMemo;
+  UserModel? _capsUser;
+  HomeModel? _capsHome;
+  bool _capsGuestExpired = false;
+
+  // Salt-okunur liste/harita görünümleri (kaynak atandıkça bir kez kurulur).
+  final _IdentityMemo<List<ScheduledRule>, List<ScheduledRule>> _rulesView = _IdentityMemo();
+  final _IdentityMemo<List<InventoryDeviceModel>, List<InventoryDeviceModel>> _inventoryView = _IdentityMemo();
+  final _IdentityMemo<Map<String, int>, Map<String, int>> _inventoryStatsView = _IdentityMemo();
+  final _IdentityMemo<List<Map<String, dynamic>>, List<Map<String, dynamic>>> _subscribersView = _IdentityMemo();
+  final _IdentityMemo<List<String>, List<String>> _offlineDevicesView = _IdentityMemo();
+
   // ---------------------------------------------------------------------------
   // Dışa açık okuma alanları
   // ---------------------------------------------------------------------------
@@ -304,8 +372,15 @@ class AutomationState extends ChangeNotifier {
   AuthStatus get authStatus => _authStatus;
   bool get isAuthenticated => _authStatus == AuthStatus.authenticated;
 
-  /// Doğrudan modda cihazın anlık durumu (bekleyen komutların iyimser değerleriyle birlikte).
-  DeviceStatus? get status => _viewStatus();
+  /// Doğrudan modda cihazın anlık durumu (bekleyen komutların iyimser değerleriyle birlikte). Girdiler
+  /// değişmedikçe aynı nesne döner.
+  DeviceStatus? get status {
+    if (_statusGen != _viewGen) {
+      _statusMemo = _viewStatus();
+      _statusGen = _viewGen;
+    }
+    return _statusMemo;
+  }
 
   /// Doğrudan mod bağlantı durumu; bulut modunda cihaz bilgisinden türetilir.
   ConnectionStateEnum get connState {
@@ -378,15 +453,36 @@ class AutomationState extends ChangeNotifier {
   String? get endpointsError => _endpointsError;
   List<DeviceInfo> get devices => _devices;
 
-  /// Birleşik görünüm: aydınlatma / priz / darbe öğeleri (panjurlar hariç), moda göre.
-  List<RelayItem> get relayItems => _mode == AppMode.cloud
-      ? relayItemsFromEndpoints(cloudEndpoints)
-      : (status?.controllableRelays ?? const <RelayItem>[]);
+  /// Birleşik görünüm: aydınlatma / priz / darbe öğeleri (panjurlar hariç), moda göre. Girdiler değişmedikçe AYNI
+  /// (salt-okunur) liste döner (PF-20): her röle kartı seçicisi tüm listeyi gezer, N kart x N uç noktada eskiden
+  /// her erişim listeyi baştan türetirdi.
+  List<RelayItem> get relayItems {
+    final cached = _relayItemsMemo;
+    if (cached != null && _relayItemsGen == _viewGen && _relayItemsMode == _mode) return cached;
+    final built = _mode == AppMode.cloud
+        ? relayItemsFromEndpoints(cloudEndpoints)
+        : (status?.controllableRelays ?? const <RelayItem>[]);
+    final view = UnmodifiableListView<RelayItem>(built);
+    _relayItemsMemo = view;
+    _relayItemsGen = _viewGen;
+    _relayItemsMode = _mode;
+    return view;
+  }
 
-  /// Birleşik görünüm: **gerçek** panjurlar (benzersiz, `pair` 1 tabanlı), moda göre.
-  List<ShutterItem> get shutterItems => _mode == AppMode.cloud
-      ? shutterItemsFromEndpoints(cloudEndpoints, _runtimeView())
-      : (status?.shutters ?? const <ShutterItem>[]);
+  /// Birleşik görünüm: **gerçek** panjurlar (benzersiz, `pair` 1 tabanlı), moda göre. Girdiler değişmedikçe AYNI
+  /// (salt-okunur) liste döner (PF-20).
+  List<ShutterItem> get shutterItems {
+    final cached = _shutterItemsMemo;
+    if (cached != null && _shutterItemsGen == _viewGen && _shutterItemsMode == _mode) return cached;
+    final built = _mode == AppMode.cloud
+        ? shutterItemsFromEndpoints(cloudEndpoints, _runtimeView())
+        : (status?.shutters ?? const <ShutterItem>[]);
+    final view = UnmodifiableListView<ShutterItem>(built);
+    _shutterItemsMemo = view;
+    _shutterItemsGen = _viewGen;
+    _shutterItemsMode = _mode;
+    return view;
+  }
 
   /// Cihazın bildirdiği LAN IP'si (MQTT `state.ip`); doğrudan mod için öneri.
   String? get lastKnownDeviceIp => _lastDeviceIp;
@@ -394,7 +490,9 @@ class AutomationState extends ChangeNotifier {
   String? get servicePin => _servicePin;
   DateTime? get servicePinExpiry => _servicePinExpiry;
 
-  /// Rol → yetki (CONTRACTS §1.4). UI kapıları ve metot denetimleri bunu kullanır.
+  /// Rol → yetki (CONTRACTS §1.4). UI kapıları ve metot denetimleri bunu kullanır. Kullanıcı, aktif ev ve misafir
+  /// penceresinin O ANKİ sonucu (süresi doldu mu / başladı mı) değişmedikçe AYNI nesne döner (PF-20); pencere zamanla
+  /// başlayınca/bitince her erişimde ucuzca yeniden hesaplanan [HomeModel.isGuestExpiredAt] anahtara girer.
   Capabilities get capabilities {
     final user = _currentUser;
     if (user == null || _authStatus != AuthStatus.authenticated) {
@@ -402,11 +500,17 @@ class AutomationState extends ChangeNotifier {
     }
     final home = _activeHome;
     final now = clock.now();
-    DateTime? validUntil = home?.guestValidUntil;
-    if (home != null && home.isGuestRole && home.isGuestExpiredAt(now)) {
-      validUntil = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    final guestExpired = home != null && home.isGuestRole && home.isGuestExpiredAt(now);
+    final cached = _capsMemo;
+    if (cached != null &&
+        identical(_capsUser, user) &&
+        identical(_capsHome, home) &&
+        _capsGuestExpired == guestExpired) {
+      return cached;
     }
-    return Capabilities(
+    DateTime? validUntil = home?.guestValidUntil;
+    if (guestExpired) validUntil = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    final built = Capabilities(
       globalRole: user.role,
       homeRole: home?.role,
       guestValidUntil: validUntil,
@@ -414,6 +518,11 @@ class AutomationState extends ChangeNotifier {
       now: now,
       hasActiveHome: home != null,
     );
+    _capsMemo = built;
+    _capsUser = user;
+    _capsHome = home;
+    _capsGuestExpired = guestExpired;
+    return built;
   }
 
   bool get _anonymousLocalKey =>
@@ -495,7 +604,8 @@ class AutomationState extends ChangeNotifier {
 
   /// Çocuk kilidi komutunun iletilemediği çevrimdışı panolar (son REST yanıtından): kilit bu panolarda
   /// uygulanmamış olabilir. Çok panolu evlerde arayüz "bazı panolar çevrimdışı" uyarısı gösterir.
-  List<String> get childLockOfflineDevices => List<String>.unmodifiable(_childLockOfflineDevices);
+  List<String> get childLockOfflineDevices =>
+      _offlineDevicesView.of(_childLockOfflineDevices, List<String>.unmodifiable);
 
   Map<String, dynamic>? get peaceNotificationData => _peaceNotificationData;
 
@@ -506,7 +616,7 @@ class AutomationState extends ChangeNotifier {
     return data == null ? null : PeaceNotificationSettings.fromJson(data);
   }
 
-  List<ScheduledRule> get scheduledRules => List.unmodifiable(_scheduledRules);
+  List<ScheduledRule> get scheduledRules => _rulesView.of(_scheduledRules, List<ScheduledRule>.unmodifiable);
   bool get scheduledRulesLoading => _scheduledRulesLoading;
   String? get scheduledRulesError => _scheduledRulesError;
 
@@ -517,11 +627,13 @@ class AutomationState extends ChangeNotifier {
   bool get biometricChecking => _biometricChecking;
   bool get biometricFailed => _biometricFailed;
 
-  List<InventoryDeviceModel> get inventoryDevices => List.unmodifiable(_inventoryDevices);
-  Map<String, int> get inventoryStats => Map.unmodifiable(_inventoryStats);
+  List<InventoryDeviceModel> get inventoryDevices =>
+      _inventoryView.of(_inventoryDevices, List<InventoryDeviceModel>.unmodifiable);
+  Map<String, int> get inventoryStats => _inventoryStatsView.of(_inventoryStats, Map<String, int>.unmodifiable);
   bool get inventoryLoading => _inventoryLoading;
   String? get inventoryError => _inventoryError;
-  List<Map<String, dynamic>> get serviceSubscribers => List.unmodifiable(_serviceSubscribers);
+  List<Map<String, dynamic>> get serviceSubscribers =>
+      _subscribersView.of(_serviceSubscribers, List<Map<String, dynamic>>.unmodifiable);
   bool get subscribersLoading => _subscribersLoading;
   String? get subscribersError => _subscribersError;
 
@@ -533,6 +645,15 @@ class AutomationState extends ChangeNotifier {
 
   /// Doğrudan moddaki son hata (anahtar geçersiz, adres yok ...).
   String? get directError => _directError;
+
+  /// LAN yoklaması anahtar sorunu yüzünden DURDU (`401`, `403 unprovisioned`, anahtarsız kısıtlı özet):
+  /// kullanıcı anahtarı girene / "Yeniden dene"ye basana ya da ön plana dönene kadar cihaza istek atılmaz
+  /// (bayat anahtarla yoklamak cihazın hatalı-deneme kilidini (423) tetikler). Bağlantı `connected` kalır.
+  bool get directNeedsKey => _pollHalted;
+
+  /// Cihaz çok sayıda hatalı denemeyle KİLİTLENDİ (`423`): yoklama bu ana kadar bekler (`Retry-After` + 1 sn);
+  /// kilit yoksa `null`. Bağlantı `connected` kalır, `status` yoktur ([directError] mesajı gösterir).
+  DateTime? get directBlockedUntil => _pollNotBefore;
 
   String get selectedDeviceUuid => _selectedDeviceUuid;
   String get selectedDeviceIp => _selectedDeviceIp;
@@ -580,6 +701,7 @@ class AutomationState extends ChangeNotifier {
   }
 
   Future<void> _initInner() async {
+    final epoch = _sessionEpoch; // çıkış / yeni giriş sürerken geç dönen okuma eski oturumu kurmasın (PF-29)
     final prefs = await SharedPreferences.getInstance();
     _installId = _loadInstallId(prefs);
 
@@ -601,32 +723,56 @@ class AutomationState extends ChangeNotifier {
     _selectedDeviceIp = prefs.getString(_prefsSvcIp) ?? '';
     _selectedDeviceName = prefs.getString(_prefsSvcName);
 
-    _isBiometricSupported = await biometricService.isBiometricSupported();
-    if (_isBiometricSupported) _biometricLabel = await biometricService.getBiometricLabel();
+    // Beş bağımsız depo okuması EŞZAMANLI (PF-13); her biri kendi süre sınırıyla (6 sn) değer ya da hata kaydına
+    // döner. Belirteçler: yalnızca SecureStorage. Okuma hatası "oturum yok" ile karıştırılmaz.
+    final (tokenRead, refreshRead, userRead, serviceRead, flagRead) = await (
+      _readStore<String?>(secureStorage.getAuthToken),
+      _readStore<String?>(secureStorage.getRefreshToken),
+      _readStore<UserModel?>(secureStorage.getUser),
+      _readStore<ServiceSessionInfo?>(secureStorage.getServiceSession),
+      _readStore<bool>(secureStorage.isBiometricEnabled),
+    ).wait;
+    if (_isStaleSession(epoch)) return;
 
-    // Belirteçler: yalnızca SecureStorage. Okuma hatası "oturum yok" ile karıştırılmaz.
-    String? token;
-    String? refresh;
-    ServiceSessionInfo? serviceInfo;
-    UserModel? storedUser;
-    try {
-      token = await secureStorage.getAuthToken();
-      refresh = await secureStorage.getRefreshToken();
-      storedUser = await secureStorage.getUser();
-      serviceInfo = await secureStorage.getServiceSession();
-    } on SecureStorageException catch (e) {
-      _storageError = e.message;
+    // Dört oturum okumasından biri hatalıysa: storageError + oturum yok (yarım oturum kurulmaz; saklı
+    // belirteçler SİLİNMEZ, sonraki açılışta okunabilir).
+    final sessionError = tokenRead.error ?? refreshRead.error ?? userRead.error ?? serviceRead.error;
+    if (sessionError != null) _storageError = sessionError.message;
+    final String? token = sessionError == null ? tokenRead.value : null;
+    final String? refresh = sessionError == null ? refreshRead.value : null;
+    final UserModel? storedUser = sessionError == null ? userRead.value : null;
+    final ServiceSessionInfo? serviceInfo = sessionError == null ? serviceRead.value : null;
+    final flagError = flagRead.error;
+    if (flagError != null) _storageError ??= flagError.message;
+
+    final hasRefresh = refresh != null && refresh.isNotEmpty;
+    final hasTokens = (token != null && token.isNotEmpty) || hasRefresh;
+
+    // Biyometrik destek sondası (platform kanalı, ≤ 3 sn): yalnız korunacak bir oturum varken ya da tercih
+    // okunamadığında (fail-closed karar için) çalışır; oturumsuz açılış platform kanalına gitmez (PF-13).
+    //
+    // İlk kullanım istemi (WP-BIO2): biyometrik kilidi KAPALI (tercih okunabildi ve false) bir kullanıcı oturumu
+    // geri yüklenirken "istem gösterildi" kaydı sondayla EŞZAMANLI okunur (takılmada süreler toplanmaz; beş oturum
+    // okuması bittikten sonra başlar). Servis oturumunda ve kilit açıkken okunmaz (istem yok). Karar
+    // `_startSession`'dan ÖNCE verilir: DashboardPage `shouldPromptBiometrics`'ı ilk karede okur.
+    var probeTimedOut = false;
+    Future<({bool? value, SecureStorageException? error})>? promptShownRead;
+    if (hasTokens || flagError != null) {
+      final lockOff = flagError == null && !(flagRead.value ?? false);
+      if (hasTokens && serviceInfo == null && lockOff) {
+        promptShownRead = _readStore<bool>(secureStorage.isBiometricPromptShown);
+      }
+      _isBiometricSupported = await biometricService.isBiometricSupported();
+      probeTimedOut = biometricService.lastSupportProbeTimedOut;
+      if (_isBiometricSupported) _biometricLabel = await biometricService.getBiometricLabel();
+      if (_isStaleSession(epoch)) return;
     }
+    // Kilit: tercih AÇIK (okunamazsa AÇIK varsayılır: fail-closed) ve cihaz destekliyor — ya da destek sondası
+    // yanıt vermedi (kilidi atlamak yerine kilitli kal; ekran "yeniden dene / şifre ile giriş" sunar).
+    final lockCapable = _isBiometricSupported || probeTimedOut;
+    _isBiometricEnabled = flagError == null ? (flagRead.value ?? false) : lockCapable;
+    final lockRequired = _isBiometricEnabled && lockCapable;
 
-    // Biyometrik tercih: okunamazsa kilit AÇIK varsayılır (fail-closed).
-    try {
-      _isBiometricEnabled = await secureStorage.isBiometricEnabled();
-    } on SecureStorageException catch (e) {
-      _storageError ??= e.message;
-      _isBiometricEnabled = _isBiometricSupported;
-    }
-
-    final hasTokens = (token != null && token.isNotEmpty) || (refresh != null && refresh.isNotEmpty);
     if (!hasTokens) {
       _authStatus = AuthStatus.unauthenticated;
       await _afterInitWithoutSession();
@@ -637,6 +783,7 @@ class AutomationState extends ChangeNotifier {
     if (serviceInfo != null) {
       if (serviceInfo.isExpiredAt(clock.now()) || token == null) {
         await _wipeStorageQuietly();
+        if (_isStaleSession(epoch)) return;
         _authStatus = AuthStatus.unauthenticated;
         await _afterInitWithoutSession();
         return;
@@ -653,17 +800,25 @@ class AutomationState extends ChangeNotifier {
       cloudApi.setRefreshToken(refresh);
       _currentUser = storedUser ?? _userFromJwt(token ?? refresh);
       if (_currentUser == null) {
-        // Kullanıcı bilinmiyor ve belirteçten de türetilemiyor: bozuk kayıt, temiz başla.
-        cloudApi.clearSession();
-        await _wipeStorageQuietly();
-        _authStatus = AuthStatus.unauthenticated;
-        await _afterInitWithoutSession();
-        return;
+        if (!hasRefresh) {
+          // Kullanıcı bilinmiyor, belirteçten türetilemiyor ve yenileme belirteci de yok: bozuk kayıt, temiz başla.
+          cloudApi.clearSession();
+          await _wipeStorageQuietly();
+          if (_isStaleSession(epoch)) return;
+          _authStatus = AuthStatus.unauthenticated;
+          await _afterInitWithoutSession();
+          return;
+        }
+        // Kullanıcı kaydı yok/bozuk ama yenileme belirteci var (WP-BIO2): oturum SİLİNMEZ (belirteç sunucuda hâlâ
+        // geçerli olabilir; silmek kullanıcıyı gereksiz yere giriş ekranına düşürürdü). Çözülemeyen erişim belirteci
+        // kullanılmaz: `_startSession` önce yeniler ve kullanıcıyı yenilenen JWT'den türetir. Sunucu reddederse oturum
+        // olayıyla kapanır; ağ hatasında belirteçler kalır (sonraki açılış yeniden dener).
+        cloudApi.setAuthToken(null);
       }
     }
 
     _pendingRestore = true;
-    if (_isBiometricEnabled && _isBiometricSupported) {
+    if (lockRequired) {
       // Kilitliyken ağ / MQTT BAŞLAMAZ: önce biyometrik doğrulama.
       _awaitingUnlock = true;
       _authStatus = AuthStatus.checking;
@@ -671,7 +826,29 @@ class AutomationState extends ChangeNotifier {
       await _unlockWithBiometrics();
       return;
     }
+    if (promptShownRead != null) {
+      // İlk kullanım istemi kararı (geri yükleme; giriş yolundaki `_handleAuthSuccess` ile aynı kural). Fail-safe:
+      // kayıt okunamadıysa ya da cihaz desteklemiyorsa (sonda zaman aşımı dahil) istem YOK. Karar bir kez verilir:
+      // "Daha Sonra" / "Etkinleştir" kaydı yazar (`dismissBiometricPrompt` / `enableBiometricWithVerification`).
+      final promptRead = await promptShownRead;
+      if (_isStaleSession(epoch)) return;
+      _shouldPromptBiometrics = _isBiometricSupported && promptRead.error == null && promptRead.value != true;
+    }
     await _startSession();
+  }
+
+  /// Oturum nesli [epoch]'tan farklılaştı (çıkış / yeni giriş) ya da durum kapatıldı: bekleyen eski iş sonucunu
+  /// UYGULAMAMALI (geç dönen okuma / doğrulama eski oturumu yeniden kurmasın).
+  bool _isStaleSession(int epoch) => _isDisposed || epoch != _sessionEpoch;
+
+  /// Tek depo okuması: [SecureStorageException]'ı (hata / 6 sn zaman aşımı) fırlatmaz, kayda çevirir; paralel
+  /// okumalarda biri düşünce diğerlerinin sonucu korunur.
+  Future<({T? value, SecureStorageException? error})> _readStore<T>(Future<T> Function() read) async {
+    try {
+      return (value: await read(), error: null);
+    } on SecureStorageException catch (e) {
+      return (value: null, error: e);
+    }
   }
 
   Future<void> _afterInitWithoutSession() async {
@@ -738,6 +915,9 @@ class AutomationState extends ChangeNotifier {
     _serviceSessionTimer = null;
     _guestExpiryTimer?.cancel();
     _guestExpiryTimer = null;
+    _loadRetryTimer?.cancel();
+    _loadRetryTimer = null;
+    _resetLayoutRefresh();
   }
 
   // ---------------------------------------------------------------------------
@@ -773,10 +953,14 @@ class AutomationState extends ChangeNotifier {
   Future<void> _onTokenRefreshed(String accessToken, String? refreshToken) {
     final epoch = _sessionEpoch;
     return _enqueueStorage(() async {
-      await secureStorage.saveAuthToken(accessToken);
+      // Önce YENİ yenileme belirteci, sonra erişim belirteci (WP-BIO2). Sunucu her yenilemede yenisini verir
+      // (rotasyon) ve eskisinin yeniden kullanımını "çalıntı" sayıp tüm oturum ailesini iptal eder: iki yazım
+      // arasında uygulama ölürse "eski yenileme + yeni erişim" kalır ve ilk yenilemede oturum zorla kapanırdı.
+      // Ters artık ("yeni yenileme + eski erişim") zararsızdır: ilk 401 sessizce yeniler.
       if (refreshToken != null && refreshToken.isNotEmpty) {
         await secureStorage.saveRefreshToken(refreshToken);
       }
+      await secureStorage.saveAuthToken(accessToken);
     }, epoch: epoch);
   }
 
@@ -818,6 +1002,7 @@ class AutomationState extends ChangeNotifier {
     _homesFromCache = false;
     _homesError = null;
     _homesFlight = null;
+    _homesCacheDigest = null;
     _resetHomeScopedState();
 
     _inventoryDevices = const [];
@@ -834,6 +1019,7 @@ class AutomationState extends ChangeNotifier {
     _biometricFailed = false;
     _pendingRestore = false;
     _awaitingUnlock = false;
+    _retryFlight = null; // eski oturumun "yeniden dene" uçuşu yeni oturumun denemesini yutmasın
 
     _selectedDeviceUuid = '';
     _selectedDeviceIp = '';
@@ -844,7 +1030,9 @@ class AutomationState extends ChangeNotifier {
     _directError = null;
     _directFailures = 0;
     _localKeyRefreshTried = false;
+    _resumeDirectPolling();
     _status = null;
+    _invalidateViews();
     _connState = ConnectionStateEnum.connecting;
     _mode = AppMode.cloud;
     _inBackground = false;
@@ -857,7 +1045,7 @@ class AutomationState extends ChangeNotifier {
   void _resetHomeScopedState() {
     _pipeline.cancelAll();
     _cloudEndpoints = const [];
-    _endpointView = null;
+    _invalidateViews();
     _endpointsLoading = false;
     _endpointsLoaded = false;
     _endpointsError = null;
@@ -883,8 +1071,15 @@ class AutomationState extends ChangeNotifier {
     _reconcileTimer = null;
     _guestExpiryTimer?.cancel();
     _guestExpiryTimer = null;
+    _loadRetryTimer?.cancel();
+    _loadRetryTimer = null;
+    _loadRetryCount = 0;
+    _resetLayoutRefresh(); // eski evin yerleşim izlemesi ve bekleyen yenilemesi yeni eve taşınmaz
+    _devicesFailed = false;
     _status = null;
+    _invalidateViews();
     _directFailures = 0;
+    _resumeDirectPolling();
   }
 
   /// Çocuk kilidi bilgisini "bilinmiyor"a döndürür (ev/mod/oturum değişiminde).
@@ -1005,6 +1200,9 @@ class AutomationState extends ChangeNotifier {
     _pollTimer = null;
     _reconcileTimer?.cancel();
     _reconcileTimer = null;
+    _loadRetryTimer?.cancel(); // arka planda ağ çağrısı yok; ön plana dönüş zaten tek snapshot alır
+    _loadRetryTimer = null;
+    _resetLayoutRefresh(); // aynı gerekçe: ön plana dönüşteki snapshot listeyi zaten yeniler
     _pipeline.cancelAll();
     unawaited(mqttService.stop());
     _mqttLink = MqttLinkState.disconnected;
@@ -1043,9 +1241,12 @@ class AutomationState extends ChangeNotifier {
       if (isServiceSession) await refresh(silent: true);
       return;
     }
-    await fetchHomes(autoSelect: false);
-    await refresh(silent: true);
-    await _startRealtime();
+    // Ev listesi (roller) + tek snapshot + canlı kanal EŞZAMANLI (PF-03): ardışık beklemek 3 tur x 10 sn olabilir.
+    await Future.wait<void>(<Future<void>>[
+      fetchHomes(autoSelect: false),
+      refresh(silent: true),
+      _startRealtime(),
+    ]);
   }
 
   @visibleForTesting
@@ -1055,23 +1256,53 @@ class AutomationState extends ChangeNotifier {
   // Biyometrik güvenlik
   // ---------------------------------------------------------------------------
 
+  /// Etkileşimli biyometrik istemin üst sınırı (PF-30): istem kullanıcı beklemesidir (bu yüzden uzun), ama
+  /// askıda kalıp yaşam döngüsünü ([handleLifecycleState]) ve splash kaçışını sonsuza dek kilitlemesin.
+  /// Süre dolunca istem "başarısız" sayılır (`biometricFailed`; yeniden dene / şifre ile giriş sunulur).
+  static const Duration _biometricPromptLimit = Duration(minutes: 2);
+
+  /// Biyometrik kilit açma (açılış, yeniden kilit, "yeniden dene"). Sağlamlık maddeleri (B4–B7: oturum nesli,
+  /// servis istisnası, arka plan bayrakları) `test/services/biometric_robustness_test.dart` içinde sınanır.
   Future<bool> _unlockWithBiometrics() async {
+    final epoch = _sessionEpoch; // await'ten ÖNCE: doğrulama sürerken oturum biterse sonuç başka oturuma aittir (B6)
     _biometricChecking = true;
     _biometricFailed = false;
     _authStatus = AuthStatus.checking;
     notifyListeners();
-    final ok = await biometricService.authenticate(
-      reason: 'AHBU Ev Otomasyonu için $_biometricLabel doğrulaması yapın',
-    );
-    _biometricChecking = false;
-    if (_isDisposed) return false;
+    var ok = false;
+    try {
+      ok = await clock.bound<bool>(
+        biometricService.authenticate(
+          reason: 'AHBU Ev Otomasyonu için $_biometricLabel doğrulaması yapın',
+        ),
+        _biometricPromptLimit,
+        () => false,
+      );
+    } catch (e) {
+      // Enjekte edilen servis fırlattı (üretim sarmalayıcısı fırlatmaz): doğrulanmadı sayılır; kilitli kalınır ve
+      // kilit ekranı "yeniden dene / şifre ile giriş" sunar. `unawaited` çağrılarda işlenmemiş hata ve takılı
+      // "doğrulanıyor" durumu (yaşam döngüsü kapısı sonsuza dek kapalı) oluşmaz (B7). Yalnız tür günlüğe yazılır.
+      _log('Biyometrik doğrulama hatası: ${e.runtimeType}');
+    } finally {
+      // Bayrak yalnız BU oturumun denemesi için sıfırlanır: oturum değiştiyse `_resetSessionState` zaten sıfırladı ve
+      // yeni oturumun / denemenin kendi `_biometricChecking` değerine eski denemenin sonu dokunmamalı.
+      if (!_isStaleSession(epoch)) _biometricChecking = false;
+    }
+    // Doğrulama sürerken oturum değişti (çıkış / yeni giriş) ya da durum kapandı: sonuç başka oturuma aittir.
+    if (_isStaleSession(epoch)) return false;
     if (!ok) {
       _biometricFailed = true;
       notifyListeners();
       return false;
     }
+    _isBiometricSupported = true; // doğrulama başarılı: cihaz destekliyor (sonda zaman aşımıyla false kalmış olabilir)
     _biometricFailed = false;
     _awaitingUnlock = false;
+    // İstem ancak ön planda yanıtlanabilir. Açılışta "paused" doğrulama BAŞLAMADAN önce işlendiyse ve "resumed" istem
+    // sırasında kapı yüzünden yutulduysa `_inBackground` takılı kalırdı: `_resumeSession` hiçbir şey başlatmaz (MQTT yok)
+    // ve bayat `_backgroundedAt` sonraki kısa arka plan gezisini gereksiz yere yeniden kilitlerdi (B5).
+    _inBackground = false;
+    _backgroundedAt = null;
     if (_pendingRestore) {
       await _startSession();
     } else {
@@ -1082,8 +1313,21 @@ class AutomationState extends ChangeNotifier {
     return true;
   }
 
-  /// Biyometrik doğrulamayı yeniden dener; başarıda oturum ağ/MQTT ile başlatılır.
-  Future<bool> retryBiometricAuth() => _unlockWithBiometrics();
+  Future<bool>? _retryFlight;
+
+  /// Biyometrik doğrulamayı yeniden dener; başarıda oturum ağ/MQTT ile başlatılır. Süren bir deneme varsa
+  /// onun sonucunu döndürür (çift dokunuş ikinci istem açmaz, oturumu iki kez başlatmaz). Fırlatmaz: servis
+  /// hatası "doğrulanamadı" (`false`) sayılır.
+  Future<bool> retryBiometricAuth() {
+    final existing = _retryFlight;
+    if (existing != null) return existing;
+    late final Future<bool> future;
+    future = _unlockWithBiometrics().whenComplete(() {
+      if (identical(_retryFlight, future)) _retryFlight = null;
+    });
+    _retryFlight = future;
+    return future;
+  }
 
   /// Şifre ile girişe düş: yerel belirteçler/MQTT temizlenir ve refresh token sunucuda iptal edilir.
   Future<void> fallbackToPasswordLogin() => logout();
@@ -1092,14 +1336,20 @@ class AutomationState extends ChangeNotifier {
   Future<bool> toggleBiometric(bool enabled) async {
     if (enabled == _isBiometricEnabled) return true;
     if (!_isBiometricSupported) return false;
+    final epoch = _sessionEpoch; // await'ten ÖNCE: doğrulama sürerken çıkış olursa tercih yazılmasın (PF-30)
     final verified = await biometricService.authenticate(
       reason: enabled
           ? 'AHBU Ev Otomasyonu için $_biometricLabel girişini etkinleştirin'
           : 'Biyometrik girişi kapatmak için kimliğinizi doğrulayın',
     );
     if (!verified) return false;
+    if (_isStaleSession(epoch)) return false;
     _isBiometricEnabled = enabled;
-    unawaited(_enqueueStorage(() => secureStorage.saveBiometricEnabled(enabled), epoch: _sessionEpoch));
+    // Doğrulama arka plandayken (ör. Android <= 9 cihaz kimlik bilgisi etkinliği) tamamlandı ve sonuç "resumed"dan
+    // ÖNCE geldiyse, bayat `_backgroundedAt` ön plana dönüşte yeni etkinleştirmeyi hemen yeniden kilitletir. Kullanıcı
+    // kimliğini az önce doğruladı: bekleme süresi şimdi başlar (B4).
+    if (_backgroundedAt != null) _backgroundedAt = clock.now();
+    unawaited(_enqueueStorage(() => secureStorage.saveBiometricEnabled(enabled), epoch: epoch));
     notifyListeners();
     return true;
   }
@@ -1369,6 +1619,7 @@ class AutomationState extends ChangeNotifier {
 
   void _scheduleServiceSessionExpiry(ServiceSessionInfo info) {
     _serviceSessionTimer?.cancel();
+    if (_isDisposed) return; // dispose sırasında süren zincir sonradan zamanlayıcı kurmasın (PF-34)
     final remaining = info.remaining(clock.now());
     _serviceSessionTimer = clock.timer(remaining, () {
       _handleSessionExpired(SessionEndReason.serviceSessionExpired);
@@ -1413,20 +1664,24 @@ class AutomationState extends ChangeNotifier {
       unawaited(cloudApi.revokeRefreshToken(previousRefreshToken));
     }
 
-    // İlk giriş sonrası biyometrik istem kararı.
-    try {
-      final promptShown = await secureStorage.isBiometricPromptShown();
-      final supported = await biometricService.isBiometricSupported();
-      _isBiometricSupported = supported;
-      if (supported) _biometricLabel = await biometricService.getBiometricLabel();
-      _shouldPromptBiometrics = supported && !promptShown;
-    } on SecureStorageException {
-      _shouldPromptBiometrics = false;
-    }
+    // İlk giriş sonrası biyometrik istem kararı. Üç bağımsız sonda EŞZAMANLI (her biri süre sınırlı) ve bildirimden
+    // ÖNCE biter: DashboardPage `shouldPromptBiometrics`'ı ilk karede BİR kez okur (unawaited YAPILMAZ).
+    final (promptRead, supported, label) = await (
+      _readStore<bool>(secureStorage.isBiometricPromptShown),
+      biometricService.isBiometricSupported(),
+      biometricService.getBiometricLabel(),
+    ).wait;
+    _isBiometricSupported = supported;
+    if (supported) _biometricLabel = label;
+    if (_isStaleSession(epoch)) return true; // sonda sürerken oturum değişti: istem kararı başka oturuma ait
+    _shouldPromptBiometrics = supported && promptRead.error == null && promptRead.value != true;
     notifyListeners();
 
-    // Ev listesi (rol dahil) ve ilk ev.
-    await fetchHomes();
+    // Ev listesi (rol dahil): bir ağ turu beklenir; ilk evin seçimi + REST yığını + canlı kanal ARKA PLANDA sürer
+    // (PF-39). Beklenirse telefon-OTP / şifre sıfırlama / sihirli bağlantı diyalogları (PopScope canPop: !busy)
+    // hepsi bitene kadar açık kalırdı (_startSession ile aynı desen).
+    await fetchHomes(autoSelect: false);
+    unawaited(_selectInitialHome());
     return true;
   }
 
@@ -1463,16 +1718,67 @@ class AutomationState extends ChangeNotifier {
       return;
     }
 
-    // Yalnızca refresh token varsa önce yenile.
+    // Yalnızca refresh token varsa önce yenile. Yalnız sunucunun KALICI reddi (4xx) oturumu kapatır: API istemcisi
+    // bunu oturum olayıyla bildirir (`_handleSessionExpired`: yerel temizlik, giriş ekranı). Ağ hatası / 5xx / 429'da
+    // oturum KORUNUR: aşağıda önbellek-önce ya da ağ-öncelikli akış sürer; ilk 401'de tek-uçuş yenileme yeniden denenir.
     if (cloudApi.authToken == null && cloudApi.currentRefreshToken != null) {
       try {
         final ok = await cloudApi.refreshSession();
-        if (!ok || epoch != _sessionEpoch) return; // oturum sona erdi (olay üretildi)
+        if (epoch != _sessionEpoch) return; // oturum sona erdi (olay üretildi) ya da değişti
+        if (!ok) {
+          // Kalıcı ret normalde oturum olayıyla (epoch artar) biter. Olaysız `false` (savunma; üretim istemcisi
+          // üretmez): açılış ekranında takılı kalmak yerine giriş ekranı; saklı belirteçler SİLİNMEZ.
+          if (_authStatus == AuthStatus.checking) {
+            _authStatus = AuthStatus.unauthenticated;
+            notifyListeners();
+          }
+          return;
+        }
       } on ApiException catch (e) {
         _log('Oturum yenilenemedi (${e.statusCode})');
+        if (epoch != _sessionEpoch) return;
       }
     }
 
+    // Kullanıcı kaydı yoktu ve saklı belirteçten türetilememişti (bkz. `_initInner`): yenilenen erişim JWT'sinden
+    // türetilir ve kayıt onarılır. Türetilemiyorsa (yenileme ağ yüzünden olmadı / yanıt çözülemedi) KULLANICISIZ oturum
+    // kurulmaz ("authenticated" + kullanıcı yok olmaz); saklı belirteçler silinmez: ağ gelince sonraki açılış dener.
+    if (_currentUser == null) {
+      final derived = _userFromJwt(cloudApi.authToken);
+      if (derived == null) {
+        cloudApi.clearSession();
+        _authStatus = AuthStatus.unauthenticated;
+        notifyListeners();
+        await _afterInitWithoutSession();
+        return;
+      }
+      _currentUser = derived;
+      unawaited(_enqueueStorage(() => secureStorage.saveUser(derived), epoch: epoch));
+    }
+
+    // Önbellek-önce (SWR) açılış (PF-03): saklı ev listesi (yalnız yerel depo okuması) varsa pano HEMEN açılır ve
+    // sunucuyla arka planda uzlaşılır (kapalı kalan uygulamada saklı erişim jetonu çoğunlukla bitmiştir: ağ-öncelikli
+    // açılış 401 -> yenileme -> yeniden = 3 ardışık tur beklerdi). `homesFromCache` BU pencerede set EDİLMEZ: yalnız ağ
+    // hatasında (çevrimiçi kullanıcıya "Çevrimdışısınız" şeridi çıkmasın); `homesLoading` zaten true'dur.
+    final cached = await _loadCachedHomesForStart();
+    if (epoch != _sessionEpoch) return;
+    if (cached.isNotEmpty) {
+      _homes = cached;
+      _homesCacheDigest = _homesDigest(_currentUser!.id, cached);
+      _authStatus = AuthStatus.authenticated;
+      notifyListeners();
+      unawaited(fetchHomes(autoSelect: false)); // rol / üyelik değişimini uzlaştırır (_reconcileHomes)
+      if (_mode == AppMode.direct) {
+        await _prepareDirect();
+        _startPolling();
+        await refresh();
+      } else {
+        unawaited(_selectInitialHome());
+      }
+      return;
+    }
+
+    // Önbellek yok (ya da okunamadı): ağ-öncelikli akış.
     await fetchHomes(autoSelect: false);
     if (epoch != _sessionEpoch) return;
     _authStatus = AuthStatus.authenticated;
@@ -1484,6 +1790,19 @@ class AutomationState extends ChangeNotifier {
       await refresh();
     } else {
       unawaited(_selectInitialHome());
+    }
+  }
+
+  /// Saklı ev listesi (yalnız bu kullanıcı için). Okuma hatası [storageError]'a yazılır ve boş liste döner
+  /// (ağ-öncelikli akışa dönülür).
+  Future<List<HomeModel>> _loadCachedHomesForStart() async {
+    final user = _currentUser;
+    if (user == null || user.id.isEmpty) return const <HomeModel>[];
+    try {
+      return await secureStorage.loadHomesCache(user.id);
+    } on SecureStorageException catch (e) {
+      _storageError = e.message;
+      return const <HomeModel>[];
     }
   }
 
@@ -1506,7 +1825,7 @@ class AutomationState extends ChangeNotifier {
   }
 
   Future<void> _fetchHomesImpl(bool autoSelect) async {
-    if (_currentUser == null) return;
+    if (_isDisposed || _currentUser == null) return;
     if (isServiceSession) return; // servis oturumunun tek evi giriş sırasında bellidir
     final epoch = _sessionEpoch;
     _homesLoading = true;
@@ -1537,10 +1856,24 @@ class AutomationState extends ChangeNotifier {
     }
   }
 
+  // Son BAŞARIYLA yazılan (ya da önbellekten okunan) ev listesinin özeti (PF-35): içerik değişmedikçe her başarılı
+  // `fetchHomes`'ta güvenli depoya (Keystore/Keychain, pahalı) tümden yeniden yazılmaz. Oturum sıfırlanınca düşer.
+  String? _homesCacheDigest;
+
+  static String _homesDigest(String userId, List<HomeModel> homes) =>
+      '$userId|${jsonEncode(<Object?>[for (final home in homes) home.toJson()])}';
+
   void _persistHomesCache(List<HomeModel> homes) {
     final user = _currentUser;
     if (user == null || user.id.isEmpty) return;
-    unawaited(_enqueueStorage(() => secureStorage.saveHomesCache(user.id, homes), epoch: _sessionEpoch));
+    final digest = _homesDigest(user.id, homes);
+    if (digest == _homesCacheDigest) return;
+    final epoch = _sessionEpoch;
+    unawaited(_enqueueStorage(() async {
+      await secureStorage.saveHomesCache(user.id, homes);
+      // Özet yalnız BAŞARILI yazımda kaydedilir: hata sonrası aynı liste yeniden denenir.
+      if (epoch == _sessionEpoch) _homesCacheDigest = digest;
+    }, epoch: epoch));
   }
 
   Future<void> _loadHomesFromCache(int epoch, bool autoSelect) async {
@@ -1613,13 +1946,19 @@ class AutomationState extends ChangeNotifier {
 
   Future<void> _selectInitialHome() async {
     if (_activeHome != null || _homes.isEmpty) return;
+    final epoch = _sessionEpoch;
     final pick = await _pickInitialHome();
-    if (pick != null && _activeHome == null) await selectHome(pick);
+    // Bu arada oturum kapandı (çıkış) ya da ev zaten seçildi: eski seçim uygulanmaz. Liste önbellekten açılışta
+    // sunucuyla uzlaşmış olabilir: seçim GÜNCEL listeden yapılır (artık listelenmeyen ev seçilmez).
+    if (_isStaleSession(epoch) || _activeHome != null) return;
+    final fresh = pick == null ? null : homeById(pick.id);
+    if (fresh != null) await selectHome(fresh);
   }
 
   /// Aktif evi değiştirir: ev kapsamlı **tüm** önbellekler (uç noktalar, cihazlar, durum, kurallar,
   /// servis PIN, bekleyen komutlar, MQTT) sıfırlanır; yeni evin verisi yüklenir.
   Future<void> selectHome(HomeModel home) async {
+    if (_isDisposed) return; // dispose sırasında süren zincir (ör. claim sonrası ev seçimi) REST/MQTT başlatmasın (PF-34)
     _homeEpoch++;
     unawaited(mqttService.stop());
     _mqttLink = MqttLinkState.disconnected;
@@ -1632,8 +1971,9 @@ class AutomationState extends ChangeNotifier {
     if (home.isGuestExpiredAt(clock.now())) return; // süresi dolmuş misafir: veri/ağ yok
 
     if (_mode == AppMode.cloud) {
-      await refresh();
-      await _startRealtime();
+      // REST yenilemesi ve canlı kanal EŞZAMANLI (PF-03): MQTT REST yığınının (3 ardışık tur olabilir) arkasında
+      // beklemez; REST yanıtı beklenirken gelen daha yeni canlı `state` REST'in üzerine uygulanır (_loadEndpoints).
+      await Future.wait<void>(<Future<void>>[refresh(), _startRealtime()]);
     } else {
       await _prepareDirect();
       await refresh();
@@ -1649,6 +1989,7 @@ class AutomationState extends ChangeNotifier {
   void _scheduleGuestExpiry() {
     _guestExpiryTimer?.cancel();
     _guestExpiryTimer = null;
+    if (_isDisposed) return; // dispose sırasında süren zincir sonradan zamanlayıcı kurmasın (PF-34)
     final home = _activeHome;
     if (home == null || !home.isGuestRole) return;
     final until = home.guestValidUntil;
@@ -1676,6 +2017,7 @@ class AutomationState extends ChangeNotifier {
     if (newMode == AppMode.direct && isAuthenticated && !capabilities.canSwitchMode) return false;
 
     _pipeline.cancelAll();
+    _resetLayoutRefresh(); // bulut yerleşim yenilemesi mod değişince geçersiz (yeniden bulut moduna dönüşte snapshot alınır)
     _mode = newMode;
     _resetChildLockKnowledge(); // kaynak değişti (LAN <-> bulut)
     unawaited(_saveMode(newMode));
@@ -1685,6 +2027,7 @@ class AutomationState extends ChangeNotifier {
       unawaited(mqttService.stop());
       _mqttLink = MqttLinkState.disconnected;
       _status = null;
+      _invalidateViews();
       _directFailures = 0;
       _connState = ConnectionStateEnum.connecting;
       await _prepareDirect();
@@ -1693,11 +2036,14 @@ class AutomationState extends ChangeNotifier {
     } else {
       _pollTimer?.cancel();
       _pollTimer = null;
+      _resumeDirectPolling(); // LAN durdurma / 423 engeli doğrudan moda aittir: bulutta "anahtar/kilit" kalıntısı kalmaz
       _status = null;
+      _invalidateViews();
       if (isAuthenticated) {
         if (_activeHome != null) {
-          await refresh();
-          await _startRealtime();
+          // Buluta dönüş: snapshot + canlı kanal EŞZAMANLI (PF-03). Ev listesi burada YENİLENMEZ (eskiden de değildi;
+          // sabitlenmiş test harness'ı boş sahte ev listesiyle çalışır: yenileme aktif evi düşürürdü).
+          await Future.wait<void>(<Future<void>>[refresh(), _startRealtime()]);
         } else {
           await fetchHomes();
         }
@@ -1734,6 +2080,8 @@ class AutomationState extends ChangeNotifier {
     _connState = ConnectionStateEnum.connecting;
     _directFailures = 0;
     _status = null;
+    _invalidateViews();
+    _resumeDirectPolling(); // yeni adres: durdurma / 423 beklemesi eski adrese aitti
     notifyListeners();
     await refresh();
   }
@@ -1756,6 +2104,7 @@ class AutomationState extends ChangeNotifier {
     _host = _selectedDeviceIp;
     directApi.localKey = null;
     _localKeyRefreshTried = false;
+    _resumeDirectPolling(); // yeni cihaz: eski cihazın durdurma / 423 beklemesi geçersiz
     notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1783,6 +2132,7 @@ class AutomationState extends ChangeNotifier {
     }
     _selectedDeviceIp = cleanIp;
     _host = _selectedDeviceIp;
+    _resumeDirectPolling(); // yeni adres: durdurma / 423 beklemesi eski adrese aitti
     notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -1799,6 +2149,7 @@ class AutomationState extends ChangeNotifier {
     _selectedDeviceUuid = clean;
     directApi.localKey = null;
     _localKeyRefreshTried = false;
+    _resumeDirectPolling(); // yeni cihaz kimliği: eski cihazın durdurma / 423 beklemesi geçersiz
     notifyListeners();
     try {
       await (await SharedPreferences.getInstance()).setString(_prefsSvcUuid, _selectedDeviceUuid);
@@ -1813,6 +2164,8 @@ class AutomationState extends ChangeNotifier {
       throw ApiException.validation('Cihaz anahtarı 8 ile 32 karakter arasında olmalıdır.');
     }
     directApi.localKey = clean;
+    _resumeDirectPolling(); // yeni anahtar: durdurulmuş yoklama sürer ve HEMEN denenir (depo yazımı beklenmez)
+    if (_mode == AppMode.direct) unawaited(refresh(silent: true));
     final uuid = _localKeyDeviceUuid();
     if (uuid != null) {
       await _enqueueStorage(() => secureStorage.saveLocalKey(uuid, clean));
@@ -1826,10 +2179,21 @@ class AutomationState extends ChangeNotifier {
   /// ev aktif ev değildir** (`claimDevice` servis akışında evi seçmez): `homeId: claim.homeId` verin.
   /// Aktif olmayan ev için istemci yetki kapısı yoktur (sunucu karar verir: owner/resident/staff/servis
   /// oturumu; süper kullanıcı ✖ olduğundan hiç sorulmaz).
-  Future<String?> localKeyFor(String deviceUuid, {String? homeId, bool forceRefresh = false}) async {
+  Future<String?> localKeyFor(String deviceUuid, {String? homeId, bool forceRefresh = false}) async =>
+      (await _lookupLocalKey(deviceUuid, homeId: homeId, forceRefresh: forceRefresh)).key;
+
+  /// [localKeyFor] gövdesi + "sunucudan yanıt alındı mı" bilgisi ([serverAnswered]): sunucuya hiç gidilmediyse
+  /// (anahtar depodaydı / cihaz-yetki yok) ya da ağ hatası olduysa `false`; sunucu anahtarı ya da bir hata
+  /// YANITI (403/404/5xx ...) verdiyse `true`.
+  Future<({String? key, bool serverAnswered})> _lookupLocalKey(
+    String deviceUuid, {
+    String? homeId,
+    bool forceRefresh = false,
+  }) async {
     final uuid = QrClaimParser.normalizeUid(deviceUuid);
-    if (uuid == null) return null;
+    if (uuid == null) return (key: null, serverAnswered: false);
     String? key;
+    var serverAnswered = false;
     if (!forceRefresh) {
       try {
         key = await secureStorage.getLocalKey(uuid);
@@ -1843,13 +2207,15 @@ class AutomationState extends ChangeNotifier {
     if (key == null && isAuthenticated && targetHomeId != null && allowed) {
       try {
         key = await cloudApi.localKey(targetHomeId, uuid);
+        serverAnswered = true;
         final saved = key;
         await _enqueueStorage(() => secureStorage.saveLocalKey(uuid, saved));
       } on ApiException catch (e) {
         _directError = e.message;
+        serverAnswered = !e.isNetwork;
       }
     }
-    return key;
+    return (key: key, serverAnswered: serverAnswered);
   }
 
   String? _localKeyDeviceUuid() {
@@ -1858,12 +2224,25 @@ class AutomationState extends ChangeNotifier {
     return ref == null ? null : QrClaimParser.normalizeUid(ref);
   }
 
-  Future<void> _resolveLocalKey({bool forceRefresh = false}) async {
+  /// Anahtarı çözer (depo, yoksa/`forceRefresh` ise sunucu) ve `directApi.localKey`'e yazar. Dönen değer:
+  /// sunucudan YANIT alındı mı (`serverAnswered`); cihaz bilinmiyorsa `false`.
+  Future<bool> _resolveLocalKey({bool forceRefresh = false}) async {
     final uuid = _localKeyDeviceUuid();
-    if (uuid == null) return;
-    final key = await localKeyFor(uuid, forceRefresh: forceRefresh);
+    if (uuid == null) return false;
+    final result = await _lookupLocalKey(uuid, forceRefresh: forceRefresh);
+    final key = result.key;
     if (key != null) directApi.localKey = key;
     notifyListeners();
+    return result.serverAnswered;
+  }
+
+  /// Anahtarı sunucudan BİR kez yeniler (401 / anahtarsız özet). Yenileme hakkı yalnız sunucudan YANIT alınan
+  /// denemede tüketilir: ağ hatasında ya da cihaz/yetki yokken (sunucuya gidilmediğinde) sonraki 401'de
+  /// yeniden denenir (internet gelince anahtar yine alınabilsin).
+  Future<void> _refreshLocalKeyOnce() async {
+    _localKeyRefreshTried = true; // eşzamanlı ikinci yenileme olmasın
+    final answered = await _resolveLocalKey(forceRefresh: true);
+    if (!answered) _localKeyRefreshTried = false;
   }
 
   Future<void> _prepareDirect() async {
@@ -1878,7 +2257,9 @@ class AutomationState extends ChangeNotifier {
   /// Tek bir anlık görüntü alır: doğrudan modda cihaz durumu; bulutta evler (aktif ev yoksa) ve
   /// aktif evin uç noktaları/cihazları.
   Future<void> refresh({bool silent = false}) async {
+    if (_isDisposed) return;
     if (_mode == AppMode.direct) {
+      if (!silent) _resumeDirectPolling(); // kullanıcının "Yeniden dene"si / çekip bırak: yoklama sürer
       await _directRefresh(silent: silent);
     } else {
       await _cloudRefresh(silent: silent);
@@ -1908,16 +2289,87 @@ class AutomationState extends ChangeNotifier {
     final caps = capabilities;
     if (!caps.canViewState) return;
     final epoch = _homeEpoch;
+    if (!silent) _loadRetryCount = 0; // kullanıcı eylemi: yeni bir otomatik deneme zinciri
 
+    // Yükleyiciler yalnız ALAN atar; TEK bildirim hepsi bittikten sonra gelir (PF-04: eskiden 4-5 bildirim).
     await Future.wait<void>([
-      _loadEndpoints(home, epoch, silent: silent),
-      _loadDevices(home, epoch),
-      _loadChildLock(home, epoch), // salt-okunur görüntüleme herkese (misafir dahil); değiştirme ayrıca kapılı
-      if (caps.canChangeChildLock) fetchPeaceNotification(),
+      _loadEndpoints(home, epoch, silent: silent, notify: false),
+      _loadDevices(home, epoch, notify: false),
+      _loadChildLock(home, epoch, notify: false), // salt-okunur görüntüleme herkese (misafir dahil); değiştirme ayrıca kapılı
+      if (caps.canChangeChildLock) _fetchPeace(notify: false),
     ]);
+    if (epoch != _homeEpoch || _isDisposed) return; // ev değişti / çıkış: sonuç eski eve aitti
+    _applyPresenceFallback();
+    _invalidateViews();
+    notifyListeners();
+    _scheduleLoadRetry(epoch);
   }
 
-  Future<void> _loadEndpoints(HomeModel home, int epoch, {required bool silent}) async {
+  // PF-11: ilk yükleme başarısız kalırsa sınırlı otomatik yeniden deneme (2, 5, 15, 30 sn; en çok 4; sessiz).
+  static const List<Duration> _loadRetryDelays = <Duration>[
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+  ];
+  Timer? _loadRetryTimer;
+  int _loadRetryCount = 0;
+
+  /// Cihaz listesi son denemede alınamadı (PF-11): yeniden denenir; çevrimiçilik uç noktalardan türetilebilir.
+  bool _devicesFailed = false;
+
+  /// Uç nokta listesi hiç yüklenemediyse ([endpointsError] ve [endpointsLoaded] false) ya da cihaz listesi
+  /// alınamadıysa [_loadRetryDelays] kadar sonra sessiz yenileme planlar. Ev değişiminde, arka plana geçişte,
+  /// çıkışta ve `dispose`'ta iptal olur.
+  void _scheduleLoadRetry(int epoch) {
+    _loadRetryTimer?.cancel();
+    _loadRetryTimer = null;
+    final needed = (_endpointsError != null && !_endpointsLoaded) || _devicesFailed;
+    if (!needed) {
+      _loadRetryCount = 0;
+      return;
+    }
+    if (_isDisposed || _inBackground || epoch != _homeEpoch || _loadRetryCount >= _loadRetryDelays.length) return;
+    final delay = _loadRetryDelays[_loadRetryCount++];
+    _loadRetryTimer = clock.timer(delay, () {
+      _loadRetryTimer = null;
+      if (_isDisposed || _inBackground || epoch != _homeEpoch || _mode != AppMode.cloud) return;
+      unawaited(refresh(silent: true));
+    });
+  }
+
+  /// Cihaz listesi alınamadıysa (ya da boşsa) çevrimiçilik uç noktaların `device_online` bilgisinden türetilir
+  /// ([_loadDevices] ile aynı kural: yalnız canlı kanal bağlı değilken ya da durum bilinmiyorken). Liste
+  /// BAŞARIYLA geldiyse o esastır; canlı kanal bağlıyken canlı bilgi ezilmez.
+  void _applyPresenceFallback() {
+    if (!_devicesFailed && _devices.isNotEmpty) return;
+    if (_presence != DevicePresence.unknown && brokerConnected) return;
+    var known = false;
+    var anyOnline = false;
+    for (final endpoint in _cloudEndpoints) {
+      final online = endpoint.deviceOnline;
+      if (online == null) continue;
+      known = true;
+      if (online) anyOnline = true;
+    }
+    if (known) _presence = anyOnline ? DevicePresence.online : DevicePresence.offline;
+  }
+
+  /// [notify] `false` ise yalnız alan atar ([_cloudRefreshImpl] tek bildirim yapar). [reportError] `false` ise hata
+  /// [endpointsError]'a yazılmaz (arka plandaki isteğe bağlı yerleşim yenilemesi, [_runLayoutRefresh]: son bilinen liste
+  /// ekranda kalır, "Cihazlar güncellenemedi" şeridi çıkmaz); başarı yine hatayı temizler. [preferLive] `true` ise en son
+  /// canlı anlık görüntü, istekten ÖNCE gelmiş olsa bile REST'in üzerine uygulanır: uç noktaların `current_state` /
+  /// `current_position` değerini yalnız köprü canlı `state`'ten yazar ve veritabanı canlı iletinin milisaniyeler gerisinde
+  /// kalabilir; canlı iletiyle tetiklenen yerleşim yenilemesi (anlık görüntü her zaman taze) kartı bu gecikmeli değerle
+  /// geri çevirmez.
+  Future<void> _loadEndpoints(
+    HomeModel home,
+    int epoch, {
+    required bool silent,
+    bool notify = true,
+    bool reportError = true,
+    bool preferLive = false,
+  }) async {
     if (!silent) {
       _endpointsLoading = true;
       _endpointsError = null;
@@ -1931,49 +2383,57 @@ class AutomationState extends ChangeNotifier {
       // REST yanıtı beklenirken daha yeni bir canlı `state` geldiyse onu REST'in üzerine uygula.
       final live = _lastLiveSnapshot;
       final liveAt = _lastLiveSnapshotAt;
-      if (live != null && liveAt != null && liveAt.isAfter(requestedAt)) {
+      if (live != null && liveAt != null && (preferLive || liveAt.isAfter(requestedAt))) {
         next = applyStatusToEndpoints(next, live).endpoints;
       }
       _cloudEndpoints = next;
-      _endpointView = null;
+      _invalidateViews();
       _endpointsLoaded = true;
       _endpointsError = null;
-      // MQTT kopukken komut onayı REST yoklamasından da doğrulanabilir.
-      _pipeline.observe(statusFromEndpoints(next));
+      // MQTT kopukken komut onayı REST yoklamasından da doğrulanabilir (yalnız bekleyen komut varsa: boşuna
+      // `statusFromEndpoints` türetilmez).
+      if (_pipeline.hasPending) _pipeline.observe(statusFromEndpoints(next));
     } on ApiException catch (e) {
       if (epoch != _homeEpoch) return;
-      if (!e.isUnauthorized) _endpointsError = e.message;
+      if (reportError && !e.isUnauthorized) _endpointsError = e.message;
     } catch (_) {
-      if (epoch == _homeEpoch) _endpointsError = 'Cihazlar yüklenemedi. Lütfen tekrar deneyin.';
+      if (reportError && epoch == _homeEpoch) _endpointsError = 'Cihazlar yüklenemedi. Lütfen tekrar deneyin.';
     } finally {
       if (epoch == _homeEpoch) {
         _endpointsLoading = false;
-        _endpointView = null;
-        notifyListeners();
+        _invalidateViews();
+        if (notify) notifyListeners();
       }
     }
   }
 
-  Future<void> _loadDevices(HomeModel home, int epoch) async {
+  /// [notify] `false` ise yalnız alan atar ([_cloudRefreshImpl] tek bildirim yapar).
+  Future<void> _loadDevices(HomeModel home, int epoch, {bool notify = true}) async {
     try {
       final list = await cloudApi.devices(home.id);
       if (epoch != _homeEpoch) return;
       _devices = list;
+      _devicesFailed = false;
       // Canlı `status` kanalı yokken (veya henüz bilinmiyorsa) REST bilgisi kullanılır.
       if (list.isNotEmpty && (_presence == DevicePresence.unknown || !brokerConnected)) {
         _presence = list.any((d) => d.online) ? DevicePresence.online : DevicePresence.offline;
       }
-      notifyListeners();
+      if (notify) notifyListeners();
     } on ApiException catch (e) {
+      if (epoch == _homeEpoch) _devicesFailed = true;
       _log('Cihaz listesi alınamadı (${e.statusCode})');
-    } catch (_) {}
+    } catch (_) {
+      if (epoch == _homeEpoch) _devicesFailed = true;
+    }
   }
 
   /// REST çocuk kilidi anlık görüntüsü. **Cihaz bildirimi esastır**: canlı kanal bağlıyken cihazdan
   /// değer biliniyorsa veya istek sırasında daha yeni bir cihaz bildirimi geldiyse REST sonucu
   /// uygulanmaz (bayat GET, daha yeni MQTT durumunu ezmesin). Hata/401/403/5xx durumunda değer
   /// "kapalı"ya DÖNMEZ: bilinmiyorsa bilinmiyor kalır.
-  Future<void> _loadChildLock(HomeModel home, int epoch) async {
+  ///
+  /// [notify] `false` ise yalnız alan atar ([_cloudRefreshImpl] tek bildirim yapar).
+  Future<void> _loadChildLock(HomeModel home, int epoch, {bool notify = true}) async {
     final requestedAt = clock.now();
     try {
       final info = await cloudApi.fetchChildLockInfo(home.id);
@@ -1985,7 +2445,7 @@ class AutomationState extends ChangeNotifier {
       final deviceNewer = deviceAt != null && deviceAt.isAfter(requestedAt);
       final deviceAuthoritative = brokerConnected && _childLockByUid.isNotEmpty;
       if (deviceNewer || deviceAuthoritative) {
-        notifyListeners();
+        if (notify) notifyListeners();
         return;
       }
       if (!brokerConnected) {
@@ -1999,7 +2459,7 @@ class AutomationState extends ChangeNotifier {
       }
       _childLockRest = info.enabled;
       _childLockUpdatedAt = clock.now();
-      notifyListeners();
+      if (notify) notifyListeners();
     } on ApiException catch (e) {
       _log('Çocuk kilidi okunamadı (${e.statusCode})');
     } catch (_) {}
@@ -2019,7 +2479,8 @@ class AutomationState extends ChangeNotifier {
   }
 
   Future<void> _startRealtime() async {
-    if (_mode != AppMode.cloud ||
+    if (_isDisposed || // dispose sırasında süren zincir sonradan MQTT bağlantısı kurmasın (PF-34)
+        _mode != AppMode.cloud ||
         _activeHome == null ||
         !isAuthenticated ||
         _inBackground ||
@@ -2069,35 +2530,209 @@ class AutomationState extends ChangeNotifier {
 
   /// Cihaz `state` anlık görüntüsünü uç noktalara, panjur hareket bilgisine ve çocuk kilidine uygular;
   /// bekleyen komutları onaylar.
+  ///
+  /// Yalnız GÖRÜNÜR bir şey değiştiyse bildirir (PF-04): cihaz kalp atışı ~30 sn'de bir özdeş `state` yayınlar
+  /// ve her ileti tüm arayüzü uyandırmamalıdır. Zaman damgaları (çocuk kilidi etiket saati, son canlı ileti)
+  /// her iletide tazelenir ama bildirim üretmez. Bekleyen komutun onayı kendi bildirimini yapar.
   void _applyCloudSnapshot(DeviceStatus snapshot, {required bool retained}) {
     final sync = applyStatusToEndpoints(_cloudEndpoints, snapshot);
+    var changed = sync.changed;
     if (sync.changed) {
       _cloudEndpoints = sync.endpoints;
     }
     for (final shutter in snapshot.shutters) {
-      _shutterRuntime[shutter.pair] = ShutterRuntime(
-        moving: shutter.isMoving,
-        direction: shutter.direction,
-        target: shutter.target,
-      );
+      final known = _shutterRuntime[shutter.pair];
+      final base = known ?? const ShutterRuntime();
+      final differs = base.moving != shutter.isMoving ||
+          base.direction != shutter.direction ||
+          base.target != shutter.target;
+      if (known == null || differs) {
+        _shutterRuntime[shutter.pair] = ShutterRuntime(
+          moving: shutter.isMoving,
+          direction: shutter.direction,
+          target: shutter.target,
+        );
+      }
+      if (differs) changed = true;
     }
     if (snapshot.childLockKnown) {
-      _childLockByUid[snapshot.uid ?? ''] = snapshot.childLock;
+      final uid = snapshot.uid ?? '';
+      if (_childLockByUid[uid] != snapshot.childLock) {
+        _childLockByUid[uid] = snapshot.childLock;
+        changed = true;
+      }
       _childLockDeviceAt = clock.now();
-      _childLockUpdatedAt = _childLockDeviceAt;
+      _childLockUpdatedAt = _childLockDeviceAt; // "son bilinen" etiket saati bayat kalmasın (bildirimsiz)
     }
-    if (snapshot.ip.isNotEmpty) _lastDeviceIp = snapshot.ip;
+    if (snapshot.ip.isNotEmpty && snapshot.ip != _lastDeviceIp) {
+      _lastDeviceIp = snapshot.ip;
+      changed = true;
+    }
     if (!retained) {
       // Canlı ileti = cihaz yaşıyor (retained "offline" status'u da düzeltilir). Saklı/retained
       // `state` çevrimiçiliği KANITLAMAZ.
-      _presence = DevicePresence.online;
+      if (_presence != DevicePresence.online) {
+        _presence = DevicePresence.online;
+        changed = true;
+      }
       _lastLiveStateAt = clock.now();
     }
     _lastLiveSnapshot = snapshot;
     _lastLiveSnapshotAt = clock.now();
     _pipeline.observe(snapshot);
-    _endpointView = null;
-    notifyListeners();
+    if (changed) {
+      _invalidateViews();
+      notifyListeners();
+    }
+    if (!retained) _watchEndpointLayout(snapshot); // bayat (retained) ileti yerleşim kararına esas olmaz
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pano yerleşimi ↔ uç nokta listesi uyuşmazlığı: gecikmeli SESSİZ yenileme (WP-STATE2)
+  // ---------------------------------------------------------------------------
+  //
+  // Sunucu köprüsü, panonun canlı `state`'indeki yerleşimi (röle türleri, panjur çiftleri, kanal sayısı) ~1 sn içinde
+  // buluttaki uç noktalara eşitler (CONTRACTS §2.4b). Açık uygulamanın `_cloudEndpoints` listesi bunu kendiliğinden
+  // görmez: ör. 5-6. kanallar panjur olunca ekranda eski lamba kartları kalır (sunucu panjur kanalına gelen röle
+  // komutunu 400 ile reddeder; yine de kartlar yanıltıcıdır). Bu yüzden CANLI
+  // `state`'in yerleşimi listeyle uyuşmuyorsa ([ReportedLayout.compareWith]) gecikmeli, sessiz TEK bir uç nokta
+  // yüklemesi planlanır. Sınırlar:
+  //
+  // * Denetim yalnız hafif bir karşılaştırmadır (O(kanal)); özdeş kalp atışı hiçbir iş/bildirim üretmez (PF-04).
+  // * Tek zamanlayıcı (debounce): bekleyen zamanlayıcı varken yenisi kurulmaz. Yerleşim imzası değişirse (pano yeniden
+  //   ayarlandı) zamanlayıcı baştan, 2 sn'ye kurulur.
+  // * Pano başına, aynı imza için en çok 3 deneme: 2 sn, +10 sn, +30 sn (sunucu eşitlemesi en geç bir kalp atışında,
+  //   30 sn; küçülmede ikinci görüş için bir kalp atışı daha gerekir). Sonra imza DEĞİŞENE ya da uyuşma sağlanana
+  //   kadar DURUR: ENDPOINT_LAYOUT_SYNC=off ya da sunucu hatasında sonsuz istek yoktur. Uyuşma sağlanınca ya da imza
+  //   değişince o panonun sayacı sıfırlanır. Bir istek tüm panoları birlikte görür (deneme ortak harcanır).
+  // * Bekleyen komut varken yenileme en çok 5 kez 1 sn ertelenir (deneme sayılmaz): komut onayı/iyimser değer REST
+  //   gecikmesiyle (veritabanı ile canlı `state` arasındaki kısa fark) yarışmasın.
+  // * Hareket/animasyon yok; yükleme göstergesi yok (`silent`); hata göstergesi yok; yalnız liste DEĞİŞTİYSE bildirir.
+  // * Ev değişimi, arka plan, çıkış, mod değişimi ve `dispose` bekleyen zamanlayıcıyı iptal eder ([_resetLayoutRefresh]).
+
+  /// Deneme gecikmeleri (her biri bir önceki denemenin SONUNDAN itibaren; ilk deneme uyuşmazlığın görüldüğü andan).
+  static const List<Duration> _layoutRefreshDelays = <Duration>[
+    Duration(seconds: 2),
+    Duration(seconds: 10),
+    Duration(seconds: 30),
+  ];
+
+  /// Bekleyen komut yüzünden erteleme adımı ve en çok erteleme sayısı.
+  static const Duration _layoutRefreshBusyDelay = Duration(seconds: 1);
+  static const int _layoutRefreshMaxBusyDeferrals = 5;
+
+  Timer? _layoutRefreshTimer;
+  bool _layoutRefreshInFlight = false;
+  int _layoutRefreshBusyDeferrals = 0;
+
+  /// Uyuşmayan yerleşimi olan panolar (anahtar: [ReportedLayout.device]).
+  final Map<String, _LayoutWatch> _layoutWatches = <String, _LayoutWatch>{};
+
+  /// Canlı bir `state`'in yerleşimini uç nokta listesiyle karşılaştırır; uyuşmazsa izlemeye alır ve yenileme planlar.
+  void _watchEndpointLayout(DeviceStatus snapshot) {
+    if (_isDisposed || _inBackground || _mode != AppMode.cloud || _activeHome == null || !_endpointsLoaded) return;
+    if (!isAuthenticated) return; // oturum yokken (kilitli/çıkış) REST yapılamaz: izleme/zamanlayıcı kurulmaz
+    final layout = ReportedLayout.from(snapshot);
+    if (layout == null) return; // sunucunun da eşitlemeyeceği (kısıtlı / eksik / tutarsız) ileti: karar verilemez
+    final verdict = layout.compareWith(_cloudEndpoints);
+    if (verdict == EndpointLayoutVerdict.unknown) return;
+    final watch = _layoutWatches[layout.device];
+    if (verdict == EndpointLayoutVerdict.match) {
+      if (watch == null) return;
+      _layoutWatches.remove(layout.device); // uyuştu: bu panonun sayacı sıfırlandı
+      if (_layoutWatches.isEmpty) _cancelLayoutRefreshTimer();
+      return;
+    }
+    if (watch == null || watch.layout.signature != layout.signature) {
+      _layoutWatches[layout.device] = _LayoutWatch(layout); // yeni ya da değişen yerleşim: deneme sayacı sıfırdan
+      _scheduleLayoutRefresh(restart: true);
+    } else {
+      _scheduleLayoutRefresh(); // aynı imza (kalp atışı): zamanlayıcı varsa dokunulmaz
+    }
+  }
+
+  void _cancelLayoutRefreshTimer() {
+    _layoutRefreshTimer?.cancel();
+    _layoutRefreshTimer = null;
+    _layoutRefreshBusyDeferrals = 0;
+  }
+
+  /// İzlemeyi ve bekleyen zamanlayıcıyı bırakır (ev değişimi, arka plan, çıkış, mod değişimi, `dispose`). Uçuştaki
+  /// istek bitince sonucu kendi başına işler ([_runLayoutRefresh]); yeni zamanlayıcı kurmaz.
+  void _resetLayoutRefresh() {
+    _cancelLayoutRefreshTimer();
+    _layoutWatches.clear();
+  }
+
+  /// Deneme hakkı kalan izleme varsa zamanlayıcıyı kurar. Uçuşta istek varken ya da (restart yoksa) zamanlayıcı
+  /// bekliyorken hiçbir şey yapmaz (debounce).
+  void _scheduleLayoutRefresh({bool restart = false}) {
+    if (_isDisposed || _inBackground || _mode != AppMode.cloud || _activeHome == null) return;
+    if (_layoutRefreshInFlight) return;
+    if (_layoutRefreshTimer != null && !restart) return;
+    int? attempts;
+    for (final watch in _layoutWatches.values) {
+      if (watch.attempts >= _layoutRefreshDelays.length) continue;
+      if (attempts == null || watch.attempts < attempts) attempts = watch.attempts;
+    }
+    if (attempts == null) return; // tüm izlemelerin denemesi doldu: imza değişene / uyuşana kadar durur
+    _layoutRefreshBusyDeferrals = 0;
+    _armLayoutRefresh(_layoutRefreshDelays[attempts]);
+  }
+
+  void _armLayoutRefresh(Duration delay) {
+    _layoutRefreshTimer?.cancel();
+    final epoch = _homeEpoch;
+    _layoutRefreshTimer = clock.timer(delay, () {
+      _layoutRefreshTimer = null;
+      unawaited(_runLayoutRefresh(epoch));
+    });
+  }
+
+  /// Liste bu arada başka yoldan yenilendiyse (çekip yenile, komut sonrası uzlaşma...) uyuşan izlemeleri bırakır.
+  void _pruneLayoutWatches() {
+    _layoutWatches.removeWhere((_, watch) => watch.layout.compareWith(_cloudEndpoints) != EndpointLayoutVerdict.mismatch);
+  }
+
+  /// Zamanlayıcı tetiklendi: uyuşmazlık sürüyorsa uç noktaları SESSİZCE yeniden yükler, sonra yeniden değerlendirir.
+  Future<void> _runLayoutRefresh(int epoch) async {
+    final home = _activeHome;
+    if (_isDisposed || _inBackground || epoch != _homeEpoch || _mode != AppMode.cloud || home == null) return;
+    // Oturum/yetki arada kaybolduysa REST yapılmaz (canlı iletiler koşullar dönünce izlemeyi yeniden kurar).
+    if (!isAuthenticated || home.isGuestExpiredAt(clock.now()) || !capabilities.canViewState) return;
+    _pruneLayoutWatches();
+    if (_layoutWatches.isEmpty) return; // artık uyuşuyor: istek yok
+    if (_pipeline.hasPending && _layoutRefreshBusyDeferrals < _layoutRefreshMaxBusyDeferrals) {
+      _layoutRefreshBusyDeferrals++;
+      _armLayoutRefresh(_layoutRefreshBusyDelay);
+      return;
+    }
+    _layoutRefreshBusyDeferrals = 0;
+    for (final watch in _layoutWatches.values) {
+      watch.attempts++; // tek istek tüm uyuşmayan panolar için denemedir
+    }
+    _layoutRefreshInFlight = true;
+    try {
+      final flight = _cloudRefreshFlight;
+      if (flight != null) {
+        await flight; // tam yenileme zaten uç noktaları yüklüyor: paralel ikinci istek açılmaz
+      } else {
+        final before = _cloudEndpoints;
+        final hadError = _endpointsError != null;
+        await _loadEndpoints(home, epoch, silent: true, notify: false, reportError: false, preferLive: true);
+        final cleared = hadError && _endpointsError == null;
+        if (!_isDisposed && epoch == _homeEpoch && (cleared || !sameEndpointList(before, _cloudEndpoints))) {
+          notifyListeners(); // yalnız görünür bir şey değiştiyse (liste ya da kaybolan hata şeridi)
+        }
+      }
+    } catch (_) {
+      // Sessiz: hata kullanıcıya yansıtılmaz; deneme hakkı kaldıysa sonraki deneme yeniden dener.
+    } finally {
+      _layoutRefreshInFlight = false;
+    }
+    if (_isDisposed || epoch != _homeEpoch) return;
+    _pruneLayoutWatches();
+    _scheduleLayoutRefresh();
   }
 
   // ---------------------------------------------------------------------------
@@ -2107,28 +2742,46 @@ class AutomationState extends ChangeNotifier {
   void _startPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
-    if (_inBackground || _mode != AppMode.direct) return;
+    if (_isDisposed || _inBackground || _mode != AppMode.direct) return;
+    _resumeDirectPolling(); // mod değişimi / ön plana dönüş: kalıcı durdurma ve 423 beklemesi kalkar
     _pollTimer = clock.periodic(_directPollInterval, (_) {
-      if (!_isDisposed && _mode == AppMode.direct && !_inBackground) {
-        unawaited(_directRefresh(silent: true));
-      }
+      if (_isDisposed || _mode != AppMode.direct || _inBackground || _pollHalted) return;
+      final notBefore = _pollNotBefore;
+      if (notBefore != null && clock.now().isBefore(notBefore)) return; // 423: Retry-After dolana kadar yoklanmaz
+      unawaited(_directRefresh(silent: true)); // engeli (süresi dolmuş) isteğin kendisi kaldırır ya da yeniler
     });
+  }
+
+  /// 423 `Retry-After` için üst sınır: cihaz (firmware) 60 sn kilitler; hatalı/abartılı bir değer yoklamayı saatlerce
+  /// susturmasın.
+  static const Duration _maxLockWait = Duration(minutes: 5);
+
+  /// LAN yoklamasının kalıcı durdurmasını ve 423 beklemesini kaldırır (kullanıcı eylemi, ön plana dönüş,
+  /// yeni adres/anahtar). Yalnızca yoklama kapısını açar; isteği çağıran atar.
+  void _resumeDirectPolling() {
+    _pollHalted = false;
+    _pollNotBefore = null;
   }
 
   /// Aynı anda yalnızca **bir** istek uçuşta olur; ardışık 3 hata sonrası cihaz çevrimdışı sayılır
-  /// (kullanıcı tetiklemeli yenilemede ilk hatada).
+  /// (kullanıcı tetiklemeli yenilemede ilk hatada). Uçuş, başlatıldığı adres + anahtar için geçerlidir:
+  /// ikisinden biri değiştiyse eski uçuş devralınmaz (yenisi ayrı başlar) ve eski uçuşun sonucu atılır.
   Future<void> _directRefresh({required bool silent}) {
+    final base = directApi.baseUrl;
+    final key = directApi.localKey;
     final existing = _pollInFlight;
-    if (existing != null) return existing;
+    if (existing != null && base == _pollFlightBase && key == _pollFlightKey) return existing;
     late final Future<void> future;
-    future = _directRefreshImpl(silent).whenComplete(() {
+    future = _directRefreshImpl(silent, base, key).whenComplete(() {
       if (identical(_pollInFlight, future)) _pollInFlight = null;
     });
     _pollInFlight = future;
+    _pollFlightBase = base;
+    _pollFlightKey = key;
     return future;
   }
 
-  Future<void> _directRefreshImpl(bool silent) async {
+  Future<void> _directRefreshImpl(bool silent, String base, String? key) async {
     if (!directApi.isConfigured) {
       final changed = _connState != ConnectionStateEnum.offline || _directError == null;
       _connState = ConnectionStateEnum.offline;
@@ -2139,66 +2792,103 @@ class AutomationState extends ChangeNotifier {
     final epoch = _homeEpoch;
     final beforeConn = _connState;
     final beforeError = _directError;
+    // Yoklama engeli (423) bu isteğin başında kalkar; yine 423 gelirse yeni zamanla yeniden kurulur. Görünen engel
+    // zamanı değiştiyse (ör. kilit yenilendi) arayüz de bilgilendirilir: bayat "şu ana kadar kilitli" görmez.
+    final blockedBefore = _pollNotBefore;
+    _pollNotBefore = null;
     var changed = false;
+    // Uçuş sırasında adres/anahtar değiştiyse sonuç eski hedefe aittir: atılır (yenisi ayrı uçuştadır).
+    bool stale() => base != directApi.baseUrl || key != directApi.localKey;
     try {
       final st = await directApi.fetchStatus();
-      if (epoch != _homeEpoch || _mode != AppMode.direct) return;
+      if (epoch != _homeEpoch || _mode != AppMode.direct || stale()) return;
       final previous = _status;
       if (st.restricted) {
         // Anahtarsız kısıtlı özet: cihaza ulaşıldı ama kontrol edilemez ("boş cihaz" sanılmaz).
         changed = previous != null;
         _directFailures = 0;
         _status = null;
+        _invalidateViews();
         _connState = ConnectionStateEnum.connected;
-        _directError = st.provisioned == false
+        final message = st.provisioned == false
             ? 'Cihaz henüz kurulmamış. Servis kurulumunu tamamlayın.'
             : 'Cihaz anahtarı gerekli. Anahtarı girin veya hesabınızla giriş yapın.';
+        _directError = message;
         if (st.provisioned != false && !_localKeyRefreshTried && isAuthenticated) {
-          _localKeyRefreshTried = true;
-          await _resolveLocalKey(forceRefresh: true);
+          await _refreshLocalKeyOnce();
+          if (epoch != _homeEpoch) return;
+          _directError = message; // bulut hatası cihazın mesajını ezmesin
         }
-        if (epoch == _homeEpoch) {
-          _endpointView = null;
-          notifyListeners();
+        // Anahtar hâlâ yok: kullanıcı anahtarı girene / "Yeniden dene"ye basana dek yoklama yok.
+        if (!hasLocalKey) _pollHalted = true;
+      } else {
+        // Telemetri (uptime/RSSI) `sameAs`'ta yok sayılır; kartı dondurmamak için kaba eşikle bildirilir.
+        final telemetryMoved = (st.uptimeSec - _telemetryUptimeSec).abs() >= 60 ||
+            (st.wifiStaRssi - _telemetryRssi).abs() >= 10;
+        changed = previous == null || !previous.sameAs(st) || telemetryMoved;
+        if (changed) {
+          _telemetryUptimeSec = st.uptimeSec;
+          _telemetryRssi = st.wifiStaRssi;
         }
-        return;
+        _directFailures = 0;
+        _directError = null;
+        _resumeDirectPolling(); // anahtar çalışıyor: durdurma / 423 beklemesi yok
+        _status = st;
+        _invalidateViews();
+        if (st.childLockKnown) {
+          _childLockByUid['_lan'] = st.childLock;
+          _childLockDeviceAt = clock.now();
+          _childLockUpdatedAt = _childLockDeviceAt; // bildirimsiz: "son bilinen" saati her yoklamada taze
+        }
+        if (st.ip.isNotEmpty) _lastDeviceIp = st.ip;
+        _connState = ConnectionStateEnum.connected;
+        _pipeline.observe(st);
       }
-      changed = previous == null || !previous.sameAs(st);
-      _directFailures = 0;
-      _directError = null;
-      _status = st;
-      if (st.childLockKnown) {
-        final before = _childLockByUid['_lan'];
-        _childLockByUid['_lan'] = st.childLock;
-        _childLockDeviceAt = clock.now();
-        if (before != st.childLock) _childLockUpdatedAt = _childLockDeviceAt;
-      }
-      if (st.ip.isNotEmpty) _lastDeviceIp = st.ip;
-      _connState = ConnectionStateEnum.connected;
-      _pipeline.observe(st);
     } on LocalApiException catch (e) {
-      if (epoch != _homeEpoch) return;
+      if (epoch != _homeEpoch || stale()) return;
       if (e.isUnauthorized || e.isUnprovisioned) {
         // Cihaza ulaşıldı ama anahtar geçersiz/yok: bir kez sunucudan yeniden al.
         _directError = e.message;
         _directFailures = 0;
+        final keyBefore = directApi.localKey;
         if (!_localKeyRefreshTried && isAuthenticated) {
-          _localKeyRefreshTried = true;
-          await _resolveLocalKey(forceRefresh: true);
+          await _refreshLocalKeyOnce();
+          if (epoch != _homeEpoch) return;
         }
+        if (directApi.localKey == keyBefore) {
+          // Anahtar değişmedi (yenilenemedi ya da sunucudaki de aynı): cihazı bayat anahtarla yormadan DUR
+          // (5 hatalı deneme cihazı 60 sn kilitler). Cihaza ulaşıldı: çevrimdışı DEĞİL, ama kontrol edilemez.
+          changed = _status != null;
+          _status = null;
+          _invalidateViews();
+          _connState = ConnectionStateEnum.connected;
+          _directError = e.message; // bulut hatası cihazın mesajını ezmesin
+          _pollHalted = true;
+        }
+      } else if (e.isLocked) {
+        // Cihaz çok sayıda hatalı denemeyle kilitlendi (423): ulaşıldı; Retry-After (+1 sn) dolana kadar yoklanmaz.
+        changed = _status != null;
+        _directFailures = 0;
+        _status = null;
+        _invalidateViews();
+        _connState = ConnectionStateEnum.connected;
+        _directError = e.message;
+        final wait = e.retryAfter ?? const Duration(seconds: 60);
+        _pollNotBefore = clock.now().add((wait > _maxLockWait ? _maxLockWait : wait) + const Duration(seconds: 1));
       } else {
         _directFailures++;
         if (!silent || _directFailures >= 3) _connState = ConnectionStateEnum.offline;
         _directError = e.message;
       }
     } catch (_) {
+      if (epoch != _homeEpoch || stale()) return;
       _directFailures++;
       if (!silent || _directFailures >= 3) _connState = ConnectionStateEnum.offline;
     }
     if (epoch == _homeEpoch) {
       // Değişim yoksa bildirme: her 1.5 sn yoklamada tüm arayüz yeniden çizilmesin.
-      if (changed || _connState != beforeConn || _directError != beforeError) {
-        _endpointView = null;
+      if (changed || _connState != beforeConn || _directError != beforeError || _pollNotBefore != blockedBefore) {
+        _invalidateViews();
         notifyListeners();
       }
     }
@@ -2206,14 +2896,16 @@ class AutomationState extends ChangeNotifier {
 
   void _pollSoon() {
     _reconcileTimer?.cancel();
+    if (_isDisposed) return; // komut yanıtı dispose'tan sonra dönebilir (PF-34)
     _reconcileTimer = clock.timer(const Duration(milliseconds: 250), () {
-      if (_mode == AppMode.direct && !_inBackground) unawaited(_directRefresh(silent: true));
+      if (!_isDisposed && _mode == AppMode.direct && !_inBackground) unawaited(_directRefresh(silent: true));
     });
   }
 
   /// MQTT kopukken (iyimser değer onay penceresinde) REST ile gerçek durumu yeniden oku.
   void _scheduleReconcile() {
     _reconcileTimer?.cancel();
+    if (_isDisposed) return; // PF-34
     _reconcileTimer = clock.timer(const Duration(milliseconds: 900), () {
       if (_isDisposed || _inBackground) return;
       if (_mode == AppMode.cloud) {
@@ -2228,8 +2920,16 @@ class AutomationState extends ChangeNotifier {
   // Görünüm: gerçek durum + bekleyen (iyimser) komutlar
   // ---------------------------------------------------------------------------
 
-  void _onPipelineChanged() {
+  /// Görünüm girdileri (uç noktalar, canlı panjur durumu, LAN durumu, bekleyen komutlar) değişti: türetilmiş
+  /// değerler ([cloudEndpoints], [relayItems], [shutterItems], [status]) bir sonraki erişimde yeniden kurulur
+  /// (PF-20). Bu girdileri değiştiren HER yer, bildirimden ÖNCE bunu çağırmalıdır.
+  void _invalidateViews() {
     _endpointView = null;
+    _viewGen++;
+  }
+
+  void _onPipelineChanged() {
+    _invalidateViews();
     notifyListeners();
   }
 
@@ -2773,7 +3473,10 @@ class AutomationState extends ChangeNotifier {
   // Huzur bildirimi
   // ---------------------------------------------------------------------------
 
-  Future<Map<String, dynamic>?> fetchPeaceNotification() async {
+  Future<Map<String, dynamic>?> fetchPeaceNotification() => _fetchPeace(notify: true);
+
+  /// [notify] `false` ise yalnız alan atar ([_cloudRefreshImpl] tek bildirim yapar).
+  Future<Map<String, dynamic>?> _fetchPeace({required bool notify}) async {
     final home = _activeHome;
     if (_mode != AppMode.cloud || home == null || !capabilities.canChangeChildLock) return null;
     final epoch = _homeEpoch;
@@ -2781,7 +3484,7 @@ class AutomationState extends ChangeNotifier {
       final data = await cloudApi.getPeaceNotification(home.id);
       if (epoch != _homeEpoch) return null;
       _peaceNotificationData = data;
-      notifyListeners();
+      if (notify) notifyListeners();
       return data;
     } on ApiException catch (e) {
       _log('Huzur bildirimi alınamadı (${e.statusCode})');
@@ -2829,7 +3532,7 @@ class AutomationState extends ChangeNotifier {
     if (home == null) throw ApiException.validation('Önce bir daire seçilmelidir.');
     final epoch = _homeEpoch;
     final token = await cloudApi.createServiceToken(home.id);
-    if (epoch != _homeEpoch) return token.pin;
+    if (epoch != _homeEpoch || _isDisposed) return token.pin; // tek seferlik PIN yine de döner; durum/zamanlayıcı kurulmaz
     _servicePin = token.pin;
     _servicePinExpiry = token.expiresAt;
     _servicePinTimer?.cancel();
@@ -2921,13 +3624,29 @@ class AutomationState extends ChangeNotifier {
       otpCode: otpCode,
     );
     final isStaffFlow = capabilities.isStaff || isSuperUser;
+    // Sonuç (cihaz kimliği) sunucudan BİR kez gelir: ev listesi yenilemesi/ev seçimi en iyi çaba ve sınırlıdır
+    // (PF-44); yavaş ağda arka planda sürer, sonuç hemen döner.
+    await _bestEffort(_refreshAfterClaim(result, isStaffFlow));
+    notifyListeners();
+    return result;
+  }
+
+  Future<void> _refreshAfterClaim(ClaimResult result, bool isStaffFlow) async {
     await fetchHomes(autoSelect: false);
     if (!isStaffFlow) {
       final claimed = homeById(result.homeId);
       if (claimed != null) await selectHome(claimed);
     }
-    notifyListeners();
-    return result;
+  }
+
+  /// Tek seferlik sırlı bir sonuçtan SONRAKİ ağ yenilemesi: en çok [_bestEffortLimit] beklenir, hata/zaman aşımı
+  /// yutulur (iş arka planda sürer; sonuç zaten alınmıştır ve bir daha verilmez).
+  static const Duration _bestEffortLimit = Duration(seconds: 3);
+
+  Future<void> _bestEffort(Future<void> work) async {
+    try {
+      await clock.bound<void>(work, _bestEffortLimit, () {});
+    } catch (_) {}
   }
 
   /// Devreye alma (commissioning): zorunlu 5 kontrol ayrı alanlarla gönderilir; `tests_passed`
@@ -3003,7 +3722,8 @@ class AutomationState extends ChangeNotifier {
       reason: reason,
       newOwnerIdentifier: newOwnerIdentifier,
     );
-    await fetchHomes(autoSelect: false);
+    // Yanıt tek seferlik sır (yeni PIN / yerel anahtar / cihaz kimliği) taşır: yenileme en iyi çaba, sınırlı (PF-44).
+    await _bestEffort(fetchHomes(autoSelect: false));
     return res;
   }
 
@@ -3030,7 +3750,8 @@ class AutomationState extends ChangeNotifier {
       setupPin: setupPin,
       reason: reason,
     );
-    await refresh(silent: true);
+    // Yanıt tek seferlik yeni pano kimliği taşır: yenileme en iyi çaba, sınırlı (PF-44).
+    await _bestEffort(refresh(silent: true));
     return res;
   }
 
@@ -3349,14 +4070,14 @@ class AutomationState extends ChangeNotifier {
   @visibleForTesting
   void setStatusForTesting(DeviceStatus? value) {
     _status = value;
-    _endpointView = null;
+    _invalidateViews();
     notifyListeners();
   }
 
   @visibleForTesting
   void setCloudEndpointsForTesting(List<EndpointModel> value) {
     _cloudEndpoints = List<EndpointModel>.of(value);
-    _endpointView = null;
+    _invalidateViews();
     _endpointsLoaded = true;
     notifyListeners();
   }

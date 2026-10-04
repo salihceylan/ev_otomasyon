@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../services/peace_notice_controller.dart';
 import '../../services/push/push_coordinator.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
 
 /// Gece huzur bildirimi kartına konan, bu telefonun push (bildirim) kaydının durumu.
 ///
@@ -123,55 +124,72 @@ class _PushStatusTileState extends State<PushStatusTile> {
       _Tone.muted => AppTheme.getTextMuted(context),
     };
 
+    // Ton rengine göre hafif tınılı panel (uyarı = amber bloom, başarı = zümrüt); renk tek ipucu değildir.
+    final tint = switch (spec.tone) {
+      _Tone.success => AppFamilies.emerald.base,
+      _Tone.warning => AppFamilies.amber.base,
+      _Tone.muted => AppFamilies.slate.base,
+    };
+
     return Padding(
       key: const Key('tile_push_status'),
       padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Semantics(
-            container: true,
-            liveRegion: true,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 1),
-                  child: Icon(spec.icon, size: 18, color: iconColor),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    spec.text,
-                    key: const Key('text_push_status'),
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.35,
-                      fontWeight: FontWeight.w600,
-                      color: textColor,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: tint.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(AppRadius.r12),
+          border: Border.all(color: tint.withValues(alpha: 0.30)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Semantics(
+                container: true,
+                liveRegion: true,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 1),
+                      child: Icon(spec.icon, size: 18, color: iconColor),
                     ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        spec.text,
+                        key: const Key('text_push_status'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (spec.action != null && spec.onAction != null)
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton(
+                    key: spec.actionKey,
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(48, 48),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                      foregroundColor: AppTheme.infoText(context),
+                    ),
+                    onPressed: _requesting
+                        ? null
+                        : () => unawaited(_run(spec.onAction!)),
+                    child: Text(spec.action!),
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
-          if (spec.action != null && spec.onAction != null)
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: TextButton(
-                key: spec.actionKey,
-                style: TextButton.styleFrom(
-                  minimumSize: const Size(48, 48),
-                  tapTargetSize: MaterialTapTargetSize.padded,
-                  foregroundColor: AppTheme.infoText(context),
-                ),
-                onPressed: _requesting
-                    ? null
-                    : () => unawaited(_run(spec.onAction!)),
-                child: Text(spec.action!),
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }

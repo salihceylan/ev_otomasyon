@@ -13,7 +13,9 @@ import 'api_exception.dart';
 import 'clock.dart';
 
 /// Refresh sonrası yeni belirteçleri kalıcı depolamaya yazar. **Beklenir**: yeniden denenen
-/// istek, yeni (dönen) refresh token kaydedildikten sonra gönderilir.
+/// istek, yeni (dönen) refresh token kaydedildikten sonra gönderilir. Bekleme **en çok 3 sn**'dir
+/// (PF-02): takılı bir yazım tek-uçuş yenilemeyi ve bekleyen tüm 401 yeniden denemelerini sonsuza dek
+/// bloklamaz; belirteçler zaten bellekte olduğundan yazım arka planda sürer (geç sonucu/hatası yutulur).
 typedef TokenRefreshedCallback = FutureOr<void> Function(String accessToken, String? refreshToken);
 
 /// Refresh token kalıcı olarak reddedildi / oturum bitti (tek merkezden; her oturum için bir kez).
@@ -25,6 +27,23 @@ typedef GuestExpiredCallback = void Function(String? homeId);
 /// `403 FORBIDDEN` (misafir dışı yetki reddi): rol değişmiş olabilir; ev listesi yenilenmelidir.
 typedef ForbiddenCallback = void Function(String? homeId);
 
+/// Tek bir `_call`'ın toplam süre bütçesi (PF-09). Bütçe dolunca bekleyen çağırana ağ hatası döner ve
+/// [expired] kalkar: terk edilen iç koşu (`_callOnce`) artık refresh başlatmaz ve isteği yeniden göndermez
+/// (çağıran hata aldıktan sonra bir POST'un "hayalet" ikinci kez gitmesi engellenir).
+class _Budget {
+  _Budget(this.limit);
+
+  final Duration limit;
+  bool expired = false;
+
+  /// Bütçe aşımı hatası: `_sendRaw` zaman aşımıyla AYNI biçimde ağ hatası (`cause` = [TimeoutException]);
+  /// arayüz "sunucu zamanında yanıt vermedi" ile "internet yok"u ayırt edebilir.
+  ApiException exceeded() => ApiException.network(
+        cause: TimeoutException('REST çağrısı toplam süre bütçesini aştı', limit),
+        message: 'Sunucu zamanında yanıt vermedi. Tekrar deneyin.',
+      );
+}
+
 /// Bulut REST istemcisi (CONTRACTS §1).
 ///
 /// * Singleton **değildir**; kurucudan `baseUrl` / `http.Client` / `Clock` alır (test için örneklenebilir).
@@ -34,6 +53,8 @@ typedef ForbiddenCallback = void Function(String? homeId);
 ///   istek en fazla bir kez yeniden denenir. **403 hiçbir zaman refresh tetiklemez.**
 /// * Ağ hatası / 5xx / 429 sırasında oturum **korunur**; yalnızca refresh'in kalıcı reddi
 ///   [onSessionExpired]'ı tetikler.
+/// * Her çağrının TOPLAM süresi sınırlıdır (istek zaman aşımı + 4 sn; komutlarda 10 sn): 401 yolundaki
+///   istek + refresh + yeniden deneme süreleri ardışık birikmez (PF-09).
 /// * Oturum nesli sayacı: çıkıştan sonra gelen refresh yanıtı yazılmaz.
 /// * Gömülü sır (yönetici API anahtarı vb.) **yoktur**; yetki yalnızca JWT ile sağlanır.
 class EvCloudApiService {
@@ -58,6 +79,18 @@ class EvCloudApiService {
   ServiceSessionInfo? _serviceSession;
   Future<bool>? _refreshInFlight;
   bool _disposed = false;
+
+  /// `_call` toplam süre bütçesi = istek başına zaman aşımı + bu pay (PF-09): GET için 10 + 4 = 14 sn
+  /// (eskiden 401 yolunda 10+10+10 sn).
+  static const Duration _callBudgetSlack = Duration(seconds: 4);
+
+  /// Komut çağrılarının (`sendCommand`/`controlEndpoint`/`setChildLock`) toplam bütçesi: komut hattının toplam
+  /// üst sınırıyla (`CommandPipeline.maxTotal` = 10 sn, CONTRACTS §5) uyumlu; REST çağrısı, komut geri
+  /// alındıktan sonra uzun süre "terk edilmiş" olarak yaşamaz (eskiden 8+10+8 sn).
+  static const Duration _commandBudget = Duration(seconds: 10);
+
+  /// Refresh sonrası belirteç yazımı ([onTokenRefreshed]) için bekleme üst sınırı (PF-02).
+  static const Duration _tokenPersistLimit = Duration(seconds: 3);
 
   /// Yenilenen belirteçleri kalıcı depolamaya yazar (await edilir).
   TokenRefreshedCallback? onTokenRefreshed;
@@ -260,6 +293,13 @@ class EvCloudApiService {
   }
 
   /// Kimlik doğrulamalı/doğrulamasız tek çağrı noktası.
+  ///
+  /// **Toplam süre bütçesi (PF-09):** 401 yolunda istek + refresh + yeniden deneme süreleri eskiden ARDIŞIK
+  /// birikirdi (GET 10+10+10 sn, komut 8+10+8 sn); `_sendRaw`'daki zaman aşımı yalnız tek isteği sınırlar.
+  /// Artık çağrının TAMAMI en çok [totalBudget] sürer (varsayılan: [timeout] + 4 sn); dolunca çağırana ağ
+  /// hatası ([ApiException.isNetwork], `cause` = [TimeoutException]) döner ve oturum KORUNUR. Süresi dolan iç
+  /// koşu iptal edilemez ama refresh başlatmaz ve isteği yeniden göndermez ([_Budget]); uçuştaki refresh
+  /// sürer ve dönen belirteçler yine uygulanır (rotasyon kaybolmaz).
   Future<Map<String, dynamic>> _call(
     String method,
     String path, {
@@ -268,6 +308,30 @@ class EvCloudApiService {
     bool auth = true,
     String? homeId,
     Duration timeout = const Duration(seconds: 10),
+    Duration? totalBudget,
+  }) {
+    final budget = _Budget(totalBudget ?? timeout + _callBudgetSlack);
+    return _clock.bound<Map<String, dynamic>>(
+      _callOnce(method, path, budget, body: body, query: query, auth: auth, homeId: homeId, timeout: timeout),
+      budget.limit,
+      () {
+        budget.expired = true;
+        throw budget.exceeded();
+      },
+    );
+  }
+
+  /// [_call]'ın asıl gövdesi (istek + 401'de tek-uçuş refresh + tek yeniden deneme). Çağıranın bütçesi dolduysa
+  /// ([_Budget.expired]) refresh ve yeniden deneme gönderimi YAPILMAZ.
+  Future<Map<String, dynamic>> _callOnce(
+    String method,
+    String path,
+    _Budget budget, {
+    required Object? body,
+    required Map<String, String>? query,
+    required bool auth,
+    required String? homeId,
+    required Duration timeout,
   }) async {
     final uri = _uri(path, query);
 
@@ -293,6 +357,8 @@ class EvCloudApiService {
         // Servis oturumunun refresh'i yoktur: oturum biter.
         _expire(SessionEndReason.serviceSessionExpired);
       } else if (_refreshToken != null && generation == _generation) {
+        // Terk edilen (bütçesi dolan) iç koşu refresh başlatmaz: çağıran zaten ağ hatası aldı.
+        if (budget.expired) throw budget.exceeded();
         // Yalnızca 401'de, tek-uçuş refresh; sonra aynı istek en fazla bir kez yeniden denenir.
         final refreshed = await _refreshSingleFlight(code == 'INVALID_TOKEN'
             ? SessionEndReason.invalidToken
@@ -302,6 +368,8 @@ class EvCloudApiService {
           throw _toException(res, _parseBody(res));
         }
         if (refreshed) {
+          // Bütçe refresh sürerken dolduysa isteği YENİDEN GÖNDERME (hayalet gönderim: çağıran hata aldı).
+          if (budget.expired) throw budget.exceeded();
           res = await _sendRaw(method, uri, body: body, auth: auth, timeout: timeout);
         }
       } else if (generation == _generation) {
@@ -387,7 +455,15 @@ class EvCloudApiService {
       _refreshToken = newRefresh;
       final callback = onTokenRefreshed;
       if (callback != null) {
-        await callback(access, newRefresh);
+        // Kalıcı yazım BEKLENİR ama en çok [_tokenPersistLimit] (PF-02): takılı güvenli depo, tek-uçuş yenilemeyi
+        // ve bekleyen TÜM 401 yeniden denemelerini sonsuza dek bloklamasın. Belirteçler zaten bellekte; yazım
+        // arka planda sürer (süreyi aşan yazımın geç sonucu/hatası yutulur; süre içinde biten yazımın hatası
+        // aynen iletilir).
+        await _clock.bound<void>(
+          Future<void>.sync(() => callback(access, newRefresh)),
+          _tokenPersistLimit,
+          () {},
+        );
         if (generation != _generation) return false; // depolama beklenirken çıkış yapıldı
       }
       return true;
@@ -797,6 +873,7 @@ class EvCloudApiService {
       body: <String, dynamic>{'home_id': homeId, 'command': command},
       homeId: homeId,
       timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
     );
     return CommandResult.fromJson(_data(body));
   }
@@ -820,6 +897,7 @@ class EvCloudApiService {
       },
       homeId: homeId,
       timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
     );
     return CommandResult.fromJson(_data(body));
   }
@@ -1066,6 +1144,7 @@ class EvCloudApiService {
       body: <String, dynamic>{'home_id': homeId, 'enabled': enabled},
       homeId: homeId,
       timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
     );
     return CommandResult.fromJson(_data(body), deliveredDefault: false);
   }

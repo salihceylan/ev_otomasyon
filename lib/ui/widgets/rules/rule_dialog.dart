@@ -7,6 +7,8 @@ import '../../../models/scheduled_rule_model.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
+import '../orb/orb.dart';
 import 'rule_logic.dart';
 
 /// Kural diyaloğunun sonucu: kayıt başarılı; liste de yenilendi mi?
@@ -270,18 +272,26 @@ class _RuleDialogState extends State<RuleDialog> {
               InkWell(
                 key: const Key('btn_rule_time'),
                 onTap: _pickTime,
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(AppRadius.r16),
                 child: Container(
                   constraints: const BoxConstraints(minHeight: 52),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.5)),
-                    borderRadius: BorderRadius.circular(10),
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppFamilies.sky.base.withValues(alpha: 0.16),
+                        AppFamilies.cyan.base.withValues(alpha: 0.06),
+                      ],
+                    ),
+                    border: Border.all(color: AppFamilies.sky.base.withValues(alpha: 0.5)),
+                    borderRadius: BorderRadius.circular(AppRadius.r16),
                   ),
                   // Dar ekran / büyük yazı: saat küçülür, "değiştir" ipucu sığmazsa kısalır (taşma yok).
                   child: Row(
                     children: [
-                      Icon(Icons.access_time, color: AppTheme.infoText(context), size: 20),
+                      const OrbIconBadge(icon: Icons.schedule_rounded, family: AppFamilies.cyan, active: true),
                       const SizedBox(width: 10),
                       Flexible(
                         child: FittedBox(
@@ -318,7 +328,7 @@ class _RuleDialogState extends State<RuleDialog> {
               Text(
                 'Saat, evinizin saat dilimine göre çalışır: $timezone',
                 key: const Key('text_rule_timezone'),
-                style: TextStyle(fontSize: 11.5, color: muted),
+                style: TextStyle(fontSize: AppText.badge, color: muted),
               ),
               sectionLabel('Günler'),
               Wrap(
@@ -408,7 +418,7 @@ class _ConflictBanner extends StatelessWidget {
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppTheme.accentAmber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppRadius.r12),
         border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.4)),
       ),
       child: Row(

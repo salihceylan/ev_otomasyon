@@ -1,6 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../motion/pulse_ring.dart';
+import '../../../theme/app_theme.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb.dart';
+import '../../../widgets/settings/accent_button.dart';
+
 import '../logic/handover_logic.dart';
 import '../service_setup_controller.dart';
 import '../setup_fields.dart';
@@ -57,6 +63,8 @@ class _Step10HandoverState extends State<Step10Handover> {
       onContinue: widget.onFinish,
       continueHint: 'Bitirmek için sunucunun devreye almayı onaylaması gerekir.',
       statusText: finished ? 'Devreye alındı' : null,
+      // "Devreye Almayı Tamamla" etkinse hata kutusundaki "Tekrar dene" aynı işi yapar: çerçeveli ikincil (tek gradyan birincil).
+      retrySecondary: h.canSubmit,
       body: finished ? _success(context, c) : _form(context, c),
     );
   }
@@ -64,13 +72,16 @@ class _Step10HandoverState extends State<Step10Handover> {
   // ---------------------------------------------------------------------------
 
   Widget _checkRow(BuildContext context, String title, bool ok, String detail, {int? fixStep}) {
-    final color = ok ? SetupColors.ok : SetupColors.error;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(ok ? Icons.check_circle_rounded : Icons.cancel_rounded, color: SetupColors.readable(context, color), size: 22),
+          SetupMiniOrb(
+            family: ok ? AppFamilies.emerald : AppFamilies.rose,
+            icon: ok ? Icons.check_rounded : Icons.close_rounded,
+            size: 24,
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -85,6 +96,7 @@ class _Step10HandoverState extends State<Step10Handover> {
             TextButton(
               key: Key('btn_fix_step_$fixStep'),
               onPressed: () => widget.controller.goToStep(fixStep),
+              style: setupInlineActionStyle(),
               child: Text('Adım $fixStep'),
             ),
         ],
@@ -116,8 +128,9 @@ class _Step10HandoverState extends State<Step10Handover> {
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
             key: const Key('btn_refresh_summary'),
+            style: setupInlineActionStyle(),
             onPressed: h.busy ? null : () => h.refreshSummary(),
-            icon: const Icon(Icons.refresh_rounded, size: 18),
+            icon: Icon(Icons.refresh_rounded, size: accentIconSize(context, base: 18)),
             label: const Text('Güncel durumu yeniden oku'),
           ),
         ),
@@ -125,7 +138,9 @@ class _Step10HandoverState extends State<Step10Handover> {
         SetupTextField(
           key: const Key('field_notes'),
           controller: _notes,
-          label: 'Montaj notu (isteğe bağlı)',
+          // Kısa etiket + "isteğe bağlı" yardımcı metinde (1.5 yazı ölçeğinde "Montaj notu (isteğe b…" diye kesiliyordu).
+          label: 'Montaj notu',
+          helperText: 'İsteğe bağlı',
           hint: 'Örn: 2 lamba çıkışı kullanılmıyor.',
           prefixIcon: Icons.notes_rounded,
           maxLines: 3,
@@ -137,19 +152,18 @@ class _Step10HandoverState extends State<Step10Handover> {
         SetupTextField(
           key: const Key('field_receiver'),
           controller: _receiver,
-          label: 'Teslim alan kişi (isteğe bağlı)',
+          label: 'Teslim alan kişi',
+          helperText: 'İsteğe bağlı',
           prefixIcon: Icons.person_outline_rounded,
           maxLength: 100,
           onChanged: h.setReceiver,
         ),
         const SizedBox(height: 8),
-        CheckboxListTile(
+        SetupCheckTile(
           key: const Key('chk_owner_approved'),
           value: h.ownerApproved,
-          onChanged: h.busy ? null : (v) => h.setOwnerApproved(v ?? false),
-          controlAffinity: ListTileControlAffinity.leading,
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Müşteriye kurulumu gösterdim ve teslimi onayladı'),
+          onChanged: h.busy ? null : (v) => h.setOwnerApproved(v),
+          label: 'Müşteriye kurulumu gösterdim ve teslimi onayladı',
         ),
         const SizedBox(height: 8),
         SetupPrimaryButton(
@@ -160,13 +174,27 @@ class _Step10HandoverState extends State<Step10Handover> {
           busy: h.busy && h.busyLabel == 'Devreye alma sunucuya gönderiliyor',
           onPressed: canSubmit ? () => h.submit() : null,
         ),
-        if (!h.allStepsReady)
+        // Pasif düğmenin nedeni düğmenin ALTINDA yazar: tüm adımlar hazırsa tek eksik müşteri onayıdır (eskiden neden yalnız alt
+        // çubuktaki "Bitir" ipucundaydı; asıl eylem ekrandaki en sessiz öğeydi).
+        if (h.allStepsReady && !h.ownerApproved && !h.busy)
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
-              'Eksik adımlar: ${h.missingSteps.join(', ')}. Sonuçlar gerçek cihaz yanıtlarıyla doğrulandıktan sonra gönderilebilir.',
+              'Devreye almak için yukarıdaki müşteri onay kutusunu işaretleyin.',
+              key: const Key('commission_locked_hint'),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: AppText.caption, height: 1.3, color: SetupColors.muted(context)),
+            ),
+          ),
+        if (!h.allStepsReady)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: SetupInfoRow(
               key: const Key('handover_missing'),
-              style: TextStyle(fontSize: 12.5, color: SetupColors.error),
+              icon: Icons.error_outline_rounded,
+              color: SetupColors.error,
+              text:
+                  'Eksik adımlar: ${h.missingSteps.join(', ')}. Sonuçlar gerçek cihaz yanıtlarıyla doğrulandıktan sonra gönderilebilir.',
             ),
           ),
       ],
@@ -186,11 +214,19 @@ class _Step10HandoverState extends State<Step10Handover> {
         SetupCard(
           key: const Key('handover_success_card'),
           accent: SetupColors.ok,
-          child: const SetupInfoRow(
-            icon: Icons.verified_rounded,
-            color: SetupColors.ok,
-            bold: true,
-            text: 'Kurulum tamamlandı: sunucu tüm testleri doğruladı ve cihazı devreye aldı.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Tek seferlik kutlama (<= 900 ms): nabız halkası + ✓ orb. Konfeti yok; hareket kapalıyken çizilmez.
+              const Center(child: HandoverCelebration()),
+              const SizedBox(height: 4),
+              const SetupInfoRow(
+                icon: Icons.verified_rounded,
+                color: SetupColors.ok,
+                bold: true,
+                text: 'Kurulum tamamlandı: sunucu tüm testleri doğruladı ve cihazı devreye aldı.',
+              ),
+            ],
           ),
         ),
         const SetupSectionTitle('Kurulum raporu'),
@@ -198,7 +234,7 @@ class _Step10HandoverState extends State<Step10Handover> {
           child: SelectableText(
             report,
             key: const Key('handover_report'),
-            style: TextStyle(fontSize: 13, height: 1.4, fontFamily: 'monospace', color: SetupColors.text(context)),
+            style: SetupText.mono(fontSize: 13, height: 1.4, color: SetupColors.text(context)),
           ),
         ),
         Text(
@@ -212,11 +248,51 @@ class _Step10HandoverState extends State<Step10Handover> {
             await Clipboard.setData(ClipboardData(text: report));
             if (mounted) setState(() => _copied = true);
           },
-          icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 18),
+          icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: accentIconSize(context, base: 18)),
           label: Text(_copied ? 'Rapor panoya kopyalandı' : 'Raporu Kopyala / Paylaş'),
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          // Çerçeve + metin + simge AYNI aileden ve AA (tema varsayılan çerçevesi açıkta ≈ 2.4:1'di).
+          style: accentOutlinedButtonStyle(context, AppFamilies.sky),
         ),
       ],
+    );
+  }
+}
+
+/// Devreye alma başarısı: ✓ orb (emerald, tek seferlik başarı halkası) + bağlanışta tek nabız halkası.
+/// Toplam süre en çok 700 ms; sonlu animasyondur (ambient/döngü/konfeti YOK; `MotionMode.off`'ta halka çizilmez).
+/// Anlamdan hariçtir (başarı metni yanında). Testler için herkese açık.
+class HandoverCelebration extends StatelessWidget {
+  const HandoverCelebration({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return ExcludeSemantics(
+      child: SizedBox.square(
+        key: const Key('handover_celebration'),
+        dimension: 104,
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            // Halka rengi açık temada koyu ton (`family.light` açık zeminde ≈ 1.3:1: kutlama fiilen görünmüyordu).
+            PulseRing(
+              color: AppTheme.accentTone(context, AppFamilies.emerald),
+              diameter: OrbSize.lg.diameter,
+              playOnMount: true,
+              duration: const Duration(milliseconds: 700),
+              maxScale: 1.9,
+              strokeWidth: 3,
+            ),
+            const SetupResultOrb(
+              icon: Icons.check_rounded,
+              family: AppFamilies.emerald,
+              size: OrbSize.lg,
+              glow: true,
+              status: OrbStatus.success,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

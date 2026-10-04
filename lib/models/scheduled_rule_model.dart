@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import '../ui/theme/tokens.dart';
 import 'json_utils.dart';
 
 /// Haftanın günleri (0=Pazar, 1=Pazartesi, ... 6=Cumartesi)
@@ -188,21 +189,26 @@ class ScheduledRule {
     }
   }
 
-  /// Eylem rengi
-  Color get actionColor {
+  /// Eylemin Neon Glass renk ailesi (şartname §2.1; ham Material aksanları yerine): lamba AÇ = amber, lamba KAPAT =
+  /// slate (nötr/pasif), panjur AÇ = emerald, panjur KAPAT = sky, diğer = cyan. Orb, çip ve kart vurgusu aynı
+  /// aileden türer; böylece aynı eylem ekranlar arasında aynı renkte görünür (panjur kartıyla uyumlu).
+  AccentFamily get family {
     switch (action) {
       case 'on':
-        return Colors.amber;
+        return AppFamilies.amber;
       case 'off':
-        return Colors.blueGrey;
+        return AppFamilies.slate;
       case 'open':
-        return Colors.greenAccent;
+        return AppFamilies.emerald;
       case 'close':
-        return Colors.deepOrangeAccent;
+        return AppFamilies.sky;
       default:
-        return Colors.cyanAccent;
+        return AppFamilies.cyan;
     }
   }
+
+  /// Eylem rengi (aile ana tonu).
+  Color get actionColor => family.base;
 
   /// Eylem metni
   String get actionLabel {

@@ -5,7 +5,11 @@ import 'package:provider/provider.dart';
 import '../../models/automation_models.dart';
 import '../../models/endpoint_sync.dart';
 import '../../services/automation_state.dart';
+import '../motion/motion.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/app_pill.dart';
+import '../widgets/orb/orb.dart';
 import '../widgets/di_status_pill.dart';
 import '../widgets/relay_switch_card.dart';
 import '../widgets/shutter_card.dart';
@@ -93,32 +97,12 @@ class RoomFilterChips extends StatelessWidget {
     final rooms = context.select<AutomationState, RoomOptions>(roomOptionsOf).items;
     if (rooms.length < 2) return const SizedBox.shrink();
 
-    final isDark = AppTheme.isDark(context);
-    Widget chip(Key key, String label, bool isSelected, VoidCallback onTap) {
-      final accent = isDark ? AppTheme.primaryBlueLight : AppTheme.primaryBlue;
-      return Padding(
-        padding: const EdgeInsetsDirectional.only(end: 8),
-        child: ChoiceChip(
-          key: key,
-          label: Text(label),
-          selected: isSelected,
-          onSelected: (_) => onTap(),
-          materialTapTargetSize: MaterialTapTargetSize.padded,
-          backgroundColor: AppTheme.getCardColor(context),
-          selectedColor: AppTheme.primaryBlue.withValues(alpha: isDark ? 0.25 : 0.15),
-          showCheckmark: false,
-          labelStyle: TextStyle(
-            fontSize: 12.5,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            color: isSelected ? accent : AppTheme.getTextPrimary(context),
-          ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
-            side: BorderSide(color: isSelected ? accent : AppTheme.getCardBorder(context)),
-          ),
-        ),
-      );
-    }
+    // Ortak çip ([AppChip]): seçili = cyan tonlu dolgu + parlak kenar + onay işareti (yalnız renkle anlatılmaz); seçili değil =
+    // nötr cam; basınca ölçek geri bildirimi, dokunma hedefi >= 48 dp, anlam: button + selected. Çipler arası 8 dp.
+    Widget chip(Key key, String label, bool isSelected, VoidCallback onTap) => Padding(
+          padding: const EdgeInsetsDirectional.only(end: 8),
+          child: AppChip(key: key, label: label, selected: isSelected, onTap: onTap),
+        );
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
@@ -139,52 +123,148 @@ class RoomFilterChips extends StatelessWidget {
   }
 }
 
-/// Bölüm başlığı + sağda rozet (ör. "3 Motor").
+/// Bölüm başlığı: küçük **mini orb** (32 dp; panodaki diğer orb'larla aynı radyal gövde + speküler + rim) + 15/800 başlık
+/// + isteğe bağlı sağ öğe: sayaç rozeti ([badge]; ör. "3 Motor") ya da eylem ([action]; ör. konsolda "Tüm Paneli Aç"
+/// bağlantısı). [family] orb rengidir (varsayılan marka camgöbeği).
+///
+/// TEK bölüm başlığı bileşenidir: pano (Panjurlar / Aydınlatma / Hızlı Senaryolar) ve süper/servis konsolları (Hızlı Yönetici
+/// İşlemleri / Saha Servis & Devreye Alma Görevleri) aynı başlığı kullanır (konsollarda eskiden orb'suz çıplak 16/700 metin vardı).
+/// Rozet de eylem de verilmezse yalnız orb + başlık çizilir.
 class SectionHeader extends StatelessWidget {
-  const SectionHeader({super.key, required this.icon, required this.title, required this.badge});
+  const SectionHeader({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.badge,
+    this.action,
+    this.family = AppFamilies.cyan,
+  }) : assert(badge == null || action == null, 'rozet ve eylem birlikte verilmez');
 
   final IconData icon;
   final String title;
-  final String badge;
+
+  /// Sağdaki sayaç rozeti; `null` ise çizilmez.
+  final String? badge;
+
+  /// Sağdaki eylem (genelde 48 dp'lik bir `TextButton`); `null` ise çizilmez. Başlığa sığmazsa başlığın ALTINA iner ve
+  /// başlık metniyle sol kenarda hizalanır.
+  final Widget? action;
+  final AccentFamily family;
+
+  /// Bu yazı ölçeğinin (dahil) üstünde rozet/eylem başlığın ALTINA iner: başlık + rozet yan yana sığmaz (320 dp + 2.0
+  /// ölçekte rozet tek başına satırın yarısından fazlasını alırdı ve başlık 0 dp'ye inerdi).
+  static const double stackBadgeFromScale = 1.3;
+
+  /// [action] verildiğinde başlık satırının bu genişliğin (dp) altında eylem başlığın altına iner (≈ başlık + 130 dp'lik bağlantı).
+  static const double actionInlineMinWidth = 480;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 18, color: AppTheme.infoText(context)),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            title,
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
-              color: AppTheme.getTextPrimary(context),
+    final bigText = MediaQuery.textScalerOf(context).scale(10) / 10 >= stackBadgeFromScale;
+    final titleText = Text(
+      title,
+      style: TextStyle(
+        fontSize: AppText.cardTitle,
+        fontWeight: FontWeight.w800,
+        color: AppTheme.getTextPrimary(context),
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
+    // Sayaç rozeti ("3 Motor"): ortak rozet dili ([AppPill]), nötr cam (tonsuz) + soluk etiket.
+    final Widget? trailing = action ?? (badge == null ? null : AppPill(label: badge!, family: AppFamilies.slate, active: false));
+    if (trailing == null) {
+      return Row(
+        children: [
+          _MiniOrb(icon: icon, family: family),
+          const SizedBox(width: 10),
+          Expanded(child: titleText),
+        ],
+      );
+    }
+
+    Widget stackedRow() => Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _MiniOrb(icon: icon, family: family),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  titleText,
+                  const SizedBox(height: 4),
+                  trailing,
+                ],
+              ),
             ),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        const SizedBox(width: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: AppTheme.getInsetColor(context),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: AppTheme.getCardBorder(context)),
-          ),
-          child: Text(
-            badge,
-            style: TextStyle(
-              fontSize: 11,
-              color: AppTheme.getTextMuted(context),
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      ],
+          ],
+        );
+    Widget inlineRow() => Row(
+          children: [
+            _MiniOrb(icon: icon, family: family),
+            const SizedBox(width: 10),
+            Expanded(child: titleText),
+            const SizedBox(width: 8),
+            trailing,
+          ],
+        );
+
+    if (action == null) return bigText ? stackedRow() : inlineRow();
+    // Eylem (48 dp'lik bağlantı) telefon genişliğinde başlıkla yan yana sığmaz: genişliğe de bakılır.
+    return LayoutBuilder(
+      builder: (context, constraints) =>
+          bigText || constraints.maxWidth < actionInlineMinWidth ? stackedRow() : inlineRow(),
     );
   }
+}
+
+/// Bölüm başlığı için 32 dp mini orb: [paintOrbBody] ile (büyük orb'larla aynı gövde); açık temada renkli statik
+/// gölge, koyuda gölge yok (şartname §2.2). Etkileşimsiz ve anlamdan hariçtir (başlık metni anlamı taşır).
+class _MiniOrb extends StatelessWidget {
+  const _MiniOrb({required this.icon, required this.family});
+
+  static const double diameter = 32;
+
+  final IconData icon;
+  final AccentFamily family;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = OrbColors.family(family);
+    final dark = AppTheme.isDark(context);
+    return ExcludeSemantics(
+      child: RepaintBoundary(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: dark
+                ? null
+                : [BoxShadow(color: family.base.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 3))],
+          ),
+          child: SizedBox.square(
+            dimension: diameter,
+            child: CustomPaint(
+              painter: _MiniOrbPainter(colors),
+              child: Center(child: Icon(icon, size: diameter * 0.52, color: colors.icon)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniOrbPainter extends CustomPainter {
+  const _MiniOrbPainter(this.colors);
+
+  final OrbColors colors;
+
+  @override
+  void paint(Canvas canvas, Size size) => paintOrbBody(canvas, size.center(Offset.zero), size.width / 2, colors);
+
+  @override
+  bool shouldRepaint(_MiniOrbPainter old) => old.colors != colors;
 }
 
 /// Karşılaştırma imzası: bölümün yeniden kurulması gerekip gerekmediğine karar verir (kartlar kendi
@@ -224,8 +304,8 @@ class DeviceSections extends StatelessWidget {
         alignment: Alignment.center,
         child: Column(
           children: [
-            Icon(Icons.inbox_outlined, size: 40, color: AppTheme.getTextMuted(context)),
-            const SizedBox(height: 8),
+            const OrbIconBadge(icon: Icons.inbox_rounded, family: AppFamilies.slate, size: OrbSize.lg),
+            const SizedBox(height: 12),
             Text(
               roomLabelText == null
                   ? 'Kontrol edilebilir cihaz bulunamadı'
@@ -242,14 +322,23 @@ class DeviceSections extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (items.shutters.isNotEmpty) ...[
+          // Bölüm başlığı orb'u bölümün anlam ailesinde: panjur = sky, lamba = amber, duvar butonu = emerald (kartlarla aynı).
           SectionHeader(
             icon: Icons.blinds,
             title: 'Panjurlar',
             badge: '${items.shutters.length} Motor',
+            family: AppFamilies.sky,
           ),
           const SizedBox(height: 10),
           CardGrid(
-            children: [for (final s in items.shutters) ShutterCard(key: ValueKey('shutter_${s.pair}'), shutter: s)],
+            children: [
+              for (var i = 0; i < items.shutters.length; i++)
+                StaggeredEntrance(
+                  key: ValueKey('enter_shutter_${items.shutters[i].pair}'),
+                  index: i,
+                  child: ShutterCard(key: ValueKey('shutter_${items.shutters[i].pair}'), shutter: items.shutters[i]),
+                ),
+            ],
           ),
           const SizedBox(height: 24),
         ],
@@ -258,10 +347,18 @@ class DeviceSections extends StatelessWidget {
             icon: Icons.lightbulb_outline,
             title: 'Aydınlatma & Çıkışlar',
             badge: '${items.relays.length} Çıkış',
+            family: AppFamilies.amber,
           ),
           const SizedBox(height: 10),
           CardGrid(
-            children: [for (final r in items.relays) RelaySwitchCard(key: ValueKey('relay_${r.id}'), relay: r)],
+            children: [
+              for (var i = 0; i < items.relays.length; i++)
+                StaggeredEntrance(
+                  key: ValueKey('enter_relay_${items.relays[i].id}'),
+                  index: i,
+                  child: RelaySwitchCard(key: ValueKey('relay_${items.relays[i].id}'), relay: items.relays[i]),
+                ),
+            ],
           ),
           const SizedBox(height: 24),
         ],
@@ -270,6 +367,7 @@ class DeviceSections extends StatelessWidget {
             icon: Icons.touch_app_outlined,
             title: 'Duvar Butonları & Girişler',
             badge: 'Kuru kontak',
+            family: AppFamilies.emerald,
           ),
           const SizedBox(height: 10),
           const _ChildLockWallNote(),
@@ -314,21 +412,39 @@ class _ChildLockWallNote extends StatelessWidget {
   }
 }
 
-/// Kartları genişliğe göre 1 ya da 2 sütunda dizer.
+/// Kartları genişliğe göre 1 / 2 / 3 sütunda dizer (<= 600 dp: 1; <= 840 dp: 2; üstü: 3) ve **kart sayısına
+/// göre dengeler**: kart sayısı sütundan azsa sütun sayısı kart sayısına iner (tek kart 3 sütunun 1'ini
+/// kaplayıp yarı boş bölüm bırakmaz), 4 kart 3 sütunda 3+1 yetim bırakmaz (2x2). Kartlar **mevcut genişliği DOLDURUR**
+/// (sütunlar eşit genişlikte): ızgara, aynı içerik sütunundaki hero / huzur bandı / senaryo satırı / bölüm başlıklarıyla AYNI
+/// sağ kenarda biter (içerik sütununun üst sınırı `kDashboardMaxWidth`'tir). Eskiden kart genişliği 560 dp'de kesilirdi:
+/// masaüstünde lamba ızgarası diğer bloklardan ~68 dp kısa kalıyor, tek panjur kartı sola yaslı 560 dp'de duruyordu ve sağında
+/// ~960 px boşluk kalıyordu. Tek kart tam genişliktedir (panjur kartı geniş kipte iki panele geçer: [ShutterCardView]).
+/// Eager [Wrap]: tüm kartlar kaydırmadan ağaçtadır (testler kartları doğrudan bulur).
 class CardGrid extends StatelessWidget {
   const CardGrid({super.key, required this.children});
 
   final List<Widget> children;
 
+  /// Kartlar arası boşluk (dp).
+  static const double gap = 12;
+
+  /// Genişliğe ve kart sayısına göre sütun sayısı ([count] verilmezse yalnız genişlik kuralı).
+  static int columnsFor(double width, {int count = 3}) {
+    var columns = width > 840 ? 3 : (width > 600 ? 2 : 1);
+    if (count < columns) columns = count < 1 ? 1 : count;
+    if (columns == 3 && count == 4) columns = 2;
+    return columns;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final isWide = constraints.maxWidth > 600;
-        final itemWidth = isWide ? (constraints.maxWidth - 12) / 2 : constraints.maxWidth;
+        final columns = columnsFor(constraints.maxWidth, count: children.length);
+        final itemWidth = (constraints.maxWidth - gap * (columns - 1)) / columns;
         return Wrap(
-          spacing: 12,
-          runSpacing: 12,
+          spacing: gap,
+          runSpacing: gap,
           children: [for (final child in children) SizedBox(width: itemWidth, child: child)],
         );
       },

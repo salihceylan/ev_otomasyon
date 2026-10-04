@@ -525,11 +525,27 @@ test('PG devreye alma: tests_passed SUNUCUDA hesaplanir; kontrol sonuclari ayri 
   assert.equal(dev2.commissioning_status, 'TESTS_FAILED');
   await rejects(c.deviceService.commissionHome({ actor, homeId: t.home.id, deviceUuid: t.uuid, checks: { relays: { ok: true } }, notes: null }), 400, 'VALIDATION');
 
-  const sess = { userId: null, globalRole: 'service_session', access: 'service_session', ip: '127.0.0.1', label: 'Ali Usta', sessionId: crypto.randomUUID() };
-  const users0 = (await h.one('SELECT count(*)::int AS n FROM users')).n;
+  const label = `Ali Usta ${crypto.randomBytes(3).toString('hex')}`;
+  const sess = { userId: null, globalRole: 'service_session', access: 'service_session', ip: '127.0.0.1', label, sessionId: crypto.randomUUID() };
+  const t0 = (await h.one('SELECT clock_timestamp() AS t')).t;
   assert.equal((await c.deviceService.commissionHome({ actor: sess, homeId: t.home.id, deviceUuid: t.uuid, checks, notes: 'oturumla' })).tests_passed, true);
-  assert.equal((await h.one('SELECT count(*)::int AS n FROM users')).n, users0, 'kullanici satiri olusmaz');
-  assert.equal((await h.one('SELECT technician_id FROM commissioning_logs WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1', [t.dev.id])).technician_id, null);
+  // Kullanici satiri olusmaz. Tum tabloyu saymak, ayni veritabaninda paralel calisan PG test dosyalarinin
+  // kullanici eklemesiyle yarisir (2026-10-04 kapisinda 39 !== 38). Bu cagrinin olusturabilecegi satirlar aranir:
+  // oturum etiketiyle adlandirilmis ya da bu eve uye olan yeni kullanici.
+  const created = await h.rows(
+    `SELECT u.id FROM users u
+      WHERE u.created_at >= $1
+        AND (u.full_name = $2 OR EXISTS (SELECT 1 FROM home_users hu WHERE hu.user_id = u.id AND hu.home_id = $3))`,
+    [t0, label, t.home.id]
+  );
+  assert.equal(created.length, 0, 'kullanici satiri olusmaz');
+  const log = await h.one(
+    'SELECT technician_id, technician_label, service_session_id FROM commissioning_logs WHERE device_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [t.dev.id]
+  );
+  assert.equal(log.technician_id, null);
+  assert.equal(log.technician_label, label, 'teknisyen etiketi oturumdan yazilir');
+  assert.equal(log.service_session_id, sess.sessionId, 'oturum kimligi yazilir');
 });
 
 test('PG huzur bildirimi + toplu lamba kapatma + teshis + yerel anahtar + cihaz listesi + kimlik yenileme + komut hatti (IDOR/rol/cevrimdisi)', { skip: SKIP }, async () => {

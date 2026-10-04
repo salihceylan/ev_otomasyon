@@ -7,11 +7,31 @@ import '../../../models/capabilities.dart';
 import '../../../models/cloud_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/confirm_dialogs.dart' show showSimpleConfirm;
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
+import '../../motion/skeleton.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/neon_app_bar.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/settings/accent_button.dart';
+import '../../widgets/settings/status_badge.dart';
+import '../../widgets/surface_card.dart';
 import 'invite_family_dialog.dart';
 import 'transfer_ownership_dialog.dart';
+
+/// Sayfanın durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skalerler; ilgisiz bildirim
+/// sayfayı yeniden kurmaz).
+typedef _MembersView = ({
+  bool hasHome,
+  String homeName,
+  bool canInvite,
+  bool canTransfer,
+  bool canManageMembers,
+  String? currentUserId,
+});
 
 /// Aile & misafir yönetimi: üye listesi (UUID **String** kimlikler), davet ve devir girişleri.
 ///
@@ -96,48 +116,20 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
     final name = member.fullName.isNotEmpty ? member.fullName : 'Bu kullanıcı';
     final isGuest = member.isGuest;
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.getSurfaceColor(ctx),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: AppTheme.getCardBorder(ctx)),
-        ),
-        title: Row(
-          children: [
-            const Icon(Icons.warning_amber_rounded, color: AppTheme.accentRed, size: 24),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                isGuest ? 'Misafir Yetkisini İptal Et' : 'Üyeyi Evden Çıkar',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(ctx)),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-        content: Text(
-          '"$name" kullanıcısının bu ev üzerindeki tüm erişim ve kontrol yetkisi iptal edilecek ve açık '
+    // Ortak onay kabuğu (orb başlık + hap eylemler; ham `AlertDialog` değil). Anahtarlar/metinler aynen (testlerle pinli).
+    final confirmed = await showSimpleConfirm(
+      context,
+      title: isGuest ? 'Misafir Yetkisini İptal Et' : 'Üyeyi Evden Çıkar',
+      message: '"$name" kullanıcısının bu ev üzerindeki tüm erişim ve kontrol yetkisi iptal edilecek ve açık '
           'bağlantıları kesilecek. Devam etmek istiyor musunuz?',
-          style: TextStyle(fontSize: 13, color: AppTheme.getTextMuted(ctx), height: 1.35),
-        ),
-        actions: [
-          TextButton(
-            key: const Key('btn_remove_cancel'),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: Text('Vazgeç', style: TextStyle(color: AppTheme.getTextMuted(ctx))),
-          ),
-          ElevatedButton(
-            key: const Key('btn_remove_confirm'),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentRed, foregroundColor: Colors.white),
-            child: const Text('Yetkiyi İptal Et'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Yetkiyi İptal Et',
+      cancelLabel: 'Vazgeç',
+      destructive: true,
+      icon: Icons.person_remove_rounded,
+      cancelKey: const Key('btn_remove_cancel'),
+      confirmKey: const Key('btn_remove_confirm'),
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     setState(() => _removingId = member.userId);
     var message = '';
@@ -174,42 +166,37 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
       SnackBar(
         key: const Key('snack_member_removal'),
         content: Text(message),
-        backgroundColor: color,
+        // Beyaz yazılı dolgu: ham amber/yeşil/kırmızı zeminde beyaz metin 2.1–3.8:1 idi.
+        backgroundColor: AppTheme.filledAccent(color),
         behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
+  static _MembersView _viewOf(AutomationState state) {
+    final caps = state.capabilities;
+    return (
+      hasHome: state.activeHome != null,
+      homeName: state.activeHome?.name ?? 'Evim',
+      canInvite: caps.canInvite,
+      canTransfer: caps.canTransferOwnership,
+      canManageMembers: caps.canManageMembers,
+      currentUserId: state.currentUser?.id,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final caps = state.capabilities;
-    final homeName = state.activeHome?.name ?? 'Evim';
+    final view = context.select<AutomationState, _MembersView>(_viewOf);
+    // Misafir "kalan süre" metni build anındaki saatle hesaplanır (okuma: izleme yok).
+    final now = context.read<AutomationState>().clock.now();
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                'assets/images/app_logo.png',
-                width: 28,
-                height: 28,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stack) => const Icon(Icons.home_work_rounded, size: 24),
-              ),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Aile & Misafir Yönetimi',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+      // Ortak Neon Glass üst çubuk (geri diski + özellik orb'u + başlık): başlık kesilmez, sığmazsa küçülür.
+      appBar: const NeonAppBar(
+        title: 'Aile & Misafir Yönetimi',
+        feature: AppFeature.family,
+        icon: Icons.family_restroom_rounded,
       ),
       body: RefreshIndicator(
         onRefresh: _loadMembers,
@@ -219,7 +206,7 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeaderCard(context, state, caps, homeName),
+              _buildHeaderCard(context, view),
               const SizedBox(height: 20),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -246,16 +233,21 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                 ],
               ),
               const SizedBox(height: 12),
-              if (state.activeHome == null)
+              if (!view.hasHome)
                 const InlineMessage.warning('Aktif bir daire seçili değil.', key: Key('members_no_home'))
               else if (_errorMessage != null) ...[
                 InlineMessage.error(
                   _errorMessage!,
                   key: const Key('members_error'),
-                  trailing: TextButton(
+                  // Tek kurtarma eylemi düz metin bağlantısı DEĞİL, sayfanın diğer eylemleri gibi çerçeveli hap düğme
+                  // (rose = hata ailesi, yenile simgesi): mesaj metniyle aynı sol kenardan başlar (TextButton'ın 12 dp
+                  // iç boşluğu yüzünden 11.5 dp hizasızdı), hedef ≥ 48 dp.
+                  trailing: OutlinedButton.icon(
                     key: const Key('btn_members_retry'),
                     onPressed: _isLoading ? null : _loadMembers,
-                    child: const Text('Tekrar Dene'),
+                    icon: Icon(Icons.refresh_rounded, size: accentIconSize(context)),
+                    label: const Text('Tekrar Dene', style: TextStyle(fontWeight: FontWeight.bold)),
+                    style: accentOutlinedButtonStyle(context, AppFamilies.rose, minimumSize: const Size(0, AppTouch.minTarget)),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -266,7 +258,14 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                   alignment: Alignment.center,
                   child: Column(
                     children: [
-                      Icon(Icons.group_outlined, size: 44, color: AppTheme.getTextMuted(context)),
+                      // Boş durum orb'u devre dışı gri (slate) değil, özellik renginde (aile = sky) ve yumuşak parıltılıdır
+                      // (üstteki NeonAppBar orb'uyla aynı aile; gri orb sayfanın en "ölü" öğesiydi).
+                      OrbIconBadge(
+                        icon: Icons.group_rounded,
+                        family: AppFeature.family.accentFamily,
+                        size: OrbSize.lg,
+                        glow: true,
+                      ),
                       const SizedBox(height: 10),
                       Text(
                         'Henüz kayıtlı başka bir üye bulunamadı',
@@ -275,7 +274,14 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                     ],
                   ),
                 ),
-              for (final m in _members) _buildMemberCard(context, m, state, caps),
+              if (_isLoading && _members.isEmpty && _errorMessage == null && view.hasHome) ...[
+                // Gerçek üye kartıyla aynı iç boşluk (14) ve satır sayısı (3: ad, iletişim, rozet): ~92 dp (gerçek kartlar
+                // 96-136 dp); eskiden 74 dp idi ve veri gelince liste kart başına ≥ 22 dp zıplıyordu.
+                const SkeletonCard(lines: 3, padding: EdgeInsets.all(14)),
+                const SizedBox(height: 12),
+                const SkeletonCard(lines: 3, padding: EdgeInsets.all(14)),
+              ],
+              for (final m in _members) _buildMemberCard(context, m, view, now),
             ],
           ),
         ),
@@ -283,24 +289,19 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
     );
   }
 
-  Widget _buildHeaderCard(BuildContext context, AutomationState state, Capabilities caps, String homeName) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
-      ),
+  Widget _buildHeaderCard(BuildContext context, _MembersView view) {
+    return SurfaceCard(
+      accent: AppFeature.family.accentFamily.base,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.home_outlined, color: AppTheme.primaryBlueLight, size: 22),
-              const SizedBox(width: 8),
+              OrbIconBadge(icon: Icons.home_rounded, family: AppFeature.family.accentFamily, active: true),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  homeName,
+                  view.homeName,
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -312,7 +313,7 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
             'Aile bireylerinizi kalıcı olarak, temizlik görevlisi ve misafirlerinizi süreli olarak evinize davet edebilirsiniz.',
             style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context), height: 1.3),
           ),
-          if (caps.canInvite) ...[
+          if (view.canInvite) ...[
             const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
@@ -322,18 +323,14 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                   await InviteFamilyDialog.show(context);
                   if (mounted) await _loadMembers(silent: true);
                 },
-                icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
-                label: const Text('Yeni Birey / Misafir Davet Et (QR Üret)'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryBlue,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
+                icon: Icon(Icons.person_add_alt_1_rounded, size: accentIconSize(context)),
+                // NBSP: "(QR Üret)" bölünmez (yetim "Üret)" satırı yok); iki satıra sararsa ortalı.
+                label: const Text('Yeni Birey / Misafir Davet Et (QR Üret)', textAlign: TextAlign.center),
+                style: accentButtonStyle(null),
               ),
             ),
           ],
-          if (caps.canTransferOwnership) ...[
+          if (view.canTransfer) ...[
             const SizedBox(height: 10),
             SizedBox(
               width: double.infinity,
@@ -343,16 +340,15 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                   await TransferOwnershipDialog.show(context);
                   if (mounted) await _loadMembers(silent: true);
                 },
-                icon: const Icon(Icons.transfer_within_a_station, size: 18, color: AppTheme.accentAmber),
+                icon: Icon(Icons.transfer_within_a_station, size: accentIconSize(context)),
                 label: const Text(
                   'Daireyi Devret (Mülkiyet Transferi)',
-                  style: TextStyle(color: AppTheme.accentAmber, fontWeight: FontWeight.bold),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: AppTheme.accentAmber),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
+                // Metin, simge ve çerçeve aynı aileden ve OKUNUR tonda (açık temada ham amber ≈2:1 idi); şekil temanın
+                // hap (stadium) biçimi, yükseklik birincil düğmeyle aynı (52).
+                style: accentOutlinedButtonStyle(context, AppFeature.ownershipTransfer.accentFamily, minimumSize: const Size.fromHeight(52)),
               ),
             ),
           ],
@@ -361,36 +357,37 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
     );
   }
 
-  Widget _buildMemberCard(BuildContext context, HomeMember member, AutomationState state, Capabilities caps) {
-    final now = state.clock.now();
+  Widget _buildMemberCard(BuildContext context, HomeMember member, _MembersView view, DateTime now) {
     final isExpired = _isExpired(member, now);
-    final isCurrentUser = state.currentUser?.id == member.userId;
+    final isCurrentUser = view.currentUserId == member.userId;
     final role = member.homeRole;
     final isOwner = role == HomeRole.owner;
     final isGuest = role == HomeRole.guest;
 
-    Color roleColor = AppTheme.primaryBlueLight;
+    // Rol: renk ailesi + etiket + simge (renk tek ipucu değil). Etiket metinleri testlerle pinlidir (büyük harf).
+    AccentFamily roleFamily = AppFamilies.sky;
     String roleLabel = 'AİLE ÜYESİ';
-    IconData roleIcon = Icons.family_restroom;
+    IconData roleIcon = Icons.groups_rounded;
     switch (role) {
       case HomeRole.owner:
-        roleColor = AppTheme.accentAmber;
+        roleFamily = AppFamilies.amber;
         roleLabel = 'EV SAHİBİ';
-        roleIcon = Icons.admin_panel_settings_outlined;
+        roleIcon = Icons.verified_user_rounded;
       case HomeRole.guest:
-        roleColor = isExpired ? AppTheme.accentRed : AppTheme.accentPurple;
+        roleFamily = isExpired ? AppFamilies.rose : AppFamilies.violet;
         roleLabel = isExpired ? 'MİSAFİR (SÜRESİ DOLDU)' : 'SÜRELİ MİSAFİR';
-        roleIcon = Icons.hourglass_top_outlined;
+        roleIcon = Icons.hourglass_top_rounded;
       case HomeRole.serviceUser:
       case HomeRole.serviceSession:
-        roleColor = AppTheme.accentCyan;
+        roleFamily = AppFamilies.cyan;
         roleLabel = 'SERVİS PERSONELİ';
-        roleIcon = Icons.build_circle_outlined;
+        roleIcon = Icons.build_circle_rounded;
       case HomeRole.resident:
         break;
       case HomeRole.unknown:
+        roleFamily = AppFamilies.slate;
         roleLabel = 'KULLANICI';
-        roleIcon = Icons.person_outline;
+        roleIcon = Icons.person_rounded;
     }
 
     String? remainingText;
@@ -403,27 +400,19 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
         ? member.email
         : (member.phone.isNotEmpty ? member.phone : 'Davet ile katıldı');
     final removing = _removingId == member.userId;
-    final canRemove = caps.canManageMembers && !isCurrentUser && !isOwner;
+    final canRemove = view.canManageMembers && !isCurrentUser && !isOwner;
+    final muted = AppTheme.getTextMuted(context);
 
-    return Container(
+    return SurfaceCard(
       key: Key('card_member_${member.userId}'),
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isExpired ? AppTheme.accentRed.withValues(alpha: 0.3) : AppTheme.getCardBorder(context),
-        ),
-      ),
+      accent: isExpired ? AppFamilies.rose.base : (isOwner ? AppFamilies.amber.base : null),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundColor: roleColor.withValues(alpha: 0.15),
-            child: Icon(roleIcon, color: roleColor, size: 20),
-          ),
+          // Avatar orb: rol rengi + rol simgesi (süresi dolan misafir soluk).
+          OrbIconBadge(icon: roleIcon, family: roleFamily, enabled: !isExpired, active: isOwner),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -444,48 +433,31 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                     ),
                     if (isCurrentUser) ...[
                       const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppTheme.primaryBlue.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: const Text('Sen', style: TextStyle(fontSize: 10, color: AppTheme.primaryBlueLight)),
-                      ),
+                      const StatusBadge(label: 'Sen', family: AppFamilies.sky, maxLines: 1),
                     ],
                   ],
                 ),
                 const SizedBox(height: 3),
                 Text(
                   contact,
-                  style: TextStyle(fontSize: 11.5, color: AppTheme.getTextMuted(context)),
+                  style: TextStyle(fontSize: 12, color: muted),
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: 6),
                 Wrap(
                   spacing: 8,
                   runSpacing: 4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: roleColor.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: roleColor.withValues(alpha: 0.3)),
-                      ),
-                      child: Text(
-                        roleLabel,
-                        style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: roleColor),
-                      ),
-                    ),
+                    StatusBadge(label: roleLabel, family: roleFamily),
                     if (remainingText != null)
                       Text(
                         remainingText,
                         key: Key('member_remaining_${member.userId}'),
                         style: TextStyle(
-                          fontSize: 11,
-                          color: isExpired ? AppTheme.accentRed : AppTheme.accentAmber,
+                          fontSize: 12,
+                          // Okunur ton: ham amber/kırmızı açık temada ≈2–4:1 idi.
+                          color: isExpired ? AppTheme.dangerText(context) : AppTheme.warningText(context),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -497,7 +469,7 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                     child: Text(
                       'Erişim bitişi: ${formatLocalDateTime(until)}',
                       key: Key('member_until_${member.userId}'),
-                      style: TextStyle(fontSize: 11, color: AppTheme.getTextMuted(context)),
+                      style: TextStyle(fontSize: 12, color: muted),
                     ),
                   ),
               ],
@@ -509,11 +481,17 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                     padding: EdgeInsets.all(12),
                     child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
                   )
-                : IconButton(
-                    key: Key('btn_remove_member_${member.userId}'),
-                    icon: const Icon(Icons.delete_outline, color: AppTheme.accentRed, size: 20),
-                    tooltip: 'Yetkiyi İptal Et',
-                    onPressed: _removingId == null ? () => _confirmRemoveMember(member) : null,
+                : Tooltip(
+                    message: 'Yetkiyi İptal Et',
+                    excludeFromSemantics: true,
+                    child: GlassIconButton(
+                      key: Key('btn_remove_member_${member.userId}'),
+                      icon: Icons.delete_outline_rounded,
+                      iconColor: AppTheme.dangerText(context),
+                      semanticLabel: 'Yetkiyi İptal Et',
+                      size: 40,
+                      onTap: _removingId == null ? () => _confirmRemoveMember(member) : null,
+                    ),
                   ),
         ],
       ),

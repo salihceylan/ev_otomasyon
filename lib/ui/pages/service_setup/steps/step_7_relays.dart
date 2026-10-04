@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb.dart';
+import '../../../widgets/settings/accent_button.dart';
+
 import '../device_connection_panel.dart';
 import '../logic/relay_logic.dart';
+import '../panel/service_glass.dart';
 import '../service_setup_controller.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
@@ -12,6 +17,9 @@ class Step7Relays extends StatelessWidget {
   const Step7Relays({super.key, required this.controller});
 
   final ServiceSetupController controller;
+
+  /// Sayaç hapının rengi: sayı 0 ise nötr (slate), değilse anlamsal renk.
+  static Color _tone(int count, Color color) => count == 0 ? AppFamilies.slate.base : color;
 
   @override
   Widget build(BuildContext context) {
@@ -25,6 +33,9 @@ class Step7Relays extends StatelessWidget {
           ? 'Sorunlu röle var: düzeltip yeniden test edin ya da "Kullanılmıyor" işaretleyin.'
           : 'Devam etmek için her röleyi test edin (pano cevabı + "yük çalıştı mı?") veya "Kullanılmıyor" işaretleyin.',
       statusText: r.loaded ? '${r.okCount + r.unusedCount}/${r.relays.length} tamam' : null,
+      // Ekranda zaten gradyan birincil var ("Panoya Bağlan" / "Röleleri Listele"): hata kutusundaki "Tekrar dene" aynı işi yapar,
+      // çerçeveli ikincil olur (asıl kurtarma eylemi belli olsun).
+      retrySecondary: !c.conn.ready || !r.loaded,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -33,19 +44,39 @@ class Step7Relays extends StatelessWidget {
             SetupCard(
               key: const Key('relay_summary'),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
-                    child: Text(
-                      '${r.relays.length} röle: ${r.okCount} doğrulandı • ${r.unusedCount} kullanılmıyor • '
-                      '${r.problemCount} sorunlu • ${r.untestedCount} bekliyor',
-                      style: TextStyle(fontWeight: FontWeight.w700, color: SetupColors.text(context)),
+                    // Dört sayaç AYRI hap (eskiden tek kalın cümle: "• 0" satır sonunda kalıp "sorunlu" alta düşüyordu).
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${r.relays.length} röle',
+                          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            // Sayacı 0 olan hap NÖTR (slate): "0 sorunlu" kırmızı olunca hiç sorun yokken bile "hata var"
+                            // izlenimi veriyordu; renk anlamı yalnız sayı > 0 iken taşınır.
+                            ServiceStatusPill(label: '${r.okCount} doğrulandı', color: _tone(r.okCount, SetupColors.ok)),
+                            ServiceStatusPill(label: '${r.unusedCount} kullanılmıyor', color: _tone(r.unusedCount, SetupColors.warn)),
+                            ServiceStatusPill(label: '${r.problemCount} sorunlu', color: _tone(r.problemCount, SetupColors.error)),
+                            ServiceStatusPill(label: '${r.untestedCount} bekliyor', color: _tone(r.untestedCount, SetupColors.info)),
+                          ],
+                        ),
+                      ],
                     ),
                   ),
-                  IconButton(
+                  const SizedBox(width: 8),
+                  GlassIconButton(
                     key: const Key('btn_reload_relays'),
-                    tooltip: 'Listeyi yenile',
-                    onPressed: r.busy ? null : () => r.load(),
-                    icon: const Icon(Icons.refresh_rounded),
+                    icon: Icons.refresh_rounded,
+                    semanticLabel: 'Listeyi yenile',
+                    onTap: r.busy ? null : () => r.load(),
                   ),
                 ],
               ),
@@ -94,7 +125,6 @@ class _RelayCard extends StatelessWidget {
         color = SetupColors.info;
         label = 'Bekliyor';
     }
-    final readable = SetupColors.readable(context, color);
     return SetupCard(
       key: Key('card_relay_$id'),
       accent: verdict == RelayVerdict.untested ? null : color,
@@ -103,28 +133,36 @@ class _RelayCard extends StatelessWidget {
         children: [
           Row(
             children: [
+              OrbIconBadge(
+                icon: relay.isImpulse ? Icons.bolt_rounded : Icons.lightbulb_rounded,
+                // Kapalı röle koyu cam (slate) orb: etkileşimli "Aç" orb'uyla (amber) karışmaz; yanık ve sorunlu durum renklenir.
+                family: verdict == RelayVerdict.problem
+                    ? AppFamilies.rose
+                    : (relay.state ? AppFamilies.amber : AppFamilies.slate),
+                active: relay.state,
+                status: verdict == RelayVerdict.ok ? OrbStatus.success : OrbStatus.none,
+                enabled: verdict != RelayVerdict.unused,
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   '${relay.name} (Röle $id)',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: color.withValues(alpha: 0.5)),
-                ),
-                child: Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: readable)),
-              ),
             ],
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SetupVerdictChip(label: label, color: color),
           ),
           if (verdict == RelayVerdict.unused)
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton(
                 key: Key('btn_relay_unused_$id'),
+                style: setupInlineActionStyle(),
                 onPressed: busy ? null : () => logic.setUnused(id, false),
                 child: const Text('Kullanılıyor olarak işaretle'),
               ),
@@ -132,31 +170,32 @@ class _RelayCard extends StatelessWidget {
           else ...[
             const SizedBox(height: 8),
             Wrap(
-              spacing: 8,
+              spacing: 16,
               runSpacing: 8,
               children: [
                 if (relay.isImpulse)
-                  ElevatedButton.icon(
-                    key: Key('btn_relay_on_$id'),
-                    onPressed: busy ? null : () => logic.command(id, true),
-                    icon: const Icon(Icons.touch_app_rounded, size: 18),
-                    label: const Text('Tetikle'),
-                    style: ElevatedButton.styleFrom(minimumSize: const Size(96, 48)),
+                  SetupOrbAction(
+                    orbKey: Key('btn_relay_on_$id'),
+                    icon: Icons.bolt_rounded,
+                    family: AppFamilies.amber,
+                    label: 'Tetikle',
+                    onTap: busy ? null : () => logic.command(id, true),
                   )
                 else ...[
-                  ElevatedButton.icon(
-                    key: Key('btn_relay_on_$id'),
-                    onPressed: busy ? null : () => logic.command(id, true),
-                    icon: const Icon(Icons.lightbulb_rounded, size: 18),
-                    label: const Text('Aç'),
-                    style: ElevatedButton.styleFrom(minimumSize: const Size(96, 48)),
+                  SetupOrbAction(
+                    orbKey: Key('btn_relay_on_$id'),
+                    icon: Icons.lightbulb_rounded,
+                    family: AppFamilies.amber,
+                    label: 'Aç',
+                    active: relay.state,
+                    onTap: busy ? null : () => logic.command(id, true),
                   ),
-                  OutlinedButton.icon(
-                    key: Key('btn_relay_off_$id'),
-                    onPressed: busy ? null : () => logic.command(id, false),
-                    icon: const Icon(Icons.lightbulb_outline_rounded, size: 18),
-                    label: const Text('Kapat'),
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(96, 48)),
+                  SetupOrbAction(
+                    orbKey: Key('btn_relay_off_$id'),
+                    icon: Icons.lightbulb_outline_rounded,
+                    family: AppFamilies.slate,
+                    label: 'Kapat',
+                    onTap: busy ? null : () => logic.command(id, false),
                   ),
                 ],
               ],
@@ -170,15 +209,12 @@ class _RelayCard extends StatelessWidget {
                   label: relay.sawOn
                       ? 'Pano: açıldı ✔'
                       : (relay.isImpulse && relay.cmdSent
-                          ? 'Pano: komutu kabul etti (geri bildirim görülemedi)'
-                          : 'Pano: açma bekleniyor'),
+                            ? 'Pano: komutu kabul etti (geri bildirim görülemedi)'
+                            : 'Pano: açma bekleniyor'),
                   ok: relay.sawOn || (relay.isImpulse && relay.cmdSent),
                 ),
                 if (!relay.isImpulse)
-                  _FeedbackChip(
-                    label: relay.sawOff ? 'Pano: kapandı ✔' : 'Pano: kapanma bekleniyor',
-                    ok: relay.sawOff,
-                  ),
+                  _FeedbackChip(label: relay.sawOff ? 'Pano: kapandı ✔' : 'Pano: kapanma bekleniyor', ok: relay.sawOff),
               ],
             ),
             if (relay.awaitingLitAnswer) ...[
@@ -188,27 +224,20 @@ class _RelayCard extends StatelessWidget {
                 style: TextStyle(fontWeight: FontWeight.w800, color: SetupColors.text(context)),
               ),
               const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ElevatedButton(
-                    key: Key('btn_relay_lit_yes_$id'),
-                    onPressed: busy ? null : () => logic.confirmLit(id, true),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(96, 48),
-                      backgroundColor: SetupColors.ok,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: const Text('Evet, çalıştı'),
-                  ),
-                  OutlinedButton(
-                    key: Key('btn_relay_lit_no_$id'),
-                    onPressed: busy ? null : () => logic.confirmLit(id, false),
-                    style: OutlinedButton.styleFrom(minimumSize: const Size(96, 48)),
-                    child: const Text('Hayır, çalışmadı'),
-                  ),
-                ],
+              SetupChoicePair(
+                primary: ElevatedButton(
+                  key: Key('btn_relay_lit_yes_$id'),
+                  onPressed: busy ? null : () => logic.confirmLit(id, true),
+                  style: accentButtonStyle(AppFamilies.emerald, minimumSize: const Size(96, 48)),
+                  child: const Text('Evet, çalıştı'),
+                ),
+                secondary: OutlinedButton(
+                  key: Key('btn_relay_lit_no_$id'),
+                  onPressed: busy ? null : () => logic.confirmLit(id, false),
+                  // Olumsuz yanıt gül (rose) çerçeveli: anlamsal renk metin + çerçevede aynı.
+                  style: accentOutlinedButtonStyle(context, AppFamilies.rose, minimumSize: const Size(96, 48)),
+                  child: const Text('Hayır, çalışmadı'),
+                ),
               ),
             ],
             if (relay.info != null)
@@ -232,11 +261,13 @@ class _RelayCard extends StatelessWidget {
                 if (verdict == RelayVerdict.problem || verdict == RelayVerdict.ok)
                   TextButton(
                     key: Key('btn_relay_reset_$id'),
+                    style: setupInlineActionStyle(),
                     onPressed: busy ? null : () => logic.resetRelay(id),
                     child: const Text('Yeniden test et'),
                   ),
                 TextButton(
                   key: Key('btn_relay_unused_$id'),
+                  style: setupInlineActionStyle(),
                   onPressed: busy ? null : () => logic.setUnused(id, true),
                   child: const Text('Kullanılmıyor'),
                 ),
@@ -258,9 +289,28 @@ class _FeedbackChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = ok ? SetupColors.ok : SetupColors.muted(context);
-    return Text(
-      label,
-      style: TextStyle(fontSize: 12.5, fontWeight: ok ? FontWeight.w800 : FontWeight.w500, color: ok ? SetupColors.readable(context, SetupColors.ok) : color),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 3, right: 6),
+          child: SizedBox.square(
+            dimension: 12,
+            child: Center(child: GlowDot(color: color, size: 7)),
+          ),
+        ),
+        Flexible(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: ok ? FontWeight.w800 : FontWeight.w500,
+              color: ok ? SetupColors.readable(context, SetupColors.ok) : color,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

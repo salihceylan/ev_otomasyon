@@ -372,13 +372,17 @@ function createService(deps = {}) {
         ...values,
       };
 
-      // Hedefi etkileyen alanlar degistiyse (kanal/tip/eylem/cihaz) yeniden dogrula.
-      // Yalnizca etkin/etiket/saat degisiminde eski (bozuk) bir kural kapatilabilsin diye atlanir.
+      // Hedefi etkileyen alanlar degistiyse (kanal/tip/eylem/cihaz) ya da kapali kural yeniden
+      // aciliyorsa (WP-L D3: esitlemenin kapattigi kural kanal artik uyumsuzken acilamasin)
+      // birlesik degerlerle yeniden dogrula. Kapatma ve kapaliyken etiket/saat degisimi
+      // dogrulamasizdir: eski (bozuk) bir kural her zaman kapatilabilsin.
       const targetChanged = ['channel', 'channel_type', 'action', 'device_id'].some((k) => k in values);
-      if (targetChanged) {
+      const reEnabling = values.enabled === true && before.enabled !== true;
+      if (targetChanged || reEnabling) {
         const pairErr = checkTypeAction(merged.channel_type, merged.action);
         if (pairErr) throw new ValidationError(pairErr);
         if (values.device_id) await assertDeviceInHome(tx, homeId, values.device_id);
+        else if (reEnabling && !('device_id' in values) && merged.device_id) await assertDeviceInHome(tx, homeId, merged.device_id);
         const endpoints = await loadEndpoints(tx, homeId, merged.device_id);
         const chErr = checkChannelAgainstEndpoints(merged.channel_type, merged.channel, endpoints);
         if (chErr) throw new ValidationError(chErr);

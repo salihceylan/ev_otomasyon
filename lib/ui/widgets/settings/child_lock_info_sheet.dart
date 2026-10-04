@@ -4,6 +4,9 @@ import 'package:provider/provider.dart';
 import '../../../services/automation_state.dart';
 import '../../dashboard/child_lock_status.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
+import '../orb/orb.dart';
 
 /// Çocuk kilidi bilgi sayfasını açar: neyi kilitler / kilitlemez, elektrik kesintisinde ne olur,
 /// kapsamı ve kimin değiştirebileceği. Hem ayar kartından hem pano rozetinden açılır.
@@ -27,19 +30,22 @@ class ChildLockInfoSheet extends StatelessWidget {
     (
       icon: Icons.lock_outline,
       title: 'Neyi kilitler?',
-      text: 'Evdeki duvar anahtarlarına ve butonlarına basılsa bile lambalar ve panjurlar çalışmaz. '
+      text:
+          'Evdeki duvar anahtarlarına ve butonlarına basılsa bile lambalar ve panjurlar çalışmaz. '
           'Böylece çocuklar anahtarlarla oynayamaz.',
     ),
     (
       icon: Icons.phone_iphone_rounded,
       title: 'Neyi kilitlemez?',
-      text: 'Telefon uygulaması, zamanlı kurallar ve ev halkının diğer telefonları lambaları ve '
+      text:
+          'Telefon uygulaması, zamanlı kurallar ve ev halkının diğer telefonları lambaları ve '
           'panjurları kontrol etmeye devam eder.',
     ),
     (
       icon: Icons.power_outlined,
       title: 'Elektrik kesintisinde',
-      text: 'Kilit pano hafızasında saklanır: elektrik kesilip gelse de sürer. Elektrik geldiğinde '
+      text:
+          'Kilit pano hafızasında saklanır: elektrik kesilip gelse de sürer. Elektrik geldiğinde '
           'lambalar kapalı başlar ve kilit kaldırılana kadar duvar anahtarıyla açılamaz.',
     ),
     (
@@ -50,7 +56,8 @@ class ChildLockInfoSheet extends StatelessWidget {
     (
       icon: Icons.verified_user_outlined,
       title: 'Kim değiştirebilir?',
-      text: 'Ev sahibi, aile üyeleri ve yetkili servis. Misafirler durumu görebilir ama '
+      text:
+          'Ev sahibi, aile üyeleri ve yetkili servis. Misafirler durumu görebilir ama '
           'değiştiremez. Kilidi kaldırmak için kimlik doğrulaması ya da basılı tutma gerekir.',
     ),
   ];
@@ -70,8 +77,8 @@ class ChildLockInfoSheet extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.child_care_rounded, color: AppTheme.warningText(context), size: 26),
-              const SizedBox(width: 10),
+              OrbIconBadge(icon: Icons.child_care_rounded, family: AppFeature.childLock.accentFamily, active: true),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Çocuk Kilidi',
@@ -90,7 +97,15 @@ class ChildLockInfoSheet extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(section.icon, size: 20, color: AppTheme.infoText(context)),
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppFamilies.sky.base.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(AppRadius.r12),
+                  ),
+                  child: Icon(section.icon, size: 20, color: AppTheme.infoText(context)),
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -101,10 +116,7 @@ class ChildLockInfoSheet extends StatelessWidget {
                         style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: primary),
                       ),
                       const SizedBox(height: 2),
-                      Text(
-                        section.text,
-                        style: TextStyle(fontSize: 13, height: 1.4, color: muted),
-                      ),
+                      Text(section.text, style: TextStyle(fontSize: 13, height: 1.4, color: muted)),
                     ],
                   ),
                 ),

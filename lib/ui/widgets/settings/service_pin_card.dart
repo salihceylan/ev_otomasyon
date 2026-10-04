@@ -8,6 +8,8 @@ import '../../../services/automation_state.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../dashboard/labels.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import 'accent_button.dart';
 import 'settings_card.dart';
 
 enum _ListLoad { loading, ready, failed }
@@ -101,31 +103,22 @@ class _ServicePinCardState extends State<ServicePinCard> {
     });
   }
 
-  Future<bool> _confirmReplace() async {
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        key: const Key('dialog_replace_service_pin'),
-        title: const Text('Yeni PIN üretilsin mi?'),
-        content: const Text(
-          'Daha önce üretilen ve henüz kullanılmamış servis PIN\'i yeni PIN üretildiğinde iptal olur. '
+  /// Eski PIN'i iptal edeceği için onay ister. Ortak onay kabuğu (servis PIN ailesi amber orb + hap eylemler; ham
+  /// `AlertDialog` değil). Anahtarlar/metinler aynen (testlerle pinli).
+  Future<bool> _confirmReplace() {
+    return showSimpleConfirm(
+      context,
+      title: 'Yeni PIN üretilsin mi?',
+      message: 'Daha önce üretilen ve henüz kullanılmamış servis PIN\'i yeni PIN üretildiğinde iptal olur. '
           'Teknisyene yeni PIN\'i iletmeniz gerekir.',
-        ),
-        actions: [
-          TextButton(
-            key: const Key('btn_replace_pin_cancel'),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Vazgeç'),
-          ),
-          FilledButton(
-            key: const Key('btn_replace_pin_confirm'),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Yeni PIN Üret'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Yeni PIN Üret',
+      cancelLabel: 'Vazgeç',
+      icon: Icons.key_rounded,
+      family: AppFeature.servicePin.accentFamily,
+      dialogKey: const Key('dialog_replace_service_pin'),
+      cancelKey: const Key('btn_replace_pin_cancel'),
+      confirmKey: const Key('btn_replace_pin_confirm'),
     );
-    return result == true;
   }
 
   Future<void> _generate() async {
@@ -155,30 +148,21 @@ class _ServicePinCardState extends State<ServicePinCard> {
   }
 
   Future<void> _revoke() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        key: const Key('dialog_revoke_service_access'),
-        title: const Text('Servis erişimi kapatılsın mı?'),
-        content: const Text(
-          'Kullanılmamış tüm servis PIN\'leri ve açık servis oturumları iptal edilir. Teknisyen '
+    // Ortak onay kabuğu (rose orb + yıkıcı gradyan hap; ham `AlertDialog` değil). Anahtarlar/metinler aynen (pinli).
+    final confirmed = await showSimpleConfirm(
+      context,
+      title: 'Servis erişimi kapatılsın mı?',
+      message: 'Kullanılmamış tüm servis PIN\'leri ve açık servis oturumları iptal edilir. Teknisyen '
           'evinize erişemez.',
-        ),
-        actions: [
-          TextButton(
-            key: const Key('btn_revoke_cancel'),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Vazgeç'),
-          ),
-          FilledButton(
-            key: const Key('btn_revoke_confirm'),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Erişimi Kapat'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Erişimi Kapat',
+      cancelLabel: 'Vazgeç',
+      destructive: true,
+      icon: Icons.block_rounded,
+      dialogKey: const Key('dialog_revoke_service_access'),
+      cancelKey: const Key('btn_revoke_cancel'),
+      confirmKey: const Key('btn_revoke_confirm'),
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     final state = context.read<AutomationState>();
     setState(() => _revoking = true);
     try {
@@ -209,7 +193,9 @@ class _ServicePinCardState extends State<ServicePinCard> {
   @override
   Widget build(BuildContext context) {
     final state = context.read<AutomationState>();
-    final purple = AppTheme.accentPurple;
+    // Servis PIN'i ailesi: amber (erişim/kilit). Eskiden violet'ti ve 'Pano Değişimi' ile karışıyordu ([AppFeature.servicePin]).
+    final pinFamily = AppFeature.servicePin.accentFamily;
+    final purple = pinFamily.base;
     final success = AppTheme.successText(context);
     final remaining = _expiresAt?.difference(state.clock.now());
 
@@ -289,17 +275,12 @@ class _ServicePinCardState extends State<ServicePinCard> {
                       height: 16,
                       child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.readableAccent(context, purple)),
                     )
-                  : const Icon(Icons.vpn_key_outlined, size: 16),
+                  : Icon(Icons.vpn_key_outlined, size: accentIconSize(context)),
               label: Text(
                 _pin == null && !_hasActivePin ? '6 Haneli Servis PIN\'i Üret' : 'Yeni PIN Üret',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                foregroundColor: AppTheme.readableAccent(context, purple),
-                side: BorderSide(color: purple),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
+              style: accentOutlinedButtonStyle(context, pinFamily),
             ),
           ),
           const SizedBox(height: 14),

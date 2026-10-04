@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../theme/app_theme.dart';
+import '../../widgets/settings/accent_button.dart';
+import 'scanner_frame.dart';
 
 /// Taranan ham metni doğrular: `null` = kabul (sayfa kapanır ve metni döndürür); metin = reddet
 /// (Türkçe neden SnackBar ile gösterilir, **tarama sürer**).
@@ -65,6 +67,9 @@ class QrScannerPageState extends State<QrScannerPage> {
 
   /// İlk kabulden sonra gelen algılamalar yok sayılır (tek pop).
   bool _handled = false;
+
+  /// Kod kabul edildi: tarayıcı çerçevesi ✓ gösterir (sayfa kapanırken; kapanışı geciktirmez).
+  bool _accepted = false;
   int? _lastRejectedHash;
   DateTime? _lastRejectedAt;
 
@@ -116,6 +121,7 @@ class QrScannerPageState extends State<QrScannerPage> {
       return false;
     }
     _handled = true; // senkron: ikinci algılama pop'tan önce gelse bile yok sayılır
+    setState(() => _accepted = true);
     Navigator.of(context).pop<String>(raw);
     return true;
   }
@@ -141,7 +147,8 @@ class QrScannerPageState extends State<QrScannerPage> {
         SnackBar(
           key: const Key('snack_scan_error'),
           content: Text(message),
-          backgroundColor: AppTheme.accentRed,
+          // Beyaz yazılı dolgu tonu (ham kırmızı zeminde beyaz metin ≈3.8:1 idi).
+          backgroundColor: AppTheme.filledAccent(AppTheme.accentRed),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -350,10 +357,7 @@ class QrScannerPageState extends State<QrScannerPage> {
                   onPressed: _restartCamera,
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('Tekrar Dene'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryBlue,
-                    foregroundColor: Colors.white,
-                  ),
+                  style: accentButtonStyle(null),
                 ),
               if (widget.onManualFallback != null) ...[
                 const SizedBox(height: 10),
@@ -419,10 +423,7 @@ class QrScannerPageState extends State<QrScannerPage> {
                   onPressed: _manualFallback,
                   icon: const Icon(Icons.keyboard_alt_outlined),
                   label: const Text('Kodu Elle Gir'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryBlue,
-                    foregroundColor: Colors.white,
-                  ),
+                  style: accentButtonStyle(null),
                 ),
               TextButton(
                 key: const Key('btn_scanner_back'),
@@ -438,47 +439,37 @@ class QrScannerPageState extends State<QrScannerPage> {
 
   Widget _buildScannerOverlay(BuildContext context, double boxSize) {
     return IgnorePointer(
-      child: Center(
-        child: Container(
-          width: boxSize,
-          height: boxSize,
-          decoration: BoxDecoration(
-            border: Border.all(color: AppTheme.primaryBlueLight, width: 2),
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.primaryBlue.withValues(alpha: 0.25),
-                blurRadius: 20,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: Stack(
-            children: [
-              // Köşe vurguları
-              Positioned(top: 0, left: 0, child: _buildCorner(true, true)),
-              Positioned(top: 0, right: 0, child: _buildCorner(true, false)),
-              Positioned(bottom: 0, left: 0, child: _buildCorner(false, true)),
-              Positioned(bottom: 0, right: 0, child: _buildCorner(false, false)),
-            ],
-          ),
-        ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // Çerçeve dışı hafif karartma (ortası deliktir).
+          CustomPaint(painter: _DimPainter(hole: boxSize)),
+          Center(child: ScannerFrame(size: boxSize, accepted: _accepted)),
+        ],
       ),
     );
+  }
+}
+
+/// Tarama penceresi dışını karartır; merkezde yuvarlak köşeli kare delik bırakır.
+class _DimPainter extends CustomPainter {
+  const _DimPainter({required this.hole});
+
+  final double hole;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final window = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: size.center(Offset.zero), width: hole, height: hole),
+      const Radius.circular(22),
+    );
+    final path = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(Offset.zero & size)
+      ..addRRect(window);
+    canvas.drawPath(path, Paint()..color = Colors.black.withValues(alpha: 0.42));
   }
 
-  Widget _buildCorner(bool isTop, bool isLeft) {
-    return Container(
-      width: 24,
-      height: 24,
-      decoration: BoxDecoration(
-        border: Border(
-          top: isTop ? const BorderSide(color: Colors.white, width: 4) : BorderSide.none,
-          bottom: !isTop ? const BorderSide(color: Colors.white, width: 4) : BorderSide.none,
-          left: isLeft ? const BorderSide(color: Colors.white, width: 4) : BorderSide.none,
-          right: !isLeft ? const BorderSide(color: Colors.white, width: 4) : BorderSide.none,
-        ),
-      ),
-    );
-  }
+  @override
+  bool shouldRepaint(_DimPainter old) => old.hole != hole;
 }

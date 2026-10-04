@@ -6,10 +6,16 @@ import 'package:provider/provider.dart';
 import '../../../models/api_models.dart';
 import '../../../services/automation_state.dart';
 import '../../common/confirm_dialogs.dart';
+import '../../motion/motion_scope.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/orb/orb.dart';
 import 'device_link.dart';
 import 'service_setup_controller.dart';
 import 'service_target.dart';
 import 'session_banner.dart';
+import 'setup_progress.dart';
+import 'setup_step_scaffold.dart';
+import 'setup_steps.dart';
 import 'setup_store.dart';
 import 'setup_style.dart';
 import 'steps/step_10_handover.dart';
@@ -62,6 +68,10 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
   ServiceSetupController? _controller;
   String? _deniedReason;
 
+  /// Çıkış / bırakma işlemi sürüyor: pano güvenli duruma getirilirken (en çok [ServiceSetupController.exitBusyWait])
+  /// ikinci geri tuşu ikinci çıkış (ve ikinci `pop`) başlatmaz.
+  bool _leaving = false;
+
   @override
   void initState() {
     super.initState();
@@ -107,16 +117,33 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
     final c = _controller;
     if (c == null) return true;
     final saved = c.target != null;
+    final message = Text(
+      saved
+          ? 'İlerlemeniz bu telefonda kaydedildi. "Devam eden kurulumlar" listesinden kaldığınız yerden sürdürebilirsiniz.'
+          : 'Cihaz henüz daireye bağlanmadı; şimdi çıkarsanız baştan başlamanız gerekir.',
+    );
     final leave = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         scrollable: true,
         title: const Text('Sihirbazdan çıkılsın mı?'),
-        content: Text(
-          saved
-              ? 'İlerlemeniz bu telefonda kaydedildi. "Devam eden kurulumlar" listesinden kaldığınız yerden sürdürebilirsiniz.'
-              : 'Cihaz henüz daireye bağlanmadı; şimdi çıkarsanız baştan başlamanız gerekir.',
-        ),
+        // Çıkış yalnız panjur işleminin bitmesini bekler ([ServiceSetupController.settleBeforeExit]): uyarı da buna bağlı.
+        content: !c.shutters.busy
+            ? message
+            : Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  message,
+                  const SizedBox(height: 8),
+                  Text(
+                    'Şu an bir panjur işlemi sürüyor: çıkarsanız önce bitmesi beklenir (en çok '
+                    '${ServiceSetupController.exitBusyWait.inSeconds} saniye) ve ölçüm için panoya yazılan geçici süre '
+                    'geri alınır.',
+                    key: const Key('exit_busy_note'),
+                  ),
+                ],
+              ),
         actions: [
           TextButton(
             key: const Key('btn_exit_cancel'),
@@ -136,14 +163,20 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
 
   /// Çıkmadan önce pano güvenli duruma getirilir (yarım panjur ölçümünün geçici süresi geri yüklenir ...).
   Future<void> _settleAndPop() async {
-    final c = _controller;
-    if (c != null) await c.settleBeforeExit();
-    if (mounted) Navigator.of(context).pop();
+    if (_leaving) return;
+    _leaving = true;
+    try {
+      final c = _controller;
+      if (c != null) await c.settleBeforeExit();
+      if (mounted) Navigator.of(context).pop();
+    } finally {
+      _leaving = false;
+    }
   }
 
   Future<void> _discard() async {
     final c = _controller;
-    if (c == null) return;
+    if (c == null || _leaving) return;
     final ok = await ConfirmDestructiveDialog.show(
       context,
       title: 'Kurulum ilerlemesi silinsin mi?',
@@ -152,10 +185,15 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
       confirmPhrase: 'SİL',
       confirmLabel: 'İlerlemeyi Sil',
     );
-    if (!ok || !mounted) return;
-    await c.settleBeforeExit();
-    await c.discardProgress();
-    if (mounted) Navigator.of(context).pop();
+    if (!ok || !mounted || _leaving) return;
+    _leaving = true;
+    try {
+      await c.settleBeforeExit();
+      await c.discardProgress();
+      if (mounted) Navigator.of(context).pop();
+    } finally {
+      _leaving = false;
+    }
   }
 
   void _backToLogin() {
@@ -164,6 +202,9 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
     if (state.isAuthenticated) unawaited(state.logout());
     navigator.popUntil((route) => route.isFirst);
   }
+
+  /// Üst şerit bloğunun yarı saydam zemini (adım iskeletinin başlık bloğuyla aynı örtü).
+  static Color _chromeScrim(BuildContext context) => SetupStepScaffold.chromeScrim(context);
 
   Widget _step(ServiceSetupController c) {
     switch (c.currentStep) {
@@ -206,7 +247,7 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.lock_outline_rounded, size: 56, color: SetupColors.warn),
+                const OrbIconBadge(icon: Icons.lock_rounded, family: AppFamilies.amber, size: OrbSize.xl, glow: true),
                 const SizedBox(height: 14),
                 Text(
                   _deniedReason ?? 'Bu sihirbaza erişiminiz yok.',
@@ -228,14 +269,19 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
         return PopScope(
           canPop: c.isFinished || expired,
           onPopInvokedWithResult: (didPop, _) async {
-            if (didPop) return;
+            if (didPop || _leaving) return; // çıkış sürerken ikinci geri tuşu yok sayılır
             final leave = await _confirmExit();
             if (leave && context.mounted) await _settleAndPop();
           },
+          // Scaffold arka planı temadan saydam gelir: küresel `CircuitBackground` (AppShell) görünür (envanter/yönetim
+          // sayfalarıyla aynı; PF-15 c). Okunurluk: şerit + başlık bloğu yarı saydam örtüyle, alt çubuk opak yüzeyle boyanır.
           child: Scaffold(
-            backgroundColor: SetupColors.background(context),
             appBar: AppBar(
               title: const Text('Yeni Kurulum', key: Key('nav_setup_title')),
+              // Kaydırılmış durumda M3 "scrolled-under" tonu YOK (kaydırınca bant lavanta-mavi boyanıp altındaki şerit/başlık
+              // bloğundan kopuyordu; NeonAppBar ile aynı kural).
+              scrolledUnderElevation: 0,
+              surfaceTintColor: Colors.transparent,
               actions: [
                 if (c.target != null && !c.isFinished)
                   PopupMenuButton<String>(
@@ -260,14 +306,44 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
                   )
                 : Column(
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        // Sunucu doğrulama uyarısı adımın kaydırılan alanındadır (sabit alanı taşırmaz; bkz. stepScaffold).
-                        child: const Column(children: [ServiceSessionBanner()]),
+                      // 10 adımlı ilerleme şeridi sayfa düzeyindedir: adım içerikleri değişirken yeniden kurulmaz,
+                      // orb renkleri ve bağlantı çizgileri yumuşakça geçer. Şerit + (PIN oturumunda) geri sayım bandı
+                      // aynı yarı saydam örtü üstündedir (başlık bloğuyla dikişsiz).
+                      DecoratedBox(
+                        decoration: BoxDecoration(color: _chromeScrim(context)),
+                        child: Column(
+                          children: [
+                            SetupStepStrip(
+                              step: c.currentStep,
+                              total: SetupSteps.total,
+                              phase: c.phaseOf(c.currentStep),
+                              // Gerçek tamamlanma: etkin adımdan önceki her adım körlemesine ✓ değildir (eksik adım amber "!").
+                              phases: <StepPhase>[for (var n = 1; n <= SetupSteps.total; n++) c.phaseOf(n)],
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              // Yalnız geçici (PIN) oturum bandı: geri sayım taşıyan tek şerit. Kalıcı personel/süper
+                              // yönetici bandı sihirbazda gösterilmez (sabit alanı büyütüp "Teknisyen" kartını tekrarlıyordu).
+                              // Sunucu doğrulama uyarısı adımın kaydırılan alanındadır (bkz. stepScaffold).
+                              child: const Column(children: [ServiceSessionBanner(pinOnly: true)]),
+                            ),
+                          ],
+                        ),
                       ),
                       Expanded(
+                        // Geçiş "fade-through": eski adım hemen kalkar (aynı anda iki adım ağaçta olmaz), yenisi
+                        // solarak ve hafifçe kayarak gelir. Hareket kapalıyken anında.
                         child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 180),
+                          duration: MotionScope.durationOf(context, AppMotion.base),
+                          reverseDuration: Duration.zero,
+                          switchInCurve: AppMotion.standard,
+                          transitionBuilder: (child, animation) => FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position: Tween<Offset>(begin: const Offset(0.04, 0), end: Offset.zero).animate(animation),
+                              child: child,
+                            ),
+                          ),
                           child: _step(c),
                         ),
                       ),

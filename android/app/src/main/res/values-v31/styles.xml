@@ -6,6 +6,7 @@
         <item name="android:windowIsTranslucent">true</item>
     </style>
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
-        <item name="android:windowBackground">?android:colorBackground</item>
+        <!-- Pencere zemini uygulamanin koyu laciverti (splash_bg = #0B1120); bkz. values/styles.xml. -->
+        <item name="android:windowBackground">@color/splash_bg</item>
     </style>
 </resources>

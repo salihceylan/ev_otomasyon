@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
+import 'package:ev_otomasyon/ui/motion/skeleton.dart';
 import 'package:ev_otomasyon/ui/pages/device_inventory_page.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/secret_clipboard.dart';
 import 'package:flutter/material.dart';
@@ -308,6 +309,77 @@ void main() {
       await openInventory(tester, env);
       expect(exists('inventory_empty'), isTrue);
       expect(find.textContaining('Karekod Üret & Etiket Bas'), findsOneWidget);
+    });
+  });
+
+  group('sayaç şeridi (uydurma sıfır YOK)', () {
+    const tiles = <String>[
+      'stat_inventory_total',
+      'stat_inventory_in_stock',
+      'stat_inventory_claimed',
+      'stat_inventory_suspended',
+    ];
+
+    testWidgets('yüklenirken dört sayaç da iskelet gösterir; "0" sayacı ÇIKMAZ; veri gelince gerçek sayılar yazılır', (tester) async {
+      // Kök neden: `AutomationState.inventoryStats` başlangıçta dört anahtarı da 0 olan harita (oturum açılışı); eski `noData`
+      // (`_stats.isEmpty && _items.isEmpty`) hiç true olmuyor, yükleme sırasında "0 Toplam / 0 Stokta / 0 Devrede / 0 Askıda"
+      // yazılıyor ve boş envanter gibi okunuyordu.
+      final env = await envFor('staff');
+      addTearDown(env.dispose);
+      env.cloud.inventoryGate = Completer<void>();
+      await openInventory(tester, env);
+      expect(exists('inventory_loading'), isTrue, reason: 'liste iskeleti yükleniyor');
+
+      for (final key in tiles) {
+        final tile = find.byKey(Key(key));
+        expect(tile, findsOneWidget, reason: key);
+        expect(
+          find.descendant(of: tile, matching: find.byType(SkeletonText)),
+          findsOneWidget,
+          reason: '$key yüklenirken iskelet göstermeli',
+        );
+        expect(find.descendant(of: tile, matching: find.text('0')), findsNothing, reason: '$key: uydurma "0" sayacı yok');
+        expect(find.descendant(of: tile, matching: find.text('—')), findsNothing, reason: '$key: hata/bilinmiyor işareti de değil');
+      }
+
+      env.cloud.inventoryGate!.complete();
+      await settle(tester);
+      for (final key in tiles) {
+        expect(find.descendant(of: find.byKey(Key(key)), matching: find.byType(SkeletonText)), findsNothing, reason: key);
+      }
+      // threeDevices(): 1 stokta, 1 devrede, 1 askıda.
+      expect(find.descendant(of: find.byKey(const Key('stat_inventory_total')), matching: find.text('3')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('stat_inventory_in_stock')), matching: find.text('1')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('stat_inventory_claimed')), matching: find.text('1')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('stat_inventory_suspended')), matching: find.text('1')), findsOneWidget);
+    });
+
+    testWidgets('ilk yükleme hata verirse sayaçlar "—" olur (iskelet sonsuza dek dönmez, "0" yazılmaz)', (tester) async {
+      final env = await envFor('staff');
+      addTearDown(env.dispose);
+      env.cloud.inventoryError = const ApiException(statusCode: 500, code: 'INTERNAL', message: 'Sunucu şu anda yanıt veremiyor.');
+      await openInventory(tester, env);
+      for (final key in tiles) {
+        final tile = find.byKey(Key(key));
+        expect(find.descendant(of: tile, matching: find.byType(SkeletonText)), findsNothing, reason: key);
+        expect(find.descendant(of: tile, matching: find.text('—')), findsOneWidget, reason: '$key bilinmiyor');
+        expect(find.descendant(of: tile, matching: find.text('0')), findsNothing, reason: key);
+      }
+    });
+
+    testWidgets('envanter durumda dolu geldiyse (konsol önceden yükledi) sayaçlar hemen gerçek değerle görünür', (tester) async {
+      final env = await envFor('staff');
+      addTearDown(env.dispose);
+      env.state.setInventoryDevicesForTesting(
+        threeDevices(),
+        stats: const <String, int>{'total': 3, 'in_stock': 1, 'claimed': 1, 'suspended': 1},
+      );
+      env.cloud.inventoryGate = Completer<void>(); // sunucu yanıtı gelmedi: eski veri yine de gösterilir
+      await openInventory(tester, env);
+      expect(find.descendant(of: find.byKey(const Key('stat_inventory_total')), matching: find.text('3')), findsOneWidget);
+      expect(find.descendant(of: find.byKey(const Key('stat_inventory_total')), matching: find.byType(SkeletonText)), findsNothing);
+      env.cloud.inventoryGate!.complete(); // bekleyen 25 sn zaman aşımı zamanlayıcısı kalmasın
+      await settle(tester);
     });
   });
 

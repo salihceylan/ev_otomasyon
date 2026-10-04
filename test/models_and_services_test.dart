@@ -4,6 +4,7 @@ import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/widgets/quick_scenario_bar.dart';
+import 'package:ev_otomasyon/ui/widgets/orb/orb.dart';
 import 'package:ev_otomasyon/ui/widgets/relay_switch_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -91,7 +92,7 @@ void main() {
 
     testWidgets('darbe (tetik) rölesi "Tetikle" düğmesi taşır ve açık/kapalı anahtarı göstermez', (tester) async {
       final h = await pumpReady(tester, scaffolded(const RelaySwitchCard(relay: impulse)));
-      expect(find.byType(Switch), findsNothing);
+      expect(find.byType(OrbToggle), findsNothing, reason: 'darbe çıkışı güç orbu göstermez');
       expect(find.text('Tetikle'), findsOneWidget);
 
       await tester.tap(find.text('Tetikle'));
@@ -126,7 +127,9 @@ void main() {
 
     testWidgets('anahtar ve kart en az 48 dp dokunma hedefindedir', (tester) async {
       await pumpReady(tester, scaffolded(const RelaySwitchCard(relay: lamp)));
-      expect(tester.getSize(find.byType(Switch)).height, greaterThanOrEqualTo(48));
+      // Switch -> OrbToggle (v2): güç orb'u en az 48x48 dokunma alanı kaplar.
+      expect(tester.getSize(find.byType(OrbToggle)).height, greaterThanOrEqualTo(48));
+      expect(tester.getSize(find.byType(OrbToggle)).width, greaterThanOrEqualTo(48));
       expect(tester.getSize(byKeyName('card_relay_1')).height, greaterThanOrEqualTo(48));
     });
 

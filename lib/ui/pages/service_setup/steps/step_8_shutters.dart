@@ -1,5 +1,12 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
+import '../../../theme/app_theme.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb.dart';
+import '../../../widgets/settings/accent_button.dart';
+import '../../../widgets/shutter_visual.dart';
 import '../device_connection_panel.dart';
 import '../logic/shutter_logic.dart';
 import '../service_setup_controller.dart';
@@ -27,6 +34,8 @@ class Step8Shutters extends StatelessWidget {
           ? 'En az bir panjuru gerçekten test edin (yön + süre): hepsi "Kullanılmıyor" işaretlenerek geçilemez.'
           : 'Devam etmek için her panjurun yönünü onaylayın ve süresini kaydedin (veya "Kullanılmıyor" işaretleyin).',
       statusText: s.loaded ? (s.hasNoShutters ? 'Panjur yok' : '$ready/${s.shutters.length} hazır') : null,
+      // Ekranda zaten gradyan birincil var ("Panoya Bağlan" / "Panjurları Listele"): hata kutusundaki "Tekrar dene" çerçeveli.
+      retrySecondary: !c.conn.ready || !s.loaded,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -108,24 +117,32 @@ class _ShutterCardState extends State<_ShutterCard> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              if (!s.unused) ...[
+                // Mini panjur görseli: panonun bildirdiği konum; hareket sırasında yumuşak akar.
+                ShutterVisual(
+                  position: s.pos.toDouble(),
+                  moving: s.moving,
+                  muted: !s.moving && s.verdict == ShutterDirectionVerdict.unknown,
+                  accent: s.moving ? (s.direction == 1 ? AppFamilies.emerald.base : AppFamilies.sky.base) : null,
+                  width: 44,
+                  height: 50,
+                ),
+                const SizedBox(width: 12),
+              ],
               Expanded(
-                child: Text(
-                  '${s.name} (Panjur ${s.pair})',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
-                ),
-              ),
-              Container(
-                key: Key('shutter_status_${s.pair}'),
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: color.withValues(alpha: 0.5)),
-                ),
-                child: Text(
-                  label,
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: SetupColors.readable(context, color)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      // Ad zaten "Panjur N" ise parantez tekrarı gizlenir ("Panjur 1 (Panjur 1)" anlamsızdı).
+                      s.name == 'Panjur ${s.pair}' ? s.name : '${s.name} (Panjur ${s.pair})',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                    ),
+                    const SizedBox(height: 6),
+                    SetupVerdictChip(key: Key('shutter_status_${s.pair}'), label: label, color: color),
+                  ],
                 ),
               ),
             ],
@@ -135,12 +152,13 @@ class _ShutterCardState extends State<_ShutterCard> {
               alignment: Alignment.centerLeft,
               child: TextButton(
                 key: Key('btn_shutter_unused_${s.pair}'),
+                style: setupInlineActionStyle(),
                 onPressed: busy ? null : () => _logic.setUnused(s.pair, false),
                 child: const Text('Kullanılıyor olarak işaretle'),
               ),
             )
           else ...[
-            const SizedBox(height: 4),
+            const SizedBox(height: 8),
             Text(
               'Pano: $live • konum %${s.pos}',
               key: Key('shutter_live_${s.pair}'),
@@ -153,6 +171,7 @@ class _ShutterCardState extends State<_ShutterCard> {
               alignment: Alignment.centerLeft,
               child: TextButton(
                 key: Key('btn_shutter_unused_${s.pair}'),
+                style: setupInlineActionStyle(),
                 onPressed: busy ? null : () => _confirmUnused(s.pair),
                 child: const Text('Bu panjur kullanılmıyor'),
               ),
@@ -178,6 +197,7 @@ class _ShutterCardState extends State<_ShutterCard> {
         actions: [
           TextButton(
             key: const Key('btn_shutter_unused_cancel'),
+            style: AppTheme.quietTextButtonStyle(ctx),
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Vazgeç'),
           ),
@@ -202,31 +222,33 @@ class _ShutterCardState extends State<_ShutterCard> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text('1) Yön testi', style: TextStyle(fontWeight: FontWeight.w800, color: text)),
-        const SizedBox(height: 6),
+        const SizedBox(height: 8),
         Wrap(
-          spacing: 8,
+          spacing: 20,
           runSpacing: 8,
           children: [
-            ElevatedButton.icon(
-              key: Key('btn_shutter_up_${s.pair}'),
-              onPressed: busy ? null : () => _logic.move(s.pair, 'up'),
-              icon: const Icon(Icons.keyboard_arrow_up_rounded),
-              label: const Text('Yukarı'),
-              style: ElevatedButton.styleFrom(minimumSize: const Size(96, 48)),
+            SetupOrbAction(
+              orbKey: Key('btn_shutter_up_${s.pair}'),
+              icon: Icons.arrow_upward_rounded,
+              family: AppFamilies.emerald,
+              label: 'Yukarı',
+              active: s.moving && s.direction == 1,
+              onTap: busy ? null : () => _logic.move(s.pair, 'up'),
             ),
-            OutlinedButton.icon(
-              key: Key('btn_shutter_stop_${s.pair}'),
-              onPressed: busy ? null : () => _logic.move(s.pair, 'stop'),
-              icon: const Icon(Icons.stop_rounded),
-              label: const Text('Dur'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size(96, 48)),
+            SetupOrbAction(
+              orbKey: Key('btn_shutter_stop_${s.pair}'),
+              icon: Icons.stop_rounded,
+              family: AppFamilies.rose,
+              label: 'Dur',
+              onTap: busy ? null : () => _logic.move(s.pair, 'stop'),
             ),
-            OutlinedButton.icon(
-              key: Key('btn_shutter_down_${s.pair}'),
-              onPressed: busy ? null : () => _logic.move(s.pair, 'down'),
-              icon: const Icon(Icons.keyboard_arrow_down_rounded),
-              label: const Text('Aşağı'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size(96, 48)),
+            SetupOrbAction(
+              orbKey: Key('btn_shutter_down_${s.pair}'),
+              icon: Icons.arrow_downward_rounded,
+              family: AppFamilies.sky,
+              label: 'Aşağı',
+              active: s.moving && s.direction == 2,
+              onTap: busy ? null : () => _logic.move(s.pair, 'down'),
             ),
           ],
         ),
@@ -234,27 +256,19 @@ class _ShutterCardState extends State<_ShutterCard> {
           const SizedBox(height: 10),
           Text('Panjur gerçekten YUKARI mı gitti?', style: TextStyle(fontWeight: FontWeight.w800, color: text)),
           const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ElevatedButton(
-                key: Key('btn_dir_ok_${s.pair}'),
-                onPressed: busy ? null : () => _logic.confirmDirection(s.pair, wentUp: true),
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(96, 48),
-                  backgroundColor: SetupColors.ok,
-                  foregroundColor: Colors.white,
-                ),
-                child: const Text('Evet, yukarı gitti'),
-              ),
-              OutlinedButton(
-                key: Key('btn_dir_wrong_${s.pair}'),
-                onPressed: busy ? null : () => _logic.confirmDirection(s.pair, wentUp: false),
-                style: OutlinedButton.styleFrom(minimumSize: const Size(96, 48)),
-                child: const Text('Hayır, aşağı gitti'),
-              ),
-            ],
+          SetupChoicePair(
+            primary: ElevatedButton(
+              key: Key('btn_dir_ok_${s.pair}'),
+              onPressed: busy ? null : () => _logic.confirmDirection(s.pair, wentUp: true),
+              style: accentButtonStyle(AppFamilies.emerald, minimumSize: const Size(96, 48)),
+              child: const Text('Evet, yukarı gitti'),
+            ),
+            secondary: OutlinedButton(
+              key: Key('btn_dir_wrong_${s.pair}'),
+              onPressed: busy ? null : () => _logic.confirmDirection(s.pair, wentUp: false),
+              style: accentOutlinedButtonStyle(context, AppFamilies.rose, minimumSize: const Size(96, 48)),
+              child: const Text('Hayır, aşağı gitti'),
+            ),
           ),
           const SizedBox(height: 6),
           Text(
@@ -281,9 +295,10 @@ class _ShutterCardState extends State<_ShutterCard> {
                 OutlinedButton.icon(
                   key: Key('btn_retest_dir_${s.pair}'),
                   onPressed: busy ? null : () => _logic.retestDirection(s.pair),
-                  icon: const Icon(Icons.replay_rounded, size: 18),
+                  icon: Icon(Icons.replay_rounded, size: accentIconSize(context, base: 18)),
                   label: const Text('Düzelttim, yeniden dene'),
-                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                  // Çerçeve + metin + simge AYNI aileden ve AA (tema varsayılan çerçevesi açıkta ≈ 2.4:1'di).
+                  style: accentOutlinedButtonStyle(context, AppFamilies.rose),
                 ),
               ],
             ),
@@ -319,8 +334,9 @@ class _ShutterCardState extends State<_ShutterCard> {
         ),
         TextButton.icon(
           key: Key('btn_remeasure_${s.pair}'),
+          style: setupInlineActionStyle(),
           onPressed: busy ? null : () => _logic.remeasure(s.pair),
-          icon: const Icon(Icons.timer_outlined, size: 18),
+          icon: Icon(Icons.timer_outlined, size: accentIconSize(context, base: 18)),
           label: const Text('Yeniden ölç'),
         ),
       ]);
@@ -343,8 +359,12 @@ class _ShutterCardState extends State<_ShutterCard> {
           ),
           TextButton.icon(
             key: Key('btn_toggle_manual_${s.pair}'),
+            style: setupInlineActionStyle(),
             onPressed: () => setState(() => _showManual = !_showManual),
-            icon: Icon(_showManual ? Icons.expand_less_rounded : Icons.edit_rounded, size: 18),
+            icon: Icon(
+              _showManual ? Icons.expand_less_rounded : Icons.edit_rounded,
+              size: accentIconSize(context, base: 18),
+            ),
             label: Text(_showManual ? 'Elle girmeyi gizle' : 'Süreyi biliyorum: elle gireceğim'),
           ),
           if (_showManual) ...[
@@ -366,9 +386,9 @@ class _ShutterCardState extends State<_ShutterCard> {
                       final value = int.tryParse(_manual.text.trim());
                       _logic.setManualSeconds(s.pair, value ?? 0);
                     },
-              icon: const Icon(Icons.check_rounded, size: 18),
+              icon: Icon(Icons.check_rounded, size: accentIconSize(context, base: 18)),
               label: const Text('Bu Süreyi Kullan'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              style: accentOutlinedButtonStyle(context, AppFamilies.sky),
             ),
           ],
         ]);
@@ -396,11 +416,7 @@ class _ShutterCardState extends State<_ShutterCard> {
                 onPressed: busy ? null : () => _logic.bottomReached(s.pair),
                 icon: const Icon(Icons.vertical_align_bottom_rounded),
                 label: const Text('Alta indi'),
-                style: ElevatedButton.styleFrom(
-                  minimumSize: const Size(96, 48),
-                  backgroundColor: SetupColors.ok,
-                  foregroundColor: Colors.white,
-                ),
+                style: accentButtonStyle(AppFamilies.emerald, minimumSize: const Size(96, 48)),
               ),
             ],
           ),
@@ -409,7 +425,8 @@ class _ShutterCardState extends State<_ShutterCard> {
         children.addAll([
           const SetupInfoRow(
             icon: Icons.vertical_align_bottom_rounded,
-            text: 'Panjur en altta. "Ölçümü Başlat"a basınca panjur yukarı çıkar ve kronometre başlar; '
+            text:
+                'Panjur en altta. "Ölçümü Başlat"a basınca panjur yukarı çıkar ve kronometre başlar; '
                 'panjur TAM AÇILINCA "Bitti"ye basın.',
           ),
           const SizedBox(height: 8),
@@ -430,11 +447,7 @@ class _ShutterCardState extends State<_ShutterCard> {
                 final elapsed = started == null
                     ? Duration.zero
                     : widget.controller.ctx.clock.now().difference(started);
-                return Text(
-                  '${elapsed.inSeconds} sn',
-                  key: Key('shutter_stopwatch_${s.pair}'),
-                  style: TextStyle(fontSize: 40, fontWeight: FontWeight.w900, color: SetupColors.text(context)),
-                );
+                return _StopwatchRing(seconds: elapsed.inSeconds, textKey: Key('shutter_stopwatch_${s.pair}'));
               },
             ),
           ),
@@ -448,6 +461,7 @@ class _ShutterCardState extends State<_ShutterCard> {
           ),
           TextButton(
             key: Key('btn_cancel_measure_${s.pair}'),
+            style: setupInlineActionStyle(),
             onPressed: busy ? null : () => _logic.cancelMeasure(s.pair),
             child: const Text('Ölçümü iptal et'),
           ),
@@ -457,25 +471,32 @@ class _ShutterCardState extends State<_ShutterCard> {
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              IconButton.outlined(
+              GlassIconButton(
                 key: Key('btn_sec_minus_${s.pair}'),
-                tooltip: '1 saniye azalt',
-                onPressed: busy ? null : () => _logic.adjustMeasured(s.pair, -1),
-                icon: const Icon(Icons.remove_rounded),
+                icon: Icons.remove_rounded,
+                semanticLabel: '1 saniye azalt',
+                onTap: busy ? null : () => _logic.adjustMeasured(s.pair, -1),
               ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
-                child: Text(
-                  '${s.measuredSeconds ?? 0} sn',
-                  key: Key('shutter_measured_${s.pair}'),
-                  style: TextStyle(fontSize: 30, fontWeight: FontWeight.w900, color: text),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  child: Text(
+                    '${s.measuredSeconds ?? 0} sn',
+                    key: Key('shutter_measured_${s.pair}'),
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: text,
+                    ),
+                  ),
                 ),
               ),
-              IconButton.outlined(
+              GlassIconButton(
                 key: Key('btn_sec_plus_${s.pair}'),
-                tooltip: '1 saniye artır',
-                onPressed: busy ? null : () => _logic.adjustMeasured(s.pair, 1),
-                icon: const Icon(Icons.add_rounded),
+                icon: Icons.add_rounded,
+                semanticLabel: '1 saniye artır',
+                onTap: busy ? null : () => _logic.adjustMeasured(s.pair, 1),
               ),
             ],
           ),
@@ -492,4 +513,92 @@ class _ShutterCardState extends State<_ShutterCard> {
     }
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
   }
+}
+
+/// Süre ölçümü kronometresi: büyük tabular saniye sayacı + çevresinde dakika halkası (her 60 sn'de bir tur;
+/// saniyede bir yeniden çizilir, ambient/animasyon yok).
+class _StopwatchRing extends StatelessWidget {
+  const _StopwatchRing({required this.seconds, required this.textKey});
+
+  final int seconds;
+  final Key textKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final family = AppFamilies.sky;
+    return SizedBox.square(
+      dimension: 132,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          RepaintBoundary(
+            child: CustomPaint(
+              size: const Size.square(132),
+              painter: _MinuteRingPainter(
+                fraction: (seconds % 60) / 60.0,
+                color: SetupColors.isDark(context) ? family.light : family.base,
+                track: SetupColors.border(context),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                '$seconds sn',
+                key: textKey,
+                style: TextStyle(
+                  fontSize: 36,
+                  fontWeight: FontWeight.w900,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: SetupColors.text(context),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MinuteRingPainter extends CustomPainter {
+  const _MinuteRingPainter({required this.fraction, required this.color, required this.track});
+
+  final double fraction;
+  final Color color;
+  final Color track;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 8.0;
+    final rect = (Offset.zero & size).deflate(stroke);
+    canvas.drawArc(
+      rect,
+      0,
+      math.pi * 2,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..color = track.withValues(alpha: 0.6),
+    );
+    final sweep = math.max(fraction, 0.02) * math.pi * 2;
+    canvas.drawArc(
+      rect,
+      -math.pi / 2,
+      sweep,
+      false,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..color = color,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_MinuteRingPainter old) =>
+      old.fraction != fraction || old.color != color || old.track != track;
 }

@@ -23,6 +23,21 @@ const ROOM_MAX = 50;
 const COSMETIC_TYPES = Object.freeze(['light', 'plug']);
 // Eski istemcilerin gonderdigi, ARTIK DEGISTIRILEMEYEN alanlar (klemens eslemesi / kimlikler).
 const IMMUTABLE_FIELDS = Object.freeze(['channel', 'channel_index', 'device_id', 'shutter_pair_index']);
+// Kilitsiz okumadan sonra kanal yerlesimi (esitleme) degistiyse.
+const TYPE_CHANGED_MESSAGE = 'Kanal tipi değişti; listeyi yenileyin.';
+
+/**
+ * Kilit altindaki satirlarda hedef hala `pair` numarali panjurun bir yonu mu ve cift tam (iki panjur satiri) mi?
+ * @param {Array<{id:string, type:string, shutter_pair_index:number|null}>} rows cihazin kilitli satirlari
+ */
+function isSamePairLocked(rows, endpointId, pair) {
+  // uuid karsilastirmasi harf duyarsiz (PG uuid'i kucuk harfle dondurur; istemci buyuk harfle gonderebilir)
+  const wanted = String(endpointId).toLowerCase();
+  const target = rows.find((r) => String(r.id).toLowerCase() === wanted);
+  if (!target || target.type !== 'shutter' || target.shutter_pair_index !== pair) return false;
+  const mates = rows.filter((r) => r.shutter_pair_index === pair);
+  return mates.length === 2 && mates.every((r) => r.type === 'shutter');
+}
 
 function trimmedText(value, max, label) {
   if (typeof value !== 'string') throw httpError(400, `${label} metin olmalı.`, 'VALIDATION');
@@ -154,6 +169,9 @@ class EndpointService {
       }
     }
 
+    // Tip yalnizca kozmetik bir degerle yazilir; ayni tip no-op (or. shutter) icin tip YAZILMAZ (NULL).
+    const typeParam = type !== null && COSMETIC_TYPES.includes(type) ? type : null;
+
     let commandId = null;
     if (durationSec !== null) {
       if (ep.type !== 'shutter' || !ep.shutter_pair_index) {
@@ -168,24 +186,48 @@ class EndpointService {
     }
 
     const updated = await this.db.withTransaction(async (tx) => {
+      if (durationSec !== null) {
+        // Kilit sirasi esitlemeyle ayni (endpoint_layout_sync rowsLocked): cihazin satirlari kanal sirasinda.
+        // Hedef ve cift satirlari bu kumenin icindedir; sonraki UPDATE'ler yeni kilit almaz (40P01 dongusu yok).
+        const locked = await tx.query(
+          `SELECT id, channel_index, type, shutter_pair_index
+             FROM endpoints WHERE home_id = $1 AND device_id = $2 ORDER BY channel_index ASC FOR UPDATE`,
+          [homeId, ep.device_id]
+        );
+        if (!isSamePairLocked(locked.rows, endpointId, ep.shutter_pair_index)) {
+          // set_runtime zaten yayinlandi (tasarim: yayin once, DB sonra). Pano cifti artik tanimiyorsa komutu reddeder
+          // (pairConfigured); DB'ye yazilmaz, istemci listeyi yenileyip yeniden dener.
+          console.warn(`[ENDPOINT] set_runtime yayinlandi (cift ${ep.shutter_pair_index}) ama kanal artik bu panjur degil; DB guncellenmedi`);
+          throw httpError(409, TYPE_CHANGED_MESSAGE, 'CONFLICT');
+        }
+      }
+
+      // Tip yaziliyorsa satir hala light/plug olmali (kilitsiz okumadan sonra esitleme panjur yapmis olabilir).
+      // Her satir bu islemde EN COK BIR KEZ guncellenir: ayni satirin ikinci UPDATE'i FK yeniden denetimini
+      // (devices/homes FOR KEY SHARE) tetikler; esitleme devices FOR UPDATE tutarken bu bir kilit dongusu kurar.
+      // Bu yuzden hedefin suresi de bu UPDATE ile yazilir, cift UPDATE'i hedefi disarida birakir.
       const res = await tx.query(
         `UPDATE endpoints
             SET name = COALESCE($1, name),
                 room = COALESCE($2, room),
                 type = COALESCE($3, type),
+                shutter_duration_sec = COALESCE($6::int, shutter_duration_sec),
                 updated_at = CURRENT_TIMESTAMP
-          WHERE id = $4 AND home_id = $5
+          WHERE id = $4 AND home_id = $5 AND ($3::varchar IS NULL OR type IN ('light', 'plug'))
           RETURNING id`,
-        [name, room, type, endpointId, homeId]
+        [name, room, typeParam, endpointId, homeId, durationSec]
       );
-      if (res.rows.length === 0) throw httpError(404, 'Kontrol noktası bulunamadı.', 'NOT_FOUND');
+      if (res.rows.length === 0) {
+        if (typeParam !== null) throw httpError(409, TYPE_CHANGED_MESSAGE, 'CONFLICT');
+        throw httpError(404, 'Kontrol noktası bulunamadı.', 'NOT_FOUND');
+      }
 
       if (durationSec !== null) {
-        // Panjur cifti (yukari + asagi satiri) ayni sureyi paylasir.
+        // Panjur cifti (yukari + asagi satiri) ayni sureyi paylasir; hedef satir yukarida yazildi.
         await tx.query(
           `UPDATE endpoints SET shutter_duration_sec = $1, updated_at = CURRENT_TIMESTAMP
-            WHERE home_id = $2 AND device_id = $3 AND shutter_pair_index = $4`,
-          [durationSec, homeId, ep.device_id, ep.shutter_pair_index]
+            WHERE home_id = $2 AND device_id = $3 AND shutter_pair_index = $4 AND type = 'shutter' AND id <> $5`,
+          [durationSec, homeId, ep.device_id, ep.shutter_pair_index, endpointId]
         );
       }
 

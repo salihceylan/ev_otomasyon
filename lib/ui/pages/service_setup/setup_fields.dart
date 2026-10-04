@@ -48,10 +48,28 @@ class SetupTextField extends StatelessWidget {
   final int maxLines;
   final bool monospace;
 
+  /// Kimlik / PIN gibi sabit uzunluklu makine kodlarında (mono alan) yazı ölçeği bu çarpandan fazla büyümez: 1.5 ölçekte
+  /// 14 karakterlik UID ('AHBU-S3-A1B2C3') iki yan simgenin arasındaki ≈ 168 dp'ye sığmayıp ilk harfi yarım kesiyordu
+  /// ('AHBU' -> '\HBU'). Etiket/ipucu/yardımcı metin normal ölçeklenir; yalnız alanın içindeki kod sınırlanır.
+  static const double monoMaxScale = 1.25;
+
+  /// Alanın yazı stili: [monospace] ise etkin boyut en çok `15 x [monoMaxScale]`'dir ([TextScaler] `15`'i bu kadardan fazla
+  /// büyütüyorsa taban boyut orantılı küçültülür; sonra ölçekleyici aynı değeri verir).
+  TextStyle _inputStyle(BuildContext context) {
+    final color = SetupColors.text(context);
+    if (!monospace) return TextStyle(fontSize: 15, color: color);
+    const base = 15.0;
+    final scaled = MediaQuery.textScalerOf(context).scale(base);
+    final cap = base * monoMaxScale;
+    return SetupText.mono(fontSize: scaled > cap ? base * cap / scaled : base, color: color);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final multiline = !obscureText && maxLines > 1;
     return Padding(
-      padding: const EdgeInsets.only(top: 10),
+      // Yüzen etiket kenarlığın ~8 dp üstüne taşar: üst boşluk 18 (eskiden 10: etiket önceki öğeye yapışıyordu).
+      padding: const EdgeInsets.only(top: 18),
       child: TextField(
         controller: controller,
         enabled: enabled,
@@ -67,25 +85,38 @@ class SetupTextField extends StatelessWidget {
         autocorrect: false,
         enableSuggestions: !obscureText,
         autofillHints: autofillHints,
-        style: TextStyle(
-          fontSize: 15,
-          color: SetupColors.text(context),
-          fontFamily: monospace ? 'monospace' : null,
-        ),
+        style: _inputStyle(context),
         decoration: InputDecoration(
           labelText: label,
+          // Etiket HER ZAMAN kenarda (küçük): dar diyalogda / büyük yazıda tek satırlık etiket kesilmez, boş alan dolu
+          // değer gibi okunmaz; örnek metin ([hint]) alanın içinde görünür kalır. Parantezli niteleyiciler etikete
+          // değil [helperText]'e yazılır.
+          floatingLabelBehavior: FloatingLabelBehavior.always,
+          // Etiket çok satırlı alanda da kenar çentiğinde durur (`alignLabelWithHint` etiketi ön simgenin sağına, 36 dp içeri
+          // kaydırıp aynı formdaki tek satırlı alanlardan farklı hizaya sokuyordu).
+          alignLabelWithHint: false,
           hintText: hint,
+          // İpucu tek satır: Flutter ipucunu görünmezken (alan DOLUYKEN) de yerleşime kattığından iki satırlık ipucu 1.5 ölçekte
+          // dolu alanı bile 88 px'e şişiriyordu (değer üst satırda, altında ölü bant). Çok satırlı alan zaten çok satırlıdır.
+          hintMaxLines: multiline ? 2 : 1,
           errorText: errorText,
           helperText: helperText,
-          helperMaxLines: 3,
-          errorMaxLines: 3,
+          helperMaxLines: 6,
+          errorMaxLines: 4,
           counterText: '',
-          prefixIcon: prefixIcon == null ? null : Icon(prefixIcon, size: 20),
+          // Çok satırlı alanda ön simge ilk satırın hizasındadır: `prefixIcon` alanın DİKEY ORTASINA oturur (3 satırlı alanda
+          // simge ilk satırdan ≈ 33 px aşağıda); satır içi `prefix` ise metnin ilk satırıyla aynı hizada (üstte) durur.
+          // Etiket hep yüzen olduğundan (floatingLabelBehavior.always) `prefix` her zaman görünür.
+          prefixIcon: (prefixIcon == null || multiline) ? null : Icon(prefixIcon, size: 20),
+          prefixIconConstraints: monospace ? const BoxConstraints(minWidth: 40, minHeight: 48) : null,
+          prefix: (prefixIcon != null && multiline)
+              ? Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 10),
+                  child: Icon(prefixIcon, size: 20, color: SetupColors.muted(context)),
+                )
+              : null,
           suffixIcon: suffixIcon,
-          filled: true,
-          fillColor: SetupColors.isDark(context) ? const Color(0xFF0F172A) : Colors.white,
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          // Dolgu/kenar/odak halkası tema `inputDecorationTheme`'inden gelir (koyu + açık eşit).
         ),
       ),
     );

@@ -1,0 +1,9 @@
+# Test etiketleri.
+#
+# visual: gerçek yazı tipiyle PNG üreten görsel galeri (test/visual/**). Varsayılan `flutter test` koşusunda
+# ATLANIR (dosya kendi içinde `--update-goldens` / AHBU_VISUAL=1 yoksa atlar).
+#   PNG üret:        flutter test --tags visual --update-goldens test/visual
+#   Karşılaştır:     AHBU_VISUAL=1 flutter test --tags visual test/visual
+tags:
+  visual:
+    timeout: 3x

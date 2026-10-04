@@ -194,6 +194,11 @@ function createWorld({ clock = createClock() } = {}) {
     Object.assign(row, changes);
     return row;
   };
+  // D5: taban sifirlama (reported_layout = NULL, reported_layout_at = NULL) uretim SQL'inde varsa alanlar NULL'lanir
+  const baseReset = (sql) =>
+    sql.includes('reported_layout = NULL') && sql.includes('reported_layout_at = NULL')
+      ? { reported_layout: null, reported_layout_at: null }
+      : {};
   const removeRows = (ctx, arr, pred) => {
     const removed = arr.filter(pred);
     for (const r of removed) remove(arr, r);
@@ -448,7 +453,7 @@ function createWorld({ clock = createClock() } = {}) {
     };
     if (hasSnapshot) fields.config_snapshot = snapshot;
     if (dev) {
-      patch(ctx, dev, fields);
+      patch(ctx, dev, { ...fields, ...baseReset(ctx.sql) }); // ON CONFLICT DO UPDATE dali
     } else {
       dev = insert(ctx, state.devices, { id: uid(), device_uuid: uuid, created_at: now(), ...fields });
     }
@@ -459,6 +464,12 @@ function createWorld({ clock = createClock() } = {}) {
     if (!dev) return [];
     await ctx.lock(`dev:${dev.id}`);
     return [copy(dev)];
+  });
+  // D13: acil sifirlama evin TUM cihaz satirlarini id sirasiyla kilitler (esitlemeyle ayni sira)
+  db.on('SELECT id FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', async (ctx) => {
+    const devs = state.devices.filter((d) => d.home_id === ctx.params[0]).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (const d of devs) await ctx.lock(`dev:${d.id}`);
+    return devs.map((d) => ({ id: d.id }));
   });
   db.on('FROM devices WHERE home_id = $1 ORDER BY created_at ASC FOR UPDATE', async (ctx) => {
     const devs = state.devices.filter((d) => d.home_id === ctx.params[0]).sort((a, b) => a.created_at - b.created_at);
@@ -472,7 +483,7 @@ function createWorld({ clock = createClock() } = {}) {
     patch(ctx, dev, {
       home_id: homeId, is_claimed: true, claimed_by: owner, claimed_at: now(), is_online: false, is_commissioned: false,
       commissioning_status: 'PENDING_INSTALLATION', device_status: 'ACTIVE', local_key_enc: enc, setup_pin: null,
-      child_lock_enabled: false,
+      child_lock_enabled: false, ...baseReset(ctx.sql),
     });
     return { rows: [], rowCount: 1 };
   });
@@ -483,7 +494,7 @@ function createWorld({ clock = createClock() } = {}) {
     patch(ctx, dev, {
       home_id: null, is_claimed: false, claimed_by: null, claimed_at: null, is_online: false, is_commissioned: false,
       commissioning_status: 'PENDING_INSTALLATION', device_status: 'ACTIVE', local_key_enc: enc, setup_pin: null,
-      child_lock_enabled: false,
+      child_lock_enabled: false, ...baseReset(ctx.sql),
     });
     return { rows: [], rowCount: 1 };
   });

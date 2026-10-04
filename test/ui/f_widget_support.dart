@@ -2,6 +2,7 @@ import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_wizard_page.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/steps/step_common.dart';
+import 'package:ev_otomasyon/ui/widgets/orb/glass_icon_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -50,6 +51,9 @@ bool buttonEnabled(WidgetTester tester, String key) {
   if (outlined.isNotEmpty) return outlined.first.onPressed != null;
   final icon = tester.widgetList(root).whereType<IconButton>();
   if (icon.isNotEmpty) return icon.first.onPressed != null;
+  // Cam disk düğmesi (kapat X'leri, çöp kutusu ...): `onTap == null` ⇒ pasif.
+  final glass = tester.widgetList(root).whereType<GlassIconButton>();
+  if (glass.isNotEmpty) return glass.first.onTap != null;
   final text = tester.widgetList(root).whereType<TextButton>();
   if (text.isNotEmpty) return text.first.onPressed != null;
   final inner = tester.widgetList<ElevatedButton>(find.descendant(of: root, matching: find.byType(ElevatedButton)));

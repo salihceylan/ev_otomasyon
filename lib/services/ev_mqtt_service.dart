@@ -171,6 +171,18 @@ class MqttClientTransport implements MqttTransport {
 
     try {
       final status = await client.connect();
+      if (_closed) {
+        // close() bağlanma SÜRERKEN çağrıldı (servis süre sınırında denemeyi bıraktı ya da durduruldu): geç
+        // tamamlanan bağlantı sahipsizdir; gelen-ileti akışına bağlanmaz (kapanmış akışlara abonelik sızmaz) ve
+        // bırakılır. Savunma amaçlıdır: mqtt_client 10.11.11'de close()'taki disconnect() işleyiciyi
+        // `disconnected` yapar, geç soketten CONNECT GÖNDERİLMEZ ve connect() genellikle NoConnectionException
+        // ile biter (aşağıdaki catch). O yolda geç açılan soket kütüphanenin içinde kalır (dışarıdan
+        // kapatılamaz; CONNECT'siz boşta durur, ömrü broker/işletim sistemi zaman aşımına bağlıdır).
+        try {
+          client.disconnect();
+        } catch (_) {}
+        return const MqttConnectOutcome.failed(MqttFailure.other);
+      }
       if (status?.state == MqttConnectionState.connected) {
         _updatesSub = client.updates?.listen(_onUpdates);
         return const MqttConnectOutcome.ok();
@@ -271,8 +283,19 @@ class EvMqttService {
   final bool _useTls;
 
   static const int _maxPayloadChars = 64 * 1024;
+
+  /// CONNACK (broker onayı) bekleme süresi (`mqtt_client` `connectTimeoutPeriod`). Soket/TLS kurulumunu
+  /// KAPSAMAZ: onu [_connectBounded] sınırlar (`_connectTimeout + _connectGrace` = 15 sn).
   static const Duration _connectTimeout = Duration(seconds: 10);
+
+  /// TCP/TLS kurulumu için CONNACK süresinin ÜSTÜNE tanınan pay (yavaş mobil ağda erken pes etmemek için).
+  static const Duration _connectGrace = Duration(seconds: 5);
+
   static const Duration _maxBackoff = Duration(seconds: 60);
+
+  /// Bu kadar (ya da daha uzun) yaşayan bağlantı "kararlı" sayılır: kopmasında geri çekilme sayacı sıfırlanır
+  /// (PF-28). Daha kısa ömürlü bağlantılar (bağlanıp hemen düşen) üstel geri çekilmeyi sürdürür.
+  static const Duration _stableConnection = Duration(seconds: 30);
 
   final _linkController = StreamController<MqttLinkState>.broadcast();
   final _stateController = StreamController<DeviceStateMessage>.broadcast();
@@ -418,6 +441,37 @@ class EvMqttService {
     });
   }
 
+  /// [transport] bağlanmasını en çok `_connectTimeout + _connectGrace` (15 sn) bekler (PF-27).
+  ///
+  /// Neden: `mqtt_client`'ın `connectTimeoutPeriod`'u yalnızca CONNACK beklemesidir; soket/TLS kurulumu
+  /// (`SecureSocket.connect`) süre sınırsızdır ve sessizce paket düşüren ağda işletim sistemi zaman aşımına
+  /// kadar döngüyü bloklardı (Windows VM'de yönlendirilemeyen adreste ölçülen: 21 sn, `connectTimeoutPeriod`
+  /// 10 sn olduğu hâlde; Android için tahmin 75-130 sn, ÖLÇÜLMEDİ). İstemcinin `socketTimeout`'u ATANMAZ
+  /// (atanınca CONNACK beklemesi 10 ms olur) ve `Future.timeout` soketi iptal etmez: sınır burada Clock ile
+  /// uygulanır. Süre dolunca [MqttFailure.timeout]; geç dönen sonuç/hata yutulur. Başarısızlıkta çağıran
+  /// aktarımı kapatır; kapatılmış aktarımın geç tamamlanan bağlantısı için bkz. `MqttClientTransport.connect`.
+  Future<MqttConnectOutcome> _connectBounded(
+    MqttTransport transport,
+    MqttCredentials credentials,
+    String clientId,
+  ) async {
+    try {
+      return await _clock.bound<MqttConnectOutcome>(
+        transport.connect(
+          credentials: credentials,
+          clientId: clientId,
+          secure: _useTls,
+          timeout: _connectTimeout,
+        ),
+        _connectTimeout + _connectGrace,
+        () => const MqttConnectOutcome.failed(MqttFailure.timeout),
+      );
+    } catch (_) {
+      // Aktarım istisna fırlatırsa döngü sessizce ölmesin (bağlantı sonsuza dek "bağlanıyor" kalırdı).
+      return const MqttConnectOutcome.failed(MqttFailure.other);
+    }
+  }
+
   /// `true`: bu hata türüyle yeniden denemek anlamsız (yetki kalıcı olarak yok).
   bool _isPermanent(Object error) {
     if (error is ApiException) {
@@ -466,12 +520,7 @@ class EvMqttService {
           'app_${_installPrefix(installId)}_$sessionSuffix';
       final transport = _transportFactory();
       _transport = transport;
-      final outcome = await transport.connect(
-        credentials: credentials,
-        clientId: clientId,
-        secure: _useTls,
-        timeout: _connectTimeout,
-      );
+      final outcome = await _connectBounded(transport, credentials, clientId);
       if (!_isActive(generation)) {
         transport.close();
         if (identical(_transport, transport)) _transport = null;
@@ -486,8 +535,9 @@ class EvMqttService {
         continue;
       }
 
-      // Bağlandı.
-      attempt = 0;
+      // Bağlandı. Geri çekilme sayacı BURADA sıfırlanmaz (PF-28): bağlanıp hemen düşen bağlantı ~0,5 Hz
+      // döngüye (ve her turda kimlik isteğine) yol açardı. Sayaç, kararlı bağlantının kopmasında sıfırlanır.
+      final connectedAt = _clock.now();
       _everConnected = true;
       _lastFailure = MqttFailure.none;
       _topicId = topic;
@@ -516,8 +566,15 @@ class EvMqttService {
       _closeTransport();
       if (!_isActive(generation)) return;
       _setLink(MqttLinkState.reconnecting);
-      // Planlı yenilemede hemen, beklenmeyen kopmada kısa bir beklemeyle yeniden bağlan.
-      if (!renewal) await _sleep(_backoff(0), generation);
+      if (renewal) {
+        // Planlı yenileme: bekleme yok, hemen taze kimlikle yeniden bağlan; geri çekilme sıfırlanır.
+        attempt = 0;
+      } else {
+        // Beklenmeyen kopma. En az [_stableConnection] yaşayan bağlantı sorunsuz sayılır: sayaç sıfırlanır,
+        // bekleme baştan (~2 sn) başlar. Ömrü kısa bağlantı üstel geri çekilmeyi (2,4,8,...60 sn) sürdürür.
+        if (_clock.now().difference(connectedAt) >= _stableConnection) attempt = 0;
+        await _sleep(_backoff(attempt++), generation);
+      }
     }
   }
 

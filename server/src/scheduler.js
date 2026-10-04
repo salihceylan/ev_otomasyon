@@ -26,6 +26,8 @@
 //   - Calistirma aninda: kuralin sahibi (created_by) hala yetkili mi (owner/resident/
 //     staff/super), kural cihazi hala o evde mi, cihaz cevrimici mi -> degilse atlanir ve
 //     `scheduled_rule_runs` tablosuna yazilir.
+//   - Ayrica kanalin GUNCEL uc nokta tipi denetlenir (WP-L D4): role kurali panjur kanalinda,
+//     panjur kurali panjur olmayan ciftte calismaz ('skipped_invalid', yuva tuketilir).
 //   - Kurallar `Promise.allSettled` ile sinirli es zamanlilikta ve kural basina zaman
 //     asimiyla calistirilir; bir kural digerini bloklamaz.
 //
@@ -294,6 +296,8 @@ const SQL = Object.freeze({
   devices:
     'SELECT id, home_id, is_online FROM devices ' +
     'WHERE home_id = $1 AND ($2::uuid IS NULL OR id = $2::uuid)',
+  // WP-L D4: atesleme aninda kuralin kanal(lar)inin guncel uc nokta tipi (cozulen cihaz).
+  target: 'SELECT channel_index, type FROM endpoints WHERE device_id = $1::uuid AND channel_index = ANY($2::int[])',
   logRun:
     'INSERT INTO scheduled_rule_runs (rule_id, home_id, device_id, slot_at, status, detail, command_id) ' +
     'VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7) ' +
@@ -558,6 +562,10 @@ class Scheduler {
       };
     }
 
+    // Hedef hala kuralla uyumlu mu? (pano yerlesimi degismis olabilir; kalici durum)
+    const mismatch = await this._checkTarget(device, command);
+    if (mismatch) return { status: 'skipped_invalid', detail: mismatch };
+
     if (!device.is_online) {
       return { status: 'skipped_offline', detail: 'cihaz cevrimdisi', release: true };
     }
@@ -574,6 +582,27 @@ class Scheduler {
       `[SCHEDULER] Kural #${rule.id} gonderildi -> ev/${rule.mqtt_username}/cmd | ${rule.channel_type} ${rule.channel} ${rule.action}`
     );
     return { status: 'sent', commandId: command.id };
+  }
+
+  /**
+   * WP-L D4 (savunma derinligi): esitleme kurali kapatmayi kacirsa bile role kurali panjur
+   * motorunu surmesin. Tek sorgu. Uc nokta satiri yoksa (cihaz henuz yapilandirilmamis)
+   * eski davranis surer. Panjur kuralinda cift eksik ya da panjur degilse yayin yapilmaz.
+   * @returns {Promise<string|null>} uyumsuzluk aciklamasi ya da null
+   */
+  async _checkTarget(device, command) {
+    const isShutter = command.shutter !== undefined;
+    const n = isShutter ? command.shutter : command.relay;
+    const channels = isShutter ? [n * 2 - 1, n * 2] : [n];
+    const res = await this.db.query(SQL.target, [device.id, channels]);
+    const rows = (res && res.rows) || [];
+    if (rows.length === 0) return null;
+    const typeOf = new Map(rows.map((r) => [Number(r.channel_index), r.type]));
+    if (!isShutter) {
+      return typeOf.get(n) === 'shutter' ? 'kanal artik panjur; role kurali calistirilmadi' : null;
+    }
+    const ok = channels.every((ch) => typeOf.get(ch) === 'shutter');
+    return ok ? null : 'kanal cifti artik panjur degil';
   }
 
   async _logRun(rule, slot, outcome) {

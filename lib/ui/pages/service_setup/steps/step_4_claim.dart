@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../theme/app_theme.dart';
 import '../logic/claim_logic.dart';
 import '../service_setup_controller.dart';
 import '../setup_fields.dart';
@@ -19,6 +20,9 @@ class Step4Claim extends StatefulWidget {
 }
 
 class _Step4ClaimState extends State<Step4Claim> {
+  /// Kurulum yetkisi bitiş tarihi biçimi (her kurulumda yeniden oluşturulmaz).
+  static final DateFormat _accessFormat = DateFormat('dd.MM.yyyy HH:mm');
+
   final TextEditingController _homeName = TextEditingController();
 
   @override
@@ -47,6 +51,7 @@ class _Step4ClaimState extends State<Step4Claim> {
         actions: [
           TextButton(
             key: const Key('btn_claim_cancel'),
+            style: AppTheme.quietTextButtonStyle(ctx),
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Vazgeç'),
           ),
@@ -141,7 +146,7 @@ class _Step4ClaimState extends State<Step4Claim> {
   }
 
   Widget _result(BuildContext context, ClaimSummary s) {
-    final fmt = DateFormat('dd.MM.yyyy HH:mm');
+    final fmt = _accessFormat;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -151,12 +156,7 @@ class _Step4ClaimState extends State<Step4Claim> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SetupInfoRow(
-                icon: Icons.check_circle_rounded,
-                color: SetupColors.ok,
-                bold: true,
-                text: 'Cihaz müşterinin dairesine bağlandı.',
-              ),
+              const SetupResultHeader(text: 'Cihaz müşterinin dairesine bağlandı.'),
               SetupInfoRow(icon: Icons.home_rounded, text: 'Daire: ${s.homeName.isEmpty ? '-' : s.homeName}'),
               SetupInfoRow(icon: Icons.developer_board_rounded, text: 'Cihaz: ${s.deviceUuid}'),
               if (s.customerAccountCreated)

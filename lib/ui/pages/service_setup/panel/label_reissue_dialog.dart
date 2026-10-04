@@ -7,6 +7,9 @@ import '../../../../services/automation_state.dart';
 import '../secret_clipboard.dart';
 import '../secret_value_row.dart';
 import '../setup_style.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
 
 /// `POST /admin/inventory/:uid/reissue-label` yanıtı: yeni kurulum PIN'i + yerel anahtar (+ PIN'li QR
@@ -54,6 +57,7 @@ class LabelReissueDialog extends StatefulWidget {
 
 class _LabelReissueDialogState extends State<LabelReissueDialog> {
   String? _copied;
+  int _copyCount = 0;
 
   @override
   void dispose() {
@@ -65,7 +69,12 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
   Future<void> _copy(String label, String value) async {
     final clock = context.read<AutomationState>().clock;
     await SecretClipboard.copy(value, clock: clock);
-    if (mounted) setState(() => _copied = label);
+    if (mounted) {
+      setState(() {
+        _copied = label;
+        _copyCount++;
+      });
+    }
   }
 
   @override
@@ -76,8 +85,8 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
     return AlertDialog(
       title: const Row(
         children: [
-          Icon(Icons.qr_code_2_rounded, color: SetupColors.info),
-          SizedBox(width: 8),
+          OrbIconBadge(icon: Icons.qr_code_2_rounded, family: AppFamilies.cyan),
+          SizedBox(width: 12),
           Expanded(child: Text('Yeni Etiket Bilgileri')),
         ],
       ),
@@ -88,7 +97,7 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SetupCard(
+              const ServiceCard(
                 key: Key('reissue_warning'),
                 accent: SetupColors.warn,
                 margin: EdgeInsets.zero,
@@ -101,12 +110,23 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
                 ),
               ),
               const SizedBox(height: 10),
-              Text(widget.deviceUuid, style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w800)),
+              // Kimlik tek satır: tireden bölünüp iki satıra yayılmaz, sığmazsa küçülür.
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(
+                  widget.deviceUuid,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: SetupText.mono(fontSize: AppText.body, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                ),
+              ),
               if (formattedPin != null)
                 SecretValueRow(
                   label: 'Kurulum PIN',
                   shown: formattedPin,
                   copyKey: const Key('btn_copy_reissue_pin'),
+                  showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
                   onCopy: () => _copy('Kurulum PIN', pin!),
                 ),
               if (r.localKey != null)
@@ -114,6 +134,7 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
                   label: 'Yerel anahtar',
                   shown: r.localKey!,
                   copyKey: const Key('btn_copy_reissue_key'),
+                  showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
                   onCopy: () => _copy('Yerel anahtar', r.localKey!),
                 ),
               if (r.apPass != null)
@@ -121,6 +142,7 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
                   label: 'Kurulum ağı parolası',
                   shown: r.apPass!,
                   copyKey: const Key('btn_copy_reissue_ap'),
+                  showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
                   onCopy: () => _copy('Kurulum ağı parolası', r.apPass!),
                 ),
               if (r.qrClaimUrl != null) ...[
@@ -128,7 +150,7 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
                 Center(
                   child: Container(
                     padding: const EdgeInsets.all(12),
-                    color: Colors.white,
+                    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(AppRadius.r12)),
                     child: QrImageView(data: r.qrClaimUrl!, size: 180, backgroundColor: Colors.white),
                   ),
                 ),
@@ -141,11 +163,19 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
               ],
               if (_copied != null)
                 Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    '$_copied panoya kopyalandı (45 sn sonra silinir).',
-                    key: const Key('reissue_copied'),
-                    style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      SecretExpiryRing(key: ValueKey<int>(_copyCount)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '$_copied panoya kopyalandı (45 sn sonra silinir).',
+                          key: const Key('reissue_copied'),
+                          style: TextStyle(fontSize: AppText.caption, color: SetupColors.muted(context)),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
             ],

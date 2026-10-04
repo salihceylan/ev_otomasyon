@@ -6,6 +6,10 @@ import 'package:provider/provider.dart';
 import '../../../services/automation_state.dart';
 import '../../pages/scheduled_rules_page.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
+import '../orb/orb.dart';
+import '../surface_card.dart';
 
 /// "Zamanlı Otomasyon Kuralları" özet kartı. Kural sayısı **ayarlar açılırken yüklenir**:
 /// yükleme sürerken "yükleniyor…", hata olursa "yüklenemedi", yalnızca başarılı boş yanıtta
@@ -49,8 +53,7 @@ class _ScheduledRulesCardState extends State<ScheduledRulesCard> {
       ),
     );
 
-    final cyan = Colors.cyanAccent;
-    final readable = AppTheme.readableAccent(context, cyan);
+    final readable = AppTheme.readableFamily(context, AppFeature.rules.accentFamily);
     final loading = !_loaded || vm.loading && vm.total == 0;
     final failed = !loading && vm.error != null && vm.total == 0;
 
@@ -73,25 +76,20 @@ class _ScheduledRulesCardState extends State<ScheduledRulesCard> {
       onTap: () => _open(context),
       child: InkWell(
         key: const Key('card_rules'),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(AppRadius.card),
         onTap: () => _open(context),
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 72),
-          padding: const EdgeInsets.all(16),
-          decoration: AppTheme.cardDecoration(
-            context,
-            accent: vm.active > 0 ? cyan : null,
-            radius: 16,
-          ),
+        child: SurfaceCard(
+          accent: vm.active > 0 ? AppFeature.rules.accentFamily.base : null,
+          active: vm.active > 0,
           child: Row(
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: cyan.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(Icons.schedule, color: readable, size: 22),
+              // Bekleme yayını orb'un kendisi çizer (tema duyarlı yay rengi; diğer ayar kartlarıyla aynı hiza).
+              OrbIconBadge(
+                icon: Icons.schedule_rounded,
+                family: AppFeature.rules.accentFamily,
+                active: vm.active > 0,
+                pending: loading,
+                glow: true,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -109,14 +107,6 @@ class _ScheduledRulesCardState extends State<ScheduledRulesCard> {
                     const SizedBox(height: 2),
                     Row(
                       children: [
-                        if (loading) ...[
-                          const SizedBox(
-                            width: 12,
-                            height: 12,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          const SizedBox(width: 6),
-                        ],
                         Flexible(
                           child: Text(
                             status,
@@ -133,16 +123,15 @@ class _ScheduledRulesCardState extends State<ScheduledRulesCard> {
                       ],
                     ),
                     const SizedBox(height: 4),
+                    // Sayfa eager-build (serbest yükseklik): büyük yazıda açıklama kelime ortasından KESİLMEZ.
                     Text(
                       'Işıklar ve panjurlar için otomatik açma/kapama saatleri belirleyin',
-                      style: TextStyle(fontSize: 11, color: AppTheme.getTextMuted(context)),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context)),
                     ),
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, color: AppTheme.getTextMuted(context)),
+              Icon(Icons.chevron_right_rounded, color: AppTheme.getTextMuted(context)),
             ],
           ),
         ),

@@ -6,8 +6,16 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
+import '../motion/skeleton.dart';
 import '../theme/app_theme.dart';
+import '../theme/feature_accent.dart';
+import '../theme/tokens.dart';
+import '../widgets/neon_app_bar.dart';
+import '../widgets/orb/glass_icon_button.dart';
+import '../widgets/orb/orb_icon_badge.dart';
+import '../widgets/settings/accent_button.dart';
 import 'service_setup/panel/assign_admin_dialog.dart';
+import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/subscriber_models.dart';
 import 'service_setup/session_banner.dart';
 import 'service_setup/setup_style.dart';
@@ -20,6 +28,10 @@ import 'service_setup/setup_style.dart';
 ///
 /// Yükleme hatası **görünür** kalır (bayat liste yenileme hatasıyla birlikte uyarılır); sonsuz
 /// yükleme dönmez (zaman aşımı + hata + yeniden dene).
+///
+/// Sayfa TEK kaydırma alanıdır: oturum bandı, sayaçlar ve arama kutusu listenin ilk öğeleridir (sabit bir üst bant büyük
+/// yazıda ekranın yarısını yerdi ve opak zemin küresel devre kartı arka planını örterdi); arama kutusu her durumda
+/// (yükleniyor/hata/boş/liste) AYNI ağaç konumunda kalır, böylece yazarken odak kaybolmaz.
 class ServiceSubscribersPage extends StatefulWidget {
   const ServiceSubscribersPage({super.key, this.pageSize = 30});
 
@@ -143,7 +155,8 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         key: const Key('snack_assign_done'),
-        backgroundColor: outcome.hasWarnings ? AppTheme.accentAmber : AppTheme.accentGreen,
+        // Beyaz yazılı zemin AA kontrastlı tonda (ham amber/yeşil üstünde beyaz ≈ 2:1'di).
+        backgroundColor: AppTheme.filledAccent(outcome.hasWarnings ? AppTheme.accentAmber : AppTheme.accentGreen),
         content: Text(outcome.message),
       ),
     );
@@ -153,191 +166,183 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
 
   @override
   Widget build(BuildContext context) {
-    final totalCount = _total ?? _items.length;
-    final assigned = _items.where((s) => s.hasOwner).length;
-    final pending = _items.length - assigned;
-    // Liste sayfalıdır: "Toplam" sunucu toplamıdır, ama "Home Admin Var" / "Atama Bekleyen" yalnızca yüklenen
-    // satırlardan sayılabilir. Daha yüklenmemiş kayıt varsa bu değerler "en az" anlamında "N+" yazılır
-    // (tutarsız / yanıltıcı kesin sayı gösterilmez).
-    final partial = _hasMore;
-    String atLeast(int n) => partial ? '$n+' : '$n';
-
+    // Scaffold arka planı temadan saydam gelir: küresel `CircuitBackground` (AppShell) görünür; opak zemin ve opak bant
+    // yok (PF-15 c).
     return Scaffold(
-      backgroundColor: AppTheme.getScaffoldBg(context),
-      appBar: AppBar(
-        title: Text(
-          'Abonelerim & Cihaz Atama',
-          style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
-        ),
-        backgroundColor: AppTheme.getSurfaceColor(context),
-        elevation: 0,
-        iconTheme: IconThemeData(color: AppTheme.getTextPrimary(context)),
+      appBar: NeonAppBar(
+        title: 'Abonelerim & Cihaz Atama',
+        feature: AppFeature.subscribers,
+        icon: Icons.people_alt_rounded,
         actions: [
-          IconButton(
-            key: const Key('btn_refresh'),
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Yenile',
-            onPressed: _loading ? null : () => _load(reset: true),
-          ),
+          ServiceRefreshAction(key: const Key('btn_refresh'), onPressed: _loading ? null : () => _load(reset: true)),
         ],
       ),
-      body: Column(
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-            color: AppTheme.getSurfaceColor(context),
-            child: Column(
-              children: [
-                const Align(alignment: Alignment.centerLeft, child: ServiceSessionBanner()),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _statChip(context, 'Toplam Abone', '$totalCount', Icons.holiday_village_outlined, AppTheme.primaryBlue,
-                          valueKey: 'stat_total'),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _statChip(context, 'Home Admin Var', atLeast(assigned), Icons.verified_user_outlined, AppTheme.accentGreen,
-                          valueKey: 'stat_assigned'),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _statChip(context, 'Atama Bekleyen', atLeast(pending), Icons.hourglass_top_outlined, AppTheme.accentAmber,
-                          valueKey: 'stat_pending'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  key: const Key('field_search'),
-                  controller: _search,
-                  onChanged: _onSearchChanged,
-                  style: TextStyle(fontSize: 14, color: AppTheme.getTextPrimary(context)),
-                  decoration: InputDecoration(
-                    hintText: 'Daire adı, adres, pano UUID veya müşteri ara...',
-                    hintStyle: TextStyle(fontSize: 13, color: AppTheme.getTextMuted(context)),
-                    prefixIcon: Icon(Icons.search, size: 20, color: AppTheme.getTextMuted(context)),
-                    suffixIcon: _search.text.isNotEmpty
-                        ? IconButton(
-                            key: const Key('btn_search_clear'),
-                            tooltip: 'Aramayı temizle',
-                            icon: const Icon(Icons.clear, size: 18),
-                            onPressed: () {
-                              _search.clear();
-                              _onSearchChanged('');
-                            },
-                          )
-                        : null,
-                    filled: true,
-                    fillColor: AppTheme.getCardColor(context),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide(color: AppTheme.getCardBorder(context)),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Expanded(child: RefreshIndicator(onRefresh: () => _load(reset: true), child: _body(context))),
-        ],
+      body: SafeArea(
+        top: false,
+        child: RefreshIndicator(
+          onRefresh: () => _load(reset: true),
+          color: AppTheme.accentTone(context, AppFeature.subscribers.accentFamily),
+          child: _list(context),
+        ),
       ),
     );
   }
 
-  Widget _body(BuildContext context) {
-    if (_loading && _items.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: const [
-          SizedBox(height: 120),
-          Center(child: CircularProgressIndicator(key: Key('subscribers_loading'))),
-        ],
+  /// Yükleniyor / hata / boş durum gövdesi; `null` ise kartlar gösterilir.
+  Widget? _stateBody(BuildContext context) {
+    if (_items.isEmpty && _error == null && (_loading || !_loaded)) {
+      return Semantics(
+        label: 'Aboneler yükleniyor',
+        liveRegion: true,
+        child: const ServiceListSkeleton(key: Key('subscribers_loading'), count: 4, lines: 3),
       );
     }
     if (_error != null && _items.isEmpty) {
-      return _centered(
-        context,
-        key: const Key('subscribers_error'),
-        icon: Icons.error_outline,
-        color: AppTheme.accentRed,
-        title: 'Aboneler Yüklenemedi',
-        text: _error!,
-        action: ElevatedButton.icon(
-          key: const Key('btn_retry'),
-          onPressed: () => _load(reset: true),
-          icon: const Icon(Icons.refresh, size: 18),
-          label: const Text('Tekrar Dene'),
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(8, 32, 8, 0),
+        child: ServiceEmptyState(
+          key: const Key('subscribers_error'),
+          icon: Icons.error_outline_rounded,
+          family: AppFamilies.rose,
+          size: OrbSize.xl,
+          glow: true,
+          title: 'Aboneler Yüklenemedi',
+          message: _error!,
+          action: ElevatedButton.icon(
+            key: const Key('btn_retry'),
+            onPressed: () => _load(reset: true),
+            icon: Icon(Icons.refresh_rounded, size: accentIconSize(context, base: 18)),
+            label: const Text('Tekrar Dene'),
+          ),
         ),
       );
     }
     if (_loaded && _items.isEmpty) {
-      return _centered(
-        context,
-        key: const Key('subscribers_empty'),
-        icon: _query.isNotEmpty ? Icons.search_off : Icons.group_off_outlined,
-        color: AppTheme.getTextMuted(context),
-        title: _query.isNotEmpty ? 'Aramanıza uygun daire veya pano bulunamadı' : 'Henüz kayıtlı bir daire veya pano bulunmuyor',
-        text: _query.isNotEmpty
-            ? 'Lütfen arama teriminizi kontrol edin.'
-            : 'Devreye aldığınız cihazlar ve bağlı daireler burada listelenir.',
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(8, 32, 8, 0),
+        child: ServiceEmptyState(
+          key: const Key('subscribers_empty'),
+          icon: _query.isNotEmpty ? Icons.search_off_rounded : Icons.holiday_village_rounded,
+          family: AppFeature.subscribers.accentFamily,
+          size: OrbSize.xl,
+          glow: true,
+          title: _query.isNotEmpty ? 'Aramanıza uygun daire veya pano bulunamadı' : 'Henüz kayıtlı bir daire veya pano bulunmuyor',
+          message: _query.isNotEmpty
+              ? 'Lütfen arama teriminizi kontrol edin.'
+              : 'Devreye aldığınız cihazlar ve bağlı daireler burada listelenir.',
+        ),
       );
     }
+    return null;
+  }
+
+  Widget _list(BuildContext context) {
+    final stateBody = _stateBody(context);
+    final cards = stateBody == null;
     // Yenileme/ek sayfa hatası varsa listenin üstünde uyarı gösterilir (bayat liste sessiz kalmaz).
-    final offset = _error != null ? 1 : 0;
+    final header = <Widget>[
+      const Align(alignment: AlignmentDirectional.centerStart, child: ServiceSessionBanner()),
+      Padding(padding: const EdgeInsets.only(top: 12), child: _stats(context)),
+      Padding(padding: const EdgeInsets.only(top: 12, bottom: 8), child: _searchField(context)),
+      if (cards && _error != null)
+        ServiceStaleBanner(
+          key: const Key('subscribers_stale'),
+          message: 'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
+          onRetry: () => _load(reset: true),
+        ),
+    ];
     return ListView.builder(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      itemCount: offset + _items.length + 1,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      itemCount: header.length + (cards ? _items.length + 1 : 1),
       itemBuilder: (context, index) {
-        if (index < offset) return _staleBanner(context);
-        final i = index - offset;
+        if (index < header.length) return header[index];
+        final i = index - header.length;
+        if (stateBody != null) return stateBody;
         if (i < _items.length) return _card(context, _items[i]);
         return _footer(context);
       },
     );
   }
 
-  Widget _staleBanner(BuildContext context) {
-    return Container(
-      key: const Key('subscribers_stale'),
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.accentAmber.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.5)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: AppTheme.accentAmber),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Liste güncellenemedi (eski veriler gösteriliyor): $_error',
-              style: TextStyle(fontSize: 12.5, color: AppTheme.getTextPrimary(context)),
-            ),
-          ),
-          TextButton(
-            key: const Key('btn_retry'),
-            onPressed: () => _load(reset: true),
-            child: const Text('Tekrar dene'),
-          ),
-        ],
+  /// Sayaç şeridi: "Toplam" sunucu toplamıdır; "Home Admin Var" / "Atama Bekleyen" yalnızca yüklenen satırlardan sayılabilir.
+  /// Daha yüklenmemiş kayıt varsa bu değerler "en az" anlamında "N+" yazılır (tutarsız kesin sayı gösterilmez). Yüklenirken
+  /// iskelet, yüklenemediyse "—" (uydurma sıfır YOK).
+  Widget _stats(BuildContext context) {
+    final noData = _items.isEmpty;
+    final loading = noData && _error == null && (_loading || !_loaded);
+    final unknown = noData && _error != null;
+    final hide = loading || unknown;
+    final assigned = _items.where((s) => s.hasOwner).length;
+    final pending = _items.length - assigned;
+    final partial = _hasMore;
+    String Function(int) fmt(bool plus) => (int n) => plus ? '$n+' : '$n';
+    return ServiceStatStrip(
+      tiles: [
+        ServiceStatTile(
+          valueKey: const Key('stat_total'),
+          label: 'Toplam Abone',
+          color: AppTheme.primaryBlue,
+          icon: Icons.holiday_village_rounded,
+          value: hide ? null : (_total ?? _items.length),
+          loading: loading,
+        ),
+        ServiceStatTile(
+          valueKey: const Key('stat_assigned'),
+          label: 'Home Admin Var',
+          color: AppTheme.accentGreen,
+          icon: Icons.verified_user_rounded,
+          value: hide ? null : assigned,
+          format: fmt(partial),
+          loading: loading,
+        ),
+        ServiceStatTile(
+          valueKey: const Key('stat_pending'),
+          label: 'Atama Bekleyen',
+          color: AppTheme.accentAmber,
+          icon: Icons.hourglass_top_rounded,
+          value: hide ? null : pending,
+          format: fmt(partial),
+          loading: loading,
+        ),
+      ],
+    );
+  }
+
+  Widget _searchField(BuildContext context) {
+    return TextField(
+      key: const Key('field_search'),
+      controller: _search,
+      onChanged: _onSearchChanged,
+      style: TextStyle(fontSize: AppText.body, color: AppTheme.getTextPrimary(context)),
+      decoration: InputDecoration(
+        // Kısa etiket + kısa örnek ipucu (eskiden "Daire adı, adres, pano UUID veya müşter…" diye kesiliyordu); renkleri tema verir.
+        labelText: 'Abone ara',
+        floatingLabelBehavior: FloatingLabelBehavior.always,
+        hintText: 'Daire, adres, UUID veya müşteri',
+        // Tek satır: Flutter ipucunu alan DOLUYKEN de yerleşime kattığından iki satırlık ipucu büyük yazıda alanı gereksiz şişirir.
+        hintMaxLines: 1,
+        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+        suffixIcon: _search.text.isNotEmpty
+            ? IconButton(
+                key: const Key('btn_search_clear'),
+                tooltip: 'Aramayı temizle',
+                icon: const Icon(Icons.clear_rounded, size: 18),
+                onPressed: () {
+                  _search.clear();
+                  _onSearchChanged('');
+                },
+              )
+            : null,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       ),
     );
   }
 
   Widget _footer(BuildContext context) {
     if (_loadingMore) {
-      return const Padding(
-        padding: EdgeInsets.all(16),
-        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
-      );
+      return const Padding(padding: EdgeInsets.only(top: 4, bottom: 16), child: SkeletonCard(lines: 2));
     }
     if (_hasMore && _error == null) {
       return Padding(
@@ -345,86 +350,14 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
         child: OutlinedButton.icon(
           key: const Key('btn_load_more'),
           onPressed: () => _load(reset: false),
-          icon: const Icon(Icons.expand_more_rounded),
+          icon: Icon(Icons.expand_more_rounded, size: accentIconSize(context, base: 20)),
           label: const Text('Daha fazla yükle'),
+          // Çerçeve + metin + simge AYNI aileden ve AA (tema varsayılan çerçevesi açıkta ≈ 2.4:1'di; kart düğmeleriyle aynı dil).
+          style: accentOutlinedButtonStyle(context, AppFeature.subscribers.accentFamily),
         ),
       );
     }
-    return const SizedBox(height: 40);
-  }
-
-  Widget _centered(
-    BuildContext context, {
-    required Key key,
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String text,
-    Widget? action,
-  }) {
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      children: [
-        const SizedBox(height: 60),
-        Padding(
-          key: key,
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              Icon(icon, size: 52, color: color),
-              const SizedBox(height: 12),
-              Text(
-                title,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
-              ),
-              const SizedBox(height: 6),
-              Text(text, textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppTheme.getTextMuted(context))),
-              if (action != null) ...[const SizedBox(height: 16), action],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _statChip(BuildContext context, String title, String value, IconData icon, Color color, {required String valueKey}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.getCardBorder(context)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 14, color: color),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  value,
-                  key: Key(valueKey),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: color),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: AppTheme.getTextMuted(context)),
-          ),
-        ],
-      ),
-    );
+    return const SizedBox(height: 24);
   }
 
   Widget _card(BuildContext context, Subscriber s) {
@@ -432,32 +365,117 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
     final hasOwner = s.hasOwner;
     final muted = AppTheme.getTextMuted(context);
     final primary = AppTheme.getTextPrimary(context);
-    return Container(
+    final large = SetupText.isLargeText(context);
+    final pill = _commissionBadge(s.isCommissioned);
+    return ServiceCard(
       key: Key('card_subscriber_${s.homeId}'),
+      accent: hasOwner ? null : AppTheme.accentAmber,
       margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: hasOwner ? AppTheme.getCardBorder(context) : AppTheme.accentAmber.withValues(alpha: 0.4),
-          width: hasOwner ? 1 : 1.2,
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const OrbIconBadge(icon: Icons.home_rounded, family: AppFamilies.sky),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${s.homeName} (#${s.shortId})',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: AppText.cardTitle, fontWeight: FontWeight.w800, color: primary),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      s.address.isEmpty ? 'Adres belirtilmemiş' : s.address,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: AppText.caption, color: muted),
+                    ),
+                  ],
+                ),
+              ),
+              // Büyük yazıda durum hapı adı sıkıştırmasın: başlığın altına iner.
+              if (!large) ...[const SizedBox(width: 8), pill],
+            ],
+          ),
+          if (large) Padding(padding: const EdgeInsets.only(top: 8), child: Wrap(children: [pill])),
+          const SizedBox(height: 12),
+          Divider(height: 1, color: AppTheme.getCardBorder(context)),
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 14),
+                child: Icon(Icons.developer_board_rounded, size: 18, color: muted),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Pano UUID', style: TextStyle(fontSize: AppText.badge, fontWeight: FontWeight.w500, color: muted)),
+                      if (s.deviceUuids.isEmpty)
+                        Text('Pano tanımsız', style: TextStyle(fontSize: AppText.caption, color: muted))
+                      else
+                        for (final uid in s.deviceUuids)
+                          // Kimlik tek satır: tireden bölünüp iki satıra yayılmaz, sığmazsa küçülür.
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: AlignmentDirectional.centerStart,
+                            child: Text(
+                              uid,
+                              maxLines: 1,
+                              softWrap: false,
+                              style: SetupText.mono(fontSize: 13, fontWeight: FontWeight.w700, color: primary),
+                            ),
+                          ),
+                      if (s.hiddenDeviceCount > 0)
+                        Text('+${s.hiddenDeviceCount} pano daha', style: TextStyle(fontSize: AppText.caption, color: muted)),
+                      if (s.deviceCount > 0)
+                        Text(
+                          '${s.deviceCount} pano • ${s.onlineCount} çevrimiçi',
+                          key: Key('devices_summary_${s.homeId}'),
+                          style: TextStyle(fontSize: AppText.caption, color: muted),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              if (s.deviceUuid.isNotEmpty)
+                // Küçük cam disk (36 dp görsel / 48 dp hedef): eskiden çıplak düz Material kopyala simgesiydi (üst çubuk ve kapat
+                // düğmeleriyle aynı cam dil).
+                GlassIconButton(
+                  key: Key('btn_copy_uuid_${s.homeId}'),
+                  icon: Icons.copy_rounded,
+                  semanticLabel: 'UUID Kopyala',
+                  size: 36,
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: s.deviceUuid));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Pano UUID panoya kopyalandı'), duration: Duration(seconds: 1)),
+                    );
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ServiceTintBox(
+            color: hasOwner ? AppTheme.accentGreen : AppTheme.accentAmber,
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primaryBlue.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.home_outlined, color: AppTheme.primaryBlue, size: 22),
+                OrbIconBadge(
+                  icon: hasOwner ? Icons.workspace_premium_rounded : Icons.person_off_rounded,
+                  family: hasOwner ? AppFamilies.emerald : AppFamilies.amber,
+                  size: OrbSize.sm,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -465,176 +483,60 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${s.homeName} (#${s.shortId})',
+                        hasOwner ? 'Home Admin: ${owner!.fullName}' : 'Home Admin henüz atanmadı',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: primary),
+                        style: TextStyle(
+                          fontSize: AppText.body,
+                          fontWeight: FontWeight.w800,
+                          color: SetupColors.readable(context, hasOwner ? AppTheme.accentGreen : AppTheme.accentAmber),
+                        ),
                       ),
                       const SizedBox(height: 2),
+                      // Yönlendirici metin KESİLMEZ ("devredin." talimatı kaybolmasın); yalnız uzun iletişim bilgisi 2 satırla sınırlı.
                       Text(
-                        s.address.isEmpty ? 'Adres belirtilmemiş' : s.address,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 12, color: muted),
+                        hasOwner ? owner!.contact : 'Pano şu an servis kontrolünde. Daire sahibine devredin.',
+                        maxLines: hasOwner ? 2 : null,
+                        overflow: hasOwner ? TextOverflow.ellipsis : null,
+                        style: TextStyle(fontSize: AppText.caption, height: 1.3, color: muted),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                _commissionBadge(s.isCommissioned),
               ],
             ),
-            const SizedBox(height: 10),
-            const Divider(height: 1),
-            const SizedBox(height: 10),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Icon(Icons.developer_board, size: 15, color: muted),
+          ),
+          const SizedBox(height: 12),
+          // Tek eylem tam genişlikte, tema hapı ve aile tonu (yerel backgroundColor/şekil kırpılmış yüzeyin altında "hayalet köşe"
+          // bırakıyordu); yükseklik >= 48 dp.
+          ServiceActionGrid(
+            columns: 1,
+            children: [
+              if (hasOwner)
+                OutlinedButton.icon(
+                  key: Key('btn_assign_admin_${s.homeId}'),
+                  style: accentOutlinedButtonStyle(context, AppFamilies.sky),
+                  onPressed: () => _assign(s),
+                  icon: Icon(Icons.swap_horiz_rounded, size: accentIconSize(context, base: 18)),
+                  label: const Text('Yöneticiyi Devret', textAlign: TextAlign.center),
+                )
+              else
+                ElevatedButton.icon(
+                  key: Key('btn_assign_admin_${s.homeId}'),
+                  style: accentButtonStyle(AppFamilies.sky),
+                  onPressed: () => _assign(s),
+                  icon: Icon(Icons.person_add_alt_1_rounded, size: accentIconSize(context, base: 18)),
+                  label: const Text('Home Admin Ata', textAlign: TextAlign.center),
                 ),
-                const SizedBox(width: 6),
-                Text('Pano UUID: ', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: muted)),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (s.deviceUuids.isEmpty)
-                        Text('Pano tanımsız', style: TextStyle(fontSize: 12, color: muted))
-                      else
-                        for (final uid in s.deviceUuids)
-                          Text(
-                            uid,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 12, fontFamily: 'monospace', fontWeight: FontWeight.bold, color: primary),
-                          ),
-                      if (s.hiddenDeviceCount > 0)
-                        Text('+${s.hiddenDeviceCount} pano daha', style: TextStyle(fontSize: 11.5, color: muted)),
-                      if (s.deviceCount > 0)
-                        Text(
-                          '${s.deviceCount} pano • ${s.onlineCount} çevrimiçi',
-                          key: Key('devices_summary_${s.homeId}'),
-                          style: TextStyle(fontSize: 11.5, color: muted),
-                        ),
-                    ],
-                  ),
-                ),
-                if (s.deviceUuid.isNotEmpty)
-                  IconButton(
-                    key: Key('btn_copy_uuid_${s.homeId}'),
-                    icon: const Icon(Icons.copy, size: 14),
-                    tooltip: 'UUID Kopyala',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: s.deviceUuid));
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Pano UUID panoya kopyalandı'), duration: Duration(seconds: 1)),
-                      );
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: (hasOwner ? AppTheme.accentGreen : AppTheme.accentAmber).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: (hasOwner ? AppTheme.accentGreen : AppTheme.accentAmber).withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    hasOwner ? Icons.workspace_premium : Icons.person_off_outlined,
-                    color: hasOwner ? AppTheme.accentGreen : AppTheme.accentAmber,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          hasOwner ? 'Home Admin: ${owner!.fullName}' : 'Home Admin henüz atanmadı',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            color: SetupColors.readable(context, hasOwner ? AppTheme.accentGreen : AppTheme.accentAmber),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          hasOwner ? owner!.contact : 'Pano şu an servis kontrolünde. Daire sahibine devredin.',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11.5, color: muted),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerRight,
-              child: hasOwner
-                  ? OutlinedButton.icon(
-                      key: Key('btn_assign_admin_${s.homeId}'),
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(48, 44),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        side: BorderSide(color: AppTheme.getCardBorder(context)),
-                      ),
-                      onPressed: () => _assign(s),
-                      icon: const Icon(Icons.swap_horiz, size: 16),
-                      label: const Text('Yöneticiyi Devret', style: TextStyle(fontSize: 12)),
-                    )
-                  : ElevatedButton.icon(
-                      key: Key('btn_assign_admin_${s.homeId}'),
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(48, 44),
-                        backgroundColor: AppTheme.primaryBlue,
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      onPressed: () => _assign(s),
-                      icon: const Icon(Icons.person_add_alt_1, size: 16),
-                      label: const Text('Home Admin Ata', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                    ),
-            ),
-          ],
-        ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
   Widget _commissionBadge(bool commissioned) {
     final color = commissioned ? AppTheme.accentGreen : AppTheme.accentAmber;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color, width: 0.8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(commissioned ? Icons.check_circle : Icons.pending_outlined, size: 12, color: color),
-          const SizedBox(width: 4),
-          Text(
-            commissioned ? 'Devrede' : 'Bekliyor',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
-          ),
-        ],
-      ),
-    );
+    return ServiceStatusPill(label: commissioned ? 'Devrede' : 'Bekliyor', color: color);
   }
 }

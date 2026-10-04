@@ -142,6 +142,9 @@ class _InvalidLinkPage extends StatelessWidget {
   }
 }
 
+/// Cihaz etiketi sayfasının durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skaler).
+typedef _ClaimLinkView = ({bool isAuthenticated, bool canClaim, bool checking, bool biometricFailed});
+
 /// Cihaz etiketi bağlantısı (`/claim?uid=&pin=`): oturum açıksa eşleştirme diyaloğunu açar.
 ///
 /// Soğuk açılışta (oturum geri yükleniyor / biyometrik kilit) bağlantı oturum durumu belli olmadan
@@ -160,9 +163,17 @@ class _ClaimLinkPage extends StatefulWidget {
 class _ClaimLinkPageState extends State<_ClaimLinkPage> {
   bool _started = false;
 
+  static _ClaimLinkView _viewOf(AutomationState s) => (
+        isAuthenticated: s.isAuthenticated,
+        canClaim: s.capabilities.canClaimDevice,
+        checking: s.authStatus == AuthStatus.checking,
+        biometricFailed: s.biometricFailed,
+      );
+
   /// Oturum açık ve yetkiliyse (bir kez) eşleştirme diyaloğunu açar; değilse durum değişince yeniden denenir.
-  void _maybeStart(AutomationState state) {
-    if (_started || !state.isAuthenticated || !state.capabilities.canClaimDevice) return;
+  /// (Yan etki `build` içindedir ama yalnız seçilen değerler değişince çalışır: `context.select`.)
+  void _maybeStart(_ClaimLinkView view) {
+    if (_started || !view.isAuthenticated || !view.canClaim) return;
     _started = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -172,15 +183,15 @@ class _ClaimLinkPageState extends State<_ClaimLinkPage> {
     });
   }
 
-  String _statusText(AutomationState state) {
-    if (state.isAuthenticated) {
-      return state.capabilities.canClaimDevice
+  String _statusText(_ClaimLinkView view) {
+    if (view.isAuthenticated) {
+      return view.canClaim
           ? 'Eşleştirme penceresi açılıyor...'
           : 'Bu hesabın cihaz eşleştirme yetkisi yok. Etiketteki karekodu yetkili bir hesapla okutun.';
     }
-    if (state.authStatus == AuthStatus.checking) {
+    if (view.checking) {
       // Açılış / biyometrik kilit: oturum henüz doğrulanmadı (bu sayfa kilit ekranının üstündedir).
-      return state.biometricFailed
+      return view.biometricFailed
           ? 'Oturum kilitli. Ana ekrana dönüp kilidi açın, ardından etiketteki karekodu yeniden okutun.'
           : 'Oturum doğrulanıyor...';
     }
@@ -189,8 +200,8 @@ class _ClaimLinkPageState extends State<_ClaimLinkPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    _maybeStart(state);
+    final view = context.select<AutomationState, _ClaimLinkView>(_viewOf);
+    _maybeStart(view);
     return Scaffold(
       appBar: AppBar(title: const Text('Cihaz Eşleştirme')),
       body: Center(
@@ -202,7 +213,7 @@ class _ClaimLinkPageState extends State<_ClaimLinkPage> {
               const Icon(Icons.qr_code_2_rounded, size: 56, color: AppTheme.primaryBlueLight),
               const SizedBox(height: 16),
               Text(
-                _statusText(state),
+                _statusText(view),
                 key: const Key('deep_link_claim_text'),
                 textAlign: TextAlign.center,
               ),

@@ -4,7 +4,11 @@ import '../../../../config/app_config.dart';
 import '../../wifi_recovery_dialog.dart';
 import '../device_link.dart';
 import '../setup_style.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
+import '../../../theme/feature_accent.dart';
 
 /// "Pano Wi-Fi & Modem Kurulumu" kartı ve "Wi-Fi Kurulum & Kurtarma Sihirbazı" düğmesi
 /// (canlı test listesi Aşama 16.1).
@@ -35,36 +39,39 @@ class WifiSetupCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SetupCard(
+    // Özellik rengi (Wi-Fi: amber) orb'da ve düğmede taşınır; kart KENARI vurgulu DEĞİL (çapraz eleştirmen #7: servis girişi
+    // ekranında PIN kartıyla yan yana iki amber kenarlı kart "her şey yanıyor" izlenimi veriyordu).
+    return ServiceCard(
       key: const Key('card_wifi_setup'),
-      accent: SetupColors.info,
       margin: margin,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.wifi_find_rounded, color: SetupColors.readable(context, SetupColors.info), size: 24),
-              const SizedBox(width: 10),
+              OrbIconBadge(icon: Icons.wifi_rounded, family: AppFeature.wifiRecovery.accentFamily),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Pano Wi-Fi & Modem Kurulumu',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                  style: TextStyle(fontSize: AppText.cardTitle, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             'Müşterinin modemi ya da Wi-Fi şifresi değiştiyse telefonu panonun kurulum ağına (AHBU-...) bağlayıp '
             'yeni bilgiyi panoya yükleyin. Giriş yapmanız ya da internet olması gerekmez.',
-            style: TextStyle(fontSize: 13.5, height: 1.4, color: SetupColors.muted(context)),
+            style: TextStyle(fontSize: AppText.body, height: 1.4, color: SetupColors.muted(context)),
           ),
           const SizedBox(height: 12),
-          SetupPrimaryButton(
+          // İkincil akış: çerçeveli hap (gradyan hap sayfa başına tek birincil eylemdir: "Servis Oturumu Aç" / "Yeni Kurulum Başlat").
+          SetupSecondaryButton(
             key: const Key('btn_wifi_setup_wizard'),
             label: 'Wi-Fi Kurulum & Kurtarma Sihirbazı',
             icon: Icons.wifi_tethering_rounded,
+            family: AppFeature.wifiRecovery.accentFamily,
             onPressed: () => _open(context),
           ),
         ],

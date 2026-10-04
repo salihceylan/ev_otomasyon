@@ -857,6 +857,8 @@ class DeviceService {
            device_status = 'ACTIVE',
            local_key_enc = EXCLUDED.local_key_enc,
            setup_pin = NULL,
+           reported_layout = NULL,
+           reported_layout_at = NULL,
            updated_at = CURRENT_TIMESTAMP
          RETURNING id, home_id, device_uuid, model`,
         [home.id, uuid, inv.mac_address, owner.id, inv.model || DEFAULT_MODEL, localKey.enc]
@@ -1066,6 +1068,10 @@ class DeviceService {
       let topicId = null;
       let oldUserIds = [];
       if (homeId) {
+        // Kilit sirasi (cok panolu ev): evin TUM cihaz satirlari id sirasiyla, ev kilidinden ve temizlikten ONCE.
+        // Yerlesim esitleme / kopru durum yolu devices -> endpoints -> scheduled_rules / homes sirasini kullanir; ters
+        // sira (once ev verisi, sonra kardes panonun cihaz satiri) kilitlenme (40P01) uretirdi.
+        await tx.query('SELECT id FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', [homeId]);
         const homeRes = await tx.query('SELECT id, mqtt_username FROM homes WHERE id = $1 FOR UPDATE', [homeId]);
         topicId = homeRes.rows[0] ? homeRes.rows[0].mqtt_username : null;
 
@@ -1146,7 +1152,7 @@ class DeviceService {
                     is_online = FALSE, is_commissioned = FALSE, commissioned_at = NULL, commissioned_by = NULL,
                     commissioning_status = 'PENDING_INSTALLATION', commissioning_notes = NULL,
                     device_status = 'ACTIVE', local_key_enc = $3, setup_pin = NULL, child_lock_enabled = FALSE,
-                    updated_at = CURRENT_TIMESTAMP
+                    reported_layout = NULL, reported_layout_at = NULL, updated_at = CURRENT_TIMESTAMP
               WHERE id = $4`,
             [homeId, newOwnerRow.id, newLocalKeyEnc, dev.id]
           );
@@ -1183,7 +1189,7 @@ class DeviceService {
                     is_online = FALSE, is_commissioned = FALSE, commissioned_at = NULL, commissioned_by = NULL,
                     commissioning_status = 'PENDING_INSTALLATION', commissioning_notes = NULL,
                     device_status = 'ACTIVE', local_key_enc = $1, setup_pin = NULL, child_lock_enabled = FALSE,
-                    updated_at = CURRENT_TIMESTAMP
+                    reported_layout = NULL, reported_layout_at = NULL, updated_at = CURRENT_TIMESTAMP
               WHERE id = $2`,
             [newLocalKeyEnc, dev.id]
           );
@@ -1234,8 +1240,21 @@ class DeviceService {
           ])
         ),
         deviceWasOnline,
+        deviceId: dev ? dev.id : null,
       };
     });
+
+    // (D6) Satirlar ayni cihaz + ayni ev icin yeniden tohumlandi: yerlesim esitleme onbellegi (ayni imza) tohum
+    // sablonunu RECHECK suresince birakmasin. Yalniz COMMIT sonrasi; en iyi caba (kopru metodu yoksa / patlarsa
+    // sifirlama yine basarili: onbellek en gec RECHECK suresinde kendiliginden yenilenir).
+    if (outcome.action === 'REASSIGNED' && outcome.deviceId) {
+      try {
+        const bridge = this.bridge;
+        if (bridge && typeof bridge.invalidateLayout === 'function') bridge.invalidateLayout(outcome.deviceId);
+      } catch (_) {
+        /* en iyi caba: onbellek hatasi sifirlamayi bozmaz */
+      }
+    }
 
     // --- Commit SONRASI yan etkiler: hatalar yutulmaz, `warnings` olarak doner ---
     const warnings = [];
@@ -1472,6 +1491,8 @@ class DeviceService {
            config_snapshot = EXCLUDED.config_snapshot,
            local_key_enc = EXCLUDED.local_key_enc,
            setup_pin = NULL,
+           reported_layout = NULL,
+           reported_layout_at = NULL,
            updated_at = CURRENT_TIMESTAMP
          RETURNING id`,
         [homeId, newUuid, newInv.mac_address, ownerId, newInv.model || DEFAULT_MODEL, JSON.stringify(deviceSnapshot), localKey.enc]

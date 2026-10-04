@@ -106,10 +106,12 @@ class ButtonLogic extends SetupLogic {
         _loaded = true;
       });
 
-  void _applyStatus(DeviceStatus status, {bool initial = false}) {
+  /// Pano durumunu girişlere işler. Arayüzü ilgilendiren bir şey (basılı göstergesi, karar, giriş listesi, çocuk kilidi
+  /// uyarısı) **değiştiyse** `true` döner; hiçbir şey değişmediyse mevcut liste olduğu gibi kalır (yeni liste üretilmez).
+  bool _applyStatus(DeviceStatus status, {bool initial = false}) {
     final existing = <int, ButtonCheck>{for (final b in _buttons) b.id: b};
     final now = ctx.clock.now();
-    _buttons = <ButtonCheck>[
+    final next = <ButtonCheck>[
       for (final item in status.dis)
         () {
           final old = existing[item.id];
@@ -123,7 +125,28 @@ class ButtonLogic extends SetupLogic {
           return old.copyWith(pressed: item.state);
         }(),
     ];
-    _childLockOn = status.childLockKnown && status.childLock;
+    final childLockOn = status.childLockKnown && status.childLock;
+    final changed = childLockOn != _childLockOn || !_sameChecks(_buttons, next);
+    _childLockOn = childLockOn;
+    if (changed) _buttons = next;
+    return changed;
+  }
+
+  /// İki giriş listesi arayüz açısından aynı mı (sıra, kimlik, ad, basılı göstergesi, karar, algılanma anı).
+  static bool _sameChecks(List<ButtonCheck> a, List<ButtonCheck> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+      if (x.id != y.id ||
+          x.name != y.name ||
+          x.pressed != y.pressed ||
+          x.verdict != y.verdict ||
+          x.detectedAt != y.detectedAt) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Dinlemeyi başlatır: giriş durumu kısa aralıkla yoklanır.
@@ -157,10 +180,8 @@ class ButtonLogic extends SetupLogic {
       ctx.ensureActive();
       final status = await ctx.deviceCall((api) => api.fetchStatus());
       _failures = 0;
-      if (_listening) {
-        _applyStatus(status);
-        ctx.notify();
-      }
+      // 200 ms'lik yoklamada her turda bildirmek tüm sayfayı saniyede 5 kez yeniden kurardı: yalnız değişimde bildirilir.
+      if (_listening && _applyStatus(status)) ctx.notify();
     } on SetupCancelled {
       // sayfa kapandı
     } on SetupSessionExpiredException {

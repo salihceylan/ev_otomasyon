@@ -486,12 +486,50 @@ class Capabilities {
         'canManageAdminAccounts': canManageAdminAccounts,
       };
 
-  @override
-  bool operator ==(Object other) =>
-      other is Capabilities && mapEquals(toMap(), other.toMap());
+  /// 32 bayrağın tek bir tamsayıdaki bit maskesi ([toMap] sırasıyla; bit 0 = [isAuthenticated]). `==`/`hashCode`
+  /// bununla karşılaştırır: `context.select<AutomationState, Capabilities>` her bildirimde `==` çağırır ve eski
+  /// uygulama her çağrıda iki 32'lik `Map` kuruyordu (PF-20). Sınıf `const` kurucular içerdiğinden `late final`
+  /// alan kullanılamaz; maske her çağrıda 32 koşullu `OR` ile (ayırma olmadan) hesaplanır. Yeni bir bayrak
+  /// eklenirse HEM [toMap] HEM bu maske güncellenmelidir (test: `state_memo_test.dart`, `toMap` eşdeğerliği).
+  int get _mask =>
+      (isAuthenticated ? 1 << 0 : 0) |
+      (isSuperUser ? 1 << 1 : 0) |
+      (isStaff ? 1 << 2 : 0) |
+      (isServiceSession ? 1 << 3 : 0) |
+      (isOwner ? 1 << 4 : 0) |
+      (isResident ? 1 << 5 : 0) |
+      (isGuest ? 1 << 6 : 0) |
+      (isGuestExpired ? 1 << 7 : 0) |
+      (hasHomeAccess ? 1 << 8 : 0) |
+      (canViewState ? 1 << 9 : 0) |
+      (canControlDevices ? 1 << 10 : 0) |
+      (canUseGroupCommands ? 1 << 11 : 0) |
+      (canChangeChildLock ? 1 << 12 : 0) |
+      (canCalibrate ? 1 << 13 : 0) |
+      (canManageRules ? 1 << 14 : 0) |
+      (canInvite ? 1 << 15 : 0) |
+      (canManageMembers ? 1 << 16 : 0) |
+      (canTransferOwnership ? 1 << 17 : 0) |
+      (canGenerateServicePin ? 1 << 18 : 0) |
+      (canClaimDevice ? 1 << 19 : 0) |
+      (canCommission ? 1 << 20 : 0) |
+      (canReplaceBoard ? 1 << 21 : 0) |
+      (canEmergencyReset ? 1 << 22 : 0) |
+      (canOpenWifiRecovery ? 1 << 23 : 0) |
+      (canEditDeviceHost ? 1 << 24 : 0) |
+      (canSwitchMode ? 1 << 25 : 0) |
+      (canFetchLocalKey ? 1 << 26 : 0) |
+      (canReissueDeviceCredential ? 1 << 27 : 0) |
+      (canViewInventory ? 1 << 28 : 0) |
+      (canManageInventory ? 1 << 29 : 0) |
+      (canOpenServiceManagement ? 1 << 30 : 0) |
+      (canManageAdminAccounts ? 1 << 31 : 0);
 
   @override
-  int get hashCode => Object.hashAll(toMap().values);
+  bool operator ==(Object other) => other is Capabilities && _mask == other._mask;
+
+  @override
+  int get hashCode => _mask.hashCode;
 
   @override
   String toString() {

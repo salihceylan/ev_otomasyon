@@ -440,3 +440,29 @@ test('C9: Turkce mesajlar HTTP govdesinde UTF-8 olarak (charset=utf-8) tasinir',
   assert.match(res.headers['content-type'], /charset=utf-8/i);
   assert.equal(Buffer.from(res.text, 'utf8').includes(Buffer.from('Geçersiz ev kimliği', 'utf8')), true);
 });
+
+test('WP-L D3: PUT {enabled:true} kanali artik panjur olan kapali role kuralini acamaz -> 400 VALIDATION + Turkce mesaj (gercek servis, sahte db)', async () => {
+  const { createService } = require('../../src/services/scheduled_rules_service');
+  const { makeFakeDb } = require('./_helpers');
+  const disabled = { id: 5, home_id: HOME, device_id: null, channel: 5, channel_type: 'relay', action: 'on', hour: 7, minute: 0, days_of_week: [1], label: null, enabled: false, created_by: 'u-owner' };
+  const db = makeFakeDb([
+    { match: /^SELECT \* FROM scheduled_rules WHERE id = \$1 AND home_id = \$2 FOR UPDATE$/, reply: () => ({ rows: [{ ...disabled }] }) },
+    {
+      match: /FROM endpoints WHERE home_id = \$1/,
+      reply: () => ({ rows: [5, 6].map((ch) => ({ channel_index: ch, type: 'shutter' })).concat([{ channel_index: 7, type: 'light' }]) }),
+    },
+    { match: /WITH upd AS/, reply: () => ({ rows: [{ ...disabled, enabled: true }] }) },
+  ]);
+  const { app } = build({ memberships: MEMBERS, service: createService({ db }) });
+  const res = await call(app, 'PUT', '/scheduled-rules/5', OWNER, { enabled: true });
+  assert.equal(res.status, 400);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.code, 'VALIDATION');
+  assert.match(res.body.message, /Kanal 5 bir panjura ayrılmış; röle kuralı yerine panjur kuralı oluşturun/);
+  assert.deepEqual(res.body.errors.map((e) => e.field), ['channel']);
+  assert.equal(db.calls.some((c) => /WITH upd AS/.test(c.text)), false, 'kural acilmamali');
+
+  // Kapatma serbest: ayni kural {enabled:false} ile 200
+  const okRes = await call(app, 'PUT', '/scheduled-rules/5', OWNER, { enabled: false });
+  assert.equal(okRes.status, 200);
+});

@@ -9,7 +9,14 @@
 // Hata politikası: depolama (platform) hataları sessizce yutulmaz; [SecureStorageException]
 // olarak çağırana yüzeye çıkar. "Kayıt yok" ise `null` döner. Böylece "okunamadı" ile
 // "oturum yok" birbirine karışmaz (ör. biyometrik kilit bayrağı okunamazsa kilit açık sayılır).
+//
+// Süre sınırı (PF-02): platform kanalı çağrısı hiç dönmeyebilir (Keystore/Keychain takılması).
+// Her işlem [SecureStorageService.defaultOpTimeout] (6 sn; kurucuda `opTimeout` ile değiştirilir) içinde
+// dönmezse beklemeyi bırakır ve `cause`'u [TimeoutException] olan bir [SecureStorageException] fırlatır;
+// böylece oturum açılışı, çıkış ve token yazımı sonsuza dek bloklanmaz. Zaman aşımı ile "kayıt yok"
+// birbirine karışmaz: belirteç SİLİNMEZ.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -17,6 +24,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/api_models.dart';
 import '../models/cloud_models.dart';
 import '../models/json_utils.dart';
+import 'clock.dart';
 
 /// Güvenli depolama platform hatası (içerik/anahtar mesaja yazılmaz).
 class SecureStorageException implements Exception {
@@ -24,6 +32,8 @@ class SecureStorageException implements Exception {
 
   /// `read` | `write` | `delete` | `deleteAll`.
   final String operation;
+
+  /// Asıl neden; süre aşımında bir [TimeoutException] (mesajı değer/anahtar içermez).
   final Object? cause;
 
   String get message =>
@@ -69,9 +79,19 @@ class FlutterSecureKeyValueStore implements SecureKeyValueStore {
 }
 
 class SecureStorageService {
-  SecureStorageService({SecureKeyValueStore? store}) : _store = store ?? FlutterSecureKeyValueStore();
+  /// [clock]: süre sınırı zamanlayıcısının kaynağı (varsayılan gerçek saat; testte `FakeClock`).
+  /// [opTimeout]: tek bir platform çağrısı için en uzun bekleme ([defaultOpTimeout]).
+  SecureStorageService({SecureKeyValueStore? store, Clock? clock, Duration? opTimeout})
+      : _store = store ?? FlutterSecureKeyValueStore(),
+        _clock = clock ?? const SystemClock(),
+        _opTimeout = opTimeout ?? defaultOpTimeout;
+
+  /// Soğuk bir Keystore/Keychain ilk okumasına pay bırakır; bundan uzun süren çağrı takılmış sayılır.
+  static const Duration defaultOpTimeout = Duration(seconds: 6);
 
   final SecureKeyValueStore _store;
+  final Clock _clock;
+  final Duration _opTimeout;
 
   static const _tokenKey = 'ahbu_auth_token';
   static const _refreshTokenKey = 'ahbu_refresh_token';
@@ -82,31 +102,28 @@ class SecureStorageService {
   static const _homesCacheKey = 'ahbu_homes_cache';
   static const _serviceSessionKey = 'ahbu_service_session';
 
-  // --- Düşük seviyeli sarmalayıcılar (hataları yüzeye çıkarır) -----------------------------
+  // --- Düşük seviyeli sarmalayıcılar (hataları yüzeye çıkarır, süreyi sınırlar) ------------
 
-  Future<String?> _read(String key) async {
+  /// Tek platform çağrısı: hata -> [SecureStorageException]; [_opTimeout] içinde dönmezse
+  /// `cause`'u [TimeoutException] olan [SecureStorageException]. Çağrı iptal EDİLEMEZ (platform
+  /// işi sürer; geç dönen sonuç/hata yutulur), yalnız beklenmesi bırakılır.
+  Future<T> _guard<T>(String operation, Future<T> Function() action) async {
     try {
-      return await _store.read(key);
+      return await _clock.bound<T>(
+        action(),
+        _opTimeout,
+        () => throw TimeoutException('Güvenli depolama yanıt vermedi ($operation).', _opTimeout),
+      );
     } catch (e) {
-      throw SecureStorageException('read', e);
+      throw SecureStorageException(operation, e);
     }
   }
 
-  Future<void> _write(String key, String value) async {
-    try {
-      await _store.write(key, value);
-    } catch (e) {
-      throw SecureStorageException('write', e);
-    }
-  }
+  Future<String?> _read(String key) => _guard<String?>('read', () => _store.read(key));
 
-  Future<void> _delete(String key) async {
-    try {
-      await _store.delete(key);
-    } catch (e) {
-      throw SecureStorageException('delete', e);
-    }
-  }
+  Future<void> _write(String key, String value) => _guard<void>('write', () => _store.write(key, value));
+
+  Future<void> _delete(String key) => _guard<void>('delete', () => _store.delete(key));
 
   // --- JWT -----------------------------------------------------------------------------------
 
@@ -219,11 +236,5 @@ class SecureStorageService {
   // --- Toplu silme ---------------------------------------------------------------------------
 
   /// Tüm oturum bilgilerini sıfırlar (çıkış / oturum sonu).
-  Future<void> clearAll() async {
-    try {
-      await _store.deleteAll();
-    } catch (e) {
-      throw SecureStorageException('deleteAll', e);
-    }
-  }
+  Future<void> clearAll() => _guard<void>('deleteAll', () => _store.deleteAll());
 }

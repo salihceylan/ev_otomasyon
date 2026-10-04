@@ -11,6 +11,11 @@ import '../../common/confirm_dialogs.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/settings/accent_button.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/surface_card.dart';
+import 'step_progress.dart';
 
 /// Girilen/taranan davet veya devir kodunun normalleştirilmiş hâli.
 class JoinCodeInput {
@@ -86,6 +91,12 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
   bool _previewUnavailable = false;
   int _run = 0;
 
+  /// İşlem (önizleme / katılım) bu süreyi aşarsa "Kapat" sunulur (PF-50); REST + ev listesi + ev seçimi
+  /// zinciri yavaş ağda 30 sn'yi aşabilir ve diyalog o süre boyunca kapanmıyordu.
+  static const Duration _slowAfter = Duration(seconds: 25);
+  Timer? _slowTimer;
+  bool _slow = false;
+
   static const String _transferPhrase = 'DEVRAL';
 
   @override
@@ -99,9 +110,32 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
     if (mounted) setState(() {});
   }
 
+  /// Meşgul durumunu başlatır ve [_slowAfter] sonra "yavaş" bayrağını kurar (`setState` içinde çağrılır).
+  /// Zamanlayıcı `Clock`'tandır (testlerde sahte saat).
+  void _beginBusy() {
+    _busy = true;
+    _slow = false;
+    _slowTimer?.cancel();
+    _slowTimer = context.read<AutomationState>().clock.timer(_slowAfter, () {
+      if (mounted && _busy) setState(() => _slow = true);
+    });
+  }
+
+  /// Meşgul durumunu bitirir (`setState` içinde çağrılır).
+  void _endBusy() {
+    _busy = false;
+    _slow = false;
+    _slowTimer?.cancel();
+    _slowTimer = null;
+  }
+
+  /// 25 sn sonra "Kapat": işlem sunucuda sürer, sonuç [_confirm] içinde yine bildirilir.
+  void _closeWhileBusy() => Navigator.of(context).pop(false);
+
   @override
   void dispose() {
     _run++;
+    _slowTimer?.cancel();
     _phraseController.removeListener(_rebuild);
     _codeController.dispose();
     _phraseController.dispose();
@@ -115,7 +149,7 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
     final state = context.read<AutomationState>();
     final run = ++_run;
     setState(() {
-      _busy = true;
+      _beginBusy();
       _error = null;
     });
     JoinCodePreview? preview;
@@ -126,14 +160,14 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
     } catch (e) {
       if (!mounted || run != _run) return;
       setState(() {
-        _busy = false;
+        _endBusy();
         _error = friendlyError(e, fallback: 'Kod doğrulanamadı. Lütfen tekrar deneyin.');
       });
       return;
     }
     if (!mounted || run != _run) return;
     setState(() {
-      _busy = false;
+      _endBusy();
       _input = input;
       _preview = preview;
       _previewUnavailable = unavailable;
@@ -162,8 +196,10 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
     final input = _input;
     if (input == null || _busy || !_confirmEnabled) return; // çift dokunuş koruması
     final state = context.read<AutomationState>();
+    // PF-50: kullanıcı 25 sn sonra "Kapat"a basarsa diyalog kapanır ama istek sürer; sonuç yine de bildirilsin.
+    final messenger = ScaffoldMessenger.maybeOf(context);
     setState(() {
-      _busy = true;
+      _beginBusy();
       _error = null;
     });
     try {
@@ -177,22 +213,30 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
             ? 'Zaten bu evin üyesisiniz.'
             : (res.message.isNotEmpty ? res.message : 'Eve başarıyla katıldınız!');
       }
-      if (!mounted) return;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
-          backgroundColor: AppTheme.accentGreen,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      _showResult(messenger, message, success: true);
+      if (!mounted) return; // kullanıcı "Kapat"a bastı: sonuç yukarıda bildirildi
       Navigator.of(context).pop(true);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) {
+        _showResult(messenger, _joinErrorMessage(e, input.isTransfer), success: false);
+        return;
+      }
       setState(() {
-        _busy = false;
+        _endBusy();
         _error = _joinErrorMessage(e, input.isTransfer);
       });
     }
+  }
+
+  static void _showResult(ScaffoldMessengerState? messenger, String message, {required bool success}) {
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(message, maxLines: 3, overflow: TextOverflow.ellipsis),
+        // Beyaz yazılı dolgu tonu (ham yeşil/kırmızı zeminde beyaz metin 2.5–3.8:1 idi).
+        backgroundColor: AppTheme.filledAccent(success ? AppTheme.accentGreen : AppTheme.accentRed),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   String _joinErrorMessage(Object e, bool transfer) {
@@ -207,27 +251,31 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final forbidden = state.isServiceSession;
+    // PF-06: yalnız servis oturumu izlenir; ilgisiz bildirim diyaloğu yeniden kurmaz.
+    final forbidden = context.select<AutomationState, bool>((s) => s.isServiceSession);
 
     return PopScope(
-      canPop: !_busy,
+      canPop: !_busy || _slow,
+      // Yüzey ve şekil temanın diyalog stilinden gelir (yerel override yok). Yatay boşluk 16: içerik genişliği 280 → 328 dp.
       child: AlertDialog(
-        backgroundColor: AppTheme.getSurfaceColor(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: AppTheme.getCardBorder(context), width: 1.2),
-        ),
+        insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
         title: Row(
           children: [
-            const Icon(Icons.vpn_key_outlined, color: AppTheme.accentGreen, size: 26),
-            const SizedBox(width: 10),
+            OrbIconBadge(
+              icon: (_input?.isTransfer ?? false) ? Icons.swap_horiz_rounded : Icons.vpn_key_rounded,
+              family: (_input?.isTransfer ?? false) ? AppFamilies.amber : AppFamilies.emerald,
+              active: _step == _JoinStep.confirm,
+              pending: _busy,
+            ),
+            const SizedBox(width: 12),
             Flexible(
               child: Text(
                 _step == _JoinStep.enter
                     ? 'Bir Eve Katıl'
                     : ((_input?.isTransfer ?? false) ? 'Daire Devrini Onayla' : 'Katılımı Onayla'),
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
+                // En çok 2 satır: büyük yazıda anlamı taşıyan "Onayla" kesilmesin.
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -239,7 +287,19 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
           child: SingleChildScrollView(
             child: forbidden
                 ? const InlineMessage.error('Servis oturumuyla bir eve katılamazsınız.', key: Key('join_forbidden'))
-                : (_step == _JoinStep.enter ? _buildEnter(context) : _buildConfirm(context)),
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      StepProgress(
+                        step: _step == _JoinStep.enter ? 1 : 2,
+                        total: 2,
+                        color: (_input?.isTransfer ?? false) ? AppFamilies.amber : AppFamilies.emerald,
+                        padding: const EdgeInsets.only(bottom: 14),
+                      ),
+                      _step == _JoinStep.enter ? _buildEnter(context) : _buildConfirm(context),
+                    ],
+                  ),
           ),
         ),
         actions: forbidden
@@ -264,12 +324,7 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
         ElevatedButton(
           key: const Key('btn_join_continue'),
           onPressed: _busy ? null : _continue,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.accentGreen,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          ),
+          style: accentButtonStyle(AppFamilies.emerald),
           child: _busy
               ? const SizedBox(
                   height: 18,
@@ -283,21 +338,22 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
   List<Widget> _confirmActions(BuildContext context) {
     final transfer = _input?.isTransfer ?? false;
     return [
-      TextButton(
-        key: const Key('btn_join_back'),
-        onPressed: _busy ? null : _back,
-        child: Text('Geri', style: TextStyle(color: AppTheme.getTextMuted(context))),
-      ),
+      if (_busy && _slow)
+        TextButton(
+          key: const Key('btn_join_close_pending'),
+          onPressed: _closeWhileBusy,
+          child: Text('Kapat', style: TextStyle(color: AppTheme.getTextMuted(context))),
+        )
+      else
+        TextButton(
+          key: const Key('btn_join_back'),
+          onPressed: _busy ? null : _back,
+          child: Text('Geri', style: TextStyle(color: AppTheme.getTextMuted(context))),
+        ),
       ElevatedButton(
         key: const Key('btn_join_confirm'),
         onPressed: _confirmEnabled ? _confirm : null,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: transfer ? AppTheme.accentRed : AppTheme.accentGreen,
-          foregroundColor: Colors.white,
-          disabledBackgroundColor: (transfer ? AppTheme.accentRed : AppTheme.accentGreen).withValues(alpha: 0.25),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
+        style: accentButtonStyle(transfer ? AppFamilies.rose : AppFamilies.emerald),
         child: _busy
             ? const SizedBox(
                 height: 18,
@@ -342,25 +398,12 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
               letterSpacing: 2,
               fontWeight: FontWeight.bold,
             ),
+            // Alan biçimi (dolgu, köşe, odak halkası) temanın giriş stilinden gelir.
             decoration: InputDecoration(
               labelText: 'Davet / Devir Kodu',
               hintText: 'AHBU-XXXXXXXXXX',
               hintStyle: TextStyle(color: muted, letterSpacing: 1, fontSize: 14),
               prefixIcon: Icon(Icons.tag, color: muted),
-              filled: true,
-              fillColor: AppTheme.getCardColor(context),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppTheme.getCardBorder(context)),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppTheme.getCardBorder(context)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppTheme.accentGreen, width: 1.8),
-              ),
             ),
             validator: (val) {
               if (val == null || val.trim().isEmpty) return 'Lütfen davet kodunu girin';
@@ -368,6 +411,10 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
               return null;
             },
           ),
+          if (_busy) ...[
+            const SizedBox(height: 12),
+            _busyNotice('Kod doğrulanıyor…'),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 12),
             InlineMessage.error(_error!, key: const Key('join_error')),
@@ -378,28 +425,44 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
     );
   }
 
+  /// İşlem sürerken belirgin ilerleme (PF-50); 25 sn sonra "Kapat" yolu açıklanır.
+  Widget _busyNotice(String message) => DialogBusyNotice(
+        key: const Key('join_busy_notice'),
+        message: message,
+        slow: _slow,
+        slowMessage: 'Sunucu yanıtı gecikiyor. Beklemeye devam edebilir ya da "Kapat"a basabilirsiniz; '
+            'işlem arka planda sürer ve sonucu bildirilir.',
+      );
+
   Widget _buildConfirm(BuildContext context) {
     final input = _input!;
     final preview = _preview;
     final muted = AppTheme.getTextMuted(context);
     final primary = AppTheme.getTextPrimary(context);
 
-    Widget row(String label, String value, {Key? key}) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(width: 108, child: Text(label, style: TextStyle(color: muted, fontSize: 12.5))),
-              Expanded(
-                child: Text(
-                  value,
-                  key: key,
-                  style: TextStyle(color: primary, fontSize: 13, fontWeight: FontWeight.w600),
-                ),
+    // Büyük yazı ölçeğinde (> 1.3) sabit 108 dp'lik etiket sütunu değer sütununu daraltıp "Yazlık Daire / 12"
+    // ya da tarih/saat ayrılması gibi yetim satırlar üretiyordu: etiket üstte, değer altta.
+    final stackedRows = MediaQuery.textScalerOf(context).scale(10) > 13;
+    Widget row(String label, String value, {Key? key}) {
+      final labelText = Text(label, style: TextStyle(color: muted, fontSize: 12.5));
+      final valueText = Text(
+        value,
+        key: key,
+        style: TextStyle(color: primary, fontSize: 13, fontWeight: FontWeight.w600),
+      );
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: stackedRows
+            ? Column(crossAxisAlignment: CrossAxisAlignment.start, children: [labelText, valueText])
+            : Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 108, child: labelText),
+                  Expanded(child: valueText),
+                ],
               ),
-            ],
-          ),
-        );
+      );
+    }
 
     final roleText = switch (preview?.role) {
       'guest' => 'Süreli misafir',
@@ -412,13 +475,9 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Container(
+        SurfaceCard(
           padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppTheme.getCardColor(context),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppTheme.getCardBorder(context)),
-          ),
+          radius: AppRadius.r16,
           child: Column(
             key: const Key('join_preview'),
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -462,10 +521,14 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
           Text.rich(
             TextSpan(
               style: TextStyle(color: primary, fontSize: 13),
-              children: const [
-                TextSpan(text: 'Onaylamak için '),
-                TextSpan(text: _transferPhrase, style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.accentRed)),
-                TextSpan(text: ' yazın:'),
+              children: [
+                const TextSpan(text: 'Onaylamak için '),
+                TextSpan(
+                  text: _transferPhrase,
+                  // Okunur tehlike tonu (açık temada ham #EF4444 ≈3.8:1 idi).
+                  style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.dangerText(context)),
+                ),
+                const TextSpan(text: ' yazın:'),
               ],
             ),
           ),
@@ -484,6 +547,10 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
             'Katılırsanız bu evin cihazlarını rolünüzün izin verdiği ölçüde kontrol edebilirsiniz.',
             style: TextStyle(color: muted, fontSize: 12.5, height: 1.4),
           ),
+        if (_busy) ...[
+          const SizedBox(height: 12),
+          _busyNotice(input.isTransfer ? 'Devir isteği işleniyor…' : 'Katılım isteği işleniyor…'),
+        ],
         if (_error != null) ...[
           const SizedBox(height: 12),
           InlineMessage.error(_error!, key: const Key('join_error')),

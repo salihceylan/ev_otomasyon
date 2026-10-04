@@ -75,3 +75,6 @@ server/.env*
 *.keystore
 id_rsa*
 id_ed25519*
+
+# flutter golden karsilastirma hata ciktilari
+test/**/failures/

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/api_models.dart';
 import '../../services/automation_state.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
 
 /// Gece huzur bildirimi kartına konan "son hatırlatma" ve cihaz durumu özeti.
 ///
@@ -88,45 +89,65 @@ class PeaceReminderDetails extends StatelessWidget {
     return Padding(
       key: const Key('peace_reminder_details'),
       padding: const EdgeInsets.only(top: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (lastText != null)
-            _Line(
-              icon: Icons.history,
-              iconColor: muted,
-              child: Text(
-                lastText,
-                key: const Key('text_peace_last_notice'),
-                style: TextStyle(fontSize: 13, height: 1.35, color: primary),
-              ),
-            ),
-          if (devicesText != null)
-            _Line(
-              icon: Icons.developer_board,
-              iconColor: muted,
-              child: Text(
-                devicesText,
-                key: const Key('text_peace_devices'),
-                style: TextStyle(fontSize: 13, height: 1.35, color: muted),
-              ),
-            ),
-          if (stale)
-            _Line(
-              icon: Icons.cloud_off_outlined,
-              iconColor: warning,
-              child: Text(
-                'Cihaz çevrimdışı; açık lamba bilgisi güncel değil.',
-                key: const Key('text_peace_stale'),
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.35,
-                  fontWeight: FontWeight.w600,
-                  color: warning,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: stale
+              ? AppFamilies.amber.base.withValues(alpha: 0.10)
+              : AppTheme.getInsetColor(context),
+          borderRadius: BorderRadius.circular(AppRadius.r12),
+          border: Border.all(
+            color: stale
+                ? AppFamilies.amber.base.withValues(alpha: 0.30)
+                : AppTheme.getCardBorder(context),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (lastText != null)
+                _Line(
+                  icon: Icons.history,
+                  iconColor: muted,
+                  child: Text(
+                    lastText,
+                    key: const Key('text_peace_last_notice'),
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: primary,
+                    ),
+                  ),
                 ),
-              ),
-            ),
-        ],
+              if (devicesText != null)
+                _Line(
+                  icon: Icons.developer_board,
+                  iconColor: muted,
+                  child: Text(
+                    devicesText,
+                    key: const Key('text_peace_devices'),
+                    style: TextStyle(fontSize: 13, height: 1.35, color: muted),
+                  ),
+                ),
+              if (stale)
+                _Line(
+                  icon: Icons.cloud_off_outlined,
+                  iconColor: warning,
+                  child: Text(
+                    'Cihaz çevrimdışı; açık lamba bilgisi güncel değil.',
+                    key: const Key('text_peace_stale'),
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      fontWeight: FontWeight.w600,
+                      color: warning,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }

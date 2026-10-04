@@ -59,6 +59,7 @@ except Exception as _exc:  # noqa: BLE001 - ortam sorunu: arayüz testleri atlan
 SOURCE_FILES = [
     os.path.join(TOOL_DIR, "ev_otomasyon_sistemi.py"),
     os.path.join(TOOL_DIR, "factory_client.py"),
+    os.path.join(TOOL_DIR, "tool_theme.py"),  # görsel tema modülü de sır/kabuk/TLS taramasından geçer
 ]
 
 # --- Test için çalışma anında üretilen SAHTE değerler (sabit sır değildir) --------------------------------

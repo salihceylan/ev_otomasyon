@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../theme/tokens.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/settings/accent_button.dart';
 import 'service_setup_controller.dart';
 import 'setup_fields.dart';
 import 'setup_style.dart';
@@ -11,9 +14,13 @@ import 'setup_widgets.dart';
 /// reddedildiyse elle anahtar girişi ve hatanın "Neden? / Ne yapmalıyım?" açıklaması gösterilir.
 /// Anahtarlı hiçbir istek, pano kimliği doğrulanmadan gönderilmez.
 class DeviceConnectionPanel extends StatefulWidget {
-  const DeviceConnectionPanel({super.key, required this.controller});
+  const DeviceConnectionPanel({super.key, required this.controller, this.primaryConnect = true});
 
   final ServiceSetupController controller;
+
+  /// "Panoya Bağlan" gradyanlı birincil düğme mi (varsayılan), yoksa çerçeveli ikincil mi. Adımın kendi birincil eylemi
+  /// aynı ekrandaysa (6. adım: "Buluta Bağla ve Bekle") `false` verilir: ekranda TEK gradyan birincil kalır.
+  final bool primaryConnect;
 
   @override
   State<DeviceConnectionPanel> createState() => _DeviceConnectionPanelState();
@@ -41,32 +48,35 @@ class _DeviceConnectionPanelState extends State<DeviceConnectionPanel> {
     if (!_ipDirty && _ip.text != target.ip) _ip.text = target.ip;
 
     if (conn.ready && !_editing) {
+      // Tek satırlık özet: "Adresi değiştir" ayrı satırdaki metin düğmesi YERİNE sağdaki kalem düğmesidir (kart ≈ 107 dp
+      // yerine ≈ 70 dp; 6-9. adımlarda her seferinde boş bir 48 dp satır kalmaz).
+      final summaryStyle = TextStyle(fontWeight: FontWeight.w700, color: SetupColors.readable(context, SetupColors.ok));
       return SetupCard(
         key: const Key('device_connection_ready'),
         accent: SetupColors.ok,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+        child: Row(
           children: [
-            Row(
-              children: [
-                Icon(Icons.link_rounded, color: SetupColors.readable(context, SetupColors.ok)),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Pano bağlı • ${target.ip}',
-                    style: TextStyle(fontWeight: FontWeight.w700, color: SetupColors.readable(context, SetupColors.ok)),
-                  ),
-                ),
-              ],
+            const SetupMiniOrb(family: AppFamilies.emerald, icon: Icons.link_rounded, size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              // Büyük yazıda başlık ve adres iki ayrı satır (eskiden tek Text sarıp ayraç nokta satır sonunda yetim kalıyordu:
+              // "Pano bağlı •" / "192.168.1.42"); normal yazıda tek satır özeti.
+              child: SetupText.isLargeText(context)
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Pano bağlı', style: summaryStyle),
+                        Text(target.ip, style: summaryStyle),
+                      ],
+                    )
+                  : Text('Pano bağlı • ${target.ip}', style: summaryStyle),
             ),
-            // Düğme ayrı satırda: dar ekranda ve büyük yazıda yan yana sığmayıp taşmasın.
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                key: const Key('btn_change_device_ip'),
-                onPressed: () => setState(() => _editing = true),
-                child: const Text('Adresi değiştir'),
-              ),
+            GlassIconButton(
+              key: const Key('btn_change_device_ip'),
+              icon: Icons.edit_rounded,
+              semanticLabel: 'Adresi değiştir',
+              onTap: () => setState(() => _editing = true),
             ),
           ],
         ),
@@ -83,7 +93,7 @@ class _DeviceConnectionPanelState extends State<DeviceConnectionPanel> {
         children: [
           Row(
             children: [
-              Icon(Icons.router_rounded, color: SetupColors.readable(context, SetupColors.warn)),
+              const SetupMiniOrb(family: AppFamilies.amber, icon: Icons.router_rounded, size: 28),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -111,17 +121,28 @@ class _DeviceConnectionPanelState extends State<DeviceConnectionPanel> {
             onSubmitted: (_) => _connect(),
           ),
           const SizedBox(height: 10),
-          SetupPrimaryButton(
-            key: const Key('btn_connect_device'),
-            label: 'Panoya Bağlan',
-            icon: Icons.link_rounded,
-            busy: conn.busy,
-            onPressed: _connect,
-          ),
+          if (widget.primaryConnect)
+            SetupPrimaryButton(
+              key: const Key('btn_connect_device'),
+              label: 'Panoya Bağlan',
+              icon: Icons.link_rounded,
+              busy: conn.busy,
+              onPressed: _connect,
+            )
+          else
+            SetupSecondaryButton(
+              key: const Key('btn_connect_device'),
+              label: 'Panoya Bağlan',
+              icon: Icons.link_rounded,
+              busy: conn.busy,
+              onPressed: _connect,
+            ),
           if (problem != null)
             SetupProblemBox(
               problem: problem,
               onRetry: conn.canRetry ? () => conn.retry() : null,
+              // "Panoya Bağlan" hemen yukarıda (bu panelin birincil eylemi): yeniden deneme aynı işi yapar, çerçeveli kalır.
+              retrySecondary: true,
             ),
           if (needsKey) ...[
             const SizedBox(height: 4),
@@ -138,9 +159,10 @@ class _DeviceConnectionPanelState extends State<DeviceConnectionPanel> {
             OutlinedButton.icon(
               key: const Key('btn_use_key'),
               onPressed: conn.busy ? null : _useKey,
-              icon: const Icon(Icons.vpn_key_rounded, size: 18),
+              icon: Icon(Icons.vpn_key_rounded, size: accentIconSize(context, base: 18)),
               label: const Text('Bu Anahtarla Bağlan'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              // Çerçeve + metin + simge AYNI aileden ve AA (tema varsayılan çerçevesi açıkta ≈ 2.4:1'di).
+              style: accentOutlinedButtonStyle(context, AppFamilies.sky),
             ),
           ],
         ],

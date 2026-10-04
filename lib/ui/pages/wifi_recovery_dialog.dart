@@ -8,9 +8,16 @@ import '../../models/automation_models.dart';
 import '../../services/automation_api_service.dart';
 import '../../services/automation_state.dart';
 import '../../services/board_network_binding.dart';
+import '../../services/clock.dart';
 import '../../utils/qr_claim_parser.dart';
+import '../common/auth_form.dart' show BalancedText;
 import '../common/wifi_provision_panel.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/orb/orb.dart';
+import '../widgets/settings/accent_button.dart';
+import '../widgets/surface_card.dart';
+import '../theme/feature_accent.dart';
 
 /// Wi-Fi kurulum & kurtarma sihirbazı: ev Wi-Fi bilgileri değiştiğinde (ya da servis kurulumunda)
 /// panoya yenisini yükler. **Giriş yapmış olmak ve internet GEREKMEZ** (canlı test listesi Aşama 16).
@@ -43,6 +50,22 @@ class WifiRecoveryDialog extends StatefulWidget {
   /// açık olduğunu bu adla anlar ve kilit açılınca yeniden açar (kullanıcı telefonun Wi-Fi ayarlarına gidip
   /// 30 sn'den uzun kalmış olabilir).
   static const String routeName = '/wifi-setup';
+
+  /// Önbellekteki anahtar okuması için üst süre (PF-43): güvenli depo (Keystore/Keychain) takılırsa sihirbaz
+  /// anahtarsız (AP kaynaklı) yolla devam eder. Servis katmanı (PF-02) ayrıca her depo çağrısını ≈6 sn'de
+  /// sınırlar; bu ek emniyettir.
+  static const Duration keyReadTimeout = Duration(seconds: 3);
+
+  /// [uid] panosunun önbellekteki anahtarı: yalnızca **yerel** güvenli depo okuması (ağ yok). Okuma
+  /// [keyReadTimeout] içinde dönmezse ya da hata verirse `null` (anahtarsız devam).
+  @visibleForTesting
+  static Future<String?> readCachedKey(AutomationState state, String uid) async {
+    try {
+      return await state.clock.bound<String?>(state.secureStorage.getLocalKey(uid), keyReadTimeout, () => null);
+    } catch (_) {
+      return null; // depo okunamadı: anahtarsız devam
+    }
+  }
 
   static Future<void> show(
     BuildContext context, {
@@ -78,6 +101,9 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
   bool _apObscure = true;
   bool _done = false;
 
+  /// Parola panoya kopyalandı (simge ✓ olur; parola değişince ya da gizlenince eski haline döner).
+  bool _apCopied = false;
+
   @override
   void initState() {
     super.initState();
@@ -102,12 +128,7 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
     _api.localKey = null;
     final uid = QrClaimParser.normalizeUid(status?.uid);
     if (uid == null) return;
-    String? key;
-    try {
-      key = await _state.secureStorage.getLocalKey(uid);
-    } catch (_) {
-      key = null; // depo okunamadı: anahtarsız devam
-    }
+    final key = await WifiRecoveryDialog.readCachedKey(_state, uid);
     if (!mounted) return;
     if (AutomationApiService.isValidLocalKey(key)) _api.localKey = key;
   }
@@ -130,6 +151,7 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
     if (text.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
+    setState(() => _apCopied = true);
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       const SnackBar(content: Text('Ağ parolası panoya kopyalandı.'), behavior: SnackBarBehavior.floating),
     );
@@ -141,57 +163,55 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
     final textPrimary = AppTheme.getTextPrimary(context);
     final textMuted = AppTheme.getTextMuted(context);
 
+    // Cam gövde (ReplaceBoardDialog / SystemDoctorDialog ile AYNI dil: SurfaceCard, yarıçap [AppRadius.dialog] 24 — eskiden düz opak
+    // yüzey ve 28 dp [AppRadius.sheet]'ti). Yatay boşluklar daraltıldı: 360 dp'de kullanılabilir genişlik 288 (kart içinde 264) dp'ydi
+    // ve düğme etiketleri "Yeniden Kontrol / Et", "Panoya / Yükle" gibi yetim sözcüklerle sarıyordu; şimdi 8 dp kenar + 16 dp dolgu
+    // ⇒ 312 dp (kart içinde 288).
     return Dialog(
-      backgroundColor: AppTheme.getSurfaceColor(context),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: cardBorder),
-      ),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 24),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 440),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
+        child: SurfaceCard(
+          margin: EdgeInsets.zero,
+          padding: EdgeInsets.zero,
+          radius: AppRadius.dialog,
+          child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
+                // Orb ve kapat düğmesi üstte (başlık/alt başlık 1.5 ölçekte 8 satıra çıkınca ikisi bloğun ortasında yüzmesin).
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryBlue.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.wifi_find, color: AppTheme.primaryBlueLight, size: 22),
-                  ),
+                  OrbIconBadge(icon: Icons.router_rounded, family: AppFeature.wifiRecovery.accentFamily),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        // Dengeli satır sonu: dar diyalogda "Wi-Fi Kurulum & Kurtarma / Sihirbazı" gibi yetim son sözcük kalmaz
+                        // (metin DEĞİŞMEZ; anahtar BalancedText'e verilir: testler yalnız varlığını denetler).
+                        BalancedText(
                           'Wi-Fi Kurulum & Kurtarma Sihirbazı',
                           key: const Key('wifi_dialog_title'),
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: textPrimary),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
                         ),
                         Text(
                           'Modem veya şifre değiştiğinde panoyu yeniden bağlayın. İnternet ve giriş gerekmez.',
-                          style: TextStyle(fontSize: 11.5, color: textMuted),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: AppText.caption, color: textMuted),
                         ),
                       ],
                     ),
                   ),
-                  IconButton(
+                  GlassIconButton(
                     key: const Key('btn_close'),
-                    tooltip: 'Kapat',
-                    icon: Icon(Icons.close, color: textMuted, size: 20),
-                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icons.close_rounded,
+                    semanticLabel: 'Kapat',
+                    onTap: () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
@@ -226,15 +246,12 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
                 ElevatedButton(
                   key: const Key('btn_wifi_done'),
                   onPressed: () => Navigator.of(context).pop(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.accentGreen,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
+                  style: accentButtonStyle(AppFamilies.emerald),
                   child: const Text('Tamam'),
                 ),
               ],
             ],
+          ),
           ),
         ),
       ),
@@ -242,36 +259,56 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
   }
 
   /// Adım 1: telefonu panonun kurulum ağına bağlama yönergesi (parola etiketten; sabit parola yok).
+  ///
+  /// Yönerge tek `Text` kalır (`wifi_step_ap_text`: testler düz metnini okur); numaralı maddeler kalın numarayla ve
+  /// geniş satır aralığıyla ayrışır (`Text.rich`; düz metin birebir aynıdır).
   Widget _buildApStep(Color textPrimary, Color textMuted) {
     final hint = _apSsidHint(_expectedUid);
-    return Container(
-      key: const Key('wifi_step_ap'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
+    final numberStyle = TextStyle(fontWeight: FontWeight.w800, color: textPrimary);
+    // Maddeler: (numara, metin). Metinler ve sırası DEĞİŞMEZ (pinli test: "4. Telefon ... koruyun", "5. Bağlandıktan ...").
+    final items = <(String, String)>[
+      ('1. ', 'Telefonunuzun Wi-Fi ayarlarını açın.'),
+      (
+        '2. ',
+        '${hint == null ? 'Pano etiketindeki "KURULUM Wi-Fi AĞI" (AHBU-XXXXXX biçiminde)' : '"$hint"'} ağına bağlanın.',
       ),
+      (
+        '3. ',
+        'Ağ parolası cihaza özeldir: pano etiketindeki "AĞ PAROLASI (AP)" değerini girin. '
+            'Kolay yol: etiketteki ikinci karekodu (Wi-Fi karekodu) telefonunuzun kamerasıyla okutup çıkan '
+            '"Ağa bağlan" önerisine dokunun.',
+      ),
+      ('4. ', 'Telefon "internet yok" uyarısı verirse bağlantıyı koruyun${_mobileDataNote()}'),
+      ('5. ', 'Bağlandıktan sonra bu ekrana dönüp "Bağlantıyı Test Et"e dokunun.'),
+    ];
+    return SurfaceCard(
+      key: const Key('wifi_step_ap'),
+      accent: AppFamilies.sky.base,
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Adım 1: Telefonu panonun kurulum ağına bağlayın',
             key: const Key('wifi_step_ap_title'),
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryBlueLight),
+            // Açık temada ham primaryBlueLight beyaz üstünde ≈ 2.4:1'di: tema duyarlı AA bağlantı tonu.
+            style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: AppTheme.infoText(context)),
           ),
           const SizedBox(height: 6),
-          Text(
-            'Pano kendi kurulum ağını yayınlar; bu işlem için internet ve hesap girişi gerekmez.\n'
-            '1. Telefonunuzun Wi-Fi ayarlarını açın.\n'
-            '2. ${hint == null ? 'Pano etiketindeki "KURULUM Wi-Fi AĞI" (AHBU-XXXXXX biçiminde)' : '"$hint"'} ağına bağlanın.\n'
-            '3. Ağ parolası cihaza özeldir: pano etiketindeki "AĞ PAROLASI (AP)" değerini girin. '
-            'Kolay yol: etiketteki ikinci karekodu (Wi-Fi karekodu) telefonunuzun kamerasıyla okutup çıkan '
-            '"Ağa bağlan" önerisine dokunun.\n'
-            '4. Telefon "internet yok" uyarısı verirse bağlantıyı koruyun${_mobileDataNote()}\n'
-            '5. Bağlandıktan sonra bu ekrana dönüp "Pano Bağlantısını Test Et"e dokunun.',
+          Text.rich(
+            TextSpan(
+              children: [
+                const TextSpan(
+                  text: 'Pano kendi kurulum ağını yayınlar; bu işlem için internet ve hesap girişi gerekmez.\n',
+                ),
+                for (var i = 0; i < items.length; i++) ...[
+                  TextSpan(text: items[i].$1, style: numberStyle),
+                  TextSpan(text: items[i].$2 + (i == items.length - 1 ? '' : '\n')),
+                ],
+              ],
+            ),
             key: const Key('wifi_step_ap_text'),
-            style: TextStyle(fontSize: 12, color: textMuted, height: 1.4),
+            style: TextStyle(fontSize: 13, color: textMuted, height: 1.5),
           ),
           const SizedBox(height: 10),
           TextField(
@@ -280,12 +317,14 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
             obscureText: _apObscure,
             autocorrect: false,
             enableSuggestions: false,
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(() => _apCopied = false),
             decoration: InputDecoration(
               isDense: true,
-              labelText: 'Etiketteki ağ parolası (isteğe bağlı)',
-              helperText: 'Yalnızca kopyalamak içindir; kaydedilmez, hiçbir yere gönderilmez.',
-              helperMaxLines: 2,
+              labelText: 'Etiketteki ağ parolası',
+              floatingLabelBehavior: FloatingLabelBehavior.always,
+              helperText: 'İsteğe bağlı. Yalnızca kopyalamak içindir; kaydedilmez, hiçbir yere gönderilmez.',
+              // Gizlilik güvencesinin son sözcüğü ("gönderilmez") 1.5 yazı ölçeğinde kesilmesin.
+              helperMaxLines: 6,
               prefixIcon: const Icon(Icons.vpn_key_outlined, size: 18),
               suffixIcon: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -299,7 +338,11 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
                   IconButton(
                     key: const Key('btn_copy_ap_password'),
                     tooltip: 'Kopyala',
-                    icon: const Icon(Icons.copy_rounded, size: 18),
+                    icon: Icon(
+                      _apCopied ? Icons.check_rounded : Icons.copy_rounded,
+                      size: 18,
+                      color: _apCopied ? AppTheme.accentTone(context, AppFamilies.emerald) : null,
+                    ),
                     onPressed: _apPassword.text.isEmpty ? null : _copyApPassword,
                   ),
                 ],

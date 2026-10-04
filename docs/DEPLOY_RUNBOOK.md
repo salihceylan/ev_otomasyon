@@ -73,7 +73,7 @@ export DATABASE_URL=...   # ev otomasyonu DB'si; kapı sistemi DB'si DEĞİL
 MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js --status         # önce durumu gör
 MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js --baseline 17    # eski run_*.js ile kurulmuş şemayı 001–017 olarak işaretle (beklenen tablolar yoksa reddeder)
 MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js --dry-run        # uygulanacakları gör
-MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js                  # 018,019 (A) → 020,021 (B) → 022–026 (C) → 030 (H)
+MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js                  # 018,019 (A) → 020,021 (B) → 022–026 (C) → 027–029 (B2) → 030 (H) → 031 (L: yerleşim eşitleme)
 ```
 Boş bir veritabanında `--baseline` kullanılmaz; doğrudan `node scripts/migrate.js` 001→sonuncu uygular.
 

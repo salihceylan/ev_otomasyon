@@ -8,6 +8,8 @@ import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/services/peace_notice_controller.dart';
 import 'package:ev_otomasyon/services/push/push_coordinator.dart';
 import 'package:ev_otomasyon/ui/theme/app_theme.dart';
+import 'package:ev_otomasyon/ui/theme/tokens.dart';
+import 'package:ev_otomasyon/ui/widgets/orb/orb.dart';
 import 'package:ev_otomasyon/ui/widgets/peace_notice_host.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderParagraph;
@@ -182,6 +184,10 @@ const _longBody =
     'iki panjur açık. Gece yarısına kadar kimse evde değilse güvenlik için hepsini kapatmanız önerilir. '
     'Bu özet cihazların son bilinen durumuna göre hazırlandı; ayrıntıları ayar kartından görebilirsiniz.';
 
+/// Amber bloom'lu afiş zemini: kart rengi üstüne amber@[alpha] (üretim kodundaki ile aynı).
+Color _bloom(Color card, double alpha) =>
+    Color.alphaBlend(AppFamilies.amber.base.withValues(alpha: alpha), card);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final fontsDir = _materialFontsDir();
@@ -205,10 +211,16 @@ void main() {
         final host = find.byType(PeaceNoticeHost);
         expect(host, findsOneWidget);
         // Köprünün hemen altındaki ilk öğe çocuğun kendisidir (örtü yok).
+        // Orb rozetinin kendi iç katmanları (orb_shadow/orb_body) hariç: köprü örtü çizmez.
+        final all = find.descendant(of: host, matching: find.byType(Positioned));
+        final inOrbs = find.descendant(
+          of: find.descendant(of: host, matching: find.byType(OrbIconBadge)),
+          matching: find.byType(Positioned),
+        );
         expect(
-          find.descendant(of: host, matching: find.byType(Positioned)),
-          findsNothing,
-          reason: 'Stack/Positioned örtüsü kullanılmaz',
+          all.evaluate().length,
+          inOrbs.evaluate().length,
+          reason: 'Stack/Positioned örtüsü kullanılmaz (yalnız orb iç katmanları)',
         );
         expect(tester.widget<PeaceNoticeHost>(host).child, isA<Widget>());
       },
@@ -226,7 +238,10 @@ void main() {
       expect(find.byKey(_closeAll), findsOneWidget);
       expect(find.byKey(_dismiss), findsOneWidget);
       expect(find.text('Hepsini kapat'), findsOneWidget);
-      expect(find.text('Kapat'), findsOneWidget);
+      // Son tur (WP-FX-B): görünür iki etiket de "kapat" idi (ayrım yalnız ekran okuyucudaydı); bildirimi kaldıran eylem
+      // artık "Gizle" (lamba/panjur kapatan eylem "Hepsini kapat" olarak kalır).
+      expect(find.text('Gizle'), findsOneWidget);
+      expect(find.text('Kapat'), findsNothing);
     });
 
     testWidgets('başlık/gövde yoksa varsayılan Türkçe metinler', (
@@ -903,7 +918,8 @@ void main() {
                   .first,
             )
             .color!;
-        expect(bannerColor(), AppTheme.cardLight);
+        // Afiş artık kartın üstüne amber tını (bloom) bindirir: kart rengi + amber@0.16.
+        expect(bannerColor(), _bloom(AppTheme.cardLight, 0.16));
 
         await tester.pumpWidget(peaceApp(rig: rig, themeMode: ThemeMode.dark));
         await _settle(tester);
@@ -991,13 +1007,14 @@ void main() {
         final dismiss = tester
             .getSemantics(find.byKey(_dismiss))
             .getSemanticsData();
-        expect(dismiss.label, 'Bildirimi kapat');
-        expect(dismiss.label.toLowerCase(), contains('kapat'));
+        // Anlam etiketi görünen metni ("Gizle") barındırır (WCAG 2.5.3).
+        expect(dismiss.label, 'Bildirimi gizle');
+        expect(dismiss.label.toLowerCase(), contains('gizle'));
         expect(dismiss.flagsCollection.isButton, isTrue);
         expect(dismiss.hasAction(SemanticsAction.tap), isTrue);
-        // Görünen metin değişmedi.
+        // Görünen metinler.
         expect(find.text('Hepsini kapat'), findsOneWidget);
-        expect(find.text('Kapat'), findsOneWidget);
+        expect(find.text('Gizle'), findsOneWidget);
         handle.dispose();
       },
     );
@@ -1058,7 +1075,7 @@ void main() {
           expect(
             _contrast(fg, bg),
             greaterThanOrEqualTo(4.5),
-            reason: '"Kapat" metni',
+            reason: '"Gizle" metni',
           );
 
           for (final key in <Key>[_closeAll]) {

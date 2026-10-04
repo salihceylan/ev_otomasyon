@@ -6,11 +6,21 @@ import '../../models/automation_models.dart';
 import '../../services/automation_api_service.dart';
 import '../../services/clock.dart';
 import '../../utils/wifi_qr_parser.dart';
+import '../motion/motion_scope.dart';
+import '../motion/skeleton.dart';
 import '../pages/claim/qr_scanner_page.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../pages/service_setup/panel/service_glass.dart' show ServiceBalancedLabel, ServiceProgressRing, serviceTallButtonShapeProperty;
+import '../pages/service_setup/setup_style.dart' show SetupText;
+import '../widgets/orb/orb.dart';
+import '../widgets/settings/accent_button.dart';
+import '../widgets/surface_card.dart';
+import 'arc_spinner.dart';
 import 'cooldown.dart';
 import 'inline_message.dart';
 import 'validators.dart';
+import 'wifi_signal_bars.dart';
 
 /// Pano Wi-Fi kurulum bileşeni (WP-E2; **Wi-Fi kurtarma diyaloğu ve servis kurulum sihirbazı
 /// (F, adım 5) aynı bileşeni kullanabilir**): bağlantı testi -> ağ tarama -> bilgi girişi -> gönder ->
@@ -111,6 +121,22 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
   /// İşlem sıra numarası: iptal ve bayat yanıtları ayırt eder.
   int _run = 0;
 
+  /// Paneldeki tam genişlikli düğmelerin yatay dolgusu 16 dp (tema 22-24): kurtarma diyaloğunda kullanılabilir genişlik 288 dp
+  /// (kart içinde 264 dp), tema dolgusuyla etiket payı ≈ 196-218 dp kalıp "Yeniden Kontrol / Et" gibi yetim sözcük çıkıyordu.
+  /// Dikey dolgu temadan aynen (çerçeveli 12, dolgulu 14).
+  static const WidgetStateProperty<EdgeInsetsGeometry?> _panelButtonPadding =
+      WidgetStatePropertyAll<EdgeInsetsGeometry?>(EdgeInsets.symmetric(horizontal: 16, vertical: 12));
+  static const WidgetStateProperty<EdgeInsetsGeometry?> _panelSubmitPadding =
+      WidgetStatePropertyAll<EdgeInsetsGeometry?>(EdgeInsets.symmetric(horizontal: 16, vertical: 14));
+
+  /// Satır içi metin eylemi ("Ağları Tara", "Yeniden Dene"): varsayılan 12-16 dp iç boşluk simgeyi/yazıyı başlık ve notun sol
+  /// kenarından ≈ 13 dp içeri iterdi; dolgu 4 dp ve içerik sola yaslı (dokunma hedefi 48 dp kalır).
+  static final ButtonStyle _inlineActionStyle = TextButton.styleFrom(
+    padding: const EdgeInsets.symmetric(horizontal: 4),
+    minimumSize: const Size(48, AppTouch.minTarget),
+    alignment: AlignmentDirectional.centerStart,
+  );
+
   @override
   void initState() {
     super.initState();
@@ -181,11 +207,7 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         }
       });
       if (status.provisioned == false) return;
-      try {
-        await widget.onDeviceChecked?.call(status); // örn. kimliği doğrulanmış panonun önbellek anahtarı
-      } catch (_) {
-        // Anahtar isteğe bağlıdır: hazırlanamazsa anahtarsız (AP kaynaklı) yolla devam edilir.
-      }
+      await _notifyDeviceChecked(status); // örn. kimliği doğrulanmış panonun önbellek anahtarı
       if (!_alive(run)) return;
       setState(() => _phase = _Phase.idle);
       unawaited(_scan());
@@ -198,9 +220,24 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         _phase = _Phase.idle;
         _checkError = _deviceError(e, whileChecking: true);
       });
-      try {
-        await widget.onDeviceChecked?.call(null); // önceki panoya ait durum/anahtar bırakılmaz
-      } catch (_) {}
+      await _notifyDeviceChecked(null); // önceki panoya ait durum/anahtar bırakılmaz
+    }
+  }
+
+  /// [WifiProvisionPanel.onDeviceChecked] için üst süre (PF-43): çağıran (ör. önbellekteki pano anahtarını
+  /// güvenli depodan okuyan) takılırsa panel sonsuza dek "kontrol ediliyor" kalmasın; Wi-Fi kurtarma panonun
+  /// ACİL yoludur. Kök çözüm servis katmanı süre sınırıdır (PF-02); bu ek emniyettir.
+  static const Duration _deviceCheckedTimeout = Duration(seconds: 3);
+
+  /// Çağırana haber verir; **hata ve zaman aşımı yutulur** (anahtar isteğe bağlıdır: hazırlanamazsa anahtarsız
+  /// (AP kaynaklı) yolla devam edilir). Zamanlayıcı [WifiProvisionPanel.clock]'tandır (testte sahte saat).
+  Future<void> _notifyDeviceChecked(DeviceStatus? status) async {
+    final callback = widget.onDeviceChecked;
+    if (callback == null) return;
+    try {
+      await widget.clock.bound<void>(callback(status), _deviceCheckedTimeout, () {});
+    } catch (_) {
+      // Anahtar isteğe bağlı: yok sayılır.
     }
   }
 
@@ -249,8 +286,9 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
     setState(() {
       _phase = _Phase.idle;
       if (wasSubmitting) {
-        _formError = 'Bekleme iptal edildi. Pano bağlanmayı sürdürüyor olabilir; '
-            '"Pano Bağlantısını Test Et" ile durumu kontrol edebilirsiniz.';
+        _formError =
+            'Bekleme iptal edildi. Pano bağlanmayı sürdürüyor olabilir; '
+            '"Bağlantıyı Test Et" ile durumu kontrol edebilirsiniz.';
       } else if (!_scanned) {
         _scanError = 'Tarama iptal edildi.';
       }
@@ -328,7 +366,8 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
     if (_rateLimit.isActive) return;
     final ssid = _ssid.text; // KIRPILMAZ
     final pass = _pass.text;
-    final error = WifiValidators.ssidError(ssid) ?? WifiValidators.passwordError(pass, networkSecured: _selectedSecured);
+    final error =
+        WifiValidators.ssidError(ssid) ?? WifiValidators.passwordError(pass, networkSecured: _selectedSecured);
     if (error != null) {
       setState(() => _formError = error);
       return;
@@ -436,8 +475,12 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           InlineMessage.warning(widget.disabledMessage!, key: const Key('wifi_disabled_message')),
           const SizedBox(height: 12),
         ],
-        _buildConnectionCard(canAct, textPrimary, textMuted),
-        const SizedBox(height: 14),
+        // Başarıda TEK başarı kartı: bağlantı kartı (bayat "Bağlantıyı Yeniden Kontrol Et" eylemiyle) gizlenir; iki yığılı yeşil kart
+        // aynı şeyi söylüyor ve eylem "Tamam" ile yarışıyordu.
+        if (!(result != null && result.isSuccess)) ...[
+          _buildConnectionCard(canAct, textPrimary, textMuted),
+          const SizedBox(height: 14),
+        ],
         if (result != null && result.isSuccess)
           _buildSuccess(result)
         else ...[
@@ -457,33 +500,41 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
       'Adres: ${_hostLabel()}',
     ].join('  •  ');
     final idleTitle = widget.numberedSteps ? 'Adım 2: Panoyla bağlantıyı test edin' : 'Pano bağlantısı';
-    return Container(
+    return SurfaceCard(
+      key: const Key('wifi_connection_card'),
+      accent: connected ? AppFamilies.emerald.base : null,
+      active: connected,
+      // Kart içi kart: r16 (sihirbazda SetupCard > bu kart iç içe; ikisi de 20 olunca üç seviye aynı yarıçapta kalıyordu).
+      radius: AppRadius.r16,
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: connected ? AppTheme.accentGreen.withValues(alpha: 0.10) : AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: connected ? AppTheme.accentGreen.withValues(alpha: 0.6) : AppTheme.getCardBorder(context),
-        ),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(
-                connected ? Icons.check_circle : Icons.wifi_find,
-                color: connected ? AppTheme.accentGreen : AppTheme.primaryBlueLight,
-                size: 20,
+              // Başarı yeşil orb ✓ (yalnız bağlantı testi gerçekten başarılıysa); bekleme/tarama sırasında dönen yay.
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  OrbIconBadge(
+                    key: const Key('wifi_connection_orb'),
+                    icon: connected ? Icons.check_rounded : Icons.network_check_rounded,
+                    family: connected ? AppFamilies.emerald : AppFamilies.sky,
+                    status: connected ? OrbStatus.success : OrbStatus.none,
+                  ),
+                  if (_phase == _Phase.checking)
+                    Positioned.fill(
+                      child: ProgressArc(diameter: OrbSize.sm.diameter, color: AppFamilies.sky.light, strokeWidth: 2.5),
+                    ),
+                ],
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  connected
-                      ? 'Pano ile bağlantı kuruldu${status == null ? '' : ' (${status.deviceName})'}'
-                      : idleTitle,
-                  key: const Key('wifi_connection_title'),
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: textPrimary),
+                // Dengeli satır sonu: dar yerde "Adım 2: Panoyla bağlantıyı test / edin" gibi yetim son sözcük kalmaz (metin DEĞİŞMEZ).
+                child: ServiceBalancedLabel(
+                  connected ? 'Pano ile bağlantı kuruldu${status == null ? '' : ' (${status.deviceName})'}' : idleTitle,
+                  textKey: const Key('wifi_connection_title'),
+                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: textPrimary),
                 ),
               ),
             ],
@@ -493,7 +544,7 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
             Text(
               detail,
               key: const Key('wifi_connection_detail'),
-              style: TextStyle(fontSize: 11.5, color: textMuted, height: 1.35),
+              style: TextStyle(fontSize: AppTouch.minFontSize, color: textMuted, height: 1.35),
             ),
           ],
           const SizedBox(height: 10),
@@ -503,9 +554,26 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
               key: const Key('btn_wifi_check'),
               onPressed: canAct ? _checkConnection : null,
               icon: _phase == _Phase.checking
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.refresh, size: 16),
-              label: Text(connected ? 'Bağlantıyı Yeniden Kontrol Et' : 'Pano Bağlantısını Test Et'),
+                  ? SizedBox(
+                      width: accentIconSize(context, base: 16),
+                      height: accentIconSize(context, base: 16),
+                      // Düğme metniyle AYNI AA ton (ham #60A5FA açık temada ≈ 2.4:1'di).
+                      child: ArcSpinner(
+                        size: accentIconSize(context, base: 16),
+                        color: AppTheme.readableFamily(context, AppFamilies.sky),
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : Icon(Icons.refresh_rounded, size: accentIconSize(context, base: 16)),
+              label: ServiceBalancedLabel(
+                connected ? 'Bağlantıyı Yeniden Kontrol Et' : 'Bağlantıyı Test Et',
+                centered: true,
+              ),
+              // Çerçeve + metin + simge AYNI aileden ve AA (sky; tema varsayılan çerçevesi açıkta ≈ 2.4:1'di ve hemen altındaki
+              // karekod düğmesi [accentOutlinedButtonStyle] ile iki farklı çerçeveli düğme dili çıkıyordu); yatay dolgu dar
+              // diyalogda etiketin yetim sözcük bırakmaması için daraltılır.
+              style: accentOutlinedButtonStyle(context, AppFamilies.sky)
+                  .copyWith(padding: _panelButtonPadding, shape: serviceTallButtonShapeProperty),
             ),
           ),
           if (_mismatch != null) ...[
@@ -546,13 +614,23 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
                   ? TextButton.icon(
                       key: const Key('btn_wifi_scan_cancel'),
                       onPressed: _cancel,
-                      icon: const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2)),
+                      style: _inlineActionStyle,
+                      icon: SizedBox(
+                        width: accentIconSize(context, base: 14),
+                        height: accentIconSize(context, base: 14),
+                        child: ArcSpinner(
+                          size: accentIconSize(context, base: 14),
+                          color: AppTheme.readableFamily(context, AppFamilies.sky),
+                          strokeWidth: 2,
+                        ),
+                      ),
                       label: const Text('Taramayı İptal Et', style: TextStyle(fontSize: 12)),
                     )
                   : TextButton.icon(
                       key: const Key('btn_wifi_scan'),
                       onPressed: canAct ? _scan : null,
-                      icon: const Icon(Icons.wifi_tethering, size: 16),
+                      style: _inlineActionStyle,
+                      icon: Icon(Icons.wifi_tethering, size: accentIconSize(context, base: 16)),
                       label: const Text('Ağları Tara', style: TextStyle(fontSize: 12)),
                     ),
           ],
@@ -561,7 +639,7 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         Text(
           'Pano yalnızca 2,4 GHz Wi-Fi ağlarına bağlanabilir.',
           key: const Key('wifi_24ghz_note'),
-          style: TextStyle(fontSize: 11.5, color: textMuted),
+          style: TextStyle(fontSize: AppTouch.minFontSize, color: textMuted),
         ),
         if (_scanError != null) ...[
           const SizedBox(height: 8),
@@ -577,21 +655,28 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         ],
         if (_scanned && _networks.isEmpty && _scanError == null) ...[
           const SizedBox(height: 8),
-          const InlineMessage.info('Çevrede ağ bulunamadı. Ağ adını elle yazabilirsiniz.', key: Key('wifi_no_networks')),
+          const InlineMessage.info(
+            'Çevrede ağ bulunamadı. Ağ adını elle yazabilirsiniz.',
+            key: Key('wifi_no_networks'),
+          ),
+        ],
+        if (_phase == _Phase.scanning && _networks.isEmpty) ...[
+          const SizedBox(height: 8),
+          const _NetworkSkeleton(key: Key('wifi_scan_skeleton')),
         ],
         if (_networks.isNotEmpty) ...[
           const SizedBox(height: 8),
-          // Dış kutu yalnızca çerçeve çizer; zemin rengi `Material`dadır (ListTile dokunma efekti ve
-          // seçili rengi, aradaki renkli bir DecoratedBox tarafından gizlenmesin).
+          // Dış kutu yalnızca çerçeve çizer; zemin rengi `Material`dadır (dokunma efekti ve seçili rengi, aradaki
+          // renkli bir DecoratedBox tarafından gizlenmesin).
           Container(
-            constraints: const BoxConstraints(maxHeight: 190),
+            constraints: const BoxConstraints(maxHeight: 220),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(AppRadius.r12),
               border: Border.all(color: cardBorder),
             ),
             child: Material(
               color: cardBg,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(AppRadius.r12),
               clipBehavior: Clip.antiAlias,
               child: ListView.builder(
                 key: const Key('wifi_network_list'),
@@ -600,30 +685,10 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
                 itemBuilder: (context, index) {
                   final net = _networks[index];
                   final selected = _ssid.text == net.ssid;
-                  return ListTile(
+                  return _NetworkTile(
                     key: Key('wifi_network_$index'),
-                    dense: true,
+                    network: net,
                     selected: selected,
-                    leading: Icon(
-                      _signalIcon(net.rssi),
-                      size: 18,
-                      color: AppTheme.primaryBlueLight,
-                      semanticLabel: 'Sinyal ${_signalLabel(net.rssi)}',
-                    ),
-                    title: Text(net.ssid, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 13, color: textPrimary)),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          net.secured ? Icons.lock_outline : Icons.lock_open,
-                          size: 13,
-                          color: net.secured ? textMuted : AppTheme.accentGreen,
-                          semanticLabel: net.secured ? 'Şifreli ağ' : 'Açık ağ',
-                        ),
-                        const SizedBox(width: 4),
-                        Text('${net.rssi} dBm', style: TextStyle(fontSize: 11, color: textMuted)),
-                      ],
-                    ),
                     onTap: busy ? null : () => _selectNetwork(net),
                   );
                 },
@@ -635,15 +700,12 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         OutlinedButton.icon(
           key: const Key('btn_wifi_scan_qr'),
           onPressed: canAct ? _scanQr : null,
-          icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentCyan, size: 20),
-          label: const Text(
-            'Modem Wi-Fi Karekodu Tara (Kamera)',
-            style: TextStyle(color: AppTheme.accentCyan, fontWeight: FontWeight.bold, fontSize: 13),
-          ),
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: AppTheme.accentCyan, width: 1.5),
-            padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 14),
-          ),
+          icon: Icon(Icons.qr_code_scanner, size: accentIconSize(context, base: 20)),
+          label: const ServiceBalancedLabel('Modem Wi-Fi Karekodu Tara (Kamera)', centered: true),
+          // Metin + simge + çerçeve AYNI cyan ailesinden ve AA: açık temada ham #06B6D4 beyazda 2.4:1'di. Pasifken (tarama /
+          // bekleme sırasında) tema'nın soluk çerçevesi/metni geçerlidir: düğme "etkin gibi" parlak kalmaz.
+          style: accentOutlinedButtonStyle(context, AppFamilies.cyan)
+              .copyWith(padding: _panelButtonPadding, shape: serviceTallButtonShapeProperty),
         ),
         const SizedBox(height: 12),
         TextField(
@@ -660,12 +722,18 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           }),
           decoration: InputDecoration(
             labelText: 'Wi-Fi Ağ Adı (SSID)',
+            // Etiket her zaman kenarda durur: iki yanındaki simgeler (ön + karekod) dar ekranda/büyük yazıda etiketi kesmesin.
+            floatingLabelBehavior: FloatingLabelBehavior.always,
             hintText: 'Ev Wi-Fi ağınızın adı',
             prefixIcon: const Icon(Icons.wifi, size: 20),
             suffixIcon: IconButton(
               key: const Key('btn_wifi_ssid_qr'),
               tooltip: 'Wi-Fi karekodunu tara',
-              icon: const Icon(Icons.qr_code_scanner, size: 20, color: AppTheme.accentCyan),
+              icon: Icon(
+                Icons.qr_code_scanner,
+                size: 20,
+                color: canAct ? AppTheme.readableAccent(context, AppFamilies.cyan.base) : null,
+              ),
               onPressed: canAct ? _scanQr : null,
             ),
             helperText: ssidEdge ? 'Dikkat: ağ adının başında/sonunda boşluk var; olduğu gibi gönderilir.' : null,
@@ -685,7 +753,9 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           onChanged: (_) => setState(() => _formError = null),
           decoration: InputDecoration(
             labelText: 'Wi-Fi Şifresi',
-            hintText: 'Açık ağlar için boş bırakın',
+            floatingLabelBehavior: FloatingLabelBehavior.always,
+            // Tek satırlık kısa ipucu: iki satırlık ipucu alanı yazı girilince de 3 satır yükseklikte tutuyordu.
+            hintText: 'Açık ağ: boş bırakın',
             prefixIcon: const Icon(Icons.lock_outline, size: 20),
             suffixIcon: IconButton(
               key: const Key('btn_wifi_password_toggle'),
@@ -703,14 +773,11 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           const SizedBox(height: 12),
         ],
         if (_phase == _Phase.submitting) ...[
-          InlineMessage.info(
-            'Bilgiler panoya gönderildi; pano ev ağına bağlanıyor (en çok ${widget.connectTimeout.inSeconds} sn)...',
+          _WifiWaitCard(
             key: const Key('wifi_waiting'),
-            trailing: TextButton(
-              key: const Key('btn_wifi_cancel'),
-              onPressed: _cancel,
-              child: const Text('İptal'),
-            ),
+            clock: widget.clock,
+            timeout: widget.connectTimeout,
+            onCancel: _cancel,
           ),
           const SizedBox(height: 12),
         ],
@@ -725,20 +792,26 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           key: const Key('btn_wifi_submit'),
           onPressed: (canAct && !cooling) ? _submit : null,
           icon: _phase == _Phase.submitting
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-              : const Icon(Icons.send_rounded, size: 18),
-          label: Text(
+              ? SizedBox(
+                  width: accentIconSize(context, base: 18),
+                  height: accentIconSize(context, base: 18),
+                  // Gönderirken düğme pasif cam hap olur: yay rengi temaya göre (koyuda beyaz, açıkta koyu sky) — sabit beyaz yay
+                  // açık temada beyaz-üstü-açık-gri olup (≈ 1.2:1) görünmüyordu; SetupPrimaryButton ile aynı kural.
+                  child: ProgressArc(
+                    diameter: accentIconSize(context, base: 18),
+                    color: AppTheme.isDark(context) ? Colors.white : AppFamilies.sky.deep,
+                    strokeWidth: 2.2,
+                  ),
+                )
+              : Icon(Icons.send_rounded, size: accentIconSize(context, base: 18)),
+          label: ServiceBalancedLabel(
             cooling
                 ? 'Yeni Wi-Fi Şifresini Panoya Yükle (${_rateLimit.remainingSeconds} sn)'
                 : 'Yeni Wi-Fi Şifresini Panoya Yükle',
-            textAlign: TextAlign.center,
+            centered: true,
           ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.primaryBlue,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            textStyle: const TextStyle(fontWeight: FontWeight.bold),
-          ),
+          // Dar diyalogda (288 dp) etiket payı büyüsün: yatay dolgu 24 -> 16.
+          style: ButtonStyle(padding: _panelSubmitPadding),
         ),
       ],
     );
@@ -747,22 +820,27 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
   Widget _buildSuccess(WifiConnectResult result) {
     final ip = result.ipAddress;
     final muted = AppTheme.getTextMuted(context);
-    return Container(
+    return SurfaceCard(
       key: const Key('wifi_result_success'),
+      accent: AppFamilies.emerald.base,
+      active: true,
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.accentGreen.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accentGreen.withValues(alpha: 0.4)),
-      ),
       child: Column(
         children: [
-          const Icon(Icons.check_circle_outline, color: AppTheme.accentGreen, size: 44),
-          const SizedBox(height: 10),
-          const Text(
+          // Başarı YALNIZ `WifiConnectOutcome.success` ile gelir: yeşil orb ✓ (tek seferlik başarı halkası).
+          const OrbIconBadge(
+            key: Key('wifi_success_orb'),
+            icon: Icons.check_rounded,
+            family: AppFamilies.emerald,
+            size: OrbSize.xl,
+            glow: true,
+            status: OrbStatus.success,
+          ),
+          const SizedBox(height: 12),
+          Text(
             'Pano ev Wi-Fi ağına bağlandı!',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.accentGreen),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
           ),
           const SizedBox(height: 8),
           Text(
@@ -778,7 +856,12 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
             'Telefonunuzu ev Wi-Fi ağınıza (veya mobil veriye) geri alın.',
             key: const Key('wifi_success_phone_hint'),
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12.5, color: AppTheme.getTextPrimary(context), fontWeight: FontWeight.w600, height: 1.4),
+            style: TextStyle(
+              fontSize: 12.5,
+              color: AppTheme.getTextPrimary(context),
+              fontWeight: FontWeight.w600,
+              height: 1.4,
+            ),
           ),
         ],
       ),
@@ -791,6 +874,8 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
     final retryButton = TextButton(
       key: const Key('btn_wifi_retry'),
       onPressed: _retry,
+      // İletiyle aynı sol kenar (varsayılan metin düğmesi dolgusu "Yeniden Dene"yi mesajdan ≈ 10 dp içeri iterdi).
+      style: _inlineActionStyle,
       child: const Text('Yeniden Dene'),
     );
     return uncertain
@@ -802,16 +887,229 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           )
         : InlineMessage.error(result.message, key: key, trailing: retryButton);
   }
+}
 
-  IconData _signalIcon(int rssi) {
-    if (rssi >= -60) return Icons.wifi;
-    if (rssi >= -75) return Icons.wifi_2_bar;
-    return Icons.wifi_1_bar;
+/// Taranan ağ satırı: animasyonlu sinyal çubukları + ağ adı + kilit simgesi + dBm. Anahtar satırın kendisindedir
+/// (`wifi_network_<i>`); seçili satır sky vurgulu.
+class _NetworkTile extends StatelessWidget {
+  const _NetworkTile({super.key, required this.network, required this.selected, required this.onTap});
+
+  final WifiNetwork network;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final textPrimary = AppTheme.getTextPrimary(context);
+    final textMuted = AppTheme.getTextMuted(context);
+    final accent = AppFamilies.sky.base;
+    return Semantics(
+      button: true,
+      selected: selected,
+      enabled: onTap != null,
+      child: InkWell(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: MotionScope.durationOf(context, AppMotion.fast),
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? accent.withValues(alpha: 0.14) : Colors.transparent,
+            border: Border(left: BorderSide(color: selected ? accent : Colors.transparent, width: 3)),
+          ),
+          child: Builder(
+            builder: (context) {
+              final ssidText = Text(
+                network.ssid,
+                maxLines: SetupText.isLargeText(context) ? 2 : 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: textPrimary,
+                ),
+              );
+              final lock = Icon(
+                network.secured ? Icons.lock_outline : Icons.lock_open,
+                size: accentIconSize(context, base: 15),
+                // Açık (şifresiz) ağ "güvenli" yeşili DEĞİL, uyarı tonudur (amber, AA); şifreli ağ nötr.
+                color: network.secured ? textMuted : AppTheme.warningText(context),
+                semanticLabel: network.secured ? 'Şifreli ağ' : 'Açık ağ',
+              );
+              final dbm = Text('${network.rssi} dBm', style: TextStyle(fontSize: AppTouch.minFontSize, color: textMuted));
+              if (SetupText.isLargeText(context)) {
+                // Büyük yazıda kilit + dBm ağ adının ALTINA iner (aynı satırda ağ adını ve dBm'i sıkıştırıp taşırıyordu);
+                // Wrap: dar yerde kilit ve dBm de alt alta dizilir.
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    WifiSignalBars(rssi: network.rssi),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ssidText,
+                          const SizedBox(height: 2),
+                          Wrap(spacing: 6, runSpacing: 2, crossAxisAlignment: WrapCrossAlignment.center, children: [lock, dbm]),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  WifiSignalBars(rssi: network.rssi),
+                  const SizedBox(width: 12),
+                  Expanded(child: ssidText),
+                  const SizedBox(width: 8),
+                  lock,
+                  const SizedBox(width: 6),
+                  dbm,
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Tarama sürerken ağ listesi yerine iskelet satırları (spinner yerine).
+class _NetworkSkeleton extends StatelessWidget {
+  const _NetworkSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: 'Ağlar taranıyor',
+      child: ExcludeSemantics(
+        child: Column(
+          children: [
+            for (var i = 0; i < 3; i++)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    const Skeleton(width: 22, height: 18, radius: 4),
+                    const SizedBox(width: 12),
+                    Expanded(child: Skeleton(height: 14, radius: 6)),
+                    const SizedBox(width: 12),
+                    const Skeleton(width: 40, height: 12, radius: 6),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// "Pano ev ağına bağlanıyor" bekleme kartı: dönen yay + ortada kalan saniye geri sayımı + açıklama + İptal.
+/// Geri sayım [clock]'tan (testte sahte saat) türer ve yalnız bu küçük widget'ı saniyede bir yeniden kurar. Süre
+/// bitince yalnızca sayaç 0'da durur; sonucu panelin beklemesi belirler (başarı yalnız `success`).
+class _WifiWaitCard extends StatefulWidget {
+  const _WifiWaitCard({super.key, required this.clock, required this.timeout, required this.onCancel});
+
+  final Clock clock;
+  final Duration timeout;
+  final VoidCallback onCancel;
+
+  @override
+  State<_WifiWaitCard> createState() => _WifiWaitCardState();
+}
+
+class _WifiWaitCardState extends State<_WifiWaitCard> {
+  late final DateTime _start = widget.clock.now();
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = widget.clock.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
-  String _signalLabel(int rssi) {
-    if (rssi >= -60) return 'iyi';
-    if (rssi >= -75) return 'orta';
-    return 'zayıf';
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  int get _remaining {
+    final left = widget.timeout - widget.clock.now().difference(_start);
+    if (left <= Duration.zero) return 0;
+    return (left.inMilliseconds / 1000).ceil();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final family = AppFamilies.sky;
+    final textPrimary = AppTheme.getTextPrimary(context);
+    // Belirli halka: kalan süre / bağlanma zaman aşımı oranıyla boşalır (eskiden belirsiz dönen yay: rakam azalırken halka
+    // ilerlemeyi göstermiyordu). Renk açık temada koyu aile tonudur ([AppTheme.accentTone]; ham sky.light ≈ 2.4:1'di).
+    final fraction = (widget.timeout.inMilliseconds <= 0
+            ? 0.0
+            : (widget.timeout - widget.clock.now().difference(_start)).inMilliseconds / widget.timeout.inMilliseconds)
+        .clamp(0.0, 1.0);
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      child: SurfaceCard(
+        accent: family.base,
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                ServiceProgressRing(
+                  value: fraction,
+                  size: 56,
+                  strokeWidth: 4,
+                  color: AppTheme.accentTone(context, family),
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '$_remaining',
+                        key: const Key('wifi_wait_countdown'),
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                          color: textPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Bilgiler panoya gönderildi; pano ev ağına bağlanıyor (en çok ${widget.timeout.inSeconds} sn)...',
+                    style: TextStyle(fontSize: AppText.caption, height: 1.4, color: textPrimary),
+                  ),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                key: const Key('btn_wifi_cancel'),
+                onPressed: widget.onCancel,
+                child: const Text('İptal'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

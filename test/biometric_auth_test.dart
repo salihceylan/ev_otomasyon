@@ -337,7 +337,10 @@ void main() {
       expect(find.byType(ChangePasswordPage), findsOneWidget);
       expect(find.byType(DashboardPage), findsNothing);
       expect(find.byKey(const Key('forced_notice')), findsOneWidget);
-      expect(find.byType(BackButton), findsNothing, reason: 'zorunlu ekranda geri düğmesi yok');
+      // Üst çubuk NeonAppBar (cam geri diski `nav_back`): zorunlu ekranda çizilmez; "Çıkış" cam disk eylemidir.
+      expect(find.byKey(const Key('nav_back')), findsNothing, reason: 'zorunlu ekranda geri düğmesi yok');
+      expect(find.byType(BackButton), findsNothing);
+      expect(find.byKey(const Key('btn_forced_logout')), findsOneWidget, reason: 'zorunlu ekranın tek çıkış yolu');
       final guards = tester.widgetList<PopScope>(find.descendant(of: find.byType(ChangePasswordPage), matching: find.byType(PopScope)));
       expect(guards.any((guard) => !guard.canPop), isTrue, reason: 'sistem geri tuşu zorunlu ekranı kapatamaz');
       await tester.state<NavigatorState>(find.byType(Navigator)).maybePop();
@@ -504,6 +507,20 @@ void main() {
 
       expect(opened.done, isTrue);
       expect(env.state.shouldPromptBiometrics, isFalse);
+    });
+
+    testWidgets('dışarıdan (programatik) kapanış karar DEĞİLDİR: tercih yazılmaz, istem yeniden sunulabilir', (tester) async {
+      final env = promptEnv();
+      final opened = await open(tester, env);
+
+      // Çıkış / kilit / derin bağlantı gibi dış nedenle kapanış: kullanıcı "Daha Sonra" demedi.
+      Navigator.of(tester.element(find.byType(BiometricPromptDialog))).pop();
+      await settle(tester);
+
+      expect(opened.done, isTrue);
+      expect(find.byType(BiometricPromptDialog), findsNothing);
+      expect(env.state.shouldPromptBiometrics, isTrue, reason: 'karar verilmedi: istem uygun anda yeniden sunulabilir');
+      expect(await env.h.storage.isBiometricPromptShown(), isFalse, reason: '"gösterildi" kaydı yazılmaz');
     });
   });
 }

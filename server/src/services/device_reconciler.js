@@ -121,12 +121,25 @@ SELECT h.id AS home_id,
    AND d.config_snapshot ->> 'runtime_sync' = 'pending'
  ORDER BY d.created_at ASC, d.id`,
 
-  // Cihazin panjur ciftleri ve sureleri (yukari/asagi satirlari ayni sureyi paylasir).
+  // Cihazin panjur ciftleri ve sureleri (yukari/asagi satirlari ayni sureyi paylasir). YALNIZ eski panonun GERCEK
+  // ciftleri: anlik goruntude (config_snapshot.endpoints) ayni kanal + cift numarasiyla panjur olan VE iki satiri da
+  // hala panjur olan ciftler. Yerlesim esitlemenin actigi cift (yer tutucu sure) panonun kendi kalibrasyonunu ezmesin.
+  // Sure GUNCEL satirdan (sihirbazin yeni olcumu buraya yazilir). Bozuk / dizi olmayan anlik goruntu = cift yok.
   runtimeShutters: `
 SELECT e.shutter_pair_index AS pair, MAX(e.shutter_duration_sec)::int AS sec
   FROM endpoints e
+  JOIN devices d ON d.id = e.device_id
  WHERE e.device_id = $1 AND e.type = 'shutter' AND e.shutter_pair_index IS NOT NULL
+   AND EXISTS (
+     SELECT 1
+       FROM jsonb_array_elements(CASE WHEN jsonb_typeof(d.config_snapshot -> 'endpoints') = 'array'
+                                      THEN d.config_snapshot -> 'endpoints' ELSE '[]'::jsonb END) s
+      WHERE jsonb_typeof(s) = 'object'
+        AND s ->> 'type' = 'shutter'
+        AND s ->> 'channel_index' = e.channel_index::text
+        AND s ->> 'shutter_pair_index' = e.shutter_pair_index::text)
  GROUP BY e.shutter_pair_index
+HAVING COUNT(*) = 2
  ORDER BY e.shutter_pair_index`,
 
   // Isaret: pending -> synced. Yalniz hala AYNI isaretse (replaced_at ayni): yeni bir pano degisimi isareti yeniden

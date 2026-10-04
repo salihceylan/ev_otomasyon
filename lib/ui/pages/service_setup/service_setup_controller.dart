@@ -325,16 +325,36 @@ class ServiceSetupController extends ChangeNotifier {
     }
   }
 
+  /// Çıkışta uçuştaki panjur işleminin (ör. ölçüm hazırlığı: panoya geçici 300 sn yazılıyor) bitmesi için en çok bu kadar
+  /// beklenir. Hazırlık en kötü ~20 sn sürebilir; sınır dolarsa çıkış yine sürer (kilitlenmez) ve önceki süre kayıttan
+  /// sonraki açılışta geri yüklenir.
+  static const Duration exitBusyWait = Duration(seconds: 20);
+
   /// Sihirbazdan çıkmadan önce panoyu güvenli duruma getirir: dinleme durur, yanan lambalar kapanır,
   /// yarım kalan panjur ölçümünün geçici süresi geri yüklenir. Sayfa çıkış onayından sonra çağırır.
+  ///
+  /// Panjur mantığı meşgulken (ör. ölçüm hazırlığı geçici süreyi yazıyor) `run` yeni işi reddeder: bu yüzden önce
+  /// uçuştaki işin bitmesi ([exitBusyWait] sınırıyla) beklenir; aksi halde geri yükleme sessizce atlanır ve 300 sn
+  /// panoda/sunucuda kalırdı.
   Future<void> settleBeforeExit() async {
     if (_disposed) return;
     buttons.stopListening();
+    await _awaitShuttersIdle();
+    if (_disposed) return;
     if (_currentStep == SetupSteps.shutters || shutters.shutters.any((s) => s.hasMeasureOverride)) {
       await shutters.settleMeasurements();
     }
     if (_currentStep == SetupSteps.relays && relays.loaded && relays.okCount > 0) {
       await relays.allLightsOff();
+    }
+  }
+
+  /// Panjur mantığındaki uçuştaki işlem bitene kadar (en çok [exitBusyWait]) 200 ms aralıkla bekler.
+  Future<void> _awaitShuttersIdle() async {
+    if (!shutters.busy) return;
+    final deadline = ctx.clock.now().add(exitBusyWait);
+    while (shutters.busy && !_disposed && ctx.clock.now().isBefore(deadline)) {
+      await ctx.delay(const Duration(milliseconds: 200));
     }
   }
 

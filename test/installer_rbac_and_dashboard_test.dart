@@ -1,7 +1,10 @@
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/pages/dashboard_page.dart';
+import 'package:ev_otomasyon/ui/theme/app_theme.dart';
+import 'package:ev_otomasyon/ui/theme/tokens.dart';
 import 'package:ev_otomasyon/ui/widgets/super_user_drawer.dart';
+import 'package:ev_otomasyon/ui/widgets/user_profile_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -144,6 +147,45 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
       expect(h.state.authStatus, AuthStatus.unauthenticated);
+    });
+
+    testWidgets('rol rozeti ortak GlassPill: büyük yazıda satıra SARILIR (kesilmez); başlık/alt başlık satır sınırsız',
+        (tester) async {
+      await pumpDrawer(tester, globalRole: 'super_user');
+      final label = find.text('SÜPER YÖNETİCİ KONSOLU');
+      expect(find.ancestor(of: label, matching: find.byType(GlassPill)), findsOneWidget);
+      final badge = tester.widget<Text>(label);
+      expect(badge.softWrap, isTrue, reason: "önceden maxLines 1 + üç nokta: 1.5x'te 'SÜPER YÖNETİCİ KONS…'");
+      expect(badge.maxLines, 2);
+      // 'Eski sahibine ulaşılamayan panoy…' diye kelime ortasından kesilen alt başlık ve başlık: satır sınırı yok.
+      expect(tester.widget<Text>(find.text('Eski sahibine ulaşılamayan panoyu sıfırla')).maxLines, isNull);
+      expect(tester.widget<Text>(find.text('Acil Sıfırlama')).maxLines, isNull);
+    });
+
+    testWidgets('koyu temada çekmece yüzeyi sayfa zemininden AYRIŞIR (bir kademe açık) ve sağ kenarda rim vardır',
+        (tester) async {
+      await pumpDrawer(tester, globalRole: 'service_user');
+      final drawer = tester.widget<Drawer>(byKeyName('nav_drawer'));
+      expect(drawer.backgroundColor, AppTheme.surfaceDark);
+      expect(drawer.backgroundColor, isNot(AppTheme.bgDark), reason: 'önceden zeminle aynıydı (scrim altında ≈ 1.1:1)');
+      final shape = drawer.shape! as RoundedRectangleBorder;
+      expect(shape.side.color, SurfaceTokens.dark.rimSolid);
+    });
+
+    testWidgets('kısa ekranda çekmece listesi kaydırılır; kalıcı kaydırma çubuğu gösterilir; çıkış satırı altta sabit kalır',
+        (tester) async {
+      await pumpReady(tester, drawerHost(), role: 'owner', globalRole: 'service_user', size: const Size(400, 520));
+      await openDrawer(tester);
+
+      final list = find.descendant(of: byKeyName('nav_drawer'), matching: find.byType(Scrollable));
+      expect(tester.state<ScrollableState>(list.first).position.maxScrollExtent, greaterThan(0));
+      expect(find.descendant(of: byKeyName('nav_drawer'), matching: find.byType(Scrollbar)), findsOneWidget);
+      expect(tester.getRect(byKeyName('nav_drawer_logout')).bottom, lessThanOrEqualTo(520));
+
+      await tester.drag(list.first, const Offset(0, -2000));
+      await tester.pump();
+      expect(tester.getRect(byKeyName('nav_drawer_theme')).bottom, lessThanOrEqualTo(520), reason: 'tema satırına ulaşılır');
+      expect(tester.getRect(byKeyName('nav_drawer_logout')).bottom, lessThanOrEqualTo(520));
     });
 
     testWidgets('çekmece dar ekranda ve yazı ölçeği 1.5\'te taşmaz (açık tema)', (tester) async {

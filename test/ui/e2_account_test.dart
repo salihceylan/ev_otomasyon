@@ -167,7 +167,9 @@ void main() {
       await pushPage(tester, env, const MagicLinkPage(link: loginLink));
 
       expect(find.byKey(const Key('magic_login_progress')), findsOneWidget);
-      expect(find.byType(BackButton), findsNothing, reason: 'meşgulken geri düğmesi yok');
+      // Üst çubuk NeonAppBar (cam geri diski `nav_back`): meşgulken `automaticallyImplyLeading` kapanır, disk çizilmez.
+      expect(find.byKey(const Key('nav_back')), findsNothing, reason: 'meşgulken geri düğmesi yok');
+      expect(find.byType(BackButton), findsNothing);
       await tester.state<NavigatorState>(find.byType(Navigator)).maybePop();
       await settle(tester);
       expect(find.byType(MagicLinkPage), findsOneWidget, reason: 'geri tuşu meşgulken sayfayı kapatmaz');
@@ -574,10 +576,16 @@ void main() {
       final env = e2Env(role: 'owner');
       await pushPage(tester, env, const ChangePasswordPage());
 
-      expect(find.byType(BackButton), findsOneWidget);
+      // Üst çubuk NeonAppBar: geri düğmesi cam disktir (`nav_back`, ipucu "Back": `WidgetTester.pageBack` bulur); eski
+      // Material `BackButton` türü artık yoktur (WP-FX-B bilinçli güncelleme).
+      expect(find.byKey(const Key('nav_back')), findsOneWidget);
+      expect(find.byTooltip('Back'), findsOneWidget);
       expect(find.byKey(const Key('forced_notice')), findsNothing);
       expect(find.byKey(const Key('btn_forced_logout')), findsNothing);
       expect(find.text('Şifre Değiştir'), findsWidgets);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(ChangePasswordPage), findsNothing, reason: 'geri düğmesi sayfayı kapatır');
     });
 
     testWidgets('boş mevcut şifre, kısa yeni şifre, aynı şifre ve uyuşmayan tekrar reddedilir; istek gitmez', (tester) async {

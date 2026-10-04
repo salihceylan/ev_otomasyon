@@ -247,7 +247,8 @@ void main() {
       addTearDown(env.dispose);
       await openSubscribers(tester, env, pageSize: 2);
 
-      String statText(String key) => tester.widget<Text>(find.byKey(Key(key))).data!;
+      String statText(String key) =>
+          tester.widget<Text>(find.descendant(of: find.byKey(Key(key)), matching: find.byType(Text))).data!;
       // Yalnızca 1. ve 2. daire yüklendi (sahipli: 1, sahipsiz: 1); 3 kayıt daha var.
       expect(statText('stat_total'), '5', reason: 'toplam sunucu toplamıdır');
       expect(statText('stat_assigned'), '1+', reason: 'yüklenen satırlardan sayıldı: kesin değil, "en az"');

@@ -8,17 +8,16 @@ import '../../services/automation_state.dart';
 import '../common/confirm_dialogs.dart';
 import '../dashboard/dashboard_states.dart';
 import '../theme/app_theme.dart';
+import '../widgets/settings/accent_button.dart';
+import '../theme/feature_accent.dart';
+import '../theme/tokens.dart';
+import '../widgets/neon_app_bar.dart';
 import '../widgets/rules/rule_dialog.dart';
 import '../widgets/rules/rule_logic.dart';
+import '../widgets/orb/orb.dart';
+import '../widgets/surface_card.dart';
 
-typedef _RulesVm = ({
-  String signature,
-  bool loading,
-  String? error,
-  bool canManage,
-  bool cloud,
-  String timezone,
-});
+typedef _RulesVm = ({String signature, bool loading, String? error, bool canManage, bool cloud, String timezone});
 
 /// Zamanlı Otomasyon Kuralları sayfası.
 ///
@@ -67,9 +66,18 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
       ?..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(message),
+          // Uyarı: ham amber ZEMİN (beyaz metinle ≈2.1:1, eylem rengi de okunmazdı) yerine tema'nın koyu iletisi +
+          // amber uyarı simgesi.
+          content: warning
+              ? Row(
+                  children: [
+                    Icon(Icons.warning_amber_rounded, color: AppFamilies.amber.light, size: 20),
+                    const SizedBox(width: 10),
+                    Flexible(child: Text(message)),
+                  ],
+                )
+              : Text(message),
           behavior: SnackBarBehavior.floating,
-          backgroundColor: warning ? AppTheme.accentAmber : null,
           action: action,
           duration: Duration(seconds: action == null ? 3 : 8),
         ),
@@ -109,28 +117,21 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
   }
 
   Future<void> _confirmDelete(ScheduledRule rule, String name) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        key: const Key('dialog_delete_rule'),
-        title: const Text('Kural silinsin mi?'),
-        content: Text('$name → ${rule.actionLabel} (${rule.timeString}) kuralı silinecek.'),
-        actions: [
-          TextButton(
-            key: const Key('btn_cancel_delete_rule'),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('İptal'),
-          ),
-          TextButton(
-            key: const Key('btn_confirm_delete_rule'),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.dangerText(ctx)),
-            child: const Text('Sil'),
-          ),
-        ],
-      ),
+    // Ortak onay kabuğu (rose orb başlık + hap eylemler; "Sil" artık çıplak metin düğmesi değil, yıkıcı gradyan hap).
+    // Anahtarlar/metinler aynen (testlerle pinli).
+    final confirmed = await showSimpleConfirm(
+      context,
+      title: 'Kural silinsin mi?',
+      message: '$name → ${rule.actionLabel} (${rule.timeString}) kuralı silinecek.',
+      confirmLabel: 'Sil',
+      cancelLabel: 'İptal',
+      destructive: true,
+      icon: Icons.delete_outline_rounded,
+      dialogKey: const Key('dialog_delete_rule'),
+      cancelKey: const Key('btn_cancel_delete_rule'),
+      confirmKey: const Key('btn_confirm_delete_rule'),
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     final state = context.read<AutomationState>();
     try {
       await state.deleteScheduledRule(rule.id);
@@ -165,16 +166,9 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
         message: 'Zamanlı kurallar sunucuda çalışır. Kuralları yönetmek için bulut moduna geçin.',
       );
     } else if ((!_loadedOnce || vm.loading) && rules.isEmpty && vm.error == null) {
-      body = TimedLoadingView(
-        message: 'Kurallar yükleniyor…',
-        onRetry: () => unawaited(_load()),
-      );
+      body = TimedLoadingView(message: 'Kurallar yükleniyor…', onRetry: () => unawaited(_load()));
     } else if (vm.error != null && rules.isEmpty) {
-      body = ErrorRetryCard(
-        title: 'Kurallar yüklenemedi',
-        message: vm.error!,
-        onRetry: () => unawaited(_load()),
-      );
+      body = ErrorRetryCard(title: 'Kurallar yüklenemedi', message: vm.error!, onRetry: () => unawaited(_load()));
     } else if (rules.isEmpty) {
       body = _EmptyRules(canManage: vm.canManage, onAdd: () => unawaited(_openDialog()));
     } else {
@@ -198,43 +192,25 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                'assets/images/app_logo.png',
-                width: 28,
-                height: 28,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const Icon(Icons.schedule, size: 24),
-              ),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Zamanlı Kurallar',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+      // Ortak Neon Glass üst çubuk: geri diski + özellik orb'u + başlık + cam disk eylemler (çıplak ⊕/↻ yok). İpucu
+      // işaretçi kullanıcıları içindir; anlamsal etiketi düğmenin kendisi verir (çift okuma olmasın).
+      appBar: NeonAppBar(
+        title: 'Zamanlı Kurallar',
+        feature: AppFeature.rules,
+        icon: Icons.schedule_rounded,
         actions: [
           if (vm.canManage && vm.cloud)
-            IconButton(
+            NeonBarAction(
               key: const Key('btn_add_rule'),
-              icon: const Icon(Icons.add_circle_outline),
+              icon: Icons.add_rounded,
               tooltip: 'Yeni Kural Ekle',
-              onPressed: () => unawaited(_openDialog()),
+              onTap: () => unawaited(_openDialog()),
             ),
-          IconButton(
+          NeonBarAction(
             key: const Key('nav_refresh'),
-            icon: const Icon(Icons.refresh),
+            icon: Icons.refresh_rounded,
             tooltip: 'Yenile',
-            onPressed: () => unawaited(_load()),
+            onTap: () => unawaited(_load()),
           ),
         ],
       ),
@@ -291,11 +267,12 @@ class _StaleBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final warn = AppTheme.warningText(context);
-    return Container(
+    return SurfaceCard(
       key: const Key('banner_rules_stale'),
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
-      decoration: AppTheme.cardDecoration(context, accent: AppTheme.accentAmber, radius: 12),
+      accent: AppFamilies.amber.base,
+      radius: AppRadius.r16,
       child: Row(
         children: [
           Icon(Icons.error_outline, size: 18, color: warn),
@@ -332,17 +309,23 @@ class _EmptyRules extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.schedule, size: 64, color: AppTheme.getTextMuted(context).withValues(alpha: 0.5)),
+          // Boş durum orb'u DEVRE DIŞI (mat gri) değil, özellik renginde (kurallar = cyan) ve yumuşak parıltılıdır: gri orb
+          // "kullanılamaz" anlamı taşıyıp hemen altındaki "İlk Kuralı Ekle" çağrısını zayıflatıyordu. Sakin kalsın diye
+          // `active: false` (nabız/halka yok).
+          OrbIconBadge(
+            icon: Icons.schedule_rounded,
+            family: AppFeature.rules.accentFamily,
+            size: OrbSize.xl,
+            glow: true,
+          ),
           const SizedBox(height: 16),
           Text(
             'Henüz zamanlı kural yok',
-            style: TextStyle(fontSize: 16, color: AppTheme.getTextMuted(context)),
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.getTextMuted(context)),
           ),
           const SizedBox(height: 8),
           Text(
-            canManage
-                ? 'Sağ üstteki + düğmesiyle kural ekleyebilirsiniz.'
-                : 'Ev sahibi henüz kural tanımlamamış.',
+            canManage ? 'Sağ üstteki + düğmesiyle kural ekleyebilirsiniz.' : 'Ev sahibi henüz kural tanımlamamış.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: AppTheme.getTextMuted(context)),
           ),
@@ -353,11 +336,7 @@ class _EmptyRules extends StatelessWidget {
               onPressed: onAdd,
               icon: const Icon(Icons.add),
               label: const Text('İlk Kuralı Ekle'),
-              style: ElevatedButton.styleFrom(
-                minimumSize: const Size(48, 48),
-                backgroundColor: AppTheme.primaryBlue,
-                foregroundColor: Colors.white,
-              ),
+              style: accentButtonStyle(null),
             ),
           ],
         ],
@@ -387,45 +366,37 @@ class _RuleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = rule.actionColor;
-    final readable = AppTheme.readableAccent(context, color);
+    // Eylemin Neon Glass ailesi (aç=amber, kapat=slate, panjur aç=emerald, panjur kapat=sky): orb, çip ve kart
+    // vurgusu aynı aileden türer (ham Material aksanları yok).
+    final family = rule.family;
     final title = (rule.label != null && rule.label!.isNotEmpty) ? rule.label! : name;
     final typeName = rule.channelType == 'shutter' ? 'Panjur' : 'Röle';
     final muted = AppTheme.getTextMuted(context);
 
-    final leading = Container(
-      width: 44,
-      height: 44,
-      decoration: BoxDecoration(
-        color: rule.enabled ? color.withValues(alpha: 0.15) : AppTheme.getInsetColor(context),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Icon(
-        rule.actionIcon,
-        color: rule.enabled ? readable : muted,
-        size: 22,
-      ),
+    final leading = OrbIconBadge(
+      icon: rule.actionIcon,
+      family: family,
+      enabled: rule.enabled,
+      active: rule.enabled,
     );
 
-    final texts = Column(
+    final titleBlock = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            fontSize: 15,
-            color: AppTheme.getTextPrimary(context),
-          ),
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.getTextPrimary(context)),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 2),
-        Text(
-          '$typeName ${rule.channel} • ${rule.actionLabel}',
-          style: TextStyle(fontSize: 11.5, color: muted),
-        ),
-        const SizedBox(height: 4),
+        Text('$typeName ${rule.channel} • ${rule.actionLabel}', style: TextStyle(fontSize: 12, color: muted)),
+      ],
+    );
+
+    final detail = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
         Wrap(
           spacing: 10,
           crossAxisAlignment: WrapCrossAlignment.center,
@@ -452,86 +423,230 @@ class _RuleCard extends StatelessWidget {
             Text(rule.daysShortString, style: TextStyle(fontSize: 12, color: muted)),
           ],
         ),
+        const SizedBox(height: 8),
+        _DayChips(days: rule.daysOfWeek, family: family, enabled: rule.enabled),
       ],
     );
 
-    final actions = Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Anahtarın kendi etiketi olur (ekran okuyucu "<kural> kuralı, açık/kapalı" der).
-        MergeSemantics(
-          child: Semantics(
-            label: '$title kuralı, ${rule.timeString}',
-            child: Switch(
-              key: Key('switch_rule_${rule.id}'),
-              value: rule.enabled,
-              materialTapTargetSize: MaterialTapTargetSize.padded,
-              activeThumbColor: color,
-              onChanged: canManage ? onToggle : null,
-            ),
-          ),
+    // Anahtarın kendi etiketi olur (ekran okuyucu "<kural> kuralı, açık/kapalı" der). Başparmak/iz rengi TEMADAN
+    // gelir (ham eylem renginde başparmak zümrüt izde ≈1.1–1.7:1 kontrast veriyordu).
+    final toggle = MergeSemantics(
+      child: Semantics(
+        label: '$title kuralı, ${rule.timeString}',
+        child: Switch(
+          key: Key('switch_rule_${rule.id}'),
+          value: rule.enabled,
+          materialTapTargetSize: MaterialTapTargetSize.padded,
+          onChanged: canManage ? onToggle : null,
         ),
-        if (canManage)
-          PopupMenuButton<String>(
-            key: Key('menu_rule_${rule.id}'),
-            tooltip: '$title kuralı işlemleri',
-            icon: const Icon(Icons.more_vert, size: 20),
-            onSelected: (value) {
-              if (value == 'edit') onEdit();
-              if (value == 'delete') onDelete();
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem<String>(
-                key: Key('btn_rule_edit_${rule.id}'),
-                value: 'edit',
-                height: 48,
-                child: const Row(
-                  children: [Icon(Icons.edit, size: 18), SizedBox(width: 8), Text('Düzenle')],
-                ),
-              ),
-              PopupMenuItem<String>(
-                key: Key('btn_rule_delete_${rule.id}'),
-                value: 'delete',
-                height: 48,
-                child: Row(
+      ),
+    );
+
+    final menu = canManage
+        ? _RuleMenuButton(ruleId: rule.id, title: title, onEdit: onEdit, onDelete: onDelete)
+        : null;
+
+    return SurfaceCard(
+      key: Key('card_rule_${rule.id}'),
+      accent: rule.enabled ? family.base : null,
+      active: rule.enabled,
+      // Yatay 16: diğer ayar kartlarıyla aynı iç boşluk (orb sütunu hizalı).
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // Çok dar ekran / büyük yazı: anahtar ve menü alt satıra iner (metin sütunu daralmaz). Normal telefonda
+          // (360 dp, 1.0–1.15 ölçek) tek başlık satırı: orb | başlık | anahtar | ⋮ ; zaman ve gün çipleri altta
+          // tam genişlikte (başlık sütunuyla aynı sol hizada).
+          final compact = constraints.maxWidth < 280 || MediaQuery.textScalerOf(context).scale(10) > 11.5;
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.delete_outline, size: 18, color: AppTheme.dangerText(context)),
-                    const SizedBox(width: 8),
-                    Text('Sil', style: TextStyle(color: AppTheme.dangerText(context))),
+                    leading,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [titleBlock, const SizedBox(height: 4), detail],
+                      ),
+                    ),
                   ],
                 ),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [toggle, ?menu]),
+                ),
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  leading,
+                  const SizedBox(width: 12),
+                  Expanded(child: titleBlock),
+                  toggle,
+                  ?menu,
+                ],
+              ),
+              Padding(
+                padding: EdgeInsetsDirectional.only(start: OrbSize.sm.diameter + 12, top: 4),
+                child: detail,
               ),
             ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Kural işlemleri menüsü (Düzenle / Sil): cam disk düğme + açılır menü. Düz Material `IconButton`+`PopupMenuButton`
+/// yerine pano üst çubuğuyla aynı [GlassIconButton] dili; menü öğeleri `Key('btn_rule_edit_<kimlik>')` /
+/// `Key('btn_rule_delete_<kimlik>')` taşır.
+class _RuleMenuButton extends StatelessWidget {
+  const _RuleMenuButton({required this.ruleId, required this.title, required this.onEdit, required this.onDelete});
+
+  final String ruleId;
+  final String title;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  Future<void> _open(BuildContext buttonContext) async {
+    final button = buttonContext.findRenderObject();
+    final overlay = Overlay.maybeOf(buttonContext)?.context.findRenderObject();
+    if (button is! RenderBox || overlay is! RenderBox || !button.attached) return;
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(
+        button.localToGlobal(Offset.zero, ancestor: overlay),
+        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay),
+      ),
+      Offset.zero & overlay.size,
+    );
+    final value = await showMenu<String>(
+      context: buttonContext,
+      position: position,
+      items: [
+        PopupMenuItem<String>(
+          key: Key('btn_rule_edit_$ruleId'),
+          value: 'edit',
+          height: 48,
+          child: const Row(children: [Icon(Icons.edit, size: 18), SizedBox(width: 8), Text('Düzenle')]),
+        ),
+        PopupMenuItem<String>(
+          key: Key('btn_rule_delete_$ruleId'),
+          value: 'delete',
+          height: 48,
+          child: Row(
+            children: [
+              Icon(Icons.delete_outline, size: 18, color: AppTheme.dangerText(buttonContext)),
+              const SizedBox(width: 8),
+              Text('Sil', style: TextStyle(color: AppTheme.dangerText(buttonContext))),
+            ],
           ),
+        ),
       ],
     );
+    if (value == 'edit') onEdit();
+    if (value == 'delete') onDelete();
+  }
 
-    return Container(
-      key: Key('card_rule_${rule.id}'),
-      decoration: AppTheme.cardDecoration(context, accent: rule.enabled ? color : null),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Dar ekran / büyük yazı: anahtar ve menü alt satıra iner (metin sütunu daralmaz).
-            final compact = constraints.maxWidth < 330 || MediaQuery.textScalerOf(context).scale(10) > 12;
-            if (compact) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [leading, const SizedBox(width: 12), Expanded(child: texts)],
-                  ),
-                  Align(alignment: AlignmentDirectional.centerEnd, child: actions),
-                ],
-              );
-            }
-            return Row(
-              children: [leading, const SizedBox(width: 12), Expanded(child: texts), actions],
-            );
-          },
+  @override
+  Widget build(BuildContext context) {
+    // Tooltip işaretçi kullanıcıları içindir; anlamsal etiketi düğmenin kendisi verir (çift okuma olmasın).
+    return Tooltip(
+      message: '$title kuralı işlemleri',
+      excludeFromSemantics: true,
+      child: Builder(
+        builder: (buttonContext) => GlassIconButton(
+          key: Key('menu_rule_$ruleId'),
+          icon: Icons.more_vert_rounded,
+          semanticLabel: '$title kuralı işlemleri',
+          size: 40,
+          haptic: PressHaptic.selection,
+          onTap: () => unawaited(_open(buttonContext)),
         ),
+      ),
+    );
+  }
+}
+
+/// Haftanın 7 günü (Pzt..Paz) küçük çipler: seçili günler kural renginde (aile) dolu. Görsel özettir; metin
+/// özeti ([ScheduledRule.daysShortString]) ve anlamsal etiket ayrıdır.
+///
+/// Mürekkep rengi tahmini parlaklıkla DEĞİL **WCAG kontrastıyla** seçilir (beyaz / koyu mürekkepten yüksek olan:
+/// turuncu üstünde beyaz 2.8:1'di). Devre dışı kuralın seçili günleri bulanık "çamur" dolgu yerine nötr zemin +
+/// aile renkli kenar + okunur aile tonunda harf (≥ 4.5:1) ile çizilir. Çip yazı ölçeğiyle büyür (sabit 24 dp'de
+/// büyük yazı taşardı).
+class _DayChips extends StatelessWidget {
+  const _DayChips({required this.days, required this.family, required this.enabled});
+
+  final List<int> days;
+  final AccentFamily family;
+  final bool enabled;
+
+  static const List<(int, String)> _order = [(1, 'P'), (2, 'S'), (3, 'Ç'), (4, 'P'), (5, 'C'), (6, 'C'), (0, 'P')];
+  static const Color _darkInk = Color(0xFF0B1120);
+
+  @override
+  Widget build(BuildContext context) {
+    final inset = AppTheme.getInsetColor(context);
+    final dark = AppTheme.isDark(context);
+    final muted = AppTheme.getTextMuted(context);
+    final readable = AppTheme.readableAccent(context, family.base);
+    final activeFill = family.base;
+    final activeInk = wcagContrast(Colors.white, activeFill) >= wcagContrast(_darkInk, activeFill) ? Colors.white : _darkInk;
+    final edge = dark ? family.base.withValues(alpha: 0.75) : family.deep;
+    // Çip yazı ölçeğiyle ölçülenir ama en çok 30 dp: yedi çip 244 dp'lik sütuna TEK satırda sığar (büyük yazıda iki
+    // satıra inip kartı şişirmesin; anahtar/menü ilk ekranda kalsın).
+    final scaled = MediaQuery.textScalerOf(context).scale(12);
+    final size = (scaled * 1.25).clamp(24.0, 30.0);
+
+    return ExcludeSemantics(
+      child: Wrap(
+        spacing: 3,
+        runSpacing: 4,
+        children: [
+          for (final (day, letter) in _order)
+            Builder(
+              builder: (context) {
+                final on = days.contains(day);
+                final Color fill;
+                final Color ink;
+                final Border? border;
+                if (on && enabled) {
+                  fill = activeFill;
+                  ink = activeInk;
+                  border = null;
+                } else if (on) {
+                  fill = inset;
+                  ink = readable;
+                  border = Border.all(color: edge, width: 1.5);
+                } else {
+                  fill = inset;
+                  ink = muted;
+                  // Seçili olmayan gün halkası haftanın hangi günlerinin DIŞARIDA kaldığını anlatır: ≥ 3:1 (alan
+                  // çerçevesiyle aynı dil; dekoratif kart kenarı açıkta 1.4:1'di).
+                  border = Border.all(color: AppTheme.getFieldBorder(context));
+                }
+                return Container(
+                  width: size,
+                  height: size,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(color: fill, shape: BoxShape.circle, border: border),
+                  child: Text(
+                    letter,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: ink, height: 1),
+                  ),
+                );
+              },
+            ),
+        ],
       ),
     );
   }

@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/dashboard/peace_banner.dart';
 import 'package:ev_otomasyon/ui/dashboard/status_pills.dart';
-import 'package:ev_otomasyon/ui/theme/app_theme.dart';
 import 'package:ev_otomasyon/ui/widgets/settings/child_lock_card.dart';
 import 'package:ev_otomasyon/ui/widgets/settings/peace_notification_card.dart';
 import 'package:flutter/material.dart';
@@ -263,9 +262,12 @@ void main() {
       final h = await pumpReady(tester, scaffolded(const ChildLockCard()), themeMode: ThemeMode.light);
       await emitLock(tester, h, true);
 
-      final card = tester.widget<Container>(byKeyName('card_child_lock'));
-      final cardColor = (card.decoration! as BoxDecoration).color!;
-      expect(cardColor, AppTheme.cardLight, reason: 'açık temada kart beyaz olmalı');
+      // Kart artık SurfaceCard (cam): gövde rengi içindeki DecoratedBox'tadır (kilitliyken amber ile harmanlı).
+      final card = tester.widget<DecoratedBox>(
+        find.descendant(of: byKeyName('card_child_lock'), matching: find.byType(DecoratedBox)).first,
+      );
+      final cardColor = (card.decoration as BoxDecoration).color!;
+      expect(cardColor.computeLuminance(), greaterThan(0.8), reason: 'açık temada kart açık renk olmalı (koyu sabit değil)');
 
       final title = tester.widget<Text>(find.text('Çocuk Kilidi'));
       expect(contrast(title.style!.color!, cardColor), greaterThanOrEqualTo(4.5));

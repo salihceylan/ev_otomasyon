@@ -95,14 +95,13 @@ class Step1Preparation extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                SetupInfoRow(
-                  icon: prep.verified ? Icons.check_circle_rounded : Icons.cloud_sync_rounded,
-                  color: prep.verified ? SetupColors.ok : null,
-                  bold: prep.verified,
-                  text: prep.verified
-                      ? 'Oturumunuz geçerli ve sunucuya ulaşıldı.'
-                      : 'Oturumunuzun geçerli olduğu ve sunucuya ulaşıldığı henüz doğrulanmadı.',
-                ),
+                if (prep.verified)
+                  const SetupResultHeader(text: 'Oturumunuz geçerli ve sunucuya ulaşıldı.')
+                else
+                  const SetupInfoRow(
+                    icon: Icons.cloud_sync_rounded,
+                    text: 'Oturumunuzun geçerli olduğu ve sunucuya ulaşıldığı henüz doğrulanmadı.',
+                  ),
                 if (!prep.verified || prep.problem != null) ...[
                   const SizedBox(height: 8),
                   SetupPrimaryButton(

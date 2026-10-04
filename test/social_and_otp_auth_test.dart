@@ -185,10 +185,24 @@ void main() {
       await typeInto(tester, 'field_code', '000000');
       await tapKey(tester, 'btn_otp_verify');
 
-      expect(textOf(tester, 'otp_error'), 'Doğrulama kodu hatalı. Kalan deneme: 2.');
-      expect(textOf(tester, 'otp_remaining_attempts'), 'Kalan deneme hakkı: 2');
+      // Kalan hak TEK yerde (iletinin içinde); sözcükler bölünmeyen boşlukla bağlı: "2." yetim satır kalmaz.
+      expect(textOf(tester, 'otp_error'), 'Doğrulama kodu hatalı. Kalan deneme: 2.');
+      expect(find.byKey(const Key('otp_remaining_attempts')), findsNothing, reason: 'ikinci "Kalan deneme hakkı" satırı yok');
+      expect(find.textContaining('Kalan deneme hakkı'), findsNothing);
       expect(find.byType(PhoneOtpDialog), findsOneWidget);
       expect(env.state.authStatus, isNot(AuthStatus.authenticated));
+
+      // Kod alanı HATALI çizilir (kırmızı çerçeve; odak halkası cyan kalmaz) ve ileti alanın hemen altındadır
+      // (geri sayım satırının altında değil).
+      final decoration = tester.widget<TextField>(find.byKey(const Key('field_code'))).decoration!;
+      final danger = (decoration.errorBorder! as OutlineInputBorder).borderSide.color;
+      expect((decoration.enabledBorder! as OutlineInputBorder).borderSide.color, danger);
+      expect((decoration.focusedBorder! as OutlineInputBorder).borderSide.color, danger);
+      final field = tester.getRect(find.byKey(const Key('field_code')));
+      final message = tester.getRect(find.byKey(const Key('otp_error')));
+      final expiry = tester.getRect(find.byKey(const Key('otp_expiry')));
+      expect(message.top, greaterThanOrEqualTo(field.bottom), reason: 'ileti alanın altında');
+      expect(message.bottom, lessThanOrEqualTo(expiry.top), reason: 'ileti geri sayım satırının ÜSTÜNDE (alana yakın)');
     });
 
     testWidgets('deneme hakkı bitince (429) bekleme süresi gösterilir ve yeni kod isteği o süre kapanır', (tester) async {

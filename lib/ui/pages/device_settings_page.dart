@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../../models/capabilities.dart';
 import '../../services/automation_state.dart';
+import '../theme/feature_accent.dart';
+import '../widgets/neon_app_bar.dart';
 import '../widgets/settings/action_cards.dart';
 import '../widgets/settings/appearance_cards.dart';
 import '../widgets/settings/child_lock_card.dart';
@@ -12,6 +14,8 @@ import '../widgets/settings/peace_notification_card.dart';
 import '../widgets/settings/scheduled_rules_card.dart';
 import '../widgets/settings/service_pin_card.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/settings/settings_card.dart';
 
 typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatus});
 
@@ -49,48 +53,54 @@ class DeviceSettingsPage extends StatelessWidget {
     final cloud = vm.mode == AppMode.cloud;
     final direct = vm.mode == AppMode.direct;
 
-    final cards = <Widget>[
+    final notices = <Widget>[
       if (caps.hasHomeAccess || direct) const HardwareNoticeCard(),
       const RoleNoticeCard(),
-      if (caps.hasHomeAccess && caps.canChangeChildLock) const SystemDoctorCard(),
-      if (caps.canViewState) const ChildLockCard(),
-      if (cloud && caps.canChangeChildLock && caps.hasHomeAccess) const PeaceNotificationCard(),
-      if (cloud && caps.canManageRules) const ScheduledRulesCard(),
-      if (vm.hasUser) const BiometricCard(),
-      const ThemeSelectorCard(),
-      if (cloud && caps.canGenerateServicePin) const ServicePinCard(),
-      if (caps.canOpenWifiRecovery) const WifiRecoveryCard(),
-      if (caps.canReplaceBoard) const ReplaceBoardCard(),
-      if (caps.canEditDeviceHost) const DeviceHostCard(),
-      if (vm.hasStatus && !caps.isGuest) const TelemetryCard(),
-      if (vm.hasUser) const AccountCard(),
+    ];
+    // Bölümler: çocuk kilidi Güvenlik'in ilk kartıdır (sayfadaki ilk Switch sözleşmesi). Bölüm başlığı rengi de özellik haritasından
+    // gelir ([AppFeature]): bölümün kartlarıyla AYNI aile.
+    final sections = <(String, IconData, AccentFamily, List<Widget>)>[
+      (
+        'Güvenlik',
+        Icons.shield_rounded,
+        AppFeature.childLock.accentFamily,
+        [
+          if (caps.canViewState) const ChildLockCard(),
+          if (vm.hasUser) const BiometricCard(),
+          if (cloud && caps.canGenerateServicePin) const ServicePinCard(),
+        ],
+      ),
+      ('Görünüm', Icons.palette_rounded, AppFeature.appearance.accentFamily, [const ThemeSelectorCard()]),
+      (
+        'Cihaz',
+        Icons.developer_board_rounded,
+        AppFeature.settings.accentFamily,
+        [
+          if (caps.hasHomeAccess && caps.canChangeChildLock) const SystemDoctorCard(),
+          if (caps.canOpenWifiRecovery) const WifiRecoveryCard(),
+          if (caps.canReplaceBoard) const ReplaceBoardCard(),
+          if (caps.canEditDeviceHost) const DeviceHostCard(),
+          if (vm.hasStatus && !caps.isGuest) const TelemetryCard(),
+        ],
+      ),
+      (
+        'Otomasyon',
+        Icons.auto_mode_rounded,
+        AppFeature.nightPeace.accentFamily,
+        [
+          if (cloud && caps.canChangeChildLock && caps.hasHomeAccess) const PeaceNotificationCard(),
+          if (cloud && caps.canManageRules) const ScheduledRulesCard(),
+        ],
+      ),
+      ('Aile', Icons.family_restroom_rounded, AppFeature.family.accentFamily, [if (vm.hasUser) const AccountCard()]),
     ];
 
     return Scaffold(
-      appBar: AppBar(
-        title: Row(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.asset(
-                'assets/images/app_logo.png',
-                width: 28,
-                height: 28,
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => const Icon(Icons.settings_outlined, size: 24),
-              ),
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Cihaz & Sistem Ayarları',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
+      // Ortak Neon Glass üst çubuk (geri diski + özellik orb'u + başlık; kaydırınca ton yok): başlık kesilmez.
+      appBar: const NeonAppBar(
+        title: 'Cihaz & Sistem Ayarları',
+        feature: AppFeature.settings,
+        icon: Icons.settings_rounded,
       ),
       // Kartlar tembel listelenmez: ekrandan çıkan kart durumunu (ör. bir kez gösterilen servis
       // PIN'i, yazılmış metinler) kaybetmesin.
@@ -100,7 +110,18 @@ class DeviceSettingsPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            for (final card in cards) ...[card, const SizedBox(height: 16)],
+            for (final notice in notices) ...[notice, const SizedBox(height: 12)],
+            for (var i = 0; i < sections.length; i++)
+              if (sections[i].$4.isNotEmpty) ...[
+                SettingsSection(
+                  index: i,
+                  title: sections[i].$1,
+                  icon: sections[i].$2,
+                  family: sections[i].$3,
+                  children: sections[i].$4,
+                ),
+                const SizedBox(height: 20),
+              ],
             const _AppInfo(),
           ],
         ),

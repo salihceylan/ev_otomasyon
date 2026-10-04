@@ -6,8 +6,10 @@ import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../../models/api_models.dart';
+import '../../../models/cloud_models.dart';
 import '../../../models/json_utils.dart';
 import '../../../services/automation_state.dart';
+import '../../../services/clock.dart';
 import '../../../utils/friendly_error.dart';
 import '../../../utils/qr_claim_parser.dart';
 import '../../../utils/qr_router.dart';
@@ -16,7 +18,15 @@ import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../claim/qr_scanner_page.dart';
+import '../service_setup/panel/uncertain_outcome_card.dart';
+import '../../motion/motion_scope.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/settings/accent_button.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/surface_card.dart';
+import 'countdown_ring.dart';
+import '../../theme/feature_accent.dart';
 
 /// Daire devri (ev sahibi) ve acil pano sıfırlama (süper kullanıcı / kalıcı servis personeli).
 ///
@@ -27,6 +37,10 @@ import '../../theme/app_theme.dart';
 ///   "X kullanıcısına devredilecek" onayı **yazarak** (`DEVRET`) alınır.
 /// * Acil sıfırlama: cihaz UID'si yazarak teyit edilir, gerekçe en az 15 karakterdir; sonuçtaki
 ///   uyarılar (`warnings` / `partial`) ve tek seferlik gizli değerler gösterilir. Ön-dolu değer yoktur.
+///   **Sonucu belirsiz kesinti (PF-45):** yanıt 40 sn içinde gelmez ya da ağ kesilirse işlem sunucuda
+///   tamamlanmış olabilir; "tekrar deneyin" DENMEZ (kör tekrar yeni PIN üretir ve devredilen sahibi bozabilir),
+///   envanterde "Durumu Kontrol Et" sunulur ve belirsizken gönder düğmesi pasiftir (servis panelindeki
+///   `EmergencyResetCard` ile aynı sözleşme).
 class TransferOwnershipDialog extends StatefulWidget {
   /// 0: daire devri, 1: acil sıfırlama (yetkisi olmayan sekme yerine ilk yetkili sekme açılır).
   final int initialTab;
@@ -49,8 +63,19 @@ class TransferOwnershipDialog extends StatefulWidget {
 
 enum _Tab { transfer, emergency }
 
+/// Diyaloğun durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skalerler).
+typedef _TransferView = ({bool canTransfer, bool canReset, String homeName});
+
 class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   static const Duration _loadTimeout = Duration(seconds: 15);
+
+  /// Acil sıfırlama yanıtı için üst süre (servis panelindeki `EmergencyResetCard` ile aynı).
+  static const Duration _resetTimeout = Duration(seconds: 40);
+  static const Duration _checkTimeout = Duration(seconds: 20);
+
+  /// Devir başlatma/iptal bu süreyi aşarsa "Kapat" sunulur (PF-50). Acil sıfırlama için YOKTUR: yeni PIN yalnızca
+  /// yanıtla birlikte gösterilir, 40 sn sınırı ve belirsiz-sonuç kartı o yolu zaten kapatır.
+  static const Duration _slowAfter = Duration(seconds: 25);
   static const String _transferPhrase = 'DEVRET';
 
   final _targetController = TextEditingController();
@@ -70,6 +95,8 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   bool _startingNew = false;
   String? _targetFieldError;
   int _statusSeq = 0;
+  Timer? _slowTimer;
+  bool _slow = false;
 
   // Acil sıfırlama
   bool _resetting = false;
@@ -78,6 +105,12 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   String? _reasonFieldError;
   String? _ownerFieldError;
   EmergencyResetResult? _resetResult;
+
+  /// Yanıt gelmedi (zaman aşımı / ağ kesintisi) ama sunucu sıfırlamayı tamamlamış olabilir: bu cihaz için işlem
+  /// **körlemesine yinelenmez**; önce durum kontrol edilir (PF-45).
+  String? _uncertainUid;
+  bool _checking = false;
+  String? _checkResult;
 
   @override
   void initState() {
@@ -93,6 +126,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   @override
   void dispose() {
     _statusSeq++;
+    _slowTimer?.cancel();
     _resetReasonController.removeListener(_rebuild);
     _targetController.dispose();
     _resetUidController.dispose();
@@ -101,14 +135,41 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     super.dispose();
   }
 
-  _Tab? _effectiveTab(AutomationState state) {
+  static _TransferView _viewOf(AutomationState state) {
     final caps = state.capabilities;
+    return (
+      canTransfer: caps.canTransferOwnership,
+      canReset: caps.canEmergencyReset,
+      homeName: state.activeHome?.name ?? 'Evim',
+    );
+  }
+
+  _Tab? _effectiveTab(_TransferView view) {
     final allowed = <_Tab>[
-      if (caps.canTransferOwnership) _Tab.transfer,
-      if (caps.canEmergencyReset) _Tab.emergency,
+      if (view.canTransfer) _Tab.transfer,
+      if (view.canReset) _Tab.emergency,
     ];
     if (allowed.isEmpty) return null;
     return allowed.contains(_selected) ? _selected : allowed.first;
+  }
+
+  /// Devir başlatma/iptal işlemini başlatır ve [_slowAfter] sonra "yavaş" bayrağını kurar (`setState` içinde
+  /// çağrılır). Zamanlayıcı `Clock`'tandır (testlerde sahte saat).
+  void _beginAction() {
+    _actionLoading = true;
+    _slow = false;
+    _slowTimer?.cancel();
+    _slowTimer = context.read<AutomationState>().clock.timer(_slowAfter, () {
+      if (mounted && _actionLoading) setState(() => _slow = true);
+    });
+  }
+
+  /// İşlemi bitirir (`setState` içinde çağrılır).
+  void _endAction() {
+    _actionLoading = false;
+    _slow = false;
+    _slowTimer?.cancel();
+    _slowTimer = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -191,7 +252,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     if (!confirmed || !mounted) return;
 
     setState(() {
-      _actionLoading = true;
+      _beginAction();
       _transferError = null;
     });
     try {
@@ -204,14 +265,14 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           'expires_at': info.expiresAt?.toUtc().toIso8601String(),
         };
         _startingNew = false;
-        _actionLoading = false;
+        _endAction();
         _statusLoaded = true;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _transferError = friendlyError(e, fallback: 'Devir başlatılamadı. Lütfen tekrar deneyin.');
-        _actionLoading = false;
+        _endAction();
       });
     }
   }
@@ -220,7 +281,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     if (_actionLoading) return;
     final state = context.read<AutomationState>();
     setState(() {
-      _actionLoading = true;
+      _beginAction();
       _transferError = null;
     });
     try {
@@ -229,13 +290,14 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       setState(() {
         _pendingTransfer = null;
         _generated = null;
-        _actionLoading = false;
+        _endAction();
         _startingNew = false;
       });
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text('Daire devir işlemi iptal edildi.'),
-          backgroundColor: AppTheme.accentGreen,
+        SnackBar(
+          content: const Text('Daire devir işlemi iptal edildi.'),
+          // Beyaz yazılı dolgu tonu (ham yeşil zeminde beyaz metin ≈2.5:1 idi).
+          backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -243,7 +305,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       if (!mounted) return;
       setState(() {
         _transferError = friendlyError(e, fallback: 'Devir iptal edilemedi. Lütfen tekrar deneyin.');
-        _actionLoading = false;
+        _endAction();
       });
     }
   }
@@ -268,6 +330,10 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       setState(() {
         _resetUidController.text = payload.uid;
         _uidFieldError = null;
+        if (_uncertainUid != null && QrClaimParser.normalizeUid(payload.uid) != _uncertainUid) {
+          _uncertainUid = null; // başka cihaz: önceki cihazın belirsizlik kilidi kalkar
+          _checkResult = null;
+        }
       });
     } else {
       setState(() => _uidFieldError = 'Okunan karekod bir pano etiketi değil.');
@@ -340,11 +406,16 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       _resetError = null;
     });
     try {
-      final res = await state.emergencyResetDevice(
-        deviceUuid: uid,
-        confirmUid: uid,
-        reason: reason,
-        newOwnerIdentifier: newOwner,
+      // PF-45: üst süre (40 sn). Zamanlayıcı `Clock`'tandır; geç dönen yanıt yok sayılır.
+      final res = await state.clock.bound<EmergencyResetResult>(
+        state.emergencyResetDevice(
+          deviceUuid: uid,
+          confirmUid: uid,
+          reason: reason,
+          newOwnerIdentifier: newOwner,
+        ),
+        _resetTimeout,
+        () => throw TimeoutException('Acil sıfırlama yanıtı zamanında gelmedi.', _resetTimeout),
       );
       if (!mounted) return;
       setState(() {
@@ -353,9 +424,81 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       });
     } catch (e) {
       if (!mounted) return;
+      if (UncertainOutcomeCard.isUncertain(e)) {
+        // Sunucu işlemi tamamlamış olabilir: "tekrar dene" denmez, durum kontrolü istenir.
+        setState(() {
+          _resetting = false;
+          _resetError = null;
+          _uncertainUid = uid;
+          _checkResult = null;
+        });
+        return;
+      }
       setState(() {
         _resetError = friendlyError(e, fallback: 'Acil sıfırlama tamamlanamadı. Lütfen tekrar deneyin.');
         _resetting = false;
+      });
+    }
+  }
+
+  /// Sonucu belirsiz kalan sıfırlamada cihazın envanterdeki **gerçek** durumuna bakar (PF-45).
+  Future<void> _checkOutcome() async {
+    final uid = _uncertainUid;
+    if (uid == null || _checking) return;
+    final state = context.read<AutomationState>();
+    setState(() {
+      _checking = true;
+      _checkResult = null;
+    });
+    String result;
+    try {
+      final res = await state.clock.bound<Map<String, dynamic>>(
+        state.cloudApi.fetchDeviceInventory(search: uid, limit: 5),
+        _checkTimeout,
+        () => throw TimeoutException('Envanter yanıtı zamanında gelmedi.', _checkTimeout),
+      );
+      if (!mounted) return;
+      final items = parseList(res['items'], InventoryDeviceModel.fromJson, label: 'Inventory');
+      InventoryDeviceModel? match;
+      for (final item in items) {
+        if (item.deviceUuid.toUpperCase() == uid.toUpperCase()) match = item;
+      }
+      if (match == null) {
+        result = 'Bu hesapla cihazın durumu görüntülenemiyor (cihaz sizin stoğunuzda değil). Süper yöneticiden '
+            'cihazın durumuna bakmasını isteyin; durum doğrulanmadan sıfırlamayı yinelemeyin.';
+      } else if (match.isInStock) {
+        result = 'Cihaz şu an STOKTA: sıfırlama sunucuda tamamlanmış görünüyor. Yeni kurulum PIN\'i yanıt gelmediği '
+            'için alınamadı; PIN gerekiyorsa süper yöneticiden Cihaz Envanteri > "Etiketi Yeniden Üret" ile yeni PIN '
+            'almasını isteyin.';
+      } else if (match.isClaimed) {
+        final home = match.claimedHomeName;
+        result = 'Cihaz şu an bir daireye bağlı${home == null || home.isEmpty ? '' : ' ("$home")'}. Sıfırlama yapılmamış '
+            'olabilir ya da cihaz yeni sahibe devredilmiş olabilir; daire adını kontrol edin. Emin olmadan yinelemeyin.';
+      } else {
+        result = 'Cihazın durumu: ${match.statusLabel}. Sıfırlama yetkisi bu durumda sınırlıdır; süper yöneticiye danışın.';
+      }
+    } catch (e) {
+      if (!mounted) return;
+      result = 'Durum kontrol edilemedi: ${friendlyError(e, fallback: 'Bağlantınızı kontrol edip yeniden deneyin.')}';
+    }
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _checkResult = result;
+    });
+  }
+
+  /// Cihaz kimliği değişince önceki cihazın belirsiz-sonuç uyarısı kalkar; alan hatası temizlenir.
+  void _onResetUidChanged(String text) {
+    final pending = _uncertainUid;
+    final clearUncertain = pending != null && QrClaimParser.normalizeUid(text) != pending;
+    if (_uidFieldError != null || clearUncertain) {
+      setState(() {
+        _uidFieldError = null;
+        if (clearUncertain) {
+          _uncertainUid = null;
+          _checkResult = null;
+        }
       });
     }
   }
@@ -374,11 +517,13 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final caps = state.capabilities;
-    final tab = _effectiveTab(state);
-    final homeName = state.activeHome?.name ?? 'Evim';
-    final bothTabs = caps.canTransferOwnership && caps.canEmergencyReset;
+    // PF-06: yalnız bu diyaloğun okuduğu yetkiler ve ev adı izlenir; ilgisiz bildirim diyaloğu yeniden kurmaz.
+    final view = context.select<AutomationState, _TransferView>(_viewOf);
+    final tab = _effectiveTab(view);
+    final homeName = view.homeName;
+    final bothTabs = view.canTransfer && view.canReset;
+    // Sıfırlama sürerken kapatılamaz (yeni PIN yalnızca yanıtla gelir); devir başlatma/iptal 25 sn sonra kapatılabilir.
+    final busyLocked = _resetting || (_actionLoading && !_slow);
 
     // Devir sekmesi ilk kez göründüğünde durumu yükle.
     if (tab == _Tab.transfer && !_statusLoaded && !_statusLoading && _transferError == null) {
@@ -394,14 +539,10 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
         : (tab == _Tab.emergency ? 'Acil Pano Sıfırlama' : 'Daire Devri (Mülkiyet Transferi)');
 
     return PopScope(
-      canPop: !(_actionLoading || _resetting),
+      canPop: !busyLocked,
+      // Yüzey ve şekil temanın diyalog stilinden gelir (yerel zemin/şekil override'ı yok).
       child: Dialog(
-        backgroundColor: AppTheme.getSurfaceColor(context),
         insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: AppTheme.getCardBorder(context)),
-        ),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
           child: SingleChildScrollView(
@@ -412,17 +553,11 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
               children: [
                 Row(
                   children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: (tab == _Tab.emergency ? AppTheme.accentRed : AppTheme.accentAmber).withValues(alpha: 0.15),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        tab == _Tab.emergency ? Icons.restore : Icons.transfer_within_a_station,
-                        color: tab == _Tab.emergency ? AppTheme.accentRed : AppTheme.accentAmber,
-                        size: 22,
-                      ),
+                    OrbIconBadge(
+                      icon: tab == _Tab.emergency ? Icons.restore_rounded : Icons.swap_horiz_rounded,
+                      family: tab == _Tab.emergency ? AppFeature.emergencyReset.accentFamily : AppFeature.ownershipTransfer.accentFamily,
+                      active: true,
+                      pending: _actionLoading || _resetting,
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -432,6 +567,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
                           Text(
                             title,
                             style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.getTextPrimary(context)),
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                           if (tab == _Tab.transfer)
@@ -447,16 +583,30 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
                       key: const Key('btn_close'),
                       tooltip: 'Kapat',
                       icon: Icon(Icons.close, color: AppTheme.getTextMuted(context), size: 20),
-                      onPressed: (_actionLoading || _resetting) ? null : () => Navigator.of(context).pop(),
+                      onPressed: busyLocked ? null : () => Navigator.of(context).pop(),
                     ),
                   ],
                 ),
                 Divider(height: 24, color: AppTheme.getCardBorder(context)),
+                // PF-50: yalnız düğme içi küçük çark değil, belirgin ilerleme + beklenen süre.
+                if (_actionLoading || _resetting) ...[
+                  DialogBusyNotice(
+                    key: Key(_resetting ? 'reset_busy_notice' : 'transfer_busy_notice'),
+                    message: _resetting
+                        ? 'Acil sıfırlama sürüyor… Yanıt en çok ${_resetTimeout.inSeconds} sn beklenir; bu sırada '
+                            'pencereyi kapatmayın (yeni PIN yalnızca yanıtla birlikte gösterilir).'
+                        : 'İşlem sürüyor…',
+                    slow: _slow && !_resetting,
+                    slowMessage: 'Sunucu yanıtı gecikiyor. Pencereyi kapatabilirsiniz; işlem arka planda sürer. '
+                        'Not: devir kodu yalnızca üretildiği anda bu pencerede gösterilir.',
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (tab == null)
                   const InlineMessage.error('Bu işlem için yetkiniz yok.', key: Key('transfer_forbidden'))
                 else ...[
                   if (bothTabs) ...[_buildTabSelector(tab), const SizedBox(height: 16)],
-                  if (tab == _Tab.transfer) _buildTransfer(state) else _buildEmergency(state),
+                  if (tab == _Tab.transfer) _buildTransfer() else _buildEmergency(),
                 ],
               ],
             ),
@@ -467,19 +617,35 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
   }
 
   Widget _buildTabSelector(_Tab current) {
-    Widget tabButton(_Tab tab, String label, Color color, Key key) {
+    Widget tabButton(_Tab tab, String label, AccentFamily family, Key key) {
       final selected = current == tab;
+      final color = family.base;
+      // Seçili etiket OKUNUR tonda (ham amber/kırmızı açık temada ≈2–3.8:1 idi); kenar açıkta koyu ton.
+      final ink = AppTheme.readableAccent(context, color);
+      final edge = AppTheme.isDark(context) ? color : family.deep;
       return Expanded(
         child: InkWell(
           key: key,
           onTap: () => setState(() => _selected = tab),
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+          borderRadius: BorderRadius.circular(AppRadius.r12),
+          child: AnimatedContainer(
+            duration: MotionScope.durationOf(context, AppMotion.fast),
+            curve: AppMotion.standard,
+            constraints: const BoxConstraints(minHeight: 48),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
             decoration: BoxDecoration(
-              color: selected ? color.withValues(alpha: 0.15) : Colors.transparent,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: selected ? color : AppTheme.getCardBorder(context)),
+              gradient: selected
+                  ? LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      // Okunur ton, bu tintin (en çok %16) üstünde de AA (≥ 4.5:1) kalır (hesaplandı: ≥ 5.2:1).
+                      colors: [color.withValues(alpha: 0.16), color.withValues(alpha: 0.08)],
+                    )
+                  : null,
+              borderRadius: BorderRadius.circular(AppRadius.r12),
+              // Seçili olmayan sekme bir KONTROLDÜR: sınırı ≥ 3:1 (alan çerçevesiyle aynı dil; dekoratif kart kenarı değil).
+              border: Border.all(color: selected ? edge : AppTheme.getFieldBorder(context), width: selected ? 1.4 : 1),
             ),
             child: Text(
               label,
@@ -487,7 +653,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                color: selected ? color : AppTheme.getTextMuted(context),
+                color: selected ? ink : AppTheme.getTextMuted(context),
               ),
             ),
           ),
@@ -497,16 +663,16 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
 
     return Row(
       children: [
-        tabButton(_Tab.transfer, 'Daire Devri (Kod & QR)', AppTheme.accentAmber, const Key('tab_transfer')),
+        tabButton(_Tab.transfer, 'Daire Devri (Kod & QR)', AppFeature.ownershipTransfer.accentFamily, const Key('tab_transfer')),
         const SizedBox(width: 8),
-        tabButton(_Tab.emergency, 'Acil Pano Sıfırlama', AppTheme.accentRed, const Key('tab_emergency')),
+        tabButton(_Tab.emergency, 'Acil Pano Sıfırlama', AppFeature.emergencyReset.accentFamily, const Key('tab_emergency')),
       ],
     );
   }
 
   // ---- Devir sekmesi ----
 
-  Widget _buildTransfer(AutomationState state) {
+  Widget _buildTransfer() {
     if (_statusLoading && !_statusLoaded) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 32),
@@ -528,7 +694,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
       );
     }
     if (_pendingTransfer != null && !_startingNew) return _buildActiveTransfer();
-    return _buildNewTransferForm(state);
+    return _buildNewTransferForm();
   }
 
   Widget _buildActiveTransfer() {
@@ -566,33 +732,54 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
             ),
           ),
           const SizedBox(height: 14),
-          Container(
+          SurfaceCard(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: AppTheme.getCardColor(context),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.getCardBorder(context)),
-            ),
+            accent: AppFamilies.amber.base,
+            active: true,
+            radius: AppRadius.r16,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                if (expires != null) ...[
+                  CountdownRing(
+                    expiresAt: expires,
+                    total: const Duration(hours: 48),
+                    now: context.read<AutomationState>().clock.now,
+                    color: AppFamilies.amber.base,
+                    diameter: 36,
+                  ),
+                  const SizedBox(width: 12),
+                ],
                 Flexible(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('DEVİR KODU (48 saat geçerli)', style: TextStyle(fontSize: 10, color: muted)),
+                      Text('DEVİR KODU (48 saat geçerli)', style: TextStyle(fontSize: 12, color: muted)),
                       const SizedBox(height: 2),
-                      SelectableText(
-                        generated.code,
-                        key: const Key('transfer_code'),
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: AppTheme.accentAmber),
+                      // Kod tek satırda ve eksiksiz: sığmazsa küçülür (ortadan bölünüp kaybolmaz).
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: AlignmentDirectional.centerStart,
+                        child: SelectableText(
+                          generated.code,
+                          key: const Key('transfer_code'),
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 2,
+                            // Açık temada ham amber ≈2.1:1 idi: okunur uyarı tonu.
+                            color: AppTheme.warningText(context),
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
                       ),
                     ],
                   ),
                 ),
                 IconButton(
                   key: const Key('btn_copy_transfer_code'),
-                  icon: const Icon(Icons.copy, size: 20, color: AppTheme.primaryBlueLight),
+                  icon: Icon(Icons.copy_rounded, size: 20, color: AppTheme.infoText(context)),
                   tooltip: 'Kodu Kopyala',
                   onPressed: () => _copy(generated.code, 'Devir kodu'),
                 ),
@@ -602,7 +789,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           const SizedBox(height: 6),
           Text(
             'Bu kod yalnızca şimdi gösterilir; sunucuda yalnızca özeti saklanır.',
-            style: TextStyle(fontSize: 11, color: muted),
+            style: TextStyle(fontSize: 12, color: muted),
             textAlign: TextAlign.center,
           ),
         ] else ...[
@@ -619,7 +806,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           Text(
             'Yalnızca $target kullanıcısı devralabilir.',
             key: const Key('transfer_target_text'),
-            style: TextStyle(fontSize: 11.5, color: muted, fontStyle: FontStyle.italic),
+            style: TextStyle(fontSize: 12, color: muted, fontStyle: FontStyle.italic),
             textAlign: TextAlign.center,
           ),
         ],
@@ -628,7 +815,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           Text(
             'Son geçerlilik: ${formatLocalDateTime(expires)}',
             key: const Key('transfer_expiry_text'),
-            style: TextStyle(fontSize: 11.5, color: muted),
+            style: TextStyle(fontSize: 12, color: muted),
             textAlign: TextAlign.center,
           ),
         ],
@@ -642,12 +829,10 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           onPressed: _actionLoading ? null : _cancelTransfer,
           icon: _actionLoading
               ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.cancel_outlined, size: 18, color: AppTheme.accentRed),
-          label: const Text('Devir İşlemini İptal Et', style: TextStyle(color: AppTheme.accentRed)),
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: AppTheme.accentRed),
-            padding: const EdgeInsets.symmetric(vertical: 12),
-          ),
+              : Icon(Icons.cancel_outlined, size: accentIconSize(context)),
+          label: const Text('Devir İşlemini İptal Et', textAlign: TextAlign.center),
+          // Metin, simge ve çerçeve aynı aileden ve okunur tonda (açık temada ham kırmızı ≈3.8:1).
+          style: accentOutlinedButtonStyle(context, AppFeature.emergencyReset.accentFamily),
         ),
         const SizedBox(height: 8),
         TextButton(
@@ -659,7 +844,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     );
   }
 
-  Widget _buildNewTransferForm(AutomationState state) {
+  Widget _buildNewTransferForm() {
     final muted = AppTheme.getTextMuted(context);
     return Column(
       key: const Key('transfer_form'),
@@ -682,22 +867,24 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
             if (_targetFieldError != null) setState(() => _targetFieldError = null);
           },
           decoration: InputDecoration(
-            labelText: 'Yeni Sahip E-posta / Telefon (Zorunlu)',
+            // Uzun etiket 1.0'da bile "…" ile kesiliyordu: kısa etiket ('Yeni Sahip'); "e-posta ya da telefon, zorunlu"
+            // bilgisi yardımcı metinde (1.5 ölçekte de kesilmez).
+            labelText: 'Yeni Sahip',
+            helperText: 'E-posta veya telefon · Zorunlu',
+            helperMaxLines: 2,
+            helperStyle: TextStyle(fontSize: 12, color: muted),
             hintText: 'ornek@email.com veya 0555 123 45 67',
             labelStyle: TextStyle(fontSize: 12, color: muted),
             hintStyle: TextStyle(fontSize: 12, color: muted),
             prefixIcon: const Icon(Icons.person_outline, size: 20),
             errorText: _targetFieldError,
             errorMaxLines: 2,
-            filled: true,
-            fillColor: AppTheme.getCardColor(context),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
           ),
         ),
         const SizedBox(height: 6),
         Text(
           'Devri yalnızca bu hesap kabul edebilir. Hesap sahibine kodu güvenli bir kanaldan iletin.',
-          style: TextStyle(fontSize: 11, color: muted),
+          style: TextStyle(fontSize: 12, color: muted),
         ),
         if (_transferError != null) ...[
           const SizedBox(height: 10),
@@ -711,13 +898,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.qr_code_2, size: 18),
           label: const Text('48 Saatlik Devir Kodu & QR Üret'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.accentAmber,
-            foregroundColor: Colors.black87,
-            padding: const EdgeInsets.symmetric(vertical: 13),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            textStyle: const TextStyle(fontWeight: FontWeight.bold),
-          ),
+          style: accentButtonStyle(AppFeature.ownershipTransfer.accentFamily),
         ),
         if (_pendingTransfer != null) ...[
           const SizedBox(height: 8),
@@ -733,14 +914,18 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
 
   // ---- Acil sıfırlama sekmesi ----
 
-  Widget _buildEmergency(AutomationState state) {
+  Widget _buildEmergency() {
     final result = _resetResult;
     if (result != null) return _buildResetResult(result);
     final muted = AppTheme.getTextMuted(context);
     final reasonLength = _resetReasonController.text.trim().length;
 
-    InputDecoration deco(String label, String hint, IconData icon, {String? error, Widget? suffix}) => InputDecoration(
+    InputDecoration deco(String label, String hint, IconData icon, {String? error, Widget? suffix, String? helper}) =>
+        InputDecoration(
           labelText: label,
+          helperText: helper,
+          helperMaxLines: 2,
+          helperStyle: TextStyle(fontSize: 12, color: muted),
           hintText: hint,
           labelStyle: TextStyle(fontSize: 12, color: muted),
           hintStyle: TextStyle(fontSize: 12, color: muted),
@@ -748,9 +933,6 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           suffixIcon: suffix,
           errorText: error,
           errorMaxLines: 2,
-          filled: true,
-          fillColor: AppTheme.getCardColor(context),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
         );
 
     return Column(
@@ -768,15 +950,13 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           child: OutlinedButton.icon(
             key: const Key('btn_reset_scan'),
             onPressed: _resetting ? null : _scanDeviceQr,
-            icon: const Icon(Icons.qr_code_scanner, color: AppTheme.accentRed, size: 20),
+            icon: Icon(Icons.qr_code_scanner, size: accentIconSize(context, base: 20)),
             label: const Text(
               'Pano QR Kodunu Tara (Kamera)',
-              style: TextStyle(color: AppTheme.accentRed, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(color: AppTheme.accentRed.withValues(alpha: 0.5)),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-            ),
+            style: accentOutlinedButtonStyle(context, AppFeature.emergencyReset.accentFamily),
           ),
         ),
         const SizedBox(height: 12),
@@ -791,9 +971,7 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
             FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9\-]')),
             LengthLimitingTextInputFormatter(37),
           ],
-          onChanged: (_) {
-            if (_uidFieldError != null) setState(() => _uidFieldError = null);
-          },
+          onChanged: _onResetUidChanged,
           decoration: deco('Cihaz UID (Pano Etiketi)', 'AHBU-S3-XXXXXX', Icons.qr_code, error: _uidFieldError),
         ),
         const SizedBox(height: 10),
@@ -808,10 +986,11 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
             if (_reasonFieldError != null) setState(() => _reasonFieldError = null);
           },
           decoration: deco(
-            'Sıfırlama Gerekçesi (en az 15 karakter)',
+            'Sıfırlama Gerekçesi',
             'Örn: Kiracı tahliye edildi, sözleşme ibraz edildi',
             Icons.description_outlined,
             error: _reasonFieldError,
+            helper: 'En az 15 karakter',
           ).copyWith(counterText: '$reasonLength / 15+'),
         ),
         const SizedBox(height: 10),
@@ -825,32 +1004,42 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
           onChanged: (_) {
             if (_ownerFieldError != null) setState(() => _ownerFieldError = null);
           },
+          // Kısa etiket ('Yeni Sahip'): 1.5 ölçekte "Yeni Sahip E-posta / Tel…" diye kesiliyordu; e-posta/telefon bilgisi
+          // yardımcı metinde.
           decoration: deco(
-            'Yeni Sahip E-posta / Telefon (Opsiyonel)',
+            'Yeni Sahip',
             'Boş bırakılırsa cihaz stoğa alınır',
             Icons.person_outline,
             error: _ownerFieldError,
+            helper: 'E-posta veya telefon · Opsiyonel',
           ),
         ),
         if (_resetError != null) ...[
           const SizedBox(height: 12),
           InlineMessage.error(_resetError!, key: const Key('reset_error')),
         ],
+        if (_uncertainUid != null)
+          UncertainOutcomeCard(
+            key: const Key('reset_uncertain'),
+            title: 'Sıfırlamanın sonucu belirsiz',
+            message: 'Sunucudan yanıt alınamadı (zaman aşımı ya da bağlantı kesintisi). Sıfırlama sunucuda '
+                'TAMAMLANMIŞ olabilir; aynı işlemi körlemesine yinelemek yeni PIN üretir ve devredilen sahibi '
+                'bozabilir. Önce "Durumu Kontrol Et" ile cihazın gerçek durumuna bakın.',
+            checkButtonKey: const Key('btn_reset_check'),
+            onCheck: _checkOutcome,
+            checking: _checking,
+            checkResult: _checkResult,
+          ),
         const SizedBox(height: 16),
         ElevatedButton.icon(
           key: const Key('btn_reset_submit'),
-          onPressed: _resetting ? null : _executeEmergencyReset,
+          // Sonucu belirsiz kalan işlem durum kontrol edilmeden yinelenemez (cihaz kimliği değişirse kilit kalkar).
+          onPressed: (_resetting || _uncertainUid != null) ? null : _executeEmergencyReset,
           icon: _resetting
               ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
               : const Icon(Icons.restore, size: 18),
           label: const Text('Acil Sıfırla & Eski Aileyi Çıkar'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppTheme.accentRed,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 13),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            textStyle: const TextStyle(fontWeight: FontWeight.bold),
-          ),
+          style: accentButtonStyle(AppFeature.emergencyReset.accentFamily),
         ),
       ],
     );
@@ -939,32 +1128,43 @@ class _TransferOwnershipDialogState extends State<TransferOwnershipDialog> {
     required Key copyKey,
     required String label,
   }) {
-    return Container(
+    return SurfaceCard(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.5)),
-      ),
+      accent: AppFamilies.amber.base,
+      active: true,
+      radius: AppRadius.r16,
       child: Row(
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(caption, style: TextStyle(fontSize: 10, color: AppTheme.getTextMuted(context))),
+                Text(caption, style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context))),
                 const SizedBox(height: 2),
-                SelectableText(
-                  value,
-                  key: valueKey,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1.5, color: AppTheme.accentAmber),
+                // Cihazda ELLE girilecek gizli değer (yerel anahtar, PIN): tek satırda ve eksiksiz kalır; sığmazsa küçülür
+                // (davet/devir kodlarıyla aynı kural). Satır kırılımı rakam grubunu ortadan bölüp aktarım hatasına yol açardı.
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerStart,
+                  child: SelectableText(
+                    value,
+                    key: valueKey,
+                    maxLines: 1,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 2,
+                      color: AppTheme.warningText(context),
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
           IconButton(
             key: copyKey,
-            icon: const Icon(Icons.copy, size: 20, color: AppTheme.primaryBlueLight),
+            icon: Icon(Icons.copy, size: 20, color: AppTheme.infoText(context)),
             tooltip: 'Kopyala',
             onPressed: () => _copy(value, label),
           ),

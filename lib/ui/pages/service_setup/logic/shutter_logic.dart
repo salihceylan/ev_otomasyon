@@ -194,8 +194,11 @@ class ShutterLogic extends SetupLogic {
   /// Panodan panjur listesini, sunucudan uç noktaları okur (test ilerlemesi korunur).
   Future<bool> load() => run('Panjurlar okunuyor', () async {
         final t = ctx.requireTarget;
-        final status = await ctx.deviceCall((api) => api.fetchStatus());
-        final endpoints = await ctx.cloud.fetchEndpoints(t.homeId);
+        // Pano (yerel ağ) ve sunucu istekleri birbirine bağlı değil: birlikte beklenir (hata önceliği: önce pano).
+        final (status, endpoints) = await awaitBoth(
+          ctx.deviceCall((api) => api.fetchStatus()),
+          ctx.cloud.fetchEndpoints(t.homeId),
+        );
         final ids = <int, String>{};
         for (final e in endpoints) {
           if (!e.isShutter) continue;
@@ -451,6 +454,8 @@ class ShutterLogic extends SetupLogic {
   Future<void> _writeRuntime(int pair, int seconds) async {
     final t = ctx.requireTarget;
     await _ensureStopped(pair);
+    // Durdurma beklenirken sayfa kapanmış / oturum bitmiş olabilir: bu durumda sunucuya yeni süre yazılmaz.
+    ctx.ensureActive();
     await ctx.cloud.updateEndpoint(
       homeId: t.homeId,
       endpointId: _endpointFor(pair),
@@ -473,15 +478,24 @@ class ShutterLogic extends SetupLogic {
         final current = _require(pair);
         // Geri yüklenecek değer: yarım kalmış bir hazırlıktan kalan değer korunur, yoksa panodan okunur.
         final previous = current.previousSeconds ?? await _readRuntime(pair);
+        final restoreTo = (previous != null && previous != measureRuntimeSec) ? previous : null;
+        if (restoreTo != null) {
+          // Önceki süre geçici 300 sn YAZILMADAN ÖNCE kayda geçer: hazırlık yarıda kesilirse (sayfa/uygulama kapandı)
+          // pano geçici süreyle kalmış olabilir; çıkış geri yüklemesi ve kayıttan devam bu değeri bilmelidir.
+          _put(_require(pair).copyWith(previousSeconds: restoreTo));
+          ctx.persist();
+        }
         try {
           await _writeRuntime(pair, measureRuntimeSec);
         } catch (_) {
           // Sunucu 300 sn'yi yazmış ama pano uygulamamış olabilir: önceki değere dönülmeye çalışılır.
-          if (previous != null && previous != measureRuntimeSec) {
+          if (restoreTo != null) {
             try {
-              await _writeRuntime(pair, previous);
+              await _writeRuntime(pair, restoreTo);
+              _put(_require(pair).copyWith(clearPrevious: true)); // pano önceki değere döndü: geçici süre kalmadı
             } catch (_) {
-              // geri yükleme de başarısızsa asıl hata bildirilir
+              // geri yükleme de başarısızsa önceki süre kayıtta kalır (çıkışta / devam edilince yeniden denenir);
+              // asıl hata bildirilir
             }
           }
           rethrow;

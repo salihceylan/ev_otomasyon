@@ -4,16 +4,21 @@ import 'package:provider/provider.dart';
 
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/auth_form.dart';
+import '../../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../../common/cooldown.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
 
 /// Yetkili servis girişi: ev sahibinin ürettiği 6 haneli, 2 saat geçerli tek eve kapsamlı PIN.
 ///
 /// PIN yalnızca rakamdır (6 hane). Yanlış denemede sunucunun bekleme süresi (`retry_after`, 423/429)
 /// geri sayılır ve düğme o sürece pasif kalır. Ham istisna metni gösterilmez.
+///
+/// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]).
 class ServicePinDialog extends StatefulWidget {
   const ServicePinDialog({super.key});
 
@@ -21,10 +26,7 @@ class ServicePinDialog extends StatefulWidget {
     final state = context.read<AutomationState>();
     return showDialog<void>(
       context: context,
-      builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
-        value: state,
-        child: const ServicePinDialog(),
-      ),
+      builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(value: state, child: const ServicePinDialog()),
     );
   }
 
@@ -90,131 +92,76 @@ class _ServicePinDialogState extends State<ServicePinDialog> {
   Widget build(BuildContext context) {
     return PopScope(
       canPop: !_submitting,
-      child: AlertDialog(
-        backgroundColor: AppTheme.surfaceDark,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: AppTheme.cardBorder),
-        ),
-        title: const Row(
+      child: AuthDialogShell(
+        icon: Icons.handyman_rounded,
+        family: AppFeature.servicePin.accentFamily,
+        title: 'Yetkili Servis Girişi',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon(Icons.build_circle_outlined, color: AppTheme.accentAmber, size: 28),
-            SizedBox(width: 10),
-            Flexible(
-              child: Text(
-                'Yetkili Servis Girişi',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
-                overflow: TextOverflow.ellipsis,
+            Text(
+              'Ev sahibinin oluşturduğu 6 haneli geçici servis PIN kodunu giriniz. PIN 2 saat geçerlidir ve '
+              'yalnızca o eve erişim sağlar.',
+              style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13, height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              key: const Key('field_service_pin'),
+              controller: _pinController,
+              enabled: !_submitting,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              textAlign: TextAlign.center,
+              autocorrect: false,
+              enableSuggestions: false,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
+              onSubmitted: (_) => _submit(),
+              style: authCodeTextStyle(context),
+              // Kod alanları ailesiyle AYNI görünüm (ortalı etiket + büyük rakamlar).
+              decoration: authCodeInputDecoration(context, label: 'Servis PIN Kodu', hint: '••••••', prefixIcon: Icons.pin_outlined),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              key: const Key('field_service_technician'),
+              controller: _nameController,
+              enabled: !_submitting,
+              maxLength: 100,
+              textCapitalization: TextCapitalization.words,
+              style: TextStyle(color: AppTheme.getTextPrimary(context), fontSize: 14),
+              // Kısa etiket; "isteğe bağlı" bilgisi yardımcı metinde (etiket büyük yazıda kesilmesin).
+              decoration: authInputDecoration(
+                context,
+                label: 'Adınız Soyadınız',
+                prefixIcon: Icons.person_outline_rounded,
+                helper: 'İsteğe bağlı. Ev sahibi oturumu kimin açtığını görebilir.',
+                counterText: '',
               ),
             ),
+            if (_lock.isActive) ...[
+              const SizedBox(height: 8),
+              InlineMessage.warning(
+                'Çok fazla hatalı deneme. ${formatCountdown(_lock.remainingSeconds)} sonra tekrar deneyebilirsiniz.',
+                key: const Key('service_pin_lock'),
+              ),
+            ],
+            if (_error != null) ...[const SizedBox(height: 8), InlineMessage.error(_error!, key: const Key('service_pin_error'))],
           ],
         ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Text(
-                'Ev sahibinin oluşturduğu 6 haneli geçici servis PIN kodunu giriniz. PIN 2 saat geçerlidir ve '
-                'yalnızca o eve erişim sağlar.',
-                style: TextStyle(color: AppTheme.textMuted, fontSize: 13, height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                key: const Key('field_service_pin'),
-                controller: _pinController,
-                enabled: !_submitting,
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                textAlign: TextAlign.center,
-                autocorrect: false,
-                enableSuggestions: false,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
-                onSubmitted: (_) => _submit(),
-                style: const TextStyle(
-                  fontSize: 24,
-                  letterSpacing: 8,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary,
-                ),
-                decoration: InputDecoration(
-                  counterText: '',
-                  hintText: '••••••',
-                  hintStyle: const TextStyle(color: AppTheme.textMuted, letterSpacing: 8),
-                  filled: true,
-                  fillColor: AppTheme.cardDark,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.cardBorder),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.cardBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.accentAmber, width: 1.8),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 4),
-              TextField(
-                key: const Key('field_service_technician'),
-                controller: _nameController,
-                enabled: !_submitting,
-                maxLength: 100,
-                textCapitalization: TextCapitalization.words,
-                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-                decoration: InputDecoration(
-                  counterText: '',
-                  labelText: 'Adınız Soyadınız (isteğe bağlı)',
-                  helperText: 'Ev sahibi oturumu kimin açtığını görebilir.',
-                  labelStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
-                  filled: true,
-                  fillColor: AppTheme.cardDark,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.cardBorder),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: AppTheme.cardBorder),
-                  ),
-                ),
-              ),
-              if (_lock.isActive) ...[
-                const SizedBox(height: 8),
-                InlineMessage.warning(
-                  'Çok fazla hatalı deneme. ${formatCountdown(_lock.remainingSeconds)} sonra tekrar deneyebilirsiniz.',
-                  key: const Key('service_pin_lock'),
-                ),
-              ],
-              if (_error != null) ...[
-                const SizedBox(height: 8),
-                InlineMessage.error(_error!, key: const Key('service_pin_error')),
-              ],
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
+        actions: AuthDialogActions(
+          secondaryLabel: 'İptal',
+          secondary: TextButton(
             key: const Key('btn_service_cancel'),
             onPressed: _submitting ? null : () => Navigator.of(context).pop(),
-            child: const Text('İptal', style: TextStyle(color: AppTheme.textMuted)),
+            child: authSecondaryLabel(context, 'İptal'),
           ),
-          ElevatedButton(
+          primaryLabel: 'Doğrula',
+          primary: ElevatedButton(
             key: const Key('btn_service_login'),
             onPressed: (_submitting || _lock.isActive) ? null : _submit,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.accentAmber,
-              foregroundColor: Colors.black87,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            child: _submitting
-                ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black87))
-                : const Text('Doğrula', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: _submitting ? buttonSpinner() : authPrimaryLabel('Doğrula'),
           ),
-        ],
+        ),
       ),
     );
   }

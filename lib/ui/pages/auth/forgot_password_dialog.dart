@@ -5,11 +5,14 @@ import 'package:provider/provider.dart';
 import '../../../models/api_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
+import '../../common/auth_form.dart';
+import '../../common/confirm_dialogs.dart' show AuthDialogActions, AuthDialogShell, authPrimaryLabel, authSecondaryLabel;
 import '../../common/cooldown.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
 import 'magic_link_dialog.dart';
 
 /// Şifre yenileme / hesap kurtarma diyaloğu (koyu giriş ekranı üzerinde).
@@ -21,15 +24,13 @@ import 'magic_link_dialog.dart';
 ///
 /// Sıfırlama sonrası mesaj dönen **duruma göre** verilir: sunucu oturum açtıysa "oturumunuz açıldı",
 /// açmadıysa "yeni şifrenizle giriş yapın". Kod ekranda gösterilmez (geliştirme `debug_code` alanı dahil).
+///
+/// Görünüm: auth/onay akışının ORTAK diyalog kabuğu ([AuthDialogShell]); eylem satırı gövdeyle kaydırılmaz.
 class ForgotPasswordDialog extends StatefulWidget {
   const ForgotPasswordDialog({super.key});
 
   static Future<void> show(BuildContext context) {
-    return showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const ForgotPasswordDialog(),
-    );
+    return showDialog(context: context, barrierDismissible: false, builder: (_) => const ForgotPasswordDialog());
   }
 
   @override
@@ -51,16 +52,21 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
   String? _identifier; // gönderimde kullanılan, normalleştirilmiş kimlik
   String? _identifierError;
   String? _error;
+
+  /// `true`: [_error] KOD alanıyla ilgilidir (eksik/hatalı/süresi dolmuş kod): alan kırmızı çizilir ve ileti alanın
+  /// hemen altında durur. Şifre politikası/uyuşmazlık/ağ hataları formun sonundaki ileti yerinde kalır.
+  bool _codeError = false;
   String? _info;
-  int? _remainingAttempts;
   bool _hasExpiry = false;
 
   @override
   void initState() {
     super.initState();
     final clock = context.read<AutomationState>().clock;
-    _resend = Cooldown(clock, _refresh);
-    _expiry = Cooldown(clock, _refresh);
+    // PF-23: tikler diyaloğu kurmaz; geri sayım metinleri `remaining` ile yalnız küçük builder'larda güncellenir,
+    // düğme kilidi başlangıç/bitişte `_refresh` ile yeniden kurulur.
+    _resend = Cooldown(clock, _refresh, notifyOnTick: false);
+    _expiry = Cooldown(clock, _refresh, notifyOnTick: false);
   }
 
   void _refresh() {
@@ -92,6 +98,7 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
       _isLoading = true;
       _identifierError = null;
       _error = null;
+      _codeError = false;
       _info = null;
     });
     try {
@@ -101,12 +108,9 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
       setState(() {
         _isCodeSent = true;
         _identifier = parsed.value;
-        _remainingAttempts = null;
         _codeController.clear();
         // Sunucu genel bir ileti döndürür (hesap varlığını sızdırmaz); yoksa aynı nitelikte genel ileti.
-        _info = challenge.message.isNotEmpty
-            ? challenge.message
-            : 'Bu hesap kayıtlıysa kurtarma kodu ve bağlantısı iletildi.';
+        _info = challenge.message.isNotEmpty ? challenge.message : 'Bu hesap kayıtlıysa kurtarma kodu ve bağlantısı iletildi.';
       });
       _resend.start(challenge.resendAfter);
       final expiresIn = challenge.expiresIn;
@@ -136,13 +140,17 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
     String? message = codeError ?? passwordError;
     if (message == null && newPassword != confirmPassword) message = 'Girdiğiniz şifreler birbiriyle uyuşmuyor';
     if (message != null) {
-      setState(() => _error = message);
+      setState(() {
+        _error = message;
+        _codeError = codeError != null;
+      });
       return;
     }
 
     setState(() {
       _isLoading = true;
       _error = null;
+      _codeError = false;
     });
     final state = context.read<AutomationState>();
     final messenger = ScaffoldMessenger.maybeOf(context);
@@ -155,10 +163,11 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
       navigator.pop();
       messenger?.showSnackBar(
         SnackBar(
-          content: Text(loggedIn
-              ? 'Şifreniz yenilendi ve oturumunuz açıldı.'
-              : 'Şifreniz yenilendi. Yeni şifrenizle giriş yapabilirsiniz.'),
-          backgroundColor: AppTheme.accentGreen,
+          content: Text(
+            loggedIn ? 'Şifreniz yenilendi ve oturumunuz açıldı.' : 'Şifreniz yenilendi. Yeni şifrenizle giriş yapabilirsiniz.',
+          ),
+          // Beyaz iletiyle AA (ham #10B981 ile ~2.5:1'di).
+          backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -166,121 +175,46 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
       if (!mounted) return;
       String text = friendlyError(e, fallback: 'Şifre sıfırlanamadı. Lütfen tekrar deneyin.');
       int? remaining;
+      var codeRelated = false;
       if (e is ApiException) {
         remaining = e.remainingAttempts;
+        // Kod sorunları (hatalı kod + kalan hak, süresi dolmuş/kullanılmış, deneme hakkı bitti) kod alanına aittir.
+        codeRelated = remaining != null || e.isGone || e.isRateLimited;
         if (e.isGone) {
           text = 'Kodun süresi dolmuş veya kullanılmış. Yeni bir kod isteyin.';
         } else if (e.isRateLimited) {
           final wait = e.retryAfter ?? e.resendAfter;
-          text = 'Çok fazla hatalı deneme yapıldı. '
+          text =
+              'Çok fazla hatalı deneme yapıldı. '
               '${wait == null ? 'Biraz bekleyip' : '${formatCountdown(wait.inSeconds)} sonra'} yeni kod isteyin.';
           if (wait != null) _resend.start(wait);
         }
       }
+      // Kalan hak TEK yerde: iletinin içinde (bölünmeyen boşlukla; "2." yetim kalmaz). Alan altında ikinci satır yok.
       setState(() {
-        _error = remaining == null ? text : '$text Kalan deneme: $remaining.';
-        _remainingAttempts = remaining;
+        _error = remaining == null ? text : '$text ${remainingAttemptsText(remaining)}';
+        _codeError = codeRelated;
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  InputDecoration _decoration({
-    required String label,
-    required IconData icon,
-    String? hint,
-    String? errorText,
-    Widget? suffix,
-    String? counter,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      counterText: counter,
-      errorText: errorText,
-      errorMaxLines: 3,
-      labelStyle: const TextStyle(color: AppTheme.textMuted, fontSize: 13),
-      hintStyle: TextStyle(color: AppTheme.textMuted.withValues(alpha: 0.5)),
-      prefixIcon: Icon(icon, color: AppTheme.primaryBlueLight),
-      suffixIcon: suffix,
-      filled: true,
-      fillColor: AppTheme.bgDark,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: AppTheme.primaryBlue.withValues(alpha: 0.2)),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: BorderSide(color: AppTheme.primaryBlue.withValues(alpha: 0.2)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: AppTheme.primaryBlueLight, width: 1.5),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: !_isLoading,
-      child: Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 440),
-          decoration: BoxDecoration(
-            color: AppTheme.surfaceDark,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppTheme.primaryBlue.withValues(alpha: 0.3)),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 28, offset: const Offset(0, 10)),
-            ],
-          ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(22),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: AppTheme.primaryBlue.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(Icons.lock_reset_rounded, color: AppTheme.primaryBlueLight, size: 26),
-                    ),
-                    const SizedBox(width: 14),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Şifre Yenileme',
-                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Hesap kurtarma',
-                            style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                if (!_isCodeSent) ..._buildStepOne() else ..._buildStepTwo(),
-              ],
-            ),
-          ),
+      child: AuthDialogShell(
+        icon: Icons.lock_reset_rounded,
+        family: AppFamilies.sky,
+        title: 'Şifre Yenileme',
+        subtitle: 'Hesap kurtarma',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: !_isCodeSent ? _buildStepOne() : _buildStepTwo(),
         ),
+        actions: !_isCodeSent ? _buildStepOneActions() : _buildStepTwoActions(),
       ),
     );
   }
@@ -290,7 +224,7 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
       Text(
         'Hesabınıza kayıtlı e-posta adresinizi veya telefon numaranızı girin. Hesap kayıtlıysa size 6 haneli '
         'tek kullanımlık bir kurtarma kodu ileteceğiz.',
-        style: TextStyle(fontSize: 13, color: AppTheme.textMuted.withValues(alpha: 0.9), height: 1.4),
+        style: TextStyle(fontSize: 13, color: AppTheme.getTextMuted(context), height: 1.4),
       ),
       const SizedBox(height: 18),
       TextField(
@@ -304,79 +238,79 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         onChanged: (_) {
           if (_identifierError != null) setState(() => _identifierError = null);
         },
-        style: const TextStyle(color: AppTheme.textPrimary),
-        decoration: _decoration(
+        style: TextStyle(color: AppTheme.getTextPrimary(context)),
+        decoration: authInputDecoration(
+          context,
           label: 'E-posta veya Telefon',
-          icon: Icons.person_outline_rounded,
+          prefixIcon: Icons.person_outline_rounded,
           hint: 'ornek@ahbu.com veya 0555 123 45 67',
           errorText: _identifierError,
         ),
       ),
-      if (_error != null) ...[
-        const SizedBox(height: 12),
-        InlineMessage.error(_error!, key: const Key('forgot_error')),
-      ],
-      const SizedBox(height: 10),
+      if (_error != null) ...[const SizedBox(height: 12), InlineMessage.error(_error!, key: const Key('forgot_error'))],
+      const SizedBox(height: 4),
+      // Bağlantı gövde metniyle AYNI sol hizada (iç boşluk yok), hedef >= 48 dp.
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton(
           key: const Key('btn_have_link'),
           onPressed: _isLoading ? null : () => MagicLinkDialog.show(context),
-          child: const Text('E-postadaki bağlantım var', style: TextStyle(fontSize: 12.5, color: AppTheme.primaryBlueLight)),
+          style: TextButton.styleFrom(padding: EdgeInsets.zero, alignment: Alignment.centerLeft, minimumSize: const Size(48, 48)),
+          child: Text(
+            'E-postadaki bağlantım var',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.infoText(context)),
+          ),
         ),
-      ),
-      const SizedBox(height: 8),
-      Row(
-        children: [
-          Expanded(
-            child: TextButton(
-              key: const Key('btn_forgot_cancel'),
-              onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
-              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 13)),
-              child: const Text('İptal', style: TextStyle(color: AppTheme.textMuted)),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            flex: 2,
-            child: ElevatedButton(
-              key: const Key('btn_send_code'),
-              onPressed: (_isLoading || _resend.isActive) ? null : _handleSendCode,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryBlue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: _isLoading
-                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : Text(
-                      _resend.isActive ? 'Bekleyin (${formatCountdown(_resend.remainingSeconds)})' : 'Kod Gönder',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-            ),
-          ),
-        ],
       ),
     ];
   }
 
+  Widget _buildStepOneActions() {
+    return AuthDialogActions(
+      secondaryLabel: 'İptal',
+      secondary: TextButton(
+        key: const Key('btn_forgot_cancel'),
+        onPressed: _isLoading ? null : () => Navigator.of(context).pop(),
+        child: authSecondaryLabel(context, 'İptal'),
+      ),
+      // Ölçüm: bekleme etiketi ("Bekleyin (10:00)") en uzunudur; düzen geri sayımda sıçramaz.
+      primaryLabel: 'Bekleyin (10:00)',
+      primary: ElevatedButton(
+        key: const Key('btn_send_code'),
+        onPressed: (_isLoading || _resend.isActive) ? null : _handleSendCode,
+        child: _isLoading
+            ? buttonSpinner()
+            : ValueListenableBuilder<int>(
+                valueListenable: _resend.remaining,
+                builder: (context, seconds, _) => authPrimaryLabel(
+                  seconds > 0 ? 'Bekleyin (${formatCountdown(seconds)})' : 'Kod Gönder',
+                  // Bekleme: kalan süre kullanıcının TEK bilgisi; pasif düğmenin soluk ön planı (≈3.4:1) yerine tam soluk metin (≥ 6:1).
+                  color: seconds > 0 ? AppTheme.getTextMuted(context) : null,
+                ),
+              ),
+      ),
+    );
+  }
+
   List<Widget> _buildStepTwo() {
-    final expiryText = _expiry.isActive
-        ? 'Kod geçerlilik süresi: ${formatCountdown(_expiry.remainingSeconds)}'
-        : (_hasExpiry ? 'Kodun süresi dolmuş olabilir; gerekirse yeni kod isteyin.' : '');
+    final muted = AppTheme.getTextMuted(context);
+    final primary = AppTheme.getTextPrimary(context);
+    // Hata iletisi: kod hatasıysa kod alanının HEMEN altında (alan kırmızı çizilir), değilse (şifre politikası,
+    // uyuşmazlık, ağ) formun sonunda. Aynı anda tek ileti vardır; anahtar aynıdır.
+    final errorBox = _error == null ? null : InlineMessage.error(_error!, key: const Key('forgot_error'));
+    final codeScoped = errorBox != null && _codeError;
     return [
       Text(
         _info ?? 'Kurtarma kodunu ve yeni şifrenizi girin.',
         key: const Key('forgot_info'),
-        style: TextStyle(fontSize: 13, color: AppTheme.textMuted.withValues(alpha: 0.9), height: 1.4),
+        style: TextStyle(fontSize: 13, color: muted, height: 1.4),
       ),
       const SizedBox(height: 4),
       Text(
         '$_identifier adresine/numarasına gönderilen 6 haneli kodu girin.',
-        style: TextStyle(fontSize: 12, color: AppTheme.textMuted.withValues(alpha: 0.8), height: 1.4),
+        style: TextStyle(fontSize: 12, color: muted, height: 1.4),
       ),
-      const SizedBox(height: 14),
+      const SizedBox(height: 16),
       TextField(
         key: const Key('field_code'),
         controller: _codeController,
@@ -387,23 +321,11 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         autocorrect: false,
         enableSuggestions: false,
         inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)],
-        style: const TextStyle(color: AppTheme.textPrimary, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 8),
-        decoration: _decoration(
-          label: '6 Haneli Kurtarma Kodu',
-          icon: Icons.pin_rounded,
-          hint: '000000',
-          counter: '',
-        ),
+        style: authCodeTextStyle(context),
+        decoration: authCodeInputDecoration(context, label: '6 Haneli Kurtarma Kodu', hint: '000000', hasError: codeScoped),
       ),
-      if (_remainingAttempts != null) ...[
-        const SizedBox(height: 4),
-        Text(
-          'Kalan deneme hakkı: $_remainingAttempts',
-          key: const Key('forgot_remaining_attempts'),
-          style: const TextStyle(fontSize: 12, color: AppTheme.accentAmber, fontWeight: FontWeight.w600),
-        ),
-      ],
-      const SizedBox(height: 10),
+      if (codeScoped) ...[const SizedBox(height: 8), errorBox],
+      const SizedBox(height: 14),
       TextField(
         key: const Key('field_new_password'),
         controller: _newPasswordController,
@@ -411,18 +333,20 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         obscureText: _obscureNew,
         autocorrect: false,
         enableSuggestions: false,
-        style: const TextStyle(color: AppTheme.textPrimary),
-        decoration: _decoration(
-          label: 'Yeni Şifre (En az ${AuthValidators.passwordMinLength} karakter)',
-          icon: Icons.lock_outline_rounded,
-          suffix: IconButton(
-            tooltip: _obscureNew ? 'Şifreyi göster' : 'Şifreyi gizle',
-            icon: Icon(_obscureNew ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: AppTheme.textMuted, size: 20),
-            onPressed: () => setState(() => _obscureNew = !_obscureNew),
+        style: TextStyle(color: primary),
+        decoration: authInputDecoration(
+          context,
+          label: 'Yeni Şifre',
+          helper: 'En az ${AuthValidators.passwordMinLength} karakter',
+          prefixIcon: Icons.lock_outline_rounded,
+          suffixIcon: passwordVisibilityButton(
+            context: context,
+            obscured: _obscureNew,
+            onToggle: () => setState(() => _obscureNew = !_obscureNew),
           ),
         ),
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: 14),
       TextField(
         key: const Key('field_confirm_password'),
         controller: _confirmPasswordController,
@@ -430,81 +354,100 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         obscureText: _obscureConfirm,
         autocorrect: false,
         enableSuggestions: false,
-        style: const TextStyle(color: AppTheme.textPrimary),
-        decoration: _decoration(
+        style: TextStyle(color: primary),
+        decoration: authInputDecoration(
+          context,
           label: 'Yeni Şifre Tekrar',
-          icon: Icons.lock_clock_outlined,
-          suffix: IconButton(
-            tooltip: _obscureConfirm ? 'Şifreyi göster' : 'Şifreyi gizle',
-            icon: Icon(_obscureConfirm ? Icons.visibility_off_outlined : Icons.visibility_outlined, color: AppTheme.textMuted, size: 20),
-            onPressed: () => setState(() => _obscureConfirm = !_obscureConfirm),
+          prefixIcon: Icons.verified_user_outlined,
+          suffixIcon: passwordVisibilityButton(
+            context: context,
+            obscured: _obscureConfirm,
+            onToggle: () => setState(() => _obscureConfirm = !_obscureConfirm),
           ),
         ),
       ),
-      const SizedBox(height: 12),
+      const SizedBox(height: 14),
       const InlineMessage.warning(
         'Şifreniz yenilendiğinde diğer tüm cihazlardaki açık oturumlar otomatik kapatılır.',
         key: Key('forgot_security_notice'),
       ),
-      if (_error != null) ...[
-        const SizedBox(height: 12),
-        InlineMessage.error(_error!, key: const Key('forgot_error')),
-      ],
-      const SizedBox(height: 12),
+      if (errorBox != null && !codeScoped) ...[const SizedBox(height: 12), errorBox],
+      const SizedBox(height: 8),
       Center(
         child: Column(
           children: [
-            if (expiryText.isNotEmpty)
-              Text(
-                expiryText,
-                key: const Key('forgot_expiry'),
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.accentAmber),
-                textAlign: TextAlign.center,
-              ),
+            ValueListenableBuilder<int>(
+              valueListenable: _expiry.remaining,
+              builder: (context, seconds, _) {
+                final text = seconds > 0
+                    ? 'Kod geçerlilik süresi: ${formatCountdown(seconds)}'
+                    : (_hasExpiry ? 'Kodun süresi dolmuş olabilir; gerekirse yeni kod isteyin.' : '');
+                if (text.isEmpty) return const SizedBox.shrink();
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (seconds > 0) ...[
+                      CooldownArc(remaining: _expiry.remaining, color: AppTheme.warningText(context)),
+                      const SizedBox(width: 8),
+                    ],
+                    Flexible(
+                      child: Text(
+                        text,
+                        key: const Key('forgot_expiry'),
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.warningText(context)),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
             TextButton(
               key: const Key('btn_resend_code'),
               onPressed: (_isLoading || _resend.isActive) ? null : _handleSendCode,
-              child: Text(
-                _resend.isActive ? 'Kodu Tekrar Gönder (${formatCountdown(_resend.remainingSeconds)})' : 'Kodu Tekrar Gönder',
-                style: const TextStyle(color: AppTheme.primaryBlueLight, fontSize: 13),
+              child: ValueListenableBuilder<int>(
+                valueListenable: _resend.remaining,
+                builder: (context, seconds, _) => Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (seconds > 0) ...[CooldownArc(remaining: _resend.remaining, color: muted), const SizedBox(width: 6)],
+                    Flexible(
+                      child: Text(
+                        seconds > 0 ? 'Kodu Tekrar Gönder (${formatCountdown(seconds)})' : 'Kodu Tekrar Gönder',
+                        // Bekleme sürerken düğme pasif: bağlantı rengi değil soluk metin (çelişkili sinyal yok).
+                        style: TextStyle(color: seconds > 0 ? muted : AppTheme.infoText(context), fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
         ),
       ),
-      const SizedBox(height: 8),
-      Row(
-        children: [
-          Expanded(
-            child: TextButton(
-              key: const Key('btn_forgot_back'),
-              onPressed: _isLoading ? null : () => setState(() {
-                    _isCodeSent = false;
-                    _error = null;
-                  }),
-              style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 13)),
-              child: const Text('Geri', style: TextStyle(color: AppTheme.textMuted)),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            flex: 2,
-            child: ElevatedButton(
-              key: const Key('btn_reset_password'),
-              onPressed: _isLoading ? null : _handleResetPassword,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.accentGreen,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: _isLoading
-                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Text('Şifreyi Yenile', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ),
-        ],
-      ),
     ];
+  }
+
+  Widget _buildStepTwoActions() {
+    return AuthDialogActions(
+      secondaryLabel: 'Geri',
+      secondary: TextButton(
+        key: const Key('btn_forgot_back'),
+        onPressed: _isLoading
+            ? null
+            : () => setState(() {
+                _isCodeSent = false;
+                _error = null;
+                _codeError = false;
+              }),
+        child: authSecondaryLabel(context, 'Geri'),
+      ),
+      primaryLabel: 'Şifreyi Yenile',
+      primary: ElevatedButton(
+        key: const Key('btn_reset_password'),
+        onPressed: _isLoading ? null : _handleResetPassword,
+        child: _isLoading ? buttonSpinner() : authPrimaryLabel('Şifreyi Yenile'),
+      ),
+    );
   }
 }

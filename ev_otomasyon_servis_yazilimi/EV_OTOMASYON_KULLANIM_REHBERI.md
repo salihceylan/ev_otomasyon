@@ -69,8 +69,8 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 
 Pencerenin en üstünde iki şerit vardır:
 
-- **Mavi başlık:** "AHBU AKILLI EV SİSTEMLERİ".
-- **Gri oturum şeridi:** solda sunucu adresi, ortada kim girişli olduğu ("Giriş yapılmadı" veya e-posta adresiniz), sağda **Sunucuya Giriş** ve **Oturumu Kapat** düğmeleri.
+- **Lacivert başlık:** "AHBU AKILLI EV SİSTEMLERİ"; sağında yüklü firmware sürümü rozeti ve **Koyu tema / Açık tema** anahtarı (görünümü değiştirir; seçiminiz bir sonraki açılış için hatırlanır, iş akışı değişmez).
+- **Oturum şeridi:** solda sunucu adresi, ortada kim girişli olduğu ("Giriş yapılmadı" veya e-posta adresiniz), sağda **Sunucuya Giriş** ve **Oturumu Kapat** düğmeleri.
 
 Altında **3 sekme** vardır:
 

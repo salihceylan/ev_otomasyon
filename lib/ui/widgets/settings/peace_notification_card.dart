@@ -7,6 +7,8 @@ import '../../../services/automation_state.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../dashboard/close_all_lights_button.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/feature_accent.dart';
+import '../../theme/tokens.dart';
 import '../peace_reminder_details.dart';
 import '../push_status_tile.dart';
 import 'settings_card.dart';
@@ -98,8 +100,9 @@ class _PeaceNotificationCardState extends State<PeaceNotificationCard> {
       },
     );
 
-    final indigo = Colors.indigoAccent;
-    final readable = AppTheme.readableAccent(context, indigo);
+    // Gece = violet (şartname §2.1); ham `Colors.indigoAccent` aile dışıydı.
+    final night = AppFeature.nightPeace.accentFamily.base;
+    final readable = AppTheme.readableAccent(context, night);
     final loading = _load == _Load.loading;
     final failed = _load == _Load.failed;
     final known = !loading && !failed && vm.enabled != null;
@@ -122,7 +125,9 @@ class _PeaceNotificationCardState extends State<PeaceNotificationCard> {
       child: SettingsCard(
         icon: Icons.nightlight_round,
         title: 'Gece Huzur Bildirimi',
-        accent: indigo,
+        accent: night,
+        active: known && vm.enabled == true,
+        pending: loading || _saving,
         children: [
           MergeSemantics(
             child: Semantics(
@@ -133,14 +138,6 @@ class _PeaceNotificationCardState extends State<PeaceNotificationCard> {
                   Expanded(
                     child: Row(
                       children: [
-                        if (loading) ...[
-                          const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          const SizedBox(width: 8),
-                        ],
                         Flexible(
                           child: Text(
                             status,
@@ -161,7 +158,6 @@ class _PeaceNotificationCardState extends State<PeaceNotificationCard> {
                     key: const Key('switch_peace'),
                     value: vm.enabled ?? false,
                     materialTapTargetSize: MaterialTapTargetSize.padded,
-                    activeThumbColor: indigo,
                     onChanged: (known && !_saving) ? (value) => unawaited(_update(enabled: value)) : null,
                   ),
                 ],
@@ -240,7 +236,7 @@ class _PeaceNotificationCardState extends State<PeaceNotificationCard> {
                     ),
                   ],
                 ),
-                const CloseAllLightsButton(filled: false, color: Colors.amber),
+                CloseAllLightsButton(filled: false, color: AppFamilies.amber.base),
               ],
             ),
           ],

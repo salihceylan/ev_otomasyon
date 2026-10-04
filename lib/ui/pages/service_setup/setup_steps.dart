@@ -42,8 +42,7 @@ class SetupSteps {
       shortTitle: 'Hazırlık',
       instructions: <String>[
         'Telefonunuzun şarjının ve internet bağlantınızın (mobil veri veya Wi-Fi) olduğundan emin olun.',
-        'Yanınızda şunlar olsun: cihaz etiketi (karekod ve kurulum PIN\'i), müşterinin e-posta adresi veya telefonu, müşterinin Wi-Fi adı ve şifresi.',
-        'Pano elektriğe bağlı olmalı ve ışıkları yanmalı.',
+        'Gerekenler aşağıdaki "Yanınızda olması gerekenler" listesindedir; pano elektriğe bağlı olmalı ve ışıkları yanmalı.',
         'Aşağıdaki kontrol, oturumunuzu ve sunucu bağlantısını doğrular.',
       ],
     ),

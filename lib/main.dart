@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import 'services/automation_state.dart';
 import 'ui/app_shell.dart';
+import 'ui/motion/motion_scope.dart';
 import 'ui/pages/auth/auth_gate.dart';
 
 /// Yakalanmamış hata bildirimi: yalnızca hata TÜRÜ yazdırılır (ileti/yığın sır içerebilir).
@@ -50,7 +51,9 @@ Future<void> main() async {
       _report(error, stack);
       return true;
     };
-    runApp(await buildApp());
+    // Tam hareket YALNIZ burada açılır (şartname §4.1): `EvOtomasyonApp`'i doğrudan pompalayan testler kapsam
+    // görmez ve `MotionMode.off` (süre 0, döngü yok) ile çalışır; sistem "animasyonları kaldır" de kapatır.
+    runApp(MotionScope(mode: MotionMode.full, child: await buildApp()));
   }, _report);
 }
 

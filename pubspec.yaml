@@ -44,6 +44,7 @@ dependencies:
   google_sign_in: ^6.2.2
   sign_in_with_apple: ^6.1.4
   local_auth: ^2.3.0
+  local_auth_android: ^1.0.56 # sistem istemi metinleri (AndroidAuthMessages); local_auth zaten getiriyor
 
 dev_dependencies:
   flutter_test:
@@ -71,7 +72,12 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/
+    # AÇIK dosya listesi (dizin girişi YOK): yalnız burada yazılı dosyalar pakete girer. Tam boyutlu ana
+    # kopyalar ve referanssız görseller assets_src/ altındadır ve pakete GİRMEZ (scripts/*.py oradan üretir).
+    - assets/images/ai_circuit_bg.jpg
+    - assets/images/ai_circuit_bg_light.jpg
+    - assets/images/round_app_logo.png
+    - assets/images/app_logo.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

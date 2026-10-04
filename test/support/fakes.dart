@@ -137,7 +137,7 @@ class _FakeTimer implements Timer {
 // Güvenli depolama
 // =============================================================================
 
-/// Bellek içi güvenli depo (+ hata enjekte etme).
+/// Bellek içi güvenli depo (+ hata ve takılma enjekte etme).
 class InMemorySecureStore implements SecureKeyValueStore {
   final Map<String, String> data = <String, String>{};
 
@@ -149,38 +149,125 @@ class InMemorySecureStore implements SecureKeyValueStore {
   /// Yalnızca bu anahtarların okunması hata verir (ör. yalnızca biyometrik tercih okunamasın).
   final Set<String> failReadKeys = <String>{};
 
+  // --- Takılan platform çağrısı (süre sınırı testleri, PF-02) ---------------------------------
+  //
+  // Atanan `Completer` tamamlanana kadar işlem DÖNMEZ (Keystore/Keychain takılması). Tamamlanınca
+  // işlem normal sürer; `completeError` ile tamamlanırsa GEÇ DÖNEN HATA simüle edilir (süre sınırını
+  // aşmış bir çağrıda yutulmalı, ele alınmamış hata üretmemelidir). Zaman aşımına uğrayan çağrı iptal
+  // edilemez: kapı sonradan açılırsa yazma yine uygulanır (platform işi sürer).
+
+  /// `read` kapısı: değer kapı açıldıktan SONRA okunur (platform işe hiç başlayamadı).
+  Completer<void>? hangReads;
+
+  /// `write` VE `delete` kapısı (`failWrites` gibi ikisini de kapsar).
+  Completer<void>? hangWrites;
+
+  /// `deleteAll` kapısı (çıkıştaki toplu silme).
+  Completer<void>? hangDeleteAll;
+
+  /// Yanıt kapısı: değer kapıdan ÖNCE yakalanır (platform okumayı bitirip yanıtı geciktirir); kapı
+  /// açılınca eski (yakalanan) değer döner.
+  Completer<void>? readGate;
+
+  /// Başlatılan `read` çağrıları (takılanlar ve hata verenler dahil).
+  int startedReads = 0;
+
+  /// Başlatılan `write` çağrıları (`delete` DEĞİL; hata/takılma dahil, girişte sayılır).
+  int writeCount = 0;
+
+  /// Başlatılan `deleteAll` çağrıları (hata/takılma dahil, girişte sayılır).
+  int deleteAllCount = 0;
+
+  final Map<String, int> _writesByKey = <String, int>{};
+
+  /// Belirli bir anahtara yapılan `write` sayısı (ör. `ahbu_homes_cache`: gereksiz yeniden yazma denetimi).
+  int writeCountFor(String key) => _writesByKey[key] ?? 0;
+
   @override
   Future<String?> read(String key) async {
+    startedReads++;
     if (failReads || failReadKeys.contains(key)) throw Exception('okuma hatası');
-    return data[key];
+    final hang = hangReads;
+    if (hang != null) await hang.future;
+    final value = data[key];
+    final gate = readGate;
+    if (gate != null) await gate.future;
+    return value;
   }
 
   @override
   Future<void> write(String key, String value) async {
+    writeCount++;
+    _writesByKey[key] = writeCountFor(key) + 1;
     if (failWrites) throw Exception('yazma hatası');
+    final hang = hangWrites;
+    if (hang != null) await hang.future;
     data[key] = value;
   }
 
   @override
   Future<void> delete(String key) async {
     if (failWrites) throw Exception('silme hatası');
+    final hang = hangWrites;
+    if (hang != null) await hang.future;
     data.remove(key);
   }
 
   @override
   Future<void> deleteAll() async {
+    deleteAllCount++;
     if (failDeleteAll) throw Exception('toplu silme hatası');
+    final hang = hangDeleteAll;
+    if (hang != null) await hang.future;
     data.clear();
   }
 }
 
-/// `SecureStorageService` + bellek içi depo.
-class FakeStorage extends SecureStorageService {
-  FakeStorage._(this.memory) : super(store: memory);
+/// Sonradan (StateHarness tarafından) bir saate bağlanabilen saat. Açıkça saat verilmediyse bağlanana
+/// kadar ATIL bir [FakeClock]'a gider (zamanlayıcılar asla tetiklenmez, gerçek zaman kullanılmaz);
+/// açıkça verildiyse hiç değişmez.
+class _BindableClock extends Clock {
+  _BindableClock(Clock? explicit)
+      : _target = explicit ?? FakeClock(),
+        _pinned = explicit != null;
 
-  factory FakeStorage([InMemorySecureStore? memory]) => FakeStorage._(memory ?? InMemorySecureStore());
+  Clock _target;
+  final bool _pinned;
+
+  void bindIfUnset(Clock clock) {
+    if (!_pinned) _target = clock;
+  }
+
+  @override
+  DateTime now() => _target.now();
+
+  @override
+  Timer timer(Duration duration, void Function() callback) => _target.timer(duration, callback);
+
+  @override
+  Timer periodic(Duration period, void Function(Timer timer) callback) =>
+      _target.periodic(period, callback);
+}
+
+/// `SecureStorageService` + bellek içi depo.
+///
+/// Süre sınırı zamanlayıcıları ([clock]) varsayılan olarak ATIL'dır: `StateHarness` kurulunca onun
+/// `FakeClock`'una bağlanır (`h.clock.elapse(...)` takılan depo çağrısını zaman aşımına uğratır).
+/// Harness'sız kullanımda zaman aşımı için [clock] verin; açıkça verilen saat hiç değiştirilmez.
+class FakeStorage extends SecureStorageService {
+  FakeStorage._(this.memory, this._clockRef, Duration? opTimeout)
+      : super(store: memory, clock: _clockRef, opTimeout: opTimeout);
+
+  /// [memory]: paylaşılan/önceden doldurulmuş bellek içi depo (verilmezse boş). [opTimeout]: üretim
+  /// varsayılanını (6 sn) değiştirir.
+  factory FakeStorage({InMemorySecureStore? memory, Clock? clock, Duration? opTimeout}) =>
+      FakeStorage._(memory ?? InMemorySecureStore(), _BindableClock(clock), opTimeout);
 
   final InMemorySecureStore memory;
+  final _BindableClock _clockRef;
+
+  /// `StateHarness` bunu çağırır: açıkça saat verilmediyse süre sınırı zamanlayıcıları [clock]'tan kurulur.
+  void bindClockIfUnset(Clock clock) => _clockRef.bindIfUnset(clock);
 
   /// Depodaki ham anahtarlar (sızıntı denetimi için).
   Iterable<String> get keys => memory.data.keys;
@@ -193,7 +280,22 @@ class FakeStorage extends SecureStorageService {
 // =============================================================================
 
 class FakeBiometric extends BiometricAuthService {
-  FakeBiometric({this.supported = false, this.authResult = true, this.label = 'Parmak İzi'});
+  /// [clock]/[probeTimeout]: yalnızca [hangSupported] için (üretim servisindeki sonda süre sınırı).
+  /// Saat verilmezse `StateHarness` kurulunca onun `FakeClock`'una bağlanır (bkz. [bindClockIfUnset]).
+  FakeBiometric({
+    bool supported = false,
+    bool authResult = true,
+    String label = 'Parmak İzi',
+    Clock? clock,
+    Duration? probeTimeout,
+  }) : this._(supported, authResult, label, _BindableClock(clock), probeTimeout);
+
+  FakeBiometric._(this.supported, this.authResult, this.label, this._clockRef, Duration? probeTimeout)
+      : _probeLimit = probeTimeout ?? BiometricAuthService.defaultProbeTimeout,
+        super(clock: _clockRef, probeTimeout: probeTimeout);
+
+  final _BindableClock _clockRef;
+  final Duration _probeLimit;
 
   bool supported;
   bool authResult;
@@ -201,14 +303,57 @@ class FakeBiometric extends BiometricAuthService {
   int authenticateCalls = 0;
   final List<String> reasons = <String>[];
 
+  /// `isBiometricSupported` çağrı sayısı (gereksiz sondaları yakalamak için).
+  int supportedCalls = 0;
+
+  /// `getBiometricLabel` çağrı sayısı.
+  int labelCalls = 0;
+
   /// Atanırsa `authenticate` bu `Completer` tamamlanana kadar bekler (gecikmeli doğrulama).
   Completer<bool>? pending;
 
-  @override
-  Future<bool> isBiometricSupported() async => supported;
+  /// Doğrulama başarısız olduğunda bildirilecek neden (verilmezse "vazgeçildi").
+  BiometricFailure? failure;
+  BiometricFailure? _lastFailure;
 
   @override
-  Future<String> getBiometricLabel() async => label;
+  BiometricFailure? get lastFailure => _lastFailure;
+
+  /// Atanırsa `isBiometricSupported` (platform sondası) bu `Completer` tamamlanana kadar DÖNMEZ ve
+  /// tamamlanınca onun değerini döner. Üretim servisi gibi sonda süre sınırına tabidir: sınır içinde
+  /// dönmezse `false` döner, geç dönen değer/hata yutulur (süre `FakeClock` ile ilerler).
+  Completer<bool>? hangSupported;
+
+  /// `StateHarness` bunu çağırır: açıkça saat verilmediyse sonda süre sınırı [clock]'tan kurulur.
+  void bindClockIfUnset(Clock clock) => _clockRef.bindIfUnset(clock);
+
+  bool _timedOut = false;
+
+  /// Üretim servisindeki gibi: son destek sondası ([hangSupported]) süre sınırına takıldıysa `true`.
+  @override
+  bool get lastSupportProbeTimedOut => _timedOut;
+
+  @override
+  Future<bool> isBiometricSupported() async {
+    supportedCalls++;
+    _timedOut = false;
+    final hang = hangSupported;
+    if (hang == null) return supported;
+    try {
+      return await _clockRef.bound<bool>(hang.future, _probeLimit, () {
+        _timedOut = true;
+        return false;
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<String> getBiometricLabel() async {
+    labelCalls++;
+    return label;
+  }
 
   @override
   Future<bool> authenticate({
@@ -218,8 +363,9 @@ class FakeBiometric extends BiometricAuthService {
     authenticateCalls++;
     reasons.add(reason);
     final wait = pending;
-    if (wait != null) return wait.future;
-    return supported && authResult;
+    final ok = wait != null ? await wait.future : supported && authResult;
+    _lastFailure = ok ? null : (failure ?? BiometricFailure.canceled);
+    return ok;
   }
 }
 
@@ -249,7 +395,14 @@ class FakeCloudApi extends EvCloudApiService {
   final Map<String, List<EndpointModel>> endpoints = <String, List<EndpointModel>>{};
   Object? fetchEndpointsError;
 
+  /// Atanırsa `fetchEndpoints` bu kapı açılana kadar bekler (REST yığını yavaş/takılı; MQTT'nin ondan önce
+  /// başladığını denetlemek için). Yanıt istek anındaki listeyle üretilir (`fetchHomesGate` gibi).
+  Completer<void>? fetchEndpointsGate;
+
   final Map<String, List<DeviceInfo>> devicesByHome = <String, List<DeviceInfo>>{};
+
+  /// Atanırsa `devices` bu hatayı fırlatır (cihaz listesi alınamadı; varlık yedeği/yeniden deneme testleri).
+  Object? devicesError;
 
   MqttCredentials? credentials;
   Object? credentialsError;
@@ -334,6 +487,10 @@ class FakeCloudApi extends EvCloudApiService {
   String localKeyValue = 'localkey-1234';
   Object? localKeyError;
 
+  /// Atanırsa `localKey` bu kapı açılana kadar bekler (yavaş anahtar yenilemesi; dispose/mod değişimi yarışları).
+  /// Dönen anahtar istek anındaki değerdir (`localKeyValue`); hata kapıdan SONRA okunur.
+  Completer<void>? localKeyGate;
+
   /// `localKey` çağrılarının ev kimlikleri (servis sihirbazında aktif olmayan ev denetimi için).
   final List<String> localKeyHomeIds = <String>[];
   final List<String> revokedRefreshTokens = <String>[];
@@ -355,14 +512,20 @@ class FakeCloudApi extends EvCloudApiService {
   @override
   Future<List<EndpointModel>> fetchEndpoints(String homeId) async {
     calls.add('fetchEndpoints:$homeId');
+    // Yanıt istek anındaki listeyle üretilir (kapı açılana kadar liste değişse de bayat yanıt simülasyonu).
+    final snapshot = List<EndpointModel>.of(endpoints[homeId] ?? const <EndpointModel>[]);
+    final gate = fetchEndpointsGate;
+    if (gate != null) await gate.future;
     final error = fetchEndpointsError;
     if (error != null) throw error;
-    return List<EndpointModel>.of(endpoints[homeId] ?? const <EndpointModel>[]);
+    return snapshot;
   }
 
   @override
   Future<List<DeviceInfo>> devices(String homeId) async {
     calls.add('devices:$homeId');
+    final error = devicesError;
+    if (error != null) throw error;
     return List<DeviceInfo>.of(devicesByHome[homeId] ?? const <DeviceInfo>[]);
   }
 
@@ -601,9 +764,12 @@ class FakeCloudApi extends EvCloudApiService {
   Future<String> localKey(String homeId, String deviceUuid) async {
     calls.add('localKey:$deviceUuid');
     localKeyHomeIds.add(homeId);
+    final value = localKeyValue;
+    final gate = localKeyGate;
+    if (gate != null) await gate.future;
     final error = localKeyError;
     if (error != null) throw error;
-    return localKeyValue;
+    return value;
   }
 
   @override
@@ -755,6 +921,10 @@ class FakeMqttTransport implements MqttTransport {
   final subscribeFailuresController = StreamController<String>.broadcast();
 
   MqttConnectOutcome outcome = const MqttConnectOutcome.ok();
+
+  /// Atanırsa `connect` bu kapı açılana kadar DÖNMEZ (TCP/TLS kurulumu takıldı; PF-27). Kimlik/istemci
+  /// alanları kapıdan ÖNCE yazılır (takılı bağlanma denemesi izlenebilsin); kapı açılınca [outcome] döner.
+  Completer<void>? connectGate;
   final List<String> subscriptions = <String>[];
   MqttCredentials? credentials;
   String? clientId;
@@ -780,6 +950,8 @@ class FakeMqttTransport implements MqttTransport {
     this.credentials = credentials;
     this.clientId = clientId;
     this.secure = secure;
+    final gate = connectGate;
+    if (gate != null) await gate.future;
     return outcome;
   }
 
@@ -842,6 +1014,12 @@ class StateHarness {
     final fakeMqtt = mqtt ?? FakeMqtt();
     final fakeStorage = storage ?? FakeStorage();
     final fakeBiometric = biometric ?? FakeBiometric(supported: biometricSupported);
+    // Depo/biyometrik sonda süre sınırları (PF-02) harness saatiyle ilerler: `h.storage.memory.hangReads`
+    // atanıp `await h.clock.elapse(...)` çağrılırsa takılan çağrı zaman aşımına uğrar. Açıkça `clock:`
+    // verilmiş `FakeStorage`/`FakeBiometric` değiştirilmez. Normal (hemen dönen) işlemler sınır
+    // zamanlayıcısını tamamlanır tamamlanmaz iptal eder (`activeTimerCount` kalıcı artmaz).
+    fakeStorage.bindClockIfUnset(fakeClock);
+    fakeBiometric.bindClockIfUnset(fakeClock);
     final mock = MockApi();
     final direct = AutomationApiService(baseUrl: '', client: mock.client);
     final state = AutomationState(

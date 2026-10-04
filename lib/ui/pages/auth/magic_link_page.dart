@@ -7,9 +7,17 @@ import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../../utils/magic_link_parser.dart';
 import '../../common/auth_form.dart';
+import '../../common/confirm_dialogs.dart' show authPrimaryLabel;
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/neon_app_bar.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/surface_card.dart';
+
+/// Sayfanın durumdan okuduğu oturum kapısı değerleri (PF-06: `context.select`).
+typedef _GateView = ({bool isAuthenticated, bool checking});
 
 /// E-postadaki sihirli bağlantıyla (`#token=`) giriş ya da şifre sıfırlama (CONTRACTS §1.1b).
 ///
@@ -18,6 +26,9 @@ import '../../theme/app_theme.dart';
 /// * `resetPassword`: yeni şifre (politika: en az 10 karakter, kırpılmaz) ister ve belirteçle sıfırlar.
 ///
 /// Belirteç ekranda gösterilmez ve loglanmaz.
+///
+/// Görünüm: orb rozetinin altındaki tüm metin ve eylemler TEK cam plakada ([SurfaceCard]) durur (devre fotoğrafı
+/// metnin altından geçmez); yükleme göstergesi marka yayıdır ([ProgressArc]).
 class MagicLinkPage extends StatefulWidget {
   const MagicLinkPage({super.key, required this.link});
 
@@ -35,6 +46,7 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
   bool _busy = false;
   bool _consumed = false;
   bool _obscure = true;
+  bool _obscureConfirm = true;
   String? _error;
   String? _success;
 
@@ -144,22 +156,19 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
+    final gate = context.select<AutomationState, _GateView>(
+      (s) => (isAuthenticated: s.isAuthenticated, checking: s.authStatus == AuthStatus.checking),
+    );
     return PopScope(
       canPop: !_busy,
       child: Scaffold(
-        appBar: AppBar(
-          title: Text(_isLogin ? 'Bağlantıyla Giriş' : 'Yeni Şifre Belirle'),
-          automaticallyImplyLeading: !_busy,
-        ),
+        // Ortak Neon Glass üst çubuk (cam geri diski + başlık); işlem sürerken geri düğmesi yok (`PopScope` ile aynı kapı).
+        appBar: NeonAppBar(title: _isLogin ? 'Bağlantıyla Giriş' : 'Yeni Şifre Belirle', automaticallyImplyLeading: !_busy),
         body: SafeArea(
           child: Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 440),
-                child: _isLogin ? _buildLogin(state) : _buildReset(),
-              ),
+              child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: _isLogin ? _buildLogin(gate) : _buildReset()),
             ),
           ),
         ),
@@ -167,69 +176,76 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
     );
   }
 
-  Widget _buildLogin(AutomationState state) {
-    final needsConfirm = state.isAuthenticated && !_busy && !_consumed;
-    final waitingForGate = state.authStatus == AuthStatus.checking && !_busy && !_consumed && _error == null;
+  /// Marka yükleme göstergesi (stok çark yerine [ProgressArc]; `MotionMode.off`'ta statik yay).
+  Widget _progress(Key key) => Center(
+    child: ProgressArc(
+      key: key,
+      diameter: 36,
+      strokeWidth: 3.2,
+      color: AppTheme.isDark(context) ? AppFamilies.cyan.light : AppFamilies.sky.deep,
+      maxSpin: const Duration(seconds: 60),
+    ),
+  );
+
+  Widget _buildLogin(_GateView gate) {
+    final needsConfirm = gate.isAuthenticated && !_busy && !_consumed;
+    final waitingForGate = gate.checking && !_busy && !_consumed && _error == null;
+    final muted = AppTheme.getTextMuted(context);
     return Column(
       key: const Key('magic_login_view'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Icon(Icons.link_rounded, size: 56, color: AppTheme.primaryBlueLight),
+        const Center(
+          child: OrbIconBadge(icon: Icons.link_rounded, family: AppFamilies.cyan, size: OrbSize.xl, glow: true),
+        ),
         const SizedBox(height: 16),
-        if (waitingForGate) ...[
-          const Center(child: CircularProgressIndicator(key: Key('magic_login_waiting'))),
-          const SizedBox(height: 16),
-          const Text(
-            'Oturum durumu kontrol ediliyor. Uygulama kilitliyse önce kilidi açın...',
-            textAlign: TextAlign.center,
-          ),
-          TextButton(
-            key: const Key('btn_magic_login_cancel'),
-            onPressed: _leave,
-            child: const Text('Vazgeç'),
-          ),
-        ] else if (_busy)
-          const Column(
+        SurfaceCard(
+          padding: const EdgeInsets.fromLTRB(18, 20, 18, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(child: CircularProgressIndicator(key: Key('magic_login_progress'))),
-              SizedBox(height: 16),
-              Text('Giriş yapılıyor...', textAlign: TextAlign.center),
+              if (waitingForGate) ...[
+                _progress(const Key('magic_login_waiting')),
+                const SizedBox(height: 16),
+                Text(
+                  'Oturum durumu kontrol ediliyor. Uygulama kilitliyse önce kilidi açın...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: muted, fontSize: 13, height: 1.4),
+                ),
+                TextButton(key: const Key('btn_magic_login_cancel'), onPressed: _leave, child: const Text('Vazgeç')),
+              ] else if (_busy)
+                Column(
+                  children: [
+                    _progress(const Key('magic_login_progress')),
+                    const SizedBox(height: 16),
+                    Text('Giriş yapılıyor...', textAlign: TextAlign.center, style: TextStyle(color: muted, fontSize: 13, height: 1.4)),
+                  ],
+                )
+              else if (needsConfirm) ...[
+                InlineMessage.warning(
+                  'Bu cihazda şu anda başka bir hesap açık. Bağlantıyla giriş yaparsanız mevcut oturum kapanır '
+                  've bağlantının hesabı açılır.',
+                  key: const Key('magic_login_confirm_notice'),
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  key: const Key('btn_magic_login_confirm'),
+                  onPressed: _runMagicLogin,
+                  child: authPrimaryLabel('Bu Bağlantıyla Giriş Yap'),
+                ),
+                TextButton(key: const Key('btn_magic_login_cancel'), onPressed: _leave, child: const Text('Vazgeç')),
+              ],
+              if (_error != null) ...[
+                if (waitingForGate || _busy || needsConfirm) const SizedBox(height: 16),
+                InlineMessage.error(_error!, key: const Key('magic_login_error')),
+                const SizedBox(height: 12),
+                if (!_consumed)
+                  ElevatedButton(key: const Key('btn_magic_login_retry'), onPressed: _runMagicLogin, child: authPrimaryLabel('Tekrar Dene')),
+                TextButton(key: const Key('btn_magic_login_back'), onPressed: _leave, child: const Text('Giriş Ekranına Dön')),
+              ],
             ],
-          )
-        else if (needsConfirm) ...[
-          InlineMessage.warning(
-            'Bu cihazda şu anda başka bir hesap açık. Bağlantıyla giriş yaparsanız mevcut oturum kapanır '
-            've bağlantının hesabı açılır.',
-            key: const Key('magic_login_confirm_notice'),
           ),
-          const SizedBox(height: 16),
-          ElevatedButton(
-            key: const Key('btn_magic_login_confirm'),
-            onPressed: _runMagicLogin,
-            child: const Text('Bu Bağlantıyla Giriş Yap'),
-          ),
-          TextButton(
-            key: const Key('btn_magic_login_cancel'),
-            onPressed: _leave,
-            child: const Text('Vazgeç'),
-          ),
-        ],
-        if (_error != null) ...[
-          const SizedBox(height: 16),
-          InlineMessage.error(_error!, key: const Key('magic_login_error')),
-          const SizedBox(height: 12),
-          if (!_consumed)
-            ElevatedButton(
-              key: const Key('btn_magic_login_retry'),
-              onPressed: _runMagicLogin,
-              child: const Text('Tekrar Dene'),
-            ),
-          TextButton(
-            key: const Key('btn_magic_login_back'),
-            onPressed: _leave,
-            child: const Text('Giriş Ekranına Dön'),
-          ),
-        ],
+        ),
       ],
     );
   }
@@ -240,14 +256,20 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
         key: const Key('magic_reset_done'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.check_circle_outline, size: 56, color: AppTheme.accentGreen),
+          const Center(
+            child: OrbIconBadge(icon: Icons.check_rounded, family: AppFamilies.emerald, size: OrbSize.xl, glow: true),
+          ),
           const SizedBox(height: 16),
-          InlineMessage.success(_success!, key: const Key('magic_reset_success')),
-          const SizedBox(height: 16),
-          ElevatedButton(
-            key: const Key('btn_magic_reset_done'),
-            onPressed: _leave,
-            child: const Text('Giriş Ekranına Dön'),
+          SurfaceCard(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InlineMessage.success(_success!, key: const Key('magic_reset_success')),
+                const SizedBox(height: 16),
+                ElevatedButton(key: const Key('btn_magic_reset_done'), onPressed: _leave, child: authPrimaryLabel('Giriş Ekranına Dön')),
+              ],
+            ),
           ),
         ],
       );
@@ -258,62 +280,78 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
         key: const Key('magic_reset_view'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Icon(Icons.lock_reset_rounded, size: 56, color: AppTheme.primaryBlueLight),
+          const Center(
+            child: OrbIconBadge(icon: Icons.lock_reset_rounded, family: AppFamilies.sky, size: OrbSize.xl, glow: true),
+          ),
           const SizedBox(height: 16),
-          Text(
-            'Hesabınız için yeni bir şifre belirleyin. Şifre en az ${AuthValidators.passwordMinLength} karakter olmalıdır.',
-            style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13, height: 1.4),
-          ),
-          const SizedBox(height: 18),
-          TextFormField(
-            key: const Key('field_new_password'),
-            controller: _passwordController,
-            enabled: !_busy,
-            obscureText: _obscure,
-            autocorrect: false,
-            enableSuggestions: false,
-            autofillHints: const [AutofillHints.newPassword],
-            decoration: authInputDecoration(
-              context,
-              label: 'Yeni Şifre',
-              prefixIcon: Icons.lock_outline,
-              suffixIcon: passwordVisibilityButton(
-                context: context,
-                obscured: _obscure,
-                onToggle: () => setState(() => _obscure = !_obscure),
-              ),
+          SurfaceCard(
+            padding: const EdgeInsets.fromLTRB(18, 20, 18, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Hesabınız için yeni bir şifre belirleyin.',
+                  style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13, height: 1.4),
+                ),
+                const SizedBox(height: 18),
+                TextFormField(
+                  key: const Key('field_new_password'),
+                  controller: _passwordController,
+                  enabled: !_busy,
+                  obscureText: _obscure,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofillHints: const [AutofillHints.newPassword],
+                  style: TextStyle(color: AppTheme.getTextPrimary(context)),
+                  // Şifre kuralı diğer üç akıştaki gibi ALAN ALTINDA yardımcı metinde (yazarken kural görünür kalır);
+                  // eskiden açıklama paragrafının içinde kalıyordu.
+                  decoration: authInputDecoration(
+                    context,
+                    label: 'Yeni Şifre',
+                    helper: 'En az ${AuthValidators.passwordMinLength} karakter',
+                    prefixIcon: Icons.lock_outline_rounded,
+                    suffixIcon: passwordVisibilityButton(
+                      context: context,
+                      obscured: _obscure,
+                      onToggle: () => setState(() => _obscure = !_obscure),
+                    ),
+                  ),
+                  validator: (v) => AuthValidators.passwordPolicyError(v, emptyMessage: 'Lütfen yeni şifrenizi girin'),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  key: const Key('field_confirm_password'),
+                  controller: _confirmController,
+                  enabled: !_busy,
+                  obscureText: _obscureConfirm,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  style: TextStyle(color: AppTheme.getTextPrimary(context)),
+                  decoration: authInputDecoration(
+                    context,
+                    label: 'Yeni Şifre Tekrar',
+                    prefixIcon: Icons.verified_user_outlined,
+                    suffixIcon: passwordVisibilityButton(
+                      context: context,
+                      obscured: _obscureConfirm,
+                      onToggle: () => setState(() => _obscureConfirm = !_obscureConfirm),
+                    ),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.isEmpty) return 'Lütfen şifrenizi tekrar girin';
+                    if (v != _passwordController.text) return 'Şifreler eşleşmiyor';
+                    return null;
+                  },
+                ),
+                if (_error != null) ...[const SizedBox(height: 14), InlineMessage.error(_error!, key: const Key('magic_reset_error'))],
+                const SizedBox(height: 22),
+                ElevatedButton(
+                  key: const Key('btn_magic_reset_submit'),
+                  onPressed: _busy ? null : _submitReset,
+                  child: _busy ? buttonSpinner() : authPrimaryLabel('Şifreyi Yenile'),
+                ),
+              ],
             ),
-            validator: (v) => AuthValidators.passwordPolicyError(v, emptyMessage: 'Lütfen yeni şifrenizi girin'),
-          ),
-          const SizedBox(height: 14),
-          TextFormField(
-            key: const Key('field_confirm_password'),
-            controller: _confirmController,
-            enabled: !_busy,
-            obscureText: _obscure,
-            autocorrect: false,
-            enableSuggestions: false,
-            decoration: authInputDecoration(context, label: 'Yeni Şifre Tekrar', prefixIcon: Icons.lock_reset),
-            validator: (v) {
-              if (v == null || v.isEmpty) return 'Lütfen şifrenizi tekrar girin';
-              if (v != _passwordController.text) return 'Şifreler eşleşmiyor';
-              return null;
-            },
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 14),
-            InlineMessage.error(_error!, key: const Key('magic_reset_error')),
-          ],
-          const SizedBox(height: 20),
-          ElevatedButton(
-            key: const Key('btn_magic_reset_submit'),
-            onPressed: _busy ? null : _submitReset,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryBlue,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-            ),
-            child: _busy ? buttonSpinner() : const Text('Şifreyi Yenile', style: TextStyle(fontWeight: FontWeight.bold)),
           ),
         ],
       ),

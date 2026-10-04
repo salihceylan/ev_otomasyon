@@ -79,8 +79,9 @@ Portlar ortam değişkenleriyle değişir: `QA_PG_PORT`, `QA_MQTT_PORT`, `QA_MQT
   **Cihazın yerel HTTP API'sine tarayıcıdan erişilemez** (firmware CORS vermez ve `Origin` ≠ `Host` ise `403 bad_origin` döner) — web yalnızca bulut modunda çalışır.
 - **Android 9+ açık metin (cleartext) HTTP**'yi varsayılan engeller: `http://10.0.2.2:...` ve cihazın LAN API'si için **debug** derlemesi
   `src/debug/AndroidManifest.xml` (`usesCleartextTraffic`) + `src/debug/res/xml/network_security_config.xml` (tüm açık metne izin) ile açılır
-  (`flutter build apk --debug` birleşik manifestinde doğrulandı). **Release'te KAPALIDIR**; yalnız `192.168.4.1`, `*.local` ve `localhost` için dar bir istisna vardır
-  (Android bu dosyada IP aralığı desteklemez: ham LAN IP'siyle doğrudan mod release derlemede cihazda sınanmalıdır).
+  (`flutter build apk --debug` birleşik manifestinde doğrulandı). Release manifestinde ağ güvenlik yapılandırması (NSC) düz HTTP'yi yalnız `192.168.4.1`, `*.local` ve `localhost` için açar;
+  **ancak NSC yalnız Java/Kotlin ağ yığınını kısıtlar, Flutter'ın `dart:io` HTTP istemcisi NSC'ye TABİ DEĞİLDİR** (statik kanıt: `flutter.jar`'da NSC ayrıştırıcısı yok; cihazda DOĞRULANMADI).
+  Yani release'te de pano AP'si ve LAN doğrudan mod (ham IP) düz HTTP ile çalışması beklenir; düz HTTP'nin yalnız yerel adreslere gitmesini uygulama kodu sağlar (`AppConfig` + `isAllowedDeviceHost`).
 
 ## 4. Hesaplar ve tohum verisi
 
@@ -106,8 +107,10 @@ Tohum hesabının parolasını uygulamada kendiniz değiştirirseniz `accounts.j
 
 ### Tohumlama davranışı (idempotent)
 
-Her adım önce mevcut durumu OKUR; istenen durumdaysa hiçbir şey yazmaz. Sonuç: aynı yığında ikinci/üçüncü `seed` ya da `up --stage2` kayıt sayılarını, satır kimliklerini (zamanlı kural, davet, servis PIN'i, MQTT kimliği)
-ve `accounts.json`'u (içerik **ve** dosya zamanı) değiştirmez. Gerçek PostgreSQL + gerçek sunucu üzerinde `test/seed_idempotency.test.js` ile sınanır.
+Her adım önce mevcut durumu OKUR; istenen durumdaysa hiçbir şey yazmaz. Sonuç: aynı yığında ikinci/üçüncü `seed` ya da `up --stage2` tohum varlıklarının (kullanıcı, ev, cihaz, envanter, üyelik, davet, zamanlı kural, servis PIN'i, MQTT kimliği)
+kayıt sayılarını ve satır kimliklerini ile `accounts.json`'u (içerik **ve** dosya zamanı) değiştirmez. Gerçek PostgreSQL + gerçek sunucu üzerinde `test/seed_idempotency.test.js` ile sınanır.
+Tek fark **oturum kayıtlarıdır** (`refresh_tokens`): tohum, owner1/owner2 için her çalıştırmada gerçek `POST /auth/login` yapar (JWT sırrı her `up`'ta değişebildiğinden önbellekli token kullanılamaz), bu da çalıştırma başına 2 oturum satırı ekler;
+bu bir tohum varlığı değildir (QA veritabanında zararsız birikir; `reset` temizler).
 
 | Varlık | Anahtar / karar |
 |---|---|
@@ -251,6 +254,7 @@ Mock'lu testlerin yakalayamadığı sınıf: gerçek şemada eksik sütun, `ON C
 - **`sqlcheck`**: `acorn` ile `.query(...)` SQL'lerini çıkarır, her biri için gerçek PG'de `PREPARE` (çalıştırmadan ayrıştırma + analiz). Statik çözülemeyen (`${...}` ile kurulan) sorgular "dinamik" listelenir (denetlenmez).
 - **`sweep`**: 78 spec × (alan/yol/sorgu/gövde-şekli düşman değerleri) + 14 akış (kimlik yaşam döngüsü, admin, envanter, claim + OTP + PIN kilidi, acil sıfırlama, pano değişimi, daire devri, servis PIN, zamanlı kurallar, IDOR, etiket yeniden üretimi, davet önizleme, hesap silme, servis paneli/Home Admin atama).
   Tüm değiştirici işlemler **süpürmeye özgü geçici kullanıcı/ev/cihazlarla** yapılır; hız sınırlayıcılar kullanıcı/ev anahtarlı olduğundan "dönen aktör" (her ~35 istekte yeni kullanıcı+ev) kullanılır.
+  **Yan etkileri:** süpürme oluşturduklarını SİLMEZ. Her koşu (`--only` dahil; temel bağlam her seferinde yeniden kurulur) en az 7 kullanıcıyı `POST /auth/register` ile kaydeder ve giriş yaptırır (IP başına saatte 10 kayıt sınırı; temiz `up --stage2` tohumu bunun 5'ini kullanır), 1 geçici süper yönetici açar, 3 panoyu envantere kaydeder (2'si `Sweep` dairelerinde, 1'i stokta) ve 4 tohum hesabıyla giriş yapar (15 dk'da 30). Sonuç: ikinci koşu kayıt 429'uyla çökebilir, sonraki bir saatte "Kayıt Olun" akışları reddedilebilir, "Stokta Hazır" listesinde fazladan pano görünür (sayaçlar sunucu belleğindedir: `down` + `up --stage2 --keep-secrets --no-seed`). Kontrol listesiyle tur yapıyorsanız sweep'i turun sonuna bırakın.
   Her 5xx yanıtı `X-Error-Ref` (veya B paketinin `[WP-B] error` satırı) ile `api.log` yığınına, her `[DB-QUERY-ERROR]` `.runtime/sweep_report.json`'a bağlanır (dosya:satır).
 
 ## 8. Testler

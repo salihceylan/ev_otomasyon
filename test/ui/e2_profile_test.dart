@@ -6,6 +6,8 @@ import 'package:ev_otomasyon/ui/pages/auth/delete_account_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/family/family_members_page.dart';
 import 'package:ev_otomasyon/ui/pages/family/invite_family_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/family/join_home_dialog.dart';
+import 'package:ev_otomasyon/ui/theme/tokens.dart';
+import 'package:ev_otomasyon/ui/widgets/orb/orb.dart';
 import 'package:ev_otomasyon/ui/widgets/user_profile_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -117,6 +119,199 @@ void main() {
       expect(textOf(tester, 'profile_role'), 'Servis Oturumu (PIN)');
       expect(find.text('Oturum Süresi'), findsOneWidget);
       expect(find.text('1 saat 30 dk'), findsOneWidget);
+    });
+  });
+
+  // ---------------------------------------------------------------------------------------------
+  // WP-F3: eylem hiyerarşisi, dar ekran / büyük yazı, okunabilir simge renkleri, kaydırma ipucu
+  // ---------------------------------------------------------------------------------------------
+  group('düzen ve hiyerarşi (WP-F3)', () {
+    Finder inDialog(Finder f) => find.descendant(of: find.byType(UserProfileDialog), matching: f);
+
+    /// Diyaloğun görünen yüzeyi (AlertDialog widget'ı kendisi tüm ekranı kaplar: kenar boşluğu + hizalama).
+    Finder dialogSurface() => find.descendant(of: find.byType(AlertDialog), matching: find.byType(Material)).first;
+
+    testWidgets('ev sahibi: TEK gradyan birincil düğme (aile yönetimi); ikincil eylemler çerçeveli; çıkış tonlu çerçeveli',
+        (tester) async {
+      final env = e2Env(role: 'owner');
+      await openProfile(tester, env);
+
+      expect(inDialog(find.byType(ElevatedButton)), findsOneWidget, reason: 'iki gradyan düğme yarışmaz');
+      expect(tester.widget(find.byKey(const Key('btn_open_family'))), isA<ElevatedButton>());
+      for (final key in ['btn_quick_invite', 'btn_join_home', 'btn_logout']) {
+        expect(tester.widget(find.byKey(Key(key))), isA<OutlinedButton>(), reason: key);
+      }
+    });
+
+    testWidgets('süper yönetici: tek gradyan düğme servis paneli (cyan ailesi); aile yönetimi çerçeveli', (tester) async {
+      final env = e2Env(role: 'owner', globalRole: 'super_user');
+      await openProfile(tester, env);
+
+      expect(inDialog(find.byType(ElevatedButton)), findsOneWidget);
+      expect(tester.widget(find.byKey(const Key('btn_open_service_panel'))), isA<ElevatedButton>());
+      expect(tester.widget(find.byKey(const Key('btn_open_family'))), isA<OutlinedButton>());
+    });
+
+    testWidgets('rol hapı ortak GlassPill; metin anahtarı profile_role korunur', (tester) async {
+      final env = e2Env(role: 'owner');
+      await openProfile(tester, env);
+
+      expect(find.ancestor(of: find.byKey(const Key('profile_role')), matching: find.byType(GlassPill)), findsOneWidget);
+      expect(textOf(tester, 'profile_role'), 'Ev Sahibi');
+    });
+
+    testWidgets('etiketler SARILIR, kesilmez: düğme etiketleri maxLines 2, hesap satırı etiketleri sınırsız', (tester) async {
+      final env = e2Env(role: 'owner');
+      await openProfile(tester, env);
+
+      for (final key in ['btn_open_family', 'btn_quick_invite', 'btn_join_home', 'btn_logout']) {
+        final text = tester.widget<Text>(find.descendant(of: find.byKey(Key(key)), matching: find.byType(Text)).first);
+        expect(text.softWrap, isTrue, reason: key);
+        expect(text.maxLines, 2, reason: key);
+      }
+      for (final key in ['btn_open_change_password', 'btn_logout_all', 'btn_delete_account_entry']) {
+        final text = tester.widget<Text>(find.descendant(of: find.byKey(Key(key)), matching: find.byType(Text)).first);
+        expect(text.maxLines, isNull, reason: '$key: satır sınırı yok');
+      }
+    });
+
+    testWidgets('telefonda (360 dp) diyalog 328 dp, tablette (800 dp) 408 dp genişliğinde: içeriğe büzülmez', (tester) async {
+      final env = e2Env(role: 'owner');
+      await openFromHost<void>(tester, env.state, size: const Size(360, 1400), (c) => UserProfileDialog.show(c));
+      expect(tester.getSize(dialogSurface()).width, closeTo(328, 0.5));
+    });
+
+    testWidgets('tablette (800 dp) diyalog genişliği 408 dp', (tester) async {
+      final env = e2Env(role: 'owner');
+      await openProfile(tester, env);
+      expect(tester.getSize(dialogSurface()).width, closeTo(408, 0.5));
+    });
+
+    testWidgets('tema çipleri: normal yazıda üç çip TEK sırada; büyük yazıda (2.0x) satıra sarılır', (tester) async {
+      final env = e2Env(role: 'owner');
+      await openFromHost<void>(tester, env.state, size: const Size(360, 1800), (c) => UserProfileDialog.show(c));
+      var tops = {
+        for (final key in ['theme_system', 'theme_light', 'theme_dark']) tester.getRect(find.byKey(Key(key))).top.round(),
+      };
+      expect(tops, hasLength(1), reason: '2+1 kırılması yok');
+
+      tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      tops = {
+        for (final key in ['theme_system', 'theme_light', 'theme_dark']) tester.getRect(find.byKey(Key(key))).top.round(),
+      };
+      expect(tops.length, greaterThan(1), reason: 'büyük yazıda çipler satıra sarılır (etiket kesilmez/küçülmez)');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('açık temada simge renkleri okunabilir ton (≥ 3:1): ham vurgu rengi (amber 2.1:1) değil', (tester) async {
+      final env = e2Env(role: 'resident');
+      await openFromHost<void>(tester, env.state, themeMode: ThemeMode.light, (c) => UserProfileDialog.show(c));
+      final white = const Color(0xFFFFFFFF);
+      // Düz yüzeyde (beyaz diyalog) duran simgeler: okunabilir ton, beyaza karşı >= 3:1.
+      final icons = <String, IconData>{
+        'btn_join_home': Icons.vpn_key_rounded,
+        'theme_light': Icons.light_mode_rounded,
+      };
+      for (final entry in icons.entries) {
+        await tester.ensureVisible(find.byKey(Key(entry.key)));
+        final icon = tester.widget<Icon>(
+          find.descendant(of: find.byKey(Key(entry.key)), matching: find.byIcon(entry.value)),
+        );
+        expect(wcagContrast(icon.color!, white), greaterThanOrEqualTo(3), reason: entry.key);
+      }
+    });
+
+    // BİLİNÇLİ güncelleme (2. tur bulgusu r2_consoles: profil satır simgeleri düz tonlu diskti, avatar/çekmece/konsol
+    // satırları parlak orb idi): 'Hesap ve güvenlik' satır simgeleri artık OrbIconBadge. Simge beyaz zeminde değil ORB
+    // GÖVDESİNİN üstündedir: kontrast orb sisteminin garantisidir (OrbColors.iconFor: gövde örneklerinde en kötü durumda
+    // beyaz/koyu mürekkepten yüksek olan) ve gövdeye karşı >= 3:1 doğrulanır.
+    for (final theme in [ThemeMode.light, ThemeMode.dark]) {
+      testWidgets('hesap satırı simgeleri parlak orb rozet (OrbIconBadge): aileye uygun, simge orb gövdesine karşı >= 3:1 (${theme.name})',
+          (tester) async {
+        final env = e2Env(role: 'resident');
+        await openFromHost<void>(tester, env.state, themeMode: theme, (c) => UserProfileDialog.show(c));
+        final rows = <String, (IconData, AccentFamily)>{
+          'btn_open_change_password': (Icons.lock_reset_rounded, AppFamilies.sky),
+          'btn_logout_all': (Icons.devices_other_rounded, AppFamilies.amber),
+          'btn_delete_account_entry': (Icons.delete_forever_rounded, AppFamilies.rose),
+        };
+        for (final entry in rows.entries) {
+          await tester.ensureVisible(find.byKey(Key(entry.key)));
+          final badge = tester.widget<OrbIconBadge>(
+            find.descendant(of: find.byKey(Key(entry.key)), matching: find.byType(OrbIconBadge)),
+          );
+          final (iconData, family) = entry.value;
+          expect(badge.icon, iconData, reason: entry.key);
+          expect(badge.family, family, reason: '${entry.key}: satırın özellik ailesi');
+          final icon = tester.widget<Icon>(
+            find.descendant(of: find.byKey(Key(entry.key)), matching: find.byIcon(iconData)),
+          );
+          expect(icon.color, OrbColors.family(family).icon, reason: '${entry.key}: orb sisteminin simge rengi');
+          final body = Color.lerp(family.light, family.base, 0.49)!;
+          expect(wcagContrast(icon.color!, body), greaterThanOrEqualTo(3), reason: entry.key);
+        }
+      });
+    }
+
+    testWidgets('hesap satırları ≥ 52 dp yüksek; tek anlam düğümü (düğme + etiket)', (tester) async {
+      final handle = tester.ensureSemantics();
+      try {
+        final env = e2Env(role: 'owner');
+        await openFromHost<void>(tester, env.state, size: const Size(360, 1400), (c) => UserProfileDialog.show(c));
+        for (final key in ['btn_open_change_password', 'btn_logout_all', 'btn_delete_account_entry']) {
+          expect(tester.getSize(find.byKey(Key(key))).height, greaterThanOrEqualTo(52), reason: key);
+        }
+        final node = tester.getSemantics(find.byKey(const Key('btn_logout_all')));
+        expect(node.label, 'Tüm Cihazlardan Çıkış Yap');
+        expect(node.getSemanticsData().flagsCollection.isButton, isTrue);
+      } finally {
+        handle.dispose();
+      }
+    });
+
+    // Erişilebilirlik kılavuzları: metin kontrastı (AA), dokunma hedefi (48 dp) ve etiketli hedefler; iki temada,
+    // ev sahibi + süper yönetici (iki farklı eylem kümesi).
+    for (final theme in <ThemeMode>[ThemeMode.dark, ThemeMode.light]) {
+      for (final roles in <(String, String)>[('owner', 'user'), ('owner', 'super_user')]) {
+        testWidgets('erişilebilirlik kılavuzları: ${theme.name} tema, ${roles.$2}', (tester) async {
+          final handle = tester.ensureSemantics();
+          try {
+            final env = e2Env(role: roles.$1, globalRole: roles.$2);
+            await openFromHost<void>(
+              tester,
+              env.state,
+              size: const Size(412, 1800),
+              themeMode: theme,
+              (c) => UserProfileDialog.show(c),
+            );
+            await expectLater(tester, meetsGuideline(textContrastGuideline));
+            await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
+            await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
+          } finally {
+            handle.dispose();
+          }
+        });
+      }
+    }
+
+    testWidgets('kısa ekranda (360x640) içerik diyalog İÇİNDE kaydırılır; "Kapat" görünür kalır; kalıcı kaydırma çubuğu var',
+        (tester) async {
+      final env = e2Env(role: 'owner');
+      await openFromHost<void>(tester, env.state, size: const Size(360, 640), (c) => UserProfileDialog.show(c));
+
+      final scrollable = inDialog(find.byType(Scrollable)).first;
+      final position = tester.state<ScrollableState>(scrollable).position;
+      expect(position.maxScrollExtent, greaterThan(0), reason: 'içerik 640 dp ekrana sığmaz');
+      expect(inDialog(find.byType(Scrollbar)), findsOneWidget, reason: 'gizli içerik olduğu görünür: kalıcı ince çubuk');
+      expect(tester.getRect(find.byKey(const Key('btn_profile_close'))).bottom, lessThanOrEqualTo(640));
+
+      // Kaydırınca alttaki eylemlere ulaşılır.
+      await tester.ensureVisible(find.byKey(const Key('btn_logout')));
+      await tester.pump();
+      expect(tester.getRect(find.byKey(const Key('btn_logout'))).bottom, lessThanOrEqualTo(640));
     });
   });
 

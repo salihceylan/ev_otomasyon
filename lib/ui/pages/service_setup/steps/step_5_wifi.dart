@@ -3,9 +3,13 @@ import 'package:flutter/services.dart';
 
 import '../../../../services/board_network_binding.dart';
 import '../../../../utils/qr_router.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb.dart';
+import '../../../widgets/settings/accent_button.dart';
 import '../../../common/wifi_provision_panel.dart';
 import '../logic/wifi_logic.dart';
 import '../service_setup_controller.dart';
+import '../panel/service_glass.dart' show ServiceTintBox;
 import '../setup_fields.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
@@ -34,6 +38,9 @@ class _Step5WifiState extends State<Step5Wifi> {
   final TextEditingController _lanIp = TextEditingController();
   final TextEditingController _key = TextEditingController();
   bool _showLan = false;
+
+  /// Kurulum ağı adı panoya kopyalandı (düğme ✓ gösterir).
+  bool _ssidCopied = false;
 
   /// Etiketteki 2. karekoddan (kurulum ağı Wi-Fi karekodu) okunan parola: yalnızca bellekte, gösterim için.
   String? _labelPassword;
@@ -107,6 +114,9 @@ class _Step5WifiState extends State<Step5Wifi> {
       5,
       continueHint: 'Devam etmek için panonun ev Wi-Fi ağına bağlandığı pano tarafından doğrulanmalı.',
       statusText: w.connected ? 'Pano ev ağında' : null,
+      // Adımın kendi gradyan birincil eylemi ("Bağlandım: Panoyu Kontrol Et" / paneldeki "Yükle") ekrandadır: hata kutusundaki
+      // "Tekrar dene" çerçeveli ikincil olur (ekranda tek gradyan birincil).
+      retrySecondary: true,
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -124,8 +134,12 @@ class _Step5WifiState extends State<Step5Wifi> {
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
                   key: const Key('btn_toggle_lan'),
+                  style: setupInlineActionStyle(),
                   onPressed: () => setState(() => _showLan = !_showLan),
-                  icon: Icon(_showLan ? Icons.expand_less_rounded : Icons.lan_rounded),
+                  icon: Icon(
+                    _showLan ? Icons.expand_less_rounded : Icons.lan_rounded,
+                    size: accentIconSize(context, base: 18),
+                  ),
                   label: Text(_showLan ? 'IP ile bağlanmayı gizle' : 'Pano zaten ev ağında: IP ile bağlan'),
                 ),
               ),
@@ -171,12 +185,15 @@ class _Step5WifiState extends State<Step5Wifi> {
                 ),
               ),
               if (apSsid != null)
-                IconButton(
+                GlassIconButton(
                   key: const Key('btn_copy_ap_ssid'),
-                  tooltip: 'Ağ adını kopyala',
-                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                  icon: const Icon(Icons.copy_rounded, size: 18),
-                  onPressed: () => Clipboard.setData(ClipboardData(text: apSsid)),
+                  icon: _ssidCopied ? Icons.check_rounded : Icons.copy_rounded,
+                  iconColor: _ssidCopied ? SetupColors.readable(context, SetupColors.ok) : null,
+                  semanticLabel: 'Ağ adını kopyala',
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: apSsid));
+                    setState(() => _ssidCopied = true);
+                  },
                 ),
             ],
           ),
@@ -192,8 +209,9 @@ class _Step5WifiState extends State<Step5Wifi> {
           if (_labelPassword != null) _labelPasswordRow(context),
           TextButton.icon(
             key: const Key('btn_scan_ap_qr'),
+            style: setupInlineActionStyle(),
             onPressed: w.busy ? null : _scanApLabel,
-            icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+            icon: Icon(Icons.qr_code_scanner_rounded, size: accentIconSize(context, base: 18)),
             label: const Text('Etiketteki kurulum ağı karekodunu uygulamayla oku (parolayı göster)'),
           ),
           if (_labelScanError != null)
@@ -216,7 +234,7 @@ class _Step5WifiState extends State<Step5Wifi> {
           SetupPrimaryButton(
             key: const Key('btn_check_device'),
             label: 'Bağlandım: Panoyu Kontrol Et',
-            icon: Icons.wifi_find_rounded,
+            icon: Icons.network_check_rounded,
             busy: w.busy && w.busyLabel == WifiLogic.checkLabel,
             onPressed: w.busy ? null : () => w.checkDevice(),
           ),
@@ -238,8 +256,7 @@ class _Step5WifiState extends State<Step5Wifi> {
             child: Text(
               _labelPasswordVisible ? password : '•' * password.length.clamp(8, 32),
               key: const Key('ap_label_password'),
-              style: TextStyle(
-                fontFamily: 'monospace',
+              style: SetupText.mono(
                 fontSize: 16,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 1,
@@ -268,10 +285,7 @@ class _Step5WifiState extends State<Step5Wifi> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SetupInfoRow(
-            icon: Icons.verified_rounded,
-            color: SetupColors.ok,
-            bold: true,
+          SetupResultHeader(
             text: 'Doğru pano bulundu: ${id.uid}${(id.firmware ?? '').isEmpty ? '' : ' • yazılım ${id.firmware}'}',
           ),
           if (id.provisioned == false)
@@ -326,9 +340,10 @@ class _Step5WifiState extends State<Step5Wifi> {
             OutlinedButton.icon(
               key: const Key('btn_fetch_key'),
               onPressed: w.busy ? null : () => w.fetchKeyForProvision(),
-              icon: const Icon(Icons.cloud_download_rounded, size: 18),
+              icon: Icon(Icons.cloud_download_rounded, size: accentIconSize(context, base: 18)),
               label: const Text('Anahtarı Sunucudan Al (internet gerekir)'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              // Çerçeve + metin + simge AYNI aileden ve AA (tema varsayılan çerçevesi açıkta ≈ 2.4:1'di).
+              style: accentOutlinedButtonStyle(context, AppFamilies.sky),
             ),
             _manualKeyFields(context),
           ],
@@ -380,9 +395,9 @@ class _Step5WifiState extends State<Step5Wifi> {
               : () {
                   if (w.useManualKey(_key.text.trim()) && mounted) _key.clear();
                 },
-          icon: const Icon(Icons.vpn_key_rounded, size: 18),
+          icon: Icon(Icons.vpn_key_rounded, size: accentIconSize(context, base: 18)),
           label: const Text('Bu Anahtarı Kullan'),
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          style: accentOutlinedButtonStyle(context, AppFamilies.sky),
         ),
       ],
     );
@@ -495,17 +510,26 @@ class _Step5WifiState extends State<Step5Wifi> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SetupInfoRow(
-                icon: Icons.check_circle_rounded,
-                color: SetupColors.ok,
-                bold: true,
-                text: 'Pano ev Wi-Fi ağına bağlandı${ipKnown ? ' (IP: $ip)' : ''}.',
+              SetupResultHeader(text: 'Pano ev Wi-Fi ağına bağlandı${ipKnown ? ' (IP: $ip)' : ''}.'),
+              const SizedBox(height: 6),
+              // Adımın en kritik eylemi: ağ değişimi unutulursa 6. adım hata verir. Sıradan gövde metni değil, amber uyarı kutusu.
+              const ServiceTintBox(
+                key: Key('wifi_return_home_notice'),
+                color: SetupColors.warn,
+                child: SetupInfoRow(
+                  icon: Icons.phone_android_rounded,
+                  color: SetupColors.warn,
+                  bold: true,
+                  text: 'ŞİMDİ telefonunuzu panonun kurulum ağından çıkarıp müşterinin ev Wi-Fi ağına geri bağlayın '
+                      '(internet gelmeli).',
+                ),
               ),
-              const SetupInfoRow(
-                icon: Icons.phone_android_rounded,
-                text: 'ŞİMDİ telefonunuzu panonun kurulum ağından çıkarıp müşterinin ev Wi-Fi ağına geri bağlayın '
-                    '(internet gelmeli). 6. adım panoya bu ağdan bağlanır, cihaz anahtarını sunucudan alır ve bulut '
-                    'kimliğini yazar.',
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 2),
+                child: Text(
+                  '6. adım panoya bu ağdan bağlanır, cihaz anahtarını sunucudan alır ve bulut kimliğini yazar.',
+                  style: TextStyle(fontSize: AppText.caption, height: 1.35, color: SetupColors.muted(context)),
+                ),
               ),
               if (!ipKnown)
                 const SetupInfoRow(

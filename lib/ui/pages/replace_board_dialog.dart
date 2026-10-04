@@ -8,6 +8,13 @@ import '../../models/api_models.dart';
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
 import '../../utils/qr_claim_parser.dart';
+import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/orb/glass_icon_button.dart';
+import '../widgets/orb/orb_core.dart';
+import '../widgets/orb/orb_icon_badge.dart';
+import '../widgets/settings/accent_button.dart';
+import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/uncertain_outcome_card.dart';
 import 'service_setup/service_setup_wizard_page.dart';
 import 'service_setup/service_target.dart';
@@ -16,6 +23,7 @@ import 'service_setup/setup_steps.dart';
 import 'service_setup/setup_style.dart';
 import 'service_setup/setup_widgets.dart';
 import 'service_setup/steps/step_common.dart';
+import '../theme/feature_accent.dart';
 
 /// Pano değişimi (arızalı panonun ayarlarını yeni panoya aktarma).
 ///
@@ -33,6 +41,10 @@ class ReplaceBoardDialog extends StatefulWidget {
     final state = context.read<AutomationState>();
     return showDialog<void>(
       context: context,
+      // Bariyere dokunmak diyaloğu kapatmaz (PF-46): değişim geri alınamaz bir işlemdir ve sonucu (uyarılar, tek
+      // seferlik bulut kimliği) yalnızca bu pencerede gösterilir. Kapatma X düğmesiyle/Kapat ile yapılır; işlem
+      // sürerken ikisi de ([PopScope] ile sistem geri tuşu da) engellenir.
+      barrierDismissible: false,
       builder: (ctx) => ChangeNotifierProvider<AutomationState>.value(
         value: state,
         child: ReplaceBoardDialog(scanner: scanner),
@@ -304,9 +316,14 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
     }
   }
 
+  /// Sihirbaz bir kez açıldı (PF-47): aynı karede gelen ikinci etkinleştirme (erişilebilirlik eylemi, klavye Enter
+  /// tekrarı) `pop()` ile az önce açılan sihirbazı kapatıp ikincisini açardı (çift denetleyici, çift kurulum durumu).
+  bool _wizardOpened = false;
+
   void _openWizard(ReplaceBoardResult result) {
     final homeId = result.homeId ?? _homeId;
-    if (homeId == null) return;
+    if (homeId == null || _wizardOpened) return;
+    _wizardOpened = true;
     final navigator = Navigator.of(context);
     final scanner = widget.scanner;
     navigator.pop();
@@ -325,19 +342,34 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final caps = state.capabilities;
-    final homeChanged = _homeId != null && state.activeHome?.id != _homeId;
+    // Tüm durumu izlemek yerine yetki bayrağı ve aktif daire kimliği seçilir (PF-06): pencere açıkken gelen ilgisiz
+    // bildirimler (canlı durum, çevrimiçi/çevrimdışı geçişleri) formu yeniden kurmaz.
+    final view = context.select<AutomationState, ({bool canReplace, String? activeHomeId})>(
+      (s) => (canReplace: s.capabilities.canReplaceBoard, activeHomeId: s.activeHome?.id),
+    );
+    final homeChanged = _homeId != null && view.activeHomeId != _homeId;
+    // İşlem sürerken pencere kapatılamaz (PF-46): istek ≤ 30 sn sürer ve eski panoyu devre dışı bırakır; pencere
+    // kapanırsa sonuç `if (!mounted) return;` ile hiç gösterilmeden atılırdı. Sistem geri tuşu da engellenir
+    // (bariyer zaten kapatmaz: `show` -> `barrierDismissible: false`; X düğmesi işlem sürerken pasiftir).
+    return PopScope(
+      canPop: !_submitting,
+      child: _dialog(context, canReplace: view.canReplace, homeChanged: homeChanged),
+    );
+  }
+
+  Widget _dialog(BuildContext context, {required bool canReplace, required bool homeChanged}) {
+    final done = _result != null;
     return Dialog(
-      backgroundColor: SetupColors.surface(context),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: SetupColors.border(context)),
-      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 480),
-        child: SingleChildScrollView(
+        child: ServiceCard(
+          margin: EdgeInsets.zero,
+          padding: EdgeInsets.zero,
+          radius: AppRadius.dialog,
+          child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -345,24 +377,41 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.sync_alt_rounded, color: SetupColors.purple, size: 24),
-                  const SizedBox(width: 10),
+                  OrbIconBadge(
+                    icon: Icons.sync_alt_rounded,
+                    family: AppFeature.boardReplace.accentFamily,
+                    pending: _submitting,
+                    status: done && !_result!.hasWarnings ? OrbStatus.success : OrbStatus.none,
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      'Pano Değişimi',
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Pano Değişimi',
+                          style: TextStyle(fontSize: AppText.title, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                        ),
+                        const SizedBox(height: 6),
+                        ServiceStepDots(
+                          current: done ? 3 : (_submitting || _uncertainNewUid != null ? 2 : 1),
+                          total: 3,
+                          family: AppFeature.boardReplace.accentFamily,
+                          label: done ? 'Adım 3 / 3: sonuç' : 'Adım ${_submitting ? 2 : 1} / 3',
+                        ),
+                      ],
                     ),
                   ),
-                  IconButton(
+                  // Kapat: cam disk (Sistem Doktoru diyaloğuyla AYNI dil; eskiden çıplak gri ✕ IconButton'du). İşlem sürerken pasif.
+                  GlassIconButton(
                     key: const Key('btn_replace_x'),
-                    tooltip: 'Kapat',
-                    constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-                    icon: const Icon(Icons.close_rounded),
-                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icons.close_rounded,
+                    semanticLabel: 'Kapat',
+                    onTap: _submitting ? null : () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
-              Divider(color: SetupColors.border(context)),
+              Divider(color: SetupColors.border(context), height: 24),
               if (_result != null)
                 _ResultView(
                   result: _result!,
@@ -372,7 +421,7 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
                   onClose: () => Navigator.of(context).pop(),
                 )
               else if (_homeId == null)
-                const SetupCard(
+                const ServiceCard(
                   key: Key('replace_no_home'),
                   accent: SetupColors.warn,
                   margin: EdgeInsets.zero,
@@ -383,8 +432,8 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
                     text: 'Önce bir daire seçin. Pano değişimi, ekranda seçili olan dairede yapılır.',
                   ),
                 )
-              else if (!caps.canReplaceBoard)
-                const SetupCard(
+              else if (!canReplace)
+                const ServiceCard(
                   key: Key('replace_forbidden'),
                   accent: SetupColors.warn,
                   margin: EdgeInsets.zero,
@@ -400,6 +449,7 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
             ],
           ),
         ),
+        ),
       ),
     );
   }
@@ -409,22 +459,22 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SetupCard(
+        ServiceCard(
           key: const Key('replace_target_home'),
           accent: SetupColors.info,
           margin: EdgeInsets.zero,
           child: Row(
             children: [
-              const Icon(Icons.home_rounded, color: SetupColors.info),
-              const SizedBox(width: 10),
+              const OrbIconBadge(icon: Icons.home_rounded, family: AppFamilies.cyan),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Değişim yapılacak daire', style: TextStyle(fontSize: 12, color: muted)),
+                    Text('Değişim yapılacak daire', style: TextStyle(fontSize: AppText.badge, color: muted)),
                     Text(
                       _homeName.isEmpty ? 'İsimsiz daire' : _homeName,
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                      style: TextStyle(fontSize: AppText.cardTitle, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                     ),
                   ],
                 ),
@@ -433,7 +483,7 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
           ),
         ),
         if (homeChanged)
-          const SetupCard(
+          const ServiceCard(
             key: Key('replace_home_changed'),
             accent: SetupColors.error,
             child: SetupInfoRow(
@@ -445,27 +495,32 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
           ),
         const SetupSectionTitle('1. Değiştirilecek (eski) pano'),
         if (_loadingDevices && _devices.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Center(child: CircularProgressIndicator(key: Key('replace_devices_loading'))),
+          Semantics(
+            label: 'Panolar yükleniyor',
+            liveRegion: true,
+            child: const ServiceListSkeleton(key: Key('replace_devices_loading'), count: 2, lines: 1),
           ),
         if (_devicesError != null)
-          SetupCard(
+          ServiceCard(
             key: const Key('replace_devices_error'),
             accent: SetupColors.error,
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: Text(_devicesError!)),
-                TextButton(
-                  key: const Key('btn_devices_retry'),
-                  onPressed: _loadingDevices ? null : _loadDevices,
-                  child: const Text('Tekrar dene'),
+                Text(_devicesError!, style: TextStyle(color: SetupColors.text(context))),
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: TextButton(
+                    key: const Key('btn_devices_retry'),
+                    onPressed: _loadingDevices ? null : _loadDevices,
+                    child: const Text('Tekrar dene'),
+                  ),
                 ),
               ],
             ),
           ),
         if (!_loadingDevices && _devicesError == null && _devices.isEmpty)
-          SetupCard(
+          ServiceCard(
             key: const Key('replace_no_devices'),
             child: Text(
               'Bu dairede kayıtlı pano yok; değiştirilecek bir pano bulunamadı.',
@@ -484,7 +539,11 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
         if (_oldError != null)
           Padding(
             padding: const EdgeInsets.only(top: 6),
-            child: Text(_oldError!, key: const Key('replace_old_error'), style: const TextStyle(color: SetupColors.error, fontSize: 12.5)),
+            child: Text(
+              _oldError!,
+              key: const Key('replace_old_error'),
+              style: TextStyle(color: SetupColors.readable(context, SetupColors.error), fontSize: AppText.caption, fontWeight: FontWeight.w600),
+            ),
           ),
         const SetupSectionTitle('2. Yeni pano'),
         SetupTextField(
@@ -492,9 +551,11 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
           controller: _newUid,
           label: 'Yeni pano kimliği',
           hint: 'AHBU-...',
+          helperText: 'Yeni pano etiketindeki kimlik',
           errorText: _uidError,
           textCapitalization: TextCapitalization.characters,
-          prefixIcon: Icons.qr_code_rounded,
+          // Ön ek simgesi sondaki tarama simgesinden FARKLI (eskiden iki neredeyse aynı QR simgesi yan yanaydı).
+          prefixIcon: Icons.memory_rounded,
           monospace: true,
           enabled: !_submitting,
           suffixIcon: IconButton(
@@ -507,7 +568,9 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
         SecretField(
           key: const Key('field_new_pin'),
           controller: _pin,
-          label: 'Yeni panonun 6 haneli kurulum PIN\'i',
+          label: 'Kurulum PIN\'i',
+          hint: '6 rakam',
+          helperText: 'Yeni pano etiketindeki 6 haneli PIN',
           maxLength: 6,
           keyboardType: TextInputType.number,
           inputFormatters: [digitsOnly, LengthLimitingTextInputFormatter(6)],
@@ -517,13 +580,14 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
         SetupTextField(
           key: const Key('field_replace_reason'),
           controller: _reason,
-          label: 'Değişim nedeni (isteğe bağlı)',
+          label: 'Değişim nedeni',
           hint: 'Örn: yıldırım düştü, pano arızalandı',
-          prefixIcon: Icons.note_alt_outlined,
+          helperText: 'İsteğe bağlı',
+          prefixIcon: Icons.note_alt_rounded,
           enabled: !_submitting,
         ),
         if (_error != null)
-          SetupCard(
+          ServiceCard(
             key: const Key('replace_error'),
             accent: SetupColors.error,
             child: SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
@@ -542,7 +606,7 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
           )
         else if (_checkResult != null)
           // Durum netleşti (değişim yapılmamış görünüyor): belirsizlik uyarısı kalkar, yalnızca sonuç yazılır.
-          SetupCard(
+          ServiceCard(
             key: const Key('replace_check_result'),
             accent: SetupColors.info,
             child: SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.info, bold: true, text: _checkResult!),
@@ -551,7 +615,7 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
         SetupPrimaryButton(
           key: const Key('btn_replace_submit'),
           label: 'Eski Panonun Ayarlarını Yeni Panoya Aktar',
-          icon: Icons.cloud_download_outlined,
+          icon: Icons.cloud_download_rounded,
           color: SetupColors.purple,
           busy: _submitting,
           // Sonucu belirsiz kalan değişim durum kontrol edilmeden yinelenemez.
@@ -577,24 +641,25 @@ class _OldBoardTile extends StatelessWidget {
       selected: selected,
       inMutuallyExclusiveGroup: true,
       button: true,
-      child: SetupCard(
+      child: ServiceCard(
         key: Key('card_oldboard_${device.deviceUuid}'),
         accent: selected ? SetupColors.purple : null,
         padding: EdgeInsets.zero,
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(AppRadius.card),
           onTap: onTap,
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 56),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.s12, vertical: AppSpace.s12),
               child: Row(
                 children: [
-                  Icon(
-                    selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
-                    color: selected ? SetupColors.purple : SetupColors.muted(context),
+                  OrbIconBadge(
+                    icon: selected ? Icons.check_rounded : Icons.developer_board_rounded,
+                    family: selected ? AppFeature.boardReplace.accentFamily : AppFamilies.slate,
+                    active: selected,
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -603,19 +668,24 @@ class _OldBoardTile extends StatelessWidget {
                           title,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                          style: TextStyle(fontSize: AppText.cardTitle, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                         ),
-                        Text(
-                          device.deviceUuid,
-                          style: TextStyle(fontSize: 12, fontFamily: 'monospace', color: SetupColors.muted(context)),
+                        // Kimlik tek satır: tireden bölünüp iki satıra yayılmaz, sığmazsa küçülür.
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: AlignmentDirectional.centerStart,
+                          child: Text(
+                            device.deviceUuid,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: SetupText.mono(fontSize: AppText.badge, color: SetupColors.muted(context)),
+                          ),
                         ),
+                        // Durum hapı adın ALTINDA: dar diyalogda (ve büyük yazıda) adı iki satıra sıkıştırmaz ("Salon / Panosu").
+                        const SizedBox(height: 6),
+                        Wrap(children: [ServiceStatusPill(label: device.online ? 'Çevrimiçi' : 'Çevrimdışı', color: color)]),
                       ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    device.online ? 'Çevrimiçi' : 'Çevrimdışı',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: SetupColors.readable(context, color)),
                   ),
                 ],
               ),
@@ -641,14 +711,23 @@ class _ConfirmReplaceDialog extends StatelessWidget {
   final String newUid;
   final String reason;
 
-  Widget _row(BuildContext context, String label, String value) {
+  Widget _row(BuildContext context, String label, String value, {bool mono = false}) {
+    final valueText = Text(
+      value,
+      maxLines: mono ? 1 : null,
+      softWrap: !mono,
+      style: mono
+          ? SetupText.mono(fontSize: AppText.body, fontWeight: FontWeight.w700, color: SetupColors.text(context))
+          : TextStyle(fontSize: AppText.body, fontWeight: FontWeight.w700, color: SetupColors.text(context)),
+    );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: 12, color: SetupColors.muted(context))),
-          Text(value, style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, color: SetupColors.text(context))),
+          Text(label, style: TextStyle(fontSize: AppText.badge, color: SetupColors.muted(context))),
+          // Kimlik tek satır: tireden bölünmez, sığmazsa küçülür.
+          if (mono) FittedBox(fit: BoxFit.scaleDown, alignment: AlignmentDirectional.centerStart, child: valueText) else valueText,
         ],
       ),
     );
@@ -667,13 +746,13 @@ class _ConfirmReplaceDialog extends StatelessWidget {
           children: [
             _row(context, 'Daire', homeName.isEmpty ? 'İsimsiz daire' : homeName),
             _row(context, 'Eski pano (devre dışı bırakılacak)', '$oldName - ${oldBoard.online ? 'çevrimiçi' : 'çevrimdışı'}'),
-            _row(context, 'Yeni pano', newUid),
+            _row(context, 'Yeni pano', newUid, mono: true),
             if (reason.isNotEmpty) _row(context, 'Neden', reason),
             const SizedBox(height: 8),
             Text(
               'Eski panonun bu daireyle bağlantısı kaldırılır ve yetkisi iptal edilir. Kanallar, isimler ve '
               'panjur süreleri yeni panoya aktarılır. Bu işlem geri alınamaz.',
-              style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.muted(context)),
+              style: TextStyle(fontSize: AppText.caption, height: 1.35, color: SetupColors.muted(context)),
             ),
           ],
         ),
@@ -681,13 +760,15 @@ class _ConfirmReplaceDialog extends StatelessWidget {
       actions: [
         TextButton(
           key: const Key('btn_replace_cancel'),
+          style: AppTheme.quietTextButtonStyle(context),
           onPressed: () => Navigator.of(context).pop(false),
           child: const Text('Vazgeç'),
         ),
         ElevatedButton(
           key: const Key('btn_replace_confirm'),
           onPressed: () => Navigator.of(context).pop(true),
-          style: ElevatedButton.styleFrom(backgroundColor: SetupColors.purple, foregroundColor: Colors.white),
+          // Anlamsal renk ortak ton yüzeyiyle (yerel `backgroundColor` kırpılmış yüzeyin altında "hayalet köşe" bırakıyordu).
+          style: accentButtonStyle(AppFeature.boardReplace.accentFamily),
           child: const Text('Panoyu Değiştir'),
         ),
       ],
@@ -713,6 +794,30 @@ class _ResultView extends StatelessWidget {
   final VoidCallback onOpenWizard;
   final VoidCallback onClose;
 
+  /// "Etiket: KİMLİK" satırı: kimlik tek satır mono, sığmazsa küçülür (tireden bölünmez).
+  Widget _idRow(BuildContext context, String label, String uid) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Text('$label: ', style: TextStyle(fontSize: AppText.caption, color: SetupColors.muted(context))),
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: AlignmentDirectional.centerStart,
+              child: Text(
+                uid,
+                maxLines: 1,
+                softWrap: false,
+                style: SetupText.mono(fontSize: AppText.body, fontWeight: FontWeight.w700, color: SetupColors.text(context)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final r = result;
@@ -725,30 +830,38 @@ class _ResultView extends StatelessWidget {
       children: [
         Row(
           children: [
-            Icon(warn ? Icons.warning_amber_rounded : Icons.check_circle_rounded, color: color, size: 30),
-            const SizedBox(width: 10),
+            OrbIconBadge(
+              icon: warn ? Icons.warning_amber_rounded : Icons.check_rounded,
+              family: warn ? AppFamilies.amber : AppFamilies.emerald,
+              size: OrbSize.md,
+              status: warn ? OrbStatus.none : OrbStatus.success,
+              glow: true,
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Text(
                 warn ? 'Pano değişimi kısmen tamamlandı' : 'Pano değişimi tamamlandı',
                 key: const Key('replace_result_title'),
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: SetupColors.readable(context, color)),
+                style: TextStyle(fontSize: AppText.cardTitle, fontWeight: FontWeight.w800, color: SetupColors.readable(context, color)),
               ),
             ),
           ],
         ),
         const SizedBox(height: 10),
+        // Kimlikler cümlenin İÇİNDE değil ayrı satırlarda: 1.5 yazıda "AHBU-" / "S3-0A0B0C" diye tireden bölünüyordu.
         Text(
           fromStatusCheck
-              ? '${homeName.isEmpty ? 'Daire' : homeName}: yeni pano ${r.newDeviceUuid} dairenin pano listesinde '
+              ? '${homeName.isEmpty ? 'Daire' : homeName}: yeni pano dairenin pano listesinde '
                   'görünüyor; değişim sunucuda tamamlanmış. Aktarılan kanal sayısı bilinmiyor.'
-              : '${homeName.isEmpty ? 'Daire' : homeName}: '
-                  '${r.oldDeviceUuid == null ? 'eski pano' : r.oldDeviceUuid!} yerine ${r.newDeviceUuid} tanımlandı. '
+              : '${homeName.isEmpty ? 'Daire' : homeName}: eski pano yerine yeni pano tanımlandı. '
                   '${r.migratedEndpointsCount} kanal yeni panoya aktarıldı.',
           key: const Key('replace_result_text'),
-          style: TextStyle(fontSize: 13.5, height: 1.4, color: text),
+          style: TextStyle(fontSize: AppText.body, height: 1.4, color: text),
         ),
+        if (!fromStatusCheck && r.oldDeviceUuid != null) _idRow(context, 'Eski pano', r.oldDeviceUuid!),
+        _idRow(context, 'Yeni pano', r.newDeviceUuid),
         if (r.partial)
-          const SetupCard(
+          const ServiceCard(
             key: Key('replace_partial'),
             accent: SetupColors.warn,
             child: SetupInfoRow(
@@ -766,7 +879,7 @@ class _ResultView extends StatelessWidget {
             text: r.warnings[i],
           ),
         if (pendingRuntime || r.shutterRuntimes.isNotEmpty)
-          SetupCard(
+          ServiceCard(
             key: const Key('replace_runtime_pending'),
             accent: SetupColors.info,
             child: Column(
@@ -783,13 +896,13 @@ class _ResultView extends StatelessWidget {
                 for (final s in r.shutterRuntimes)
                   Padding(
                     padding: const EdgeInsets.only(left: 26, top: 2),
-                    child: Text('Panjur ${s.shutter}: ${s.seconds} sn', style: TextStyle(fontSize: 13, color: text)),
+                    child: Text('Panjur ${s.shutter}: ${s.seconds} sn', style: TextStyle(fontSize: AppText.caption, color: text)),
                   ),
               ],
             ),
           ),
         if (r.childLockPending)
-          const SetupCard(
+          const ServiceCard(
             key: Key('replace_childlock_pending'),
             accent: SetupColors.info,
             child: SetupInfoRow(
@@ -798,7 +911,7 @@ class _ResultView extends StatelessWidget {
               text: 'Çocuk kilidi, yeni pano çevrimiçi olunca yeniden uygulanacak.',
             ),
           ),
-        const SetupCard(
+        const ServiceCard(
           key: Key('replace_next_step'),
           accent: SetupColors.primary,
           child: SetupInfoRow(
@@ -812,12 +925,13 @@ class _ResultView extends StatelessWidget {
         SetupPrimaryButton(
           key: const Key('btn_replace_open_wizard'),
           label: 'Yeni Panoyu Şimdi Bağla',
-          icon: Icons.wifi_find_rounded,
+          icon: Icons.wifi_rounded,
           onPressed: onOpenWizard,
         ),
         const SizedBox(height: 8),
         TextButton(
           key: const Key('btn_replace_close'),
+          style: AppTheme.quietTextButtonStyle(context),
           onPressed: onClose,
           child: const Text('Kapat'),
         ),

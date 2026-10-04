@@ -7,10 +7,11 @@
 #include <freertos/semphr.h>
 #include "NetTime.h"
 
-// Firmware surumu (state JSON "fw", GET /api/status). platformio.ini'de -DFW_VERSION=\"x.y.z\" ile
-// gecersiz kilinabilir.
+// Firmware surumu (state JSON "fw", GET /api/status, MQTT durumu "fw"). platformio.ini'de -DFW_VERSION=\"x.y.z\" ile
+// gecersiz kilinabilir. 1.1.1: yalniz gomulu web arayuzu degisti (WebPortalPage.h: yeni gorunum + kalici cihaz anahtari);
+// Wi-Fi/MQTT/guvenlik davranisi 1.1.0 ile aynidir.
 #ifndef FW_VERSION
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.1.1"
 #endif
 
 // ============================================================================

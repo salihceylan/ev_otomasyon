@@ -12,12 +12,18 @@ import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../common/validators.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/settings/accent_button.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/orb/orb.dart';
 
 String _humanDuration(Duration d) {
   final seconds = d.inSeconds;
   if (seconds >= 120) return '${(seconds / 60).ceil()} dakika';
   return '$seconds saniye';
 }
+
+/// Diyaloğun durumdan okuduğu yetkiler (PF-06: `context.select`; `Capabilities` yerine skalerler).
+typedef _ClaimPerms = ({bool canClaim, bool isStaff, bool isSuperUser, bool mustActForCustomer});
 
 /// Claim hatalarını eyleme yönelik Türkçe mesaja çevirir (ham istisna metni gösterilmez).
 ///
@@ -123,8 +129,10 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
     _uidController = TextEditingController(text: widget.initialUid ?? '');
     _pinController = TextEditingController(text: widget.initialPin ?? '');
     _homeNameController = TextEditingController(text: 'Evim');
-    _resend = Cooldown(state.clock, _refresh);
-    _pinLock = Cooldown(state.clock, _refresh);
+    // PF-23: tikler diyaloğu kurmaz; geri sayım metinleri `remaining` ile yalnız küçük builder'larda güncellenir,
+    // düğme kilidi başlangıç/bitişte `_refresh` ile yeniden kurulur.
+    _resend = Cooldown(state.clock, _refresh, notifyOnTick: false);
+    _pinLock = Cooldown(state.clock, _refresh, notifyOnTick: false);
     // Kalıcı servis personeli (küresel `service_user`) kendi adına cihaz sahiplenemez (sunucu 400
     // reddeder): müşteri adına eşleme baştan açık ve kapatılamaz.
     _forCustomer = _mustActForCustomer(state);
@@ -132,6 +140,16 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
 
   static bool _mustActForCustomer(AutomationState state) =>
       GlobalRole.parse(state.currentUser?.role) == GlobalRole.serviceUser;
+
+  static _ClaimPerms _permsOf(AutomationState state) {
+    final caps = state.capabilities;
+    return (
+      canClaim: caps.canClaimDevice,
+      isStaff: caps.isStaff,
+      isSuperUser: caps.isSuperUser,
+      mustActForCustomer: _mustActForCustomer(state),
+    );
+  }
 
   void _refresh() {
     if (mounted) setState(() {});
@@ -274,7 +292,8 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
             content: const Text('Cihaz başarıyla evinize eşleştirildi.'),
-            backgroundColor: AppTheme.accentGreen,
+            // Beyaz yazılı dolgu tonu (ham yeşil zeminde beyaz metin ≈2.5:1 idi).
+            backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -311,21 +330,22 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final caps = state.capabilities;
+    // PF-06: yalnız bu diyaloğun okuduğu yetkiler izlenir; ilgisiz bildirim diyaloğu yeniden kurmaz.
+    final perms = context.select<AutomationState, _ClaimPerms>(_permsOf);
 
     return PopScope(
       canPop: !_isLoading,
+      // Yüzey ve şekil temanın diyalog stilinden gelir (yerel zemin/şekil override'ı yok).
       child: AlertDialog(
-        backgroundColor: AppTheme.getSurfaceColor(context),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: AppTheme.getCardBorder(context), width: 1.2),
-        ),
         title: Row(
           children: [
-            const Icon(Icons.qr_code_2_rounded, color: AppTheme.primaryBlueLight, size: 28),
-            const SizedBox(width: 10),
+            OrbIconBadge(
+              icon: _success != null ? Icons.check_rounded : Icons.qr_code_2_rounded,
+              family: _success != null ? AppFamilies.emerald : AppFamilies.sky,
+              active: true,
+              pending: _isLoading,
+            ),
+            const SizedBox(width: 12),
             Flexible(
               child: Text(
                 'Cihaz Eşleştirme',
@@ -339,13 +359,13 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 400),
           child: SingleChildScrollView(
-            child: !caps.canClaimDevice
+            child: !perms.canClaim
                 ? const InlineMessage.error('Bu hesapla cihaz eşleştiremezsiniz.', key: Key('claim_forbidden'))
-                : (_success != null ? _buildSuccess(_success!) : _buildForm(context, state)),
+                : (_success != null ? _buildSuccess(_success!) : _buildForm(context, perms)),
           ),
         ),
         actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        actions: _success != null || !caps.canClaimDevice
+        actions: _success != null || !perms.canClaim
             ? [
                 ElevatedButton(
                   key: const Key('btn_claim_done'),
@@ -362,23 +382,19 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
                 ElevatedButton(
                   key: const Key('btn_claim_submit'),
                   onPressed: (_isLoading || _pinLock.isActive) ? null : _handleClaim,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primaryBlue,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
+                  style: accentButtonStyle(null),
                   child: _isLoading
                       ? const SizedBox(
                           height: 18,
                           width: 18,
                           child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                         )
-                      : Text(
-                          _pinLock.isActive
-                              ? 'Bekleyin (${formatCountdown(_pinLock.remainingSeconds)})'
-                              : 'Eşle & Sahiplen',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                      : ValueListenableBuilder<int>(
+                          valueListenable: _pinLock.remaining,
+                          builder: (context, seconds, _) => Text(
+                            seconds > 0 ? 'Bekleyin (${formatCountdown(seconds)})' : 'Eşle & Sahiplen',
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
                         ),
                 ),
               ],
@@ -386,10 +402,9 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
     );
   }
 
-  Widget _buildForm(BuildContext context, AutomationState state) {
-    final caps = state.capabilities;
-    final canActForCustomer = caps.isStaff || caps.isSuperUser;
-    final mustActForCustomer = _mustActForCustomer(state);
+  Widget _buildForm(BuildContext context, _ClaimPerms perms) {
+    final canActForCustomer = perms.isStaff || perms.isSuperUser;
+    final mustActForCustomer = perms.mustActForCustomer;
     final locked = _fieldsLocked;
     return Form(
       key: _formKey,
@@ -501,16 +516,19 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
                     ? 'Servis personeli cihazı yalnızca müşteri adına eşleştirebilir; müşteri doğrulama kodunu size söyler.'
                     : 'Cihaz müşterinin hesabına bağlanır; müşteri doğrulama kodunu size söyler.',
                 key: const Key('claim_for_customer_hint'),
-                style: TextStyle(fontSize: 11.5, color: AppTheme.getTextMuted(context)),
+                style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context)),
               ),
             ),
             if (_forCustomer) ..._buildCustomerSection(context),
           ],
           if (_pinLock.isActive) ...[
             const SizedBox(height: 10),
-            InlineMessage.warning(
-              'Cihaz geçici olarak kilitli. ${_humanDuration(Duration(seconds: _pinLock.remainingSeconds))} sonra tekrar deneyin.',
-              key: const Key('claim_lock_notice'),
+            ValueListenableBuilder<int>(
+              valueListenable: _pinLock.remaining,
+              builder: (context, seconds, _) => InlineMessage.warning(
+                'Cihaz geçici olarak kilitli. ${_humanDuration(Duration(seconds: seconds))} sonra tekrar deneyin.',
+                key: const Key('claim_lock_notice'),
+              ),
             ),
           ],
           if (_error != null) ...[
@@ -550,9 +568,11 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
           icon: _otpSending
               ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.sms_outlined, size: 18),
-          label: Text(_resend.isActive
-              ? 'Kod gönderilebilir: ${formatCountdown(_resend.remainingSeconds)}'
-              : 'Müşteriye Doğrulama Kodu Gönder'),
+          label: ValueListenableBuilder<int>(
+            valueListenable: _resend.remaining,
+            builder: (context, seconds, _) =>
+                Text(seconds > 0 ? 'Kod gönderilebilir: ${formatCountdown(seconds)}' : 'Müşteriye Doğrulama Kodu Gönder'),
+          ),
         )
       else ...[
         TextFormField(
@@ -593,9 +613,12 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
                       setState(() => _otpSent = false);
                       await _sendOtp();
                     },
-              child: Text(
-                _resend.isActive ? 'Yeniden gönder (${formatCountdown(_resend.remainingSeconds)})' : 'Kodu Yeniden Gönder',
-                style: const TextStyle(fontSize: 12),
+              child: ValueListenableBuilder<int>(
+                valueListenable: _resend.remaining,
+                builder: (context, seconds, _) => Text(
+                  seconds > 0 ? 'Yeniden gönder (${formatCountdown(seconds)})' : 'Kodu Yeniden Gönder',
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
             ),
           ],
@@ -622,6 +645,17 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        const Center(
+          child: OrbIconBadge(
+            key: Key('claim_success_orb'),
+            icon: Icons.check_rounded,
+            family: AppFamilies.emerald,
+            size: OrbSize.lg,
+            active: true,
+            status: OrbStatus.success,
+          ),
+        ),
+        const SizedBox(height: 12),
         const InlineMessage.success('Cihaz eşleştirildi.', key: Key('claim_success')),
         if (view.homeName.isNotEmpty) ...[
           const SizedBox(height: 8),
@@ -651,20 +685,7 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
       hintStyle: TextStyle(color: muted, fontSize: 13),
       prefixIcon: Icon(prefixIcon, color: muted, size: 20),
       suffixIcon: suffixIcon,
-      filled: true,
-      fillColor: AppTheme.getCardColor(context),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppTheme.getCardBorder(context)),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppTheme.getCardBorder(context)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppTheme.primaryBlue, width: 1.8),
-      ),
+      // Alan biçimi (dolgu, köşe, odak halkası) temanın giriş stilinden gelir.
     );
   }
 }

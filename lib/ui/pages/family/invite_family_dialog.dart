@@ -10,7 +10,15 @@ import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
+import '../../motion/motion_scope.dart';
 import '../../theme/app_theme.dart';
+import '../../theme/tokens.dart';
+import '../../widgets/app_pill.dart';
+import '../../widgets/orb/orb.dart';
+import '../../widgets/settings/accent_button.dart';
+import '../../widgets/surface_card.dart';
+import 'countdown_ring.dart';
+import 'step_progress.dart';
 
 /// Aile bireyi / süreli misafir davet diyaloğu.
 ///
@@ -20,6 +28,11 @@ import '../../theme/app_theme.dart';
 /// * Sunucu UTC zamanları **yerel saatle** (`toLocal`) gösterilir.
 /// * Her üretim isteği bir **sıra numarası** taşır: bayat/iptal edilmiş istek yanıtı, daha yeni bir
 ///   isteğin (veya "Vazgeç"in) sonucunu ezemez.
+///
+/// Düzen (WP-F2): içerik yüksekliği **içeriğe göre** belirlenir (sabit yükseklik yok; üst sınır 680 dp, aşınca
+/// kaydırılır); üretilen kodun asıl eylemi "Kodu Kopyala & Paylaş" içerik kaydırılsa da HER ZAMAN görünen alt
+/// eylem çubuğundadır; kod bir kez üretilince sonuç görünür bölgeye kaydırılır. Kod, yazı ölçeği ne olursa olsun
+/// TEK satırda ve eksiksiz görünür (sığmazsa küçülür; `FittedBox`).
 class InviteFamilyDialog extends StatefulWidget {
   final String? initialInviteCode;
   final String? initialHomeName;
@@ -59,12 +72,15 @@ class _InviteView {
   final DateTime? accessUntil;
 }
 
-class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTickerProviderStateMixin {
+class _InviteFamilyDialogState extends State<InviteFamilyDialog> {
   /// Misafir süre seçenekleri (saat); sunucu üst sınırı 72.
   static const List<int> guestHourOptions = <int>[2, 4, 8, 24, 48, 72];
 
-  late TabController _tabController;
+  /// 0: aile bireyi, 1: süreli misafir.
+  int _tab = 0;
   final _guestNameController = TextEditingController();
+  final _memberResultKey = GlobalKey();
+  final _guestResultKey = GlobalKey();
 
   // Aile üyesi
   bool _memberLoading = false;
@@ -78,11 +94,12 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
   String? _guestError;
   int _guestSeq = 0;
   int _guestHours = 8;
+  bool _memberCopied = false;
+  bool _guestCopied = false;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
     final initial = widget.initialInviteCode;
     if (initial != null && initial.isNotEmpty) {
       _member = _InviteView(code: initial, qrContent: 'AHBU-INVITE:$initial');
@@ -93,7 +110,6 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
   void dispose() {
     _memberSeq++;
     _guestSeq++;
-    _tabController.dispose();
     _guestNameController.dispose();
     super.dispose();
   }
@@ -124,10 +140,12 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
         _guestLoading = true;
         _guestError = null;
         _guest = null; // bayat kod ekranda kalmasın
+        _guestCopied = false;
       } else {
         _memberLoading = true;
         _memberError = null;
         _member = null;
+        _memberCopied = false;
       }
     });
     try {
@@ -147,6 +165,7 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
           _memberLoading = false;
         }
       });
+      _revealResult(guest: guest);
     } catch (e) {
       if (!mounted || seq != (guest ? _guestSeq : _memberSeq)) return;
       final message = friendlyError(e, fallback: 'Davet kodu üretilemedi. Lütfen tekrar deneyin.');
@@ -162,6 +181,23 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
     }
   }
 
+  /// Üretilen sonuç (QR + kod) görünür bölgeye kaydırılır: kod formun altında kalıp fark edilmesin. Hareket kapalıyken
+  /// (ve "hareketi azalt"ta) anında atlar; girdiyi bloklamaz.
+  void _revealResult({required bool guest}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final target = (guest ? _guestResultKey : _memberResultKey).currentContext;
+      if (target == null || !target.mounted) return;
+      unawaited(
+        Scrollable.ensureVisible(
+          target,
+          duration: MotionScope.durationOf(context, AppMotion.base),
+          curve: AppMotion.standard,
+        ),
+      );
+    });
+  }
+
   /// Bekleyen üretim isteğini bırakır: yanıtı gelse bile ekrana yansımaz.
   void _cancelPending({required bool guest}) {
     setState(() {
@@ -175,9 +211,16 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
     });
   }
 
-  Future<void> _copyToClipboard(String code) async {
+  Future<void> _copyToClipboard(String code, {required bool guest}) async {
     await Clipboard.setData(ClipboardData(text: code));
     if (!mounted) return;
+    setState(() {
+      if (guest) {
+        _guestCopied = true;
+      } else {
+        _memberCopied = true;
+      }
+    });
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Row(
@@ -187,7 +230,8 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
             Flexible(child: Text('Davet kodu ($code) panoya kopyalandı!')),
           ],
         ),
-        backgroundColor: AppTheme.accentGreen,
+        // Beyaz yazılı dolgu: ham yeşil zeminde beyaz metin ≈2.5:1 idi.
+        backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -195,39 +239,36 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final homeName = widget.initialHomeName ?? state.activeHome?.name ?? 'Evim';
-    final allowed = state.capabilities.canInvite || widget.initialInviteCode != null;
+    // PF-06: yalnız ev adı ve davet yetkisi izlenir; ilgisiz bildirim diyaloğu yeniden kurmaz.
+    final view = context.select<AutomationState, ({String? homeName, bool canInvite})>(
+      (s) => (homeName: s.activeHome?.name, canInvite: s.capabilities.canInvite),
+    );
+    final homeName = widget.initialHomeName ?? view.homeName ?? 'Evim';
+    final allowed = view.canInvite || widget.initialInviteCode != null;
+    final guestTab = _tab == 1;
+    final loading = guestTab ? _guestLoading : _memberLoading;
+    final current = guestTab ? _guest : _member;
 
+    // Yüzey ve şekil temanın diyalog stilinden gelir (yerel zemin/şekil override'ı yok).
     return Dialog(
-      backgroundColor: AppTheme.getSurfaceColor(context),
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: AppTheme.getCardBorder(context), width: 1.2),
-      ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 420, maxHeight: 680),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 12),
+              // Sağ boşluk: kapat düğmesinin iç boşluğu kadar eksik (simge içerik sağ kenarıyla hizalı).
+              padding: const EdgeInsets.fromLTRB(20, 16, 6, 12),
               child: Row(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryBlue.withValues(alpha: 0.15),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.group_add_outlined, color: AppTheme.primaryBlueLight, size: 22),
-                  ),
+                  const OrbIconBadge(icon: Icons.group_add_rounded, family: AppFamilies.sky, active: true),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // En çok 2 satır: büyük yazıda "Davet Et" kesilmesin.
                         Text(
                           'Erişim Paylaş & Davet Et',
                           style: TextStyle(
@@ -235,11 +276,13 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
                             fontWeight: FontWeight.bold,
                             color: AppTheme.getTextPrimary(context),
                           ),
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
                           homeName,
                           style: TextStyle(fontSize: 12, color: AppTheme.getTextMuted(context)),
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ],
@@ -260,44 +303,38 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
                 child: InlineMessage.error('Bu işlem için yetkiniz yok.', key: Key('invite_forbidden')),
               )
             else ...[
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: AppTheme.getCardColor(context),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.getCardBorder(context)),
-                ),
-                child: TabBar(
-                  controller: _tabController,
-                  indicator: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    color: AppTheme.primaryBlue,
-                  ),
-                  indicatorSize: TabBarIndicatorSize.tab,
-                  dividerColor: Colors.transparent,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: AppTheme.getTextMuted(context),
-                  labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                  tabs: const [
-                    Tab(key: Key('tab_invite_member'), icon: Icon(Icons.family_restroom, size: 18), text: 'Aile Bireyi'),
-                    Tab(key: Key('tab_invite_guest'), icon: Icon(Icons.hourglass_top_outlined, size: 18), text: 'Süreli Misafir'),
-                  ],
-                ),
+              StepProgress(
+                step: current != null ? 3 : (loading ? 2 : 1),
+                color: guestTab ? AppFamilies.violet : AppFamilies.sky,
               ),
-              Flexible(
-                child: SizedBox(
-                  height: 520,
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _buildFamilyTab(homeName),
-                      _buildGuestTab(),
-                    ],
-                  ),
-                ),
-              ),
+              _SegmentBar(selected: _tab, onSelect: (index) => setState(() => _tab = index)),
+              const SizedBox(height: 4),
+              Flexible(child: guestTab ? _buildGuestTab() : _buildFamilyTab(homeName)),
+              if (current != null) _buildCopyBar(current, guest: guestTab),
             ],
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Alt eylem çubuğu: üretilen kodun asıl ardıl eylemi HER ZAMAN görünür (içerik kaydırılsa da, yazı ölçeği
+  /// büyüse de).
+  Widget _buildCopyBar(_InviteView invite, {required bool guest}) {
+    final copied = guest ? _guestCopied : _memberCopied;
+    return DecoratedBox(
+      // İnce üst çizgi: kaydırılan içerik çubuğun altında kesilirken sınır belli olsun.
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: AppTheme.getCardBorder(context).withValues(alpha: 0.6))),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+        child: ElevatedButton.icon(
+          key: Key(guest ? 'btn_copy_guest_code' : 'btn_copy_member_code'),
+          onPressed: () => _copyToClipboard(invite.code, guest: guest),
+          icon: Icon(copied ? Icons.check_rounded : Icons.copy_rounded, size: accentIconSize(context)),
+          label: const Text('Kodu Kopyala & Paylaş', textAlign: TextAlign.center),
+          style: accentButtonStyle(guest ? AppFamilies.violet : null),
         ),
       ),
     );
@@ -306,10 +343,10 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
   Widget _qrCard(String data, Color glow) {
     return Center(
       child: Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppRadius.r16),
           boxShadow: [BoxShadow(color: glow.withValues(alpha: 0.25), blurRadius: 18, spreadRadius: 2)],
         ),
         child: QrImageView(
@@ -317,7 +354,7 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
           key: ValueKey<String>('qr_payload:$data'),
           data: data,
           version: QrVersions.auto,
-          size: 160,
+          size: 132,
           backgroundColor: Colors.white,
         ),
       ),
@@ -328,17 +365,24 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
     required Key key,
     required bool loading,
     required bool hasCode,
-    required Color color,
+    required AccentFamily family,
     required VoidCallback onGenerate,
     required VoidCallback onCancel,
     required String firstLabel,
     required String againLabel,
   }) {
     if (loading) {
+      // Bekleme: düz spinner yerine ortak "bekliyor" yayı (+ vazgeç yolu).
       return Row(
         children: [
-          const Expanded(
-            child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4))),
+          Expanded(
+            child: Center(
+              child: ProgressArc(
+                diameter: 30,
+                color: AppTheme.isDark(context) ? family.light : family.deep,
+                strokeWidth: 3,
+              ),
+            ),
           ),
           TextButton(
             key: const Key('btn_invite_cancel_pending'),
@@ -348,51 +392,70 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
         ],
       );
     }
+    final icon = Icon(Icons.qr_code_2_rounded, size: accentIconSize(context));
+    if (hasCode) {
+      // Kod varken asıl eylem alttaki "Kodu Kopyala & Paylaş"tır: yeniden üretme ikincil (çerçeveli) görünür.
+      return OutlinedButton.icon(
+        key: key,
+        onPressed: onGenerate,
+        icon: icon,
+        label: Text(againLabel, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold)),
+        style: accentOutlinedButtonStyle(context, family),
+      );
+    }
     return ElevatedButton.icon(
       key: key,
       onPressed: onGenerate,
-      icon: const Icon(Icons.qr_code_2_rounded, size: 18),
-      label: Text(hasCode ? againLabel : firstLabel),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color,
-        foregroundColor: Colors.white,
-        padding: const EdgeInsets.symmetric(vertical: 11),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
+      icon: icon,
+      label: Text(firstLabel, textAlign: TextAlign.center),
+      style: accentButtonStyle(identical(family, AppFamilies.violet) ? AppFamilies.violet : null),
     );
   }
 
+  /// Kod kartı. Kod **tek satırda ve eksiksiz** görünür: kart genişliğine sığmazsa (büyük yazı ölçeği, 13 karakterli
+  /// misafir kodu) `FittedBox` ile küçülür; ortadan bölünüp son karakterler kaybolmaz. Test anahtarı
+  /// ([codeKey]) `SelectableText` üzerindedir.
   Widget _codeCard({
     required String caption,
     required String code,
-    required Color color,
+    required AccentFamily family,
+    required Color ink,
     required List<Widget> details,
     Key? codeKey,
   }) {
-    return Container(
+    return SurfaceCard(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      decoration: BoxDecoration(
-        color: AppTheme.getCardColor(context),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
+      accent: family.base,
+      active: true,
+      radius: AppRadius.r16,
       child: Column(
         children: [
           Text(
             caption,
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: AppTheme.getTextMuted(context),
-              fontSize: 10,
+              fontSize: AppTouch.minFontSize,
               fontWeight: FontWeight.bold,
-              letterSpacing: 1.5,
+              letterSpacing: 1.2,
             ),
           ),
           const SizedBox(height: 4),
-          SelectableText(
-            code,
-            key: codeKey,
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2, color: color),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: SelectableText(
+              code,
+              key: codeKey,
+              maxLines: 1,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 3,
+                color: ink,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
           ),
           ...details,
         ],
@@ -404,7 +467,7 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
     final muted = AppTheme.getTextMuted(context);
     final member = _member;
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -418,7 +481,7 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
             key: const Key('btn_generate_member_invite'),
             loading: _memberLoading,
             hasCode: member != null,
-            color: AppTheme.primaryBlue,
+            family: AppFamilies.sky,
             onGenerate: () => _generate(guest: false),
             onCancel: () => _cancelPending(guest: false),
             firstLabel: 'Aile Katılım Kodu Üret',
@@ -430,42 +493,49 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
           ],
           if (member != null) ...[
             const SizedBox(height: 16),
-            _qrCard(member.qrContent, AppTheme.primaryBlue),
+            KeyedSubtree(key: _memberResultKey, child: _qrCard(member.qrContent, AppFamilies.sky.base)),
             const SizedBox(height: 14),
             _codeCard(
               caption: 'AİLE KATILIM KODU',
               code: member.code,
-              color: AppTheme.primaryBlueLight,
+              family: AppFamilies.sky,
+              // Açık temada ham #60A5FA ≈2.2:1 idi; bilgi tonu (açık: #1D4ED8, koyu: #60A5FA).
+              ink: AppTheme.infoText(context),
               codeKey: const Key('invite_member_code'),
               details: [
-                const SizedBox(height: 4),
-                Text(
-                  member.expiresAt == null
-                      ? '24 saat geçerli'
-                      : 'Son geçerlilik: ${formatLocalDateTime(member.expiresAt!)}',
-                  key: const Key('invite_member_expiry'),
-                  style: TextStyle(color: muted, fontSize: 11),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (member.expiresAt != null) ...[
+                      CountdownRing(
+                        expiresAt: member.expiresAt!,
+                        total: const Duration(hours: 24),
+                        now: context.read<AutomationState>().clock.now,
+                        color: AppFamilies.sky.base,
+                        diameter: 28,
+                        strokeWidth: 3,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    Flexible(
+                      child: Text(
+                        member.expiresAt == null
+                            ? '24 saat geçerli'
+                            : 'Son geçerlilik: ${formatLocalDateTime(member.expiresAt!)}',
+                        key: const Key('invite_member_expiry'),
+                        style: TextStyle(color: muted, fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
               ],
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              key: const Key('btn_copy_member_code'),
-              onPressed: () => _copyToClipboard(member.code),
-              icon: const Icon(Icons.copy_rounded, size: 16),
-              label: const Text('Kodu Kopyala & Paylaş'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryBlue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 11),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
             ),
             const SizedBox(height: 10),
             Text(
               'Aile bireyiniz AHBU uygulamasını açıp karekod tarayıcıya bu kodu gösterdiğinde veya kodu '
               '"Bir Eve Katıl" ekranına yazdığında eve bağlanır.',
-              style: TextStyle(color: muted, fontSize: 11.5, height: 1.3),
+              style: TextStyle(color: muted, fontSize: 12, height: 1.3),
               textAlign: TextAlign.center,
             ),
           ],
@@ -477,27 +547,29 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
   Widget _buildGuestTab() {
     final muted = AppTheme.getTextMuted(context);
     final guest = _guest;
+    final warning = AppTheme.warningText(context);
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: AppTheme.accentAmber.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: AppTheme.accentAmber.withValues(alpha: 0.3)),
+              color: AppFamilies.amber.base.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(AppRadius.r12),
+              border: Border.all(color: AppFamilies.amber.base.withValues(alpha: 0.30)),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.shield_outlined, color: AppTheme.accentAmber, size: 18),
+                Icon(Icons.shield_outlined, color: warning, size: 18),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     'Süreli misafir / temizlikçi: süre kodun üretildiği andan başlar ve bittiğinde yetki '
                     'otomatik kapanır. En fazla ${guestHourOptions.last} saat.',
-                    style: TextStyle(fontSize: 11.5, color: AppTheme.getTextPrimary(context)),
+                    style: TextStyle(fontSize: 12, color: AppTheme.getTextPrimary(context)),
                   ),
                 ),
               ],
@@ -517,18 +589,20 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
             ],
           ),
           const SizedBox(height: 12),
+          // Alan biçimi (dolgu, köşe, odak halkası) temanın giriş stilinden gelir. "İsteğe bağlı" bilgisi etiketten
+          // çıkarıldı (uzun etiket 1.0'da bile "…" ile kesiliyordu).
           TextField(
             key: const Key('field_guest_name'),
             controller: _guestNameController,
             maxLength: 100,
+            textInputAction: TextInputAction.done,
             decoration: InputDecoration(
-              labelText: 'Misafir / Görevli Adı (İsteğe Bağlı)',
+              labelText: 'Misafir / Görevli Adı',
+              helperText: 'İsteğe bağlı',
               hintText: 'Örn: Temizlikçi Fatma Hanım, Misafir Ali',
               counterText: '',
-              filled: true,
-              fillColor: AppTheme.getCardColor(context),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              labelStyle: TextStyle(color: muted),
+              helperStyle: TextStyle(color: muted),
             ),
           ),
           const SizedBox(height: 12),
@@ -536,7 +610,7 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
             key: const Key('btn_generate_guest_invite'),
             loading: _guestLoading,
             hasCode: guest != null,
-            color: AppTheme.accentPurple,
+            family: AppFamilies.violet,
             onGenerate: () => _generate(guest: true),
             onCancel: () => _cancelPending(guest: true),
             firstLabel: 'Geçici Misafir QR\'ı Üret',
@@ -548,40 +622,46 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
           ],
           if (guest != null) ...[
             const SizedBox(height: 16),
-            _qrCard(guest.qrContent, AppTheme.accentPurple),
+            KeyedSubtree(key: _guestResultKey, child: _qrCard(guest.qrContent, AppFamilies.violet.base)),
             const SizedBox(height: 12),
             _codeCard(
               caption: 'GEÇİCİ MİSAFİR KODU',
               code: guest.code,
-              color: AppTheme.accentPurple,
+              family: AppFamilies.violet,
+              ink: AppTheme.readableAccent(context, AppFamilies.violet.base),
               codeKey: const Key('invite_guest_code'),
               details: [
                 if (guest.accessUntil != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'Son erişim: ${formatLocalDateTime(guest.accessUntil!)}',
-                    key: const Key('invite_guest_until'),
-                    style: const TextStyle(color: AppTheme.accentAmber, fontWeight: FontWeight.bold, fontSize: 11.5),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CountdownRing(
+                        expiresAt: guest.accessUntil!,
+                        total: Duration(hours: _guestHours),
+                        now: context.read<AutomationState>().clock.now,
+                        color: AppFamilies.amber.base,
+                        diameter: 28,
+                        strokeWidth: 3,
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          'Son erişim: ${formatLocalDateTime(guest.accessUntil!)}',
+                          key: const Key('invite_guest_until'),
+                          style: TextStyle(color: warning, fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ],
             ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              key: const Key('btn_copy_guest_code'),
-              onPressed: () => _copyToClipboard(guest.code),
-              icon: const Icon(Icons.copy_rounded, size: 16, color: AppTheme.accentPurple),
-              label: const Text('Kodu Kopyala & Paylaş', style: TextStyle(color: AppTheme.accentPurple)),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: AppTheme.accentPurple),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
             Text(
               'Süreyi değiştirmek için yeni bir kod üretin; önceki kod süresi bitene (ya da kullanılana) '
               'kadar geçerli kalır.',
-              style: TextStyle(color: muted, fontSize: 11, height: 1.3),
+              style: TextStyle(color: muted, fontSize: 12, height: 1.3),
               textAlign: TextAlign.center,
             ),
           ],
@@ -600,19 +680,113 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> with SingleTick
       8 => '8 Saat (Mesai)',
       _ => '$hours Saat',
     };
-    return ChoiceChip(
+    // Ortak çip ([AppChip]): seçili = misafir moru tonlu dolgu + parlak kenar + onay işareti, AA okunur etiket (eskiden koyu mor
+    // zemin + beyaz metin elle verilirdi); süre çipi YALNIZCA seçimdir, kod üretmez.
+    return AppChip(
       key: Key('chip_guest_$hours'),
-      label: Text(
-        label,
-        style: TextStyle(fontSize: 12, color: isSelected ? Colors.white : AppTheme.getTextPrimary(context)),
-      ),
+      label: label,
       selected: isSelected,
-      selectedColor: AppTheme.accentPurple,
-      backgroundColor: AppTheme.getCardColor(context),
-      side: BorderSide(color: isSelected ? AppTheme.accentPurple : AppTheme.getCardBorder(context)),
-      onSelected: (selected) {
-        if (selected) setState(() => _guestHours = hours);
-      },
+      family: AppFamilies.violet,
+      onTap: () => setState(() => _guestHours = hours),
+    );
+  }
+}
+
+/// Cam segment çubuğu (Aile Bireyi / Süreli Misafir): seçili segment sky→cyan gradyan hap, etiket büyük yazıda iki
+/// satıra sarar (sabit yükseklik yok; `Tab`'in tek satır + solma kırpması yok). Dokunma hedefi ≥ 48 dp.
+class _SegmentBar extends StatelessWidget {
+  const _SegmentBar({required this.selected, required this.onSelect});
+
+  final int selected;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      // Yatay 20: başlık/ilerleme çubuğu/içerikle aynı sol-sağ hiza.
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppTheme.getInsetColor(context),
+        borderRadius: BorderRadius.circular(AppRadius.r16),
+        // Segment kabı bir KONTROLÜN sınırıdır: ≥ 3:1 (alan çerçevesiyle aynı dil); dekoratif kart kenarı açıkta 1.5:1'di.
+        border: Border.all(color: AppTheme.getFieldBorder(context)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _Segment(
+              key: const Key('tab_invite_member'),
+              icon: Icons.groups_rounded,
+              label: 'Aile Bireyi',
+              selected: selected == 0,
+              onTap: () => onSelect(0),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: _Segment(
+              key: const Key('tab_invite_guest'),
+              icon: Icons.hourglass_top_rounded,
+              label: 'Süreli Misafir',
+              selected: selected == 1,
+              onTap: () => onSelect(1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Segment extends StatelessWidget {
+  const _Segment({super.key, required this.icon, required this.label, required this.selected, required this.onTap});
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = selected ? Colors.white : AppTheme.getTextMuted(context);
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadius.r12),
+        child: AnimatedContainer(
+          duration: MotionScope.durationOf(context, AppMotion.fast),
+          curve: AppMotion.standard,
+          constraints: const BoxConstraints(minHeight: AppTouch.minTarget + 8),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+          decoration: BoxDecoration(
+            gradient: selected
+                ? const LinearGradient(colors: [PrimaryButtonSurface.gradientStart, PrimaryButtonSurface.gradientEnd])
+                : null,
+            borderRadius: BorderRadius.circular(AppRadius.r12),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20, color: ink),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: ink),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
 import '../common/confirm_dialogs.dart';
 import '../theme/app_theme.dart';
+import '../theme/tokens.dart';
+import '../widgets/orb/progress_arc.dart';
 
 /// "Hepsini Kapat" düğmesi (pano bandı ve ayarlar sayfası ortak kullanır).
 ///
@@ -14,15 +16,21 @@ import '../theme/app_theme.dart';
 /// * Başarıda **gerçek** kapatılan lamba sayısı bildirilir ([AutomationState.closeAllOpenLights]
 ///   sunucunun saydığı sayıyı döndürür); `0` ise "açık lamba bulunamadı" denir.
 ///
+/// [color] yalnızca kenarlıklı varyantın ([filled] = `false`) rengidir ve **7 aileden biri** olmalıdır
+/// (varsayılan `AppFamilies.sky.deep`: tema çerçeveli düğmesinin mavisi); ham Material rengi verilirse
+/// (`ButtonTone.familyFor`) en yakın aileye oturtulur. Dolgulu varyant tema gradyanını kullanır.
+///
 /// Anahtar: `Key('btn_close_all_lights')`.
 class CloseAllLightsButton extends StatefulWidget {
   const CloseAllLightsButton({
     super.key,
-    this.color = Colors.indigoAccent,
+    this.color,
     this.filled = true,
   });
 
-  final Color color;
+  /// Kenarlıklı varyantın rengi; `null` ise `AppFamilies.sky.deep` (ailenin rengi `const` ifadeyle okunamadığı
+  /// için varsayılan yapım anında çözülür).
+  final Color? color;
 
   /// `true`: dolgulu düğme, `false`: kenarlıklı metin düğmesi.
   final bool filled;
@@ -33,6 +41,8 @@ class CloseAllLightsButton extends StatefulWidget {
 
 class _CloseAllLightsButtonState extends State<CloseAllLightsButton> {
   bool _busy = false;
+
+  Color get _color => widget.color ?? AppFamilies.sky.deep;
 
   Future<void> _closeAll() async {
     if (_busy) return;
@@ -70,17 +80,15 @@ class _CloseAllLightsButtonState extends State<CloseAllLightsButton> {
   Widget build(BuildContext context) {
     final canUse = context.select<AutomationState, bool>((s) => s.capabilities.canUseGroupCommands);
     final onPressed = (_busy || !canUse) ? null : _closeAll;
-    final progress = SizedBox(
-      width: 16,
-      height: 16,
-      child: CircularProgressIndicator(
-        strokeWidth: 2,
-        color: widget.filled ? Colors.white : AppTheme.readableAccent(context, widget.color),
-      ),
+    final color = _color;
+    final progress = ProgressArc(
+      diameter: 16,
+      strokeWidth: 2,
+      color: widget.filled ? Colors.white : AppTheme.readableAccent(context, color),
     );
     final label = Text(
       _busy ? 'Kapatılıyor…' : 'Hepsini Kapat',
-      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+      style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
     );
 
     if (widget.filled) {
@@ -88,11 +96,9 @@ class _CloseAllLightsButtonState extends State<CloseAllLightsButton> {
         key: const Key('btn_close_all_lights'),
         onPressed: onPressed,
         style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.filledAccent(widget.color),
-          foregroundColor: Colors.white,
+          // Tema gradyanı (sky -> cyan) ve stadium şekli uygulanır; yalnız boyut/dolgu burada.
           minimumSize: const Size(48, 48),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -103,15 +109,16 @@ class _CloseAllLightsButtonState extends State<CloseAllLightsButton> {
         ),
       );
     }
+    // Kenar: tüm çerçeveli düğmelerle AYNI tek ton kuralı ([AppTheme.outlinedBorderOfColor]: renk önce ailesine oturtulur; kenar
+    // iki temada kart / sayfa / diyalog yüzeylerinde ≥ 3:1). Eskiden elle `family.deep@.75` (açıkta amber ≈ 2.3:1) çiziliyordu.
     return OutlinedButton(
       key: const Key('btn_close_all_lights'),
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
-        foregroundColor: AppTheme.readableAccent(context, widget.color),
-        side: BorderSide(color: widget.color.withValues(alpha: 0.7)),
+        foregroundColor: AppTheme.readableAccent(context, color),
+        side: BorderSide(color: AppTheme.outlinedBorderOfColor(context, color), width: 1.5),
         minimumSize: const Size(48, 48),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

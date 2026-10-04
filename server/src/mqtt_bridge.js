@@ -32,8 +32,9 @@
 //     retained "offline"); kopru hicbir kararda QoS'e bakmaz. `state.last_id` bossa alan HIC yoktur
 //     (yok = gecerli; ack'e dokunulmaz); `shutters[]` yalniz yapilandirilmis ciftleri tasir (raporlanmayan
 //     cift silinmez/sifirlanmaz); `uid` ("AHBU-S3-" + 6 hex) buyuk/kucuk harf duyarsiz eslenir; `relays[].type`
-//     metindir (kopru kullanmaz); `child_lock` her state'te vardir. Kayip "online" status'u canli state ile telafi
-//     edilir (her canli state cihazi cevrimici yapar).
+//     metindir (kopru durum guncellemesinde kullanmaz; yerlesim esitleme servisi kullanir - asagida);
+//     `child_lock` her state'te vardir. Kayip "online" status'u canli state ile telafi edilir (her canli state
+//     cihazi cevrimici yapar).
 //   - Yuk: kalp atisi 30 sn, degisiklikte ~0.4 sn. Mesaj basina <= 1 transaction ve 5 sorgu; ayni eve ait
 //     bekleyen eski state'ler birlestirilir; degismeyen satira yazilmaz. devices.last_seen_at/is_online
 //     INDEKSLENMEZ (migration 026): her kalp atisi HOT guncelleme olarak kalir.
@@ -46,10 +47,17 @@
 //     doneminin basinda bekleyen niyet (cocuk kilidi, pano degisimi sonrasi panjur sureleri) cihaz durumundan
 //     farkliysa `publishCommand` yoluyla bir kez uygulanir. Ana state yolunu (toplu UPDATE, retain farkindaligi,
 //     sorgu/transaction sayisi) DEGISTIRMEZ: ek sorgular ayri, sonradan ve hata yalitimli calisir.
+//   - YERLESIM ESITLEME (WP-L, CONTRACTS §2.4b): services/endpoint_layout_sync.js; yalniz `layoutSync: true` ile
+//     (uretim tekili). Dogrulanmis her state'in HAM yukunden panonun bildirdigi yerlesim (role id + tip + ad, panjur
+//     ciftleri) cikarilir (utils/endpoint_layout.js `extractReportedLayout`; en kucuk suphede null). Yalniz CANLI
+//     (retained OLMAYAN) state COMMIT edildikten sonra, uzlastirici bildiriminin ardindan servise bildirilir; servis
+//     `endpoints` satirlarini kendi kuyrugunda / transaction'inda uzlastirir. Ana state yolunu DEGISTIRMEZ ve hata
+//     yalitimlidir (cikarma ve bildirim ayri try/catch). `ENDPOINT_LAYOUT_SYNC=off|0|false` servisi hic kurmaz.
 //
 // Ortam degiskenleri (CONTRACTS §6): MQTT_HOST, MQTT_PORT, MQTT_BACKEND_USER,
 // MQTT_BACKEND_PASS. Opsiyonel: MQTT_TLS=true, MQTT_CLIENT_ID, MQTT_OFFLINE_AFTER_SEC,
-// MQTT_RECONNECT_MIN_MS, MQTT_RECONNECT_MAX_MS, MQTT_PUBLISH_TIMEOUT_MS (varsayilan 5000).
+// MQTT_RECONNECT_MIN_MS, MQTT_RECONNECT_MAX_MS, MQTT_PUBLISH_TIMEOUT_MS (varsayilan 5000),
+// ENDPOINT_LAYOUT_SYNC (off / 0 / false = yerlesim esitleme kapali; varsayilan acik).
 //
 // GUVENLIK: yuk (payload) icerigi ve parolalar log'a YAZILMAZ (sys komutlari gizli deger
 // tasiyabilir). Yalnizca konu, bayt sayisi ve hata mesaji loglanir.
@@ -539,6 +547,15 @@ class MqttBridge {
     this._reconcilerInjected = this._reconciler !== null; // enjekte ornek end()'de atilmaz (test sahibi yonetir)
     this._reconcileEnabled = this._reconciler !== null || opts.reconcile === true;
 
+    // Yerlesim esitleme (WP-L, CONTRACTS §2.4b): `layoutSync: true` (uretim tekili) -> tembel olusturulur;
+    // `layoutSyncer`: hazir ornek (test). Varsayilan KAPALI: dogrudan `new MqttBridge({...})` ile kurulan ornekler
+    // yerlesim cikarmaz, ek sorgu uretmez. ENDPOINT_LAYOUT_SYNC tembel olusturma aninda okunur (bkz. _getLayoutSync).
+    this._layoutSync = opts.layoutSyncer || null;
+    this._layoutSyncInjected = this._layoutSync !== null; // enjekte ornek end()'de atilmaz (test sahibi yonetir)
+    this._layoutSyncEnabled = this._layoutSync !== null || opts.layoutSync === true;
+    this._layoutExtract = null; // extractReportedLayout (tembel yuklenir)
+    this._layoutClosed = false; // end() kurar, init() sifirlar: kapanmis kopru servisi yeniden kurmaz / yerlesim cikarmaz
+
     this._backoffMs = DEFAULTS.reconnectMinMs;
     this._resubscribeTimer = null;
     this._resubscribeDelayMs = DEFAULTS.resubscribeDelayMs;
@@ -626,6 +643,7 @@ class MqttBridge {
   // -- Yasam dongusu -----------------------------------------------------------
   init() {
     if (this.client) return this.client; // idempotent
+    this._layoutClosed = false; // yeniden acilis: yerlesim esitleme tembel olarak yeniden kurulabilir
 
     const cfg = this._readConfig();
     this._cfg = cfg;
@@ -760,6 +778,13 @@ class MqttBridge {
       counters: { ...this.counters, queue: { ...this._queue.stats } },
     };
     if (this._reconciler && typeof this._reconciler.stats === 'function') status.reconcile = this._reconciler.stats();
+    if (this._layoutSync && typeof this._layoutSync.stats === 'function') {
+      try {
+        status.layout_sync = this._layoutSync.stats();
+      } catch (_) {
+        /* istatistik hatasi durum raporunu bozmasin */
+      }
+    }
     return status;
   }
 
@@ -798,8 +823,85 @@ class MqttBridge {
     }
   }
 
+  // -- Yerlesim esitleme (WP-L, CONTRACTS §2.4b) --------------------------------------
+  /**
+   * Tembel olusturma (`_getReconciler` deseni). Kapatma anahtari: ENDPOINT_LAYOUT_SYNC = off / 0 / false
+   * (buyuk-kucuk harf duyarsiz, bosluk kirpilmis) ise servis OLUSTURULMAZ; enjekte edilen ornek bundan etkilenmez.
+   * Yuklenemezse / kurulamazsa kopru etkilenmez (bir kez uyarir, yeniden denemez).
+   */
+  _getLayoutSync() {
+    if (this._layoutClosed) return null; // end() sonrasi (gec teslim edilen mesaj) servis yeniden KURULMAZ
+    if (this._layoutSync) return this._layoutSync;
+    if (!this._layoutSyncEnabled) return null;
+    const raw = this.env.ENDPOINT_LAYOUT_SYNC;
+    const flag = raw === undefined || raw === null ? '' : String(raw).trim().toLowerCase();
+    if (flag === 'off' || flag === '0' || flag === 'false') return null;
+    try {
+      const { createEndpointLayoutSync } = require('./services/endpoint_layout_sync');
+      this._layoutSync = createEndpointLayoutSync({
+        db: this.db,
+        logger: this.logger,
+        now: this.now,
+        timers: this.timers,
+        QueueClass: KeyedWorkQueue,
+      });
+    } catch (err) {
+      this._layoutSyncEnabled = false; // yuklenemedi: kopru etkilenmez
+      this._warnOnce('layout-init', `Yerlesim esitleme baslatilamadi (devre disi): ${err && err.message ? err.message : 'bilinmiyor'}`);
+      return null;
+    }
+    return this._layoutSync;
+  }
+
+  /**
+   * Dogrulanmis state'in HAM yukunden panonun bildirdigi yerlesim (yoksa / supheliyse null). Esitleme kapaliysa
+   * cikarici HIC cagrilmaz. Hata YALITIMI: cikarma hatasi ana state yolunu etkilemez (yerlesim yok sayilir).
+   */
+  _extractLayout(obj) {
+    try {
+      if (this._layoutClosed || !this._getLayoutSync()) return null;
+      if (!this._layoutExtract) this._layoutExtract = require('./utils/endpoint_layout').extractReportedLayout;
+      return this._layoutExtract(obj);
+    } catch (err) {
+      // Yalniz hata turu: ileti yuk icerigi (ad) tasiyabilir.
+      this._warnOnce('layout-extract', `Yerlesim cikarma hatasi: ${err && err.name ? err.name : 'bilinmiyor'}`);
+      return null;
+    }
+  }
+
+  /**
+   * Hata YALITIMI: yerlesim esitleme kopruyu/mesaj isleme hattini asla bozmaz. Yalniz MEVCUT ornek kullanilir
+   * (burada olusturulmaz): end() sonrasi biten, onceden baslamis bir state isi yeni servis kurmaz.
+   * @param {'onLiveState'|'onOffline'} method
+   */
+  _notifyLayoutSync(method, arg) {
+    try {
+      const s = this._layoutSync;
+      if (s && typeof s[method] === 'function') s[method](arg);
+    } catch (err) {
+      // Yalniz hata turu: ileti ad / kimlik tasiyabilir.
+      this._warnOnce('layout-notify', `Yerlesim esitleme bildirimi hatasi: ${err && err.name ? err.name : 'bilinmiyor'}`);
+    }
+  }
+
+  /**
+   * Bir cihazin yerlesim esitleme onbellegini atar (genel; ornegin acil sifirlama satirlari yeniden tohumladiktan
+   * sonra device_service cagirir): ayni imzali sonraki canli state RECHECK beklenmeden yeniden kontrol edilir.
+   * Yalniz MEVCUT servis kullanilir (burada kurulmaz); servis yoksa no-op. En iyi caba: ASLA firlatmaz.
+   */
+  invalidateLayout(deviceId) {
+    try {
+      const s = this._layoutSync;
+      if (s && typeof s.invalidate === 'function') s.invalidate(deviceId);
+    } catch (err) {
+      // Yalniz hata turu: ileti kimlik tasiyabilir.
+      this._warnOnce('layout-invalidate', `Yerlesim onbellegi gecersizlestirilemedi: ${err && err.name ? err.name : 'bilinmiyor'}`);
+    }
+  }
+
   /** Zarif kapanis: sureci acik tutan tutamaclari birakir. */
   end({ force = false, timeoutMs = 3000 } = {}) {
+    this._layoutClosed = true; // gec teslim edilen mesaj yerlesim servisini yeniden kurmasin (init() sifirlar)
     this._stopSweeper();
     if (this._resubscribeTimer) {
       this.timers.clearTimeout(this._resubscribeTimer);
@@ -814,6 +916,15 @@ class MqttBridge {
       }
       // Tembel olusturulan ornek atilir: init() yeniden cagrilirsa taze (durdurulmamis) bir uzlastirici kurulur.
       if (!this._reconcilerInjected) this._reconciler = null;
+    }
+    if (this._layoutSync) {
+      try {
+        if (typeof this._layoutSync.stop === 'function') this._layoutSync.stop();
+      } catch (_) {
+        /* kapanis engellenmez */
+      }
+      // Tembel olusturulan ornek atilir: init() yeniden cagrilirsa (yeni mesajda) taze bir servis kurulur.
+      if (!this._layoutSyncInjected) this._layoutSync = null;
     }
     const client = this.client;
     this.client = null;
@@ -914,7 +1025,10 @@ class MqttBridge {
         );
       }
       this.counters.state++;
-      await this._queue.push(parsed.topicId, 'state', () => this._processState(parsed.topicId, check.value, retain), {
+      // Yerlesim (WP-L): dogrulama BASARILI olduktan sonra HAM yukten cikarilir (esitleme kapaliysa cikarilmaz).
+      // Kapanisa girer: kuyruk birlestirmesi en yeni mesajin degerini + yerlesimini birlikte kullanir.
+      const layout = this._layoutSyncEnabled ? this._extractLayout(obj) : null;
+      await this._queue.push(parsed.topicId, 'state', () => this._processState(parsed.topicId, check.value, retain, layout), {
         coalesce: true,
       });
     } catch (err) {
@@ -928,13 +1042,17 @@ class MqttBridge {
       await this.db.query(STATUS_UPDATE_SQL, [topicId, online, retain]);
       // Canli LWT/offline: cevrimici donem biter (retained 'offline' bayat olabilir: sayilmaz).
       if (!online && !retain && this._reconcileEnabled) this._notifyReconciler('onOffline', topicId);
+      // Yerlesim esitleme (WP-L): evin cihaz onbellegi atilir; yeni kimlikle donen pano ilk canli state'te hemen
+      // kontrol edilir (acil sifirlama / pano degisimi sonrasi tohum sablonu RECHECK_MS boyunca kalmasin).
+      if (!online && !retain) this._notifyLayoutSync('onOffline', topicId);
     } catch (err) {
       this.counters.dbErrors++;
       this._warnOnce('db-status', `Status guncelleme hatasi [${topicId}]: ${err.message}`);
     }
   }
 
-  async _processState(topicId, v, retain) {
+  /** @param {object|null} [layout]  extractReportedLayout sonucu (yerlesim esitleme kapali / yuk supheli ise null) */
+  async _processState(topicId, v, retain, layout = null) {
     try {
       const res = await this.db.query(RESOLVE_HOME_SQL, [topicId]);
       const rows = (res && res.rows) || [];
@@ -998,6 +1116,11 @@ class MqttBridge {
           intent: typeof pending === 'boolean' ? pending : null,
           reported: typeof v.childLock === 'boolean' ? v.childLock : null,
         });
+      }
+      // Yerlesim esitleme (WP-L): yalniz CANLI state + gecerli yerlesim; COMMIT sonrasi, hata yalitimli. Bayat
+      // retained mesaj satir degistirmez. (Canli state'te deviceUpdate her zaman dolu: yukaridaki erken donus atlamaz.)
+      if (!retain && layout) {
+        this._notifyLayoutSync('onLiveState', { topicId, homeId: device.home_id, deviceId: device.device_id, layout });
       }
     } catch (err) {
       this.counters.dbErrors++;
@@ -1165,8 +1288,9 @@ class MqttBridge {
   }
 }
 
-// Uretim tekili: cevrimici olunca uzlastirma ACIK (plan §5d-3). Testlerin kendi `new MqttBridge(...)` ornekleri KAPALI.
-const mqttBridge = new MqttBridge({ reconcile: true });
+// Uretim tekili: cevrimici olunca uzlastirma ACIK (plan §5d-3) + yerlesim esitleme ACIK (WP-L, CONTRACTS §2.4b;
+// ENDPOINT_LAYOUT_SYNC=off ile kapatilir). Testlerin kendi `new MqttBridge(...)` ornekleri KAPALI.
+const mqttBridge = new MqttBridge({ reconcile: true, layoutSync: true });
 
 module.exports = mqttBridge;
 module.exports.MqttBridge = MqttBridge;

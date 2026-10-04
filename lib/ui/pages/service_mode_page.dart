@@ -6,6 +6,13 @@ import 'package:provider/provider.dart';
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
 import '../common/confirm_dialogs.dart';
+import '../motion/staggered_entrance.dart';
+import '../theme/feature_accent.dart';
+import '../theme/tokens.dart';
+import '../widgets/neon_app_bar.dart';
+import '../widgets/settings/accent_button.dart';
+import '../widgets/orb/orb_icon_badge.dart';
+import 'service_setup/panel/service_glass.dart';
 import 'service_setup/device_link.dart';
 import 'service_setup/panel/emergency_reset_card.dart';
 import 'service_setup/panel/existing_devices_list.dart';
@@ -50,26 +57,82 @@ class ServiceModePage extends StatefulWidget {
   State<ServiceModePage> createState() => _ServiceModePageState();
 }
 
+/// [ServiceSetupAccess]'in karşılaştırılabilir özeti: sınıf `==` tanımlamadığı için `context.select` onu her
+/// bildirimde "değişti" sayardı; alanları kayıt olarak `==` ile karşılaştırılır.
+typedef _AccessKey = ({
+  SetupMode mode,
+  String ownerKey,
+  String technicianName,
+  bool isSuperUser,
+  String? sessionHomeId,
+  String? sessionHomeName,
+  DateTime? sessionExpiresAt,
+});
+
+/// Sayfa kökünün görünümünü belirleyen tüm değerler (`build` yalnızca bunlara bağlıdır).
+typedef _ModeView = ({bool authenticated, bool hasNotice, _AccessKey? access});
+
+_ModeView _modeViewOf(AutomationState s) {
+  final a = ServiceSetupAccess.fromState(s);
+  return (
+    authenticated: s.isAuthenticated,
+    hasNotice: s.sessionNotice != null,
+    access: a == null
+        ? null
+        : (
+            mode: a.mode,
+            ownerKey: a.ownerKey,
+            technicianName: a.technicianName,
+            isSuperUser: a.isSuperUser,
+            sessionHomeId: a.sessionHomeId,
+            sessionHomeName: a.sessionHomeName,
+            sessionExpiresAt: a.sessionExpiresAt,
+          ),
+  );
+}
+
+ServiceSetupAccess _accessFrom(_AccessKey k) => ServiceSetupAccess(
+      mode: k.mode,
+      ownerKey: k.ownerKey,
+      technicianName: k.technicianName,
+      isSuperUser: k.isSuperUser,
+      sessionHomeId: k.sessionHomeId,
+      sessionHomeName: k.sessionHomeName,
+      sessionExpiresAt: k.sessionExpiresAt,
+    );
+
 class _ServiceModePageState extends State<ServiceModePage> {
   int _reload = 0;
+
+  /// Sihirbaz rotası açılırken/açıkken yeniden giriş engellenir (PF-47): aynı kare içinde gelen ikinci
+  /// etkinleştirme (erişilebilirlik eylemi, klavye Enter tekrarı) ikinci bir sihirbaz rotası açmasın. İkinci rota
+  /// aynı cihaz kaydıyla ikinci bir denetleyici (çift zamanlayıcı, `SetupStore.save` yarışı, çift komut) demektir.
+  /// Rota kapanınca (`finally`) bırakılır.
+  bool _opening = false;
 
   Future<void> _openWizard({
     SetupProgressRecord? resume,
     ServiceTarget? existing,
     int? startStep,
   }) async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => ServiceSetupWizardPage(
-          resume: resume,
-          existingTarget: existing,
-          startStep: startStep,
-          store: widget.store,
-          deviceApiFactory: widget.deviceApiFactory,
-          scanner: widget.scanner,
+    if (_opening) return;
+    _opening = true;
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => ServiceSetupWizardPage(
+            resume: resume,
+            existingTarget: existing,
+            startStep: startStep,
+            store: widget.store,
+            deviceApiFactory: widget.deviceApiFactory,
+            scanner: widget.scanner,
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _opening = false;
+    }
     if (mounted) setState(() => _reload++);
   }
 
@@ -79,26 +142,29 @@ class _ServiceModePageState extends State<ServiceModePage> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AutomationState>();
-    final access = ServiceSetupAccess.fromState(state);
+    // Sayfa kökü tüm durumu izlemez (PF-06): yalnızca görünümü belirleyen değerler seçilir; her bildirimde
+    // (çevrimiçi/çevrimdışı geçişleri, durum yenilemeleri) sayfa yeniden kurulmaz. Kartlar kendi değerlerini
+    // kendileri seçer.
+    final view = context.select<AutomationState, _ModeView>(_modeViewOf);
+    final state = context.read<AutomationState>();
+    final accessKey = view.access;
+    final access = accessKey == null ? null : _accessFrom(accessKey);
+    // Scaffold arka planı temadan saydam gelir: küresel `CircuitBackground` (AppShell) görünür; opak zemin onu örter ve
+    // aynı akışta sayfa değişince zemin "devre kartlı"dan "düz lacivert"e atlardı (PF-15 c).
     return Scaffold(
-      backgroundColor: SetupColors.background(context),
-      appBar: AppBar(
-        title: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Servis Paneli', key: Key('nav_service_title'), style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text('Kurulum, test ve yönetim', style: TextStyle(fontSize: 11.5)),
-          ],
-        ),
+      appBar: const NeonAppBar(
+        title: 'Servis Paneli',
+        titleKey: Key('nav_service_title'),
+        subtitle: 'Kurulum, test ve yönetim',
+        feature: AppFeature.commissioning,
+        icon: Icons.engineering_rounded,
       ),
-      body: SafeArea(child: _body(context, state, access)),
+      body: SafeArea(child: _body(context, state, view, access)),
     );
   }
 
-  Widget _body(BuildContext context, AutomationState state, ServiceSetupAccess? access) {
-    if (!state.isAuthenticated && state.sessionNotice != null) {
+  Widget _body(BuildContext context, AutomationState state, _ModeView view, ServiceSetupAccess? access) {
+    if (!view.authenticated && view.hasNotice) {
       // Oturum bitmiş olsa da Wi-Fi kurulum sihirbazı girişsiz çalışır (Aşama 16.1).
       return SessionExpiredPanel(
         onBackToLogin: _backToLogin,
@@ -106,7 +172,7 @@ class _ServiceModePageState extends State<ServiceModePage> {
       );
     }
     if (access == null) {
-      return _LoginView(denied: state.isAuthenticated, deviceApiFactory: widget.deviceApiFactory);
+      return _LoginView(denied: view.authenticated, deviceApiFactory: widget.deviceApiFactory);
     }
     return _Panel(
       state: state,
@@ -141,7 +207,7 @@ class _LoginView extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (denied)
-                const SetupCard(
+                const ServiceCard(
                   key: Key('service_denied'),
                   accent: SetupColors.warn,
                   margin: EdgeInsets.only(bottom: 12),
@@ -154,11 +220,18 @@ class _LoginView extends StatelessWidget {
                   ),
                 ),
               const ServicePinLoginCard(),
-              const SizedBox(height: 12),
-              Text(
-                'Kalıcı servis hesabınız varsa uygulamadan çıkış yapıp e-posta ve parolanızla giriş ekranından girin.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 12.5, height: 1.35, color: SetupColors.muted(context)),
+              // Açıklama cam kartın içinde (eskiden kartsız, doğrudan devre kartı zemininde duran 12.5 sp metin açık temada iz
+              // çizgileri ve lehim noktalarıyla iç içe geçiyordu). 'e-posta' bölünmez tireyle (U+2011) yazılır: satır sonunda
+              // "e-" / "posta" diye ayrılmaz.
+              ServiceCard(
+                key: const Key('service_login_hint'),
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpace.s16, vertical: AppSpace.s12),
+                child: Text(
+                  'Kalıcı servis hesabınız varsa uygulamadan çıkış yapıp e‑posta ve parolanızla giriş ekranından girin.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: AppText.caption, height: 1.35, color: SetupColors.muted(context)),
+                ),
               ),
               // Pano Wi-Fi & Modem Kurulumu: giriş yapılmamış olsa da görünür ve çalışır (Aşama 16.1).
               WifiSetupCard(margin: const EdgeInsets.only(top: 20), deviceApiFactory: deviceApiFactory),
@@ -218,7 +291,8 @@ class _Panel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final caps = state.capabilities;
+    // Yalnızca acil sıfırlama kartının görünürlüğü yetkiye bağlıdır (PF-06): tüm durumu izlemek yerine tek bayrak.
+    final canEmergencyReset = context.select<AutomationState, bool>((s) => s.capabilities.canEmergencyReset);
     return RefreshIndicator(
       onRefresh: () => _refresh(context),
       child: ListView(
@@ -227,23 +301,34 @@ class _Panel extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
           const ServiceSessionBanner(),
-          SetupCard(
+          StaggeredEntrance(
+            index: 0,
+            child: ServiceCard(
             accent: SetupColors.primary,
+            active: true,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Yeni Kurulum',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                Row(
+                  children: [
+                    const OrbIconBadge(icon: Icons.rocket_launch_rounded, family: AppFamilies.sky),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Yeni Kurulum',
+                        style: TextStyle(fontSize: AppText.title, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 10),
                 Text(
                   access.isPinSession
                       ? 'Bu dairenin panosunu adım adım kurun ve test edin. Her adım gerçek cihaz ve sunucu '
                           'yanıtıyla doğrulanır.'
                       : 'Yeni bir panoyu tanıyın, müşteriye bağlayın ve adım adım kurup test edin. Her adım '
                           'gerçek cihaz ve sunucu yanıtıyla doğrulanır.',
-                  style: TextStyle(fontSize: 13.5, height: 1.4, color: SetupColors.muted(context)),
+                  style: TextStyle(fontSize: AppText.body, height: 1.4, color: SetupColors.muted(context)),
                 ),
                 if (access.isPinSession)
                   Padding(
@@ -252,7 +337,7 @@ class _Panel extends StatelessWidget {
                       'Geçici servis oturumunda cihazı müşteriye bağlama (claim) yapılamaz; yalnızca bu dairedeki '
                       'panoda çalışabilirsiniz.',
                       key: const Key('pin_session_note'),
-                      style: TextStyle(fontSize: 12.5, height: 1.35, color: SetupColors.muted(context)),
+                      style: TextStyle(fontSize: AppText.caption, height: 1.35, color: SetupColors.muted(context)),
                     ),
                   ),
                 const SizedBox(height: 12),
@@ -264,8 +349,9 @@ class _Panel extends StatelessWidget {
                 ),
               ],
             ),
+            ),
           ),
-          WifiSetupCard(deviceApiFactory: deviceApiFactory),
+          StaggeredEntrance(index: 1, child: WifiSetupCard(deviceApiFactory: deviceApiFactory)),
           SetupResumeList(
             key: ValueKey<int>(reload),
             access: access,
@@ -276,7 +362,7 @@ class _Panel extends StatelessWidget {
             onOpen: (target, step) => onOpenWizard(existing: target, startStep: step),
           ),
           ServiceToolCards(scanner: scanner),
-          if (caps.canEmergencyReset) ...[
+          if (canEmergencyReset) ...[
             const SetupSectionTitle('Acil durum'),
             const SizedBox(height: 8),
             EmergencyResetCard(scanner: scanner),
@@ -285,13 +371,10 @@ class _Panel extends StatelessWidget {
           OutlinedButton.icon(
             key: const Key('btn_service_logout'),
             onPressed: () => unawaited(confirmAndLogout(context, state)),
-            icon: const Icon(Icons.logout_rounded, color: SetupColors.error),
+            icon: Icon(Icons.logout_rounded, size: accentIconSize(context, base: 20)),
             label: Text(access.isPinSession ? 'Servis Oturumunu Kapat' : 'Çıkış Yap'),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(52),
-              foregroundColor: SetupColors.error,
-              side: const BorderSide(color: SetupColors.error),
-            ),
+            // Çerçeve + metin + simge AYNI aileden ve AA (ham kırmızı koyu temada ≈ 3.8:1'di); şekil/boyut temadan.
+            style: accentOutlinedButtonStyle(context, AppFamilies.rose),
           ),
         ],
       ),

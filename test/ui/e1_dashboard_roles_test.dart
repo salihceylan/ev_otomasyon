@@ -1,4 +1,5 @@
 import 'package:ev_otomasyon/ui/pages/dashboard_page.dart';
+import 'package:ev_otomasyon/ui/pages/family/family_members_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -70,21 +71,47 @@ void main() {
       expectNav({'nav_settings', 'nav_mode', 'nav_refresh', 'nav_login'});
     });
 
-    testWidgets('dar ekranda ikincil girdiler "Diğer" menüsüne girer ve oradan erişilir', (tester) async {
+    testWidgets('dar telefonda (360 dp) ikincil girdiler VE aile yönetimi "Diğer" menüsüne girer ve oradan erişilir',
+        (tester) async {
       await pumpReady(tester, const DashboardPage(), role: 'owner', size: const Size(360, 800));
-      // Birincil simgeler görünür.
+      // Birincil simgeler görünür: karekod, ayarlar, profil (çubukta en çok 2 birincil disk + ⋮ + avatar:
+      // 5 disk başlığı eziyor, ev adı 'E…' kalıyordu).
       expect(byKeyName('nav_qr'), findsOneWidget);
       expect(byKeyName('nav_settings'), findsOneWidget);
-      expect(byKeyName('nav_family'), findsOneWidget);
       expect(byKeyName('nav_profile'), findsOneWidget);
-      // İkincil girdiler menüde.
+      // İkincil girdiler (telefonda aile yönetimi dahil) menüde.
+      expect(byKeyName('nav_family'), findsNothing);
       expect(byKeyName('nav_mode'), findsNothing);
       expect(byKeyName('nav_overflow'), findsOneWidget);
       await tester.tap(byKeyName('nav_overflow'));
       await tester.pumpAndSettle();
+      expect(byKeyName('nav_family'), findsOneWidget);
       expect(byKeyName('nav_mode'), findsOneWidget);
       expect(byKeyName('nav_doctor'), findsOneWidget);
       expect(byKeyName('nav_refresh'), findsOneWidget);
+    });
+
+    testWidgets('menüdeki "Aile & Misafir Yönetimi" girdisi ilgili sayfayı açar (dar telefon)', (tester) async {
+      await pumpReady(tester, const DashboardPage(), role: 'owner', size: const Size(360, 800));
+      await tester.tap(byKeyName('nav_overflow'));
+      await tester.pumpAndSettle();
+      await tester.tap(byKeyName('nav_family'));
+      await tester.pumpAndSettle();
+      expect(find.byType(FamilyMembersPage), findsOneWidget);
+    });
+
+    testWidgets('geniş telefonda (412 dp) aile yönetimi hâlâ çubukta (3 birincil disk); mod/doktor/yenile menüde',
+        (tester) async {
+      await pumpReady(tester, const DashboardPage(), role: 'owner', size: const Size(412, 800));
+      for (final name in ['nav_qr', 'nav_settings', 'nav_family', 'nav_profile', 'nav_overflow']) {
+        expect(byKeyName(name), findsOneWidget, reason: name);
+      }
+      expect(byKeyName('nav_mode'), findsNothing);
+      await tester.tap(byKeyName('nav_overflow'));
+      await tester.pumpAndSettle();
+      for (final name in ['nav_mode', 'nav_doctor', 'nav_refresh']) {
+        expect(byKeyName(name), findsOneWidget, reason: name);
+      }
     });
   });
 

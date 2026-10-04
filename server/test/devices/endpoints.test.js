@@ -170,6 +170,150 @@ test('tip yalnizca light<->plug degisir; panjur/darbe tipi DB\'den degistirileme
   assert.strictEqual(ctx.ep(1).type, 'shutter');
 });
 
+// ------------------------------------------------------------------------------------------------
+// D12: PUT yarisi (kilitsiz okuma -> esitleme kanali degistirir) + sure yolunda kanal sirasinda kilit
+// ------------------------------------------------------------------------------------------------
+
+const TYPE_CHANGED = 'Kanal tipi değişti; listeyi yenileyin.';
+
+/** Kilitsiz okuma (JOIN homes) dondukten hemen sonra `afterRead` calisir (esitlemenin araya girmesi). */
+function raceAfterRead(ctx, afterRead) {
+  const original = ctx.world.db._exec.bind(ctx.world.db);
+  let fired = false;
+  ctx.world.db._exec = async (tx, text, params) => {
+    const sql = norm(text);
+    // Gercek PG'deki WHERE kosulunu taklit et: tip kosulu SQL'de varsa ve satir artik light/plug degilse 0 satir.
+    if (sql.startsWith('UPDATE endpoints SET name = COALESCE($1, name)') && sql.includes("type IN ('light', 'plug')") && params[2] !== null) {
+      const row = ctx.world.state.endpoints.find((e) => e.id === params[3] && e.home_id === params[4]);
+      if (row && !['light', 'plug'].includes(row.type)) return { rows: [], rowCount: 0 };
+    }
+    const out = await original(tx, text, params);
+    if (!fired && sql.includes('FROM endpoints e JOIN devices d ON d.id = e.device_id JOIN homes h')) {
+      fired = true;
+      afterRead();
+    }
+    return out;
+  };
+}
+
+test('D12 tip yarisi: kilitsiz okumadan sonra kanal panjur olursa PUT {type:plug} 409 CONFLICT; satir plug OLMAZ, ad/oda korunur', async () => {
+  const ctx = setup();
+  const target = ctx.ep(5);
+  raceAfterRead(ctx, () => Object.assign(target, { type: 'shutter', shutter_pair_index: 3, shutter_duration_sec: 20 }));
+  const err = await expectHttp(ctx.update(target, { type: 'plug', name: 'Salon Priz' }), 409, 'CONFLICT');
+  assert.strictEqual(err.message, TYPE_CHANGED);
+  assert.strictEqual(target.type, 'shutter', 'panjur satirina plug yazilmamali');
+  assert.strictEqual(target.shutter_pair_index, 3);
+  assert.strictEqual(target.name, 'Salon Aydınlatma', 'ayni islemde ad da yazilmaz (geri alinir)');
+});
+
+test('D12 tip yarisi: ayni tip (light) bile kosullu yazilir; satir panjur olduysa 409 ve tip light OLMAZ', async () => {
+  const ctx = setup();
+  const target = ctx.ep(6);
+  raceAfterRead(ctx, () => Object.assign(target, { type: 'shutter', shutter_pair_index: 3, shutter_duration_sec: 20 }));
+  await expectHttp(ctx.update(target, { type: 'light', room: 'Mutfak 2' }), 409, 'CONFLICT');
+  assert.strictEqual(target.type, 'shutter');
+  assert.strictEqual(target.room, 'Mutfak', 'oda da yazilmaz');
+});
+
+test('D12: panjur satirinda ayni tip (shutter) + ad -> tip YAZILMAZ (NULL), ad yazilir; tipsiz ad/oda guncellemesi kosulsuz', async () => {
+  const ctx = setup();
+  const seen = [];
+  const original = ctx.world.db._exec.bind(ctx.world.db);
+  ctx.world.db._exec = (tx, text, params) => {
+    if (norm(text).startsWith('UPDATE endpoints SET name = COALESCE($1, name)')) seen.push(params[2]);
+    return original(tx, text, params);
+  };
+  const r = await ctx.update(ctx.ep(1), { name: 'Salon Panjuru', type: 'shutter' });
+  assert.strictEqual(r.name, 'Salon Panjuru');
+  assert.strictEqual(r.type, 'shutter');
+  const r2 = await ctx.update(ctx.ep(3), { room: 'Yatak Odasi' });
+  assert.strictEqual(r2.room, 'Yatak Odasi');
+  assert.deepStrictEqual(seen, [null, null], 'kozmetik olmayan tip UPDATE parametresine gecmez');
+});
+
+test('D12 sure yolu: transaction BASINDA cihazin satirlari kanal sirasinda FOR UPDATE kilitlenir; UPDATE\'ler kilitten sonra', async () => {
+  const ctx = setup();
+  await ctx.update(ctx.ep(2), { shutter_duration_sec: 30, name: 'Salon Asagi' });
+  const txQueries = ctx.world.db.log.filter((l) => l.tx !== null);
+  assert.ok(txQueries.length >= 3);
+  const first = txQueries[0];
+  assert.match(first.sql, /^SELECT .* FROM endpoints WHERE home_id = \$1 AND device_id = \$2 ORDER BY channel_index ASC FOR UPDATE$/);
+  assert.deepStrictEqual(first.params, [ctx.home.id, ctx.dev.id]);
+  assert.strictEqual(ctx.ep(1).shutter_duration_sec, 30);
+  assert.strictEqual(ctx.ep(2).shutter_duration_sec, 30);
+  assert.strictEqual(ctx.ep(2).name, 'Salon Asagi');
+});
+
+test('D12 sure yolu: her satir transaction\'da EN COK BIR KEZ guncellenir (hedef: ad+sure tek UPDATE; cift UPDATE hedefi disarida birakir)', async () => {
+  // Ayni satirin ikinci UPDATE'i (xmin = bu islem) PG'de FK yeniden denetimini (devices/homes FOR KEY SHARE) tetikler;
+  // esitleme devices FOR UPDATE tutup kanal kilidinde beklerken bu 40P01 dongusu kurar (gercek PG: endpoints_pg (b)).
+  const ctx = setup();
+  await ctx.update(ctx.ep(2), { shutter_duration_sec: 32, name: 'Salon Asagi' });
+  const ups = ctx.world.db.log.filter((l) => l.tx !== null && l.sql.startsWith('UPDATE endpoints'));
+  assert.strictEqual(ups.length, 2);
+  assert.ok(ups[0].sql.startsWith('UPDATE endpoints SET name = COALESCE($1, name)'));
+  assert.match(ups[0].sql, /shutter_duration_sec = COALESCE\(\$6::int, shutter_duration_sec\)/);
+  assert.strictEqual(ups[0].params[5], 32, 'hedefin suresi ilk UPDATE ile yazilir');
+  assert.ok(ups[1].sql.startsWith('UPDATE endpoints SET shutter_duration_sec = $1'));
+  assert.match(ups[1].sql, /AND id <> \$5$/);
+  assert.strictEqual(ups[1].params[4], ctx.ep(2).id, 'cift UPDATE hedef satiri ikinci kez yazmaz');
+  // ad/oda/tip yolunda sure parametresi NULL (sure kolonuna dokunulmaz)
+  await ctx.update(ctx.ep(5), { name: 'Avize' });
+  const last = ctx.world.db.log.filter((l) => l.sql.startsWith('UPDATE endpoints SET name')).at(-1);
+  assert.strictEqual(last.params[5], null);
+  assert.strictEqual(ctx.ep(5).shutter_duration_sec, null);
+});
+
+test('D12: ad/oda/tip guncellemesinde kilit sorgusu YOK (tek satir UPDATE)', async () => {
+  const ctx = setup();
+  await ctx.update(ctx.ep(5), { name: 'Avize', type: 'plug' });
+  assert.strictEqual(ctx.world.db.log.filter((l) => l.sql.includes('FOR UPDATE')).length, 0);
+});
+
+test('D12 sure yolu yarisi: yayindan sonra kanal panjur olmaktan cikarsa 409 CONFLICT; DB (sure + ad) DEGISMEZ', async () => {
+  const ctx = setup();
+  const target = ctx.ep(1);
+  const mate = ctx.ep(2);
+  raceAfterRead(ctx, () => {
+    Object.assign(target, { type: 'light', shutter_pair_index: null, shutter_duration_sec: null });
+    Object.assign(mate, { type: 'light', shutter_pair_index: null, shutter_duration_sec: null });
+  });
+  const err = await expectHttp(ctx.update(target, { shutter_duration_sec: 33, name: 'X' }), 409, 'CONFLICT');
+  assert.strictEqual(err.message, TYPE_CHANGED);
+  assert.strictEqual(ctx.bridge.commands.length, 1, 'yayin transaction oncesi yapildi (tasarim: yayin once, DB sonra)');
+  assert.strictEqual(target.name, 'Salon Panjur Yukarı');
+  assert.strictEqual(target.shutter_duration_sec, null);
+  assert.strictEqual(mate.shutter_duration_sec, null);
+});
+
+test('D12 sure yolu yarisi: cift numarasi degisirse (hedef artik baska ciftte) 409; hicbir satira sure yazilmaz', async () => {
+  const ctx = setup();
+  const target = ctx.ep(3);
+  raceAfterRead(ctx, () => {
+    // esitleme benzeri: kanal 3-4 artik cift 1 olarak numaralandi (eski cift 2 yok)
+    Object.assign(target, { shutter_pair_index: 1 });
+    Object.assign(ctx.ep(4), { shutter_pair_index: 1 });
+  });
+  await expectHttp(ctx.update(target, { shutter_duration_sec: 44 }), 409, 'CONFLICT');
+  assert.ok(ctx.eps.every((e) => e.shutter_duration_sec !== 44));
+});
+
+test('D12 sure yolu yarisi: ciftin diger yonu panjur olmaktan cikarsa (cift bozuk) 409', async () => {
+  const ctx = setup();
+  raceAfterRead(ctx, () => Object.assign(ctx.ep(2), { type: 'light', shutter_pair_index: null, shutter_duration_sec: null }));
+  await expectHttp(ctx.update(ctx.ep(1), { shutter_duration_sec: 45 }), 409, 'CONFLICT');
+  assert.strictEqual(ctx.ep(1).shutter_duration_sec, 20);
+});
+
+test('D12 sure yolu yarisi: satir silinirse (kuculme) 409; baska satira yazilmaz', async () => {
+  const ctx = setup();
+  const target = ctx.ep(3);
+  raceAfterRead(ctx, () => ctx.world.state.endpoints.splice(ctx.world.state.endpoints.indexOf(target), 1));
+  await expectHttp(ctx.update(target, { shutter_duration_sec: 46 }), 409, 'CONFLICT');
+  assert.strictEqual(ctx.ep(4).shutter_duration_sec, 20);
+});
+
 test('klemens eslemesi alanlari (channel, channel_index, device_id, shutter_pair_index) degistirilemez', async () => {
   const ctx = setup();
   for (const field of ['channel', 'channel_index', 'device_id', 'shutter_pair_index']) {

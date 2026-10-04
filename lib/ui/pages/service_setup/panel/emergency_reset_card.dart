@@ -18,9 +18,14 @@ import '../service_target.dart';
 import '../setup_fields.dart';
 import '../setup_steps.dart';
 import '../setup_style.dart';
+import '../../../theme/tokens.dart';
+import '../../../widgets/orb/orb_core.dart';
+import '../../../widgets/orb/orb_icon_badge.dart';
+import 'service_glass.dart';
 import '../setup_widgets.dart';
 import '../steps/step_common.dart';
 import 'uncertain_outcome_card.dart';
+import '../../../theme/feature_accent.dart';
 
 /// Acil servis sıfırlaması (yalnızca süper yönetici ve kalıcı servis personeli).
 ///
@@ -253,7 +258,7 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
   @override
   Widget build(BuildContext context) {
     final muted = SetupColors.muted(context);
-    return SetupCard(
+    return ServiceCard(
       key: const Key('card_emergency_reset'),
       accent: SetupColors.error,
       margin: EdgeInsets.zero,
@@ -262,13 +267,13 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded, color: SetupColors.error, size: 22),
-              const SizedBox(width: 8),
+              OrbIconBadge(icon: Icons.warning_amber_rounded, family: AppFeature.emergencyReset.accentFamily, pending: _busy),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Acil Servis Sıfırlaması',
                   style: TextStyle(
-                    fontSize: 15,
+                    fontSize: AppText.cardTitle,
                     fontWeight: FontWeight.w800,
                     color: SetupColors.readable(context, SetupColors.error),
                   ),
@@ -276,20 +281,22 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             'Eski kiracıya/ev sahibine ulaşılamıyorsa; tapu veya sözleşme ibrazıyla cihazı boşa çıkarın ya da '
             'doğrudan yeni malike devredin. Eski ailenin tüm yetkileri sonlanır. Bu işlem denetim kaydına yazılır.',
-            style: TextStyle(fontSize: 12.5, height: 1.35, color: muted),
+            style: TextStyle(fontSize: AppText.caption, height: 1.35, color: muted),
           ),
           SetupTextField(
             key: const Key('field_reset_uid'),
             controller: _uid,
-            label: 'Cihaz kimliği (pano etiketi)',
+            label: 'Cihaz kimliği',
             hint: 'AHBU-...',
+            helperText: 'Pano etiketindeki kimlik',
             errorText: _uidError,
             textCapitalization: TextCapitalization.characters,
-            prefixIcon: Icons.qr_code_rounded,
+            // Ön ek simgesi sondaki tarama simgesinden FARKLI (eskiden iki neredeyse aynı QR simgesi yan yanaydı).
+            prefixIcon: Icons.memory_rounded,
             monospace: true,
             enabled: !_busy,
             onChanged: _onUidChanged,
@@ -303,27 +310,31 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
           SetupTextField(
             key: const Key('field_reset_reason'),
             controller: _reason,
-            label: 'Sıfırlama gerekçesi (en az ${EmergencyResetCard.minReasonLength} karakter)',
+            // Zorunluluk bilgisi etikette (kesilirdi) değil yardımcı metinde: "12 / 15 karakter (en az)".
+            label: 'Sıfırlama gerekçesi',
             hint: 'Örn: Kiracı tahliye edildi, tapu teyit edildi.',
             errorText: _reasonError,
-            prefixIcon: Icons.description_outlined,
+            prefixIcon: Icons.description_rounded,
             maxLines: 2,
             enabled: !_busy,
             onChanged: (_) => setState(() {}),
-            helperText: '${_reason.text.trim().length} / ${EmergencyResetCard.minReasonLength}',
+            helperText: '${_reason.text.trim().length} / ${EmergencyResetCard.minReasonLength} karakter (en az)',
           ),
           SetupTextField(
             key: const Key('field_reset_owner'),
             controller: _owner,
-            label: 'Yeni sahip e-posta / telefon (isteğe bağlı)',
-            hint: 'Boş bırakılırsa cihaz stoğa alınır',
+            // Kısa etiket: eski "Yeni sahip e-posta veya telefon" 1.5 ölçekte yüzen etiket olarak "Yeni sahip e-posta veya t…"
+            // diye kesiliyor, alanın telefon da kabul ettiği bilgisi kayboluyordu. Niteleyici ipucuna, açıklama yardımcı metne.
+            label: 'Yeni sahip',
+            hint: 'E-posta veya telefon',
+            helperText: 'İsteğe bağlı: boş bırakırsanız cihaz stoğa alınır',
             errorText: _ownerError,
             keyboardType: TextInputType.emailAddress,
-            prefixIcon: Icons.person_outline_rounded,
+            prefixIcon: Icons.person_rounded,
             enabled: !_busy,
           ),
           if (_error != null)
-            SetupCard(
+            ServiceCard(
               key: const Key('reset_error'),
               accent: SetupColors.error,
               margin: const EdgeInsets.only(top: 12),
@@ -342,15 +353,29 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
               checkResult: _checkResult,
             ),
           const SizedBox(height: 14),
-          SetupPrimaryButton(
+          // Yıkıcı eylem ÇERÇEVELİ rose hap: servis panelinde sayfanın TEK gradyan birincil eylemi "Yeni Kurulum Başlat"tır (eskiden
+          // sayfa sonundaki gradyanlı kırmızı düğme ikinci kahraman gibi okunuyordu). Eylem zaten cihaz kimliği YAZILARAK
+          // onaylanır ([ConfirmDestructiveDialog]: orada yıkıcı dolu düğme vardır), yani hafif görünmesi güvenliği azaltmaz.
+          SetupSecondaryButton(
             key: const Key('btn_emergency_reset'),
             label: 'Acil Sıfırla',
             icon: Icons.restore_rounded,
-            color: SetupColors.error,
+            family: AppFamilies.rose,
             busy: _busy,
             // Sonucu belirsiz kalan işlem durum kontrol edilmeden yinelenemez (cihaz kimliği değişirse kilit kalkar).
             onPressed: _uncertainUid != null ? null : _submit,
           ),
+          // Düğmenin neden kilitli olduğu düğmenin ALTINDA yazar (eskiden yalnız yukarıdaki kartta anlatılırdı).
+          if (_uncertainUid != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Sonuç doğrulanana kadar sıfırlama kilitli: önce cihazın durumunu kontrol edin.',
+                key: const Key('reset_locked_hint'),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: AppText.caption, height: 1.3, color: muted),
+              ),
+            ),
         ],
       ),
     );
@@ -380,6 +405,7 @@ class EmergencyResetResultDialog extends StatefulWidget {
 
 class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog> {
   String? _copied;
+  int _copyCount = 0;
 
   @override
   void dispose() {
@@ -390,7 +416,12 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
   Future<void> _copy(String label, String value) async {
     final clock = context.read<AutomationState>().clock;
     await SecretClipboard.copy(value, clock: clock);
-    if (mounted) setState(() => _copied = label);
+    if (mounted) {
+      setState(() {
+        _copied = label;
+        _copyCount++;
+      });
+    }
   }
 
   String _headline(EmergencyResetResult r) {
@@ -426,11 +457,13 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
     return AlertDialog(
       title: Row(
         children: [
-          Icon(
-            r.hasWarnings ? Icons.warning_amber_rounded : Icons.check_circle_rounded,
-            color: r.hasWarnings ? SetupColors.warn : SetupColors.ok,
+          OrbIconBadge(
+            icon: r.hasWarnings ? Icons.warning_amber_rounded : Icons.check_rounded,
+            family: r.hasWarnings ? AppFamilies.amber : AppFamilies.emerald,
+            status: r.hasWarnings ? OrbStatus.none : OrbStatus.success,
+            glow: true,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 12),
           Expanded(
             child: Text(
               r.hasWarnings ? 'Sıfırlama kısmen tamamlandı' : 'Sıfırlama tamamlandı',
@@ -446,17 +479,17 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(_headline(r), style: TextStyle(fontSize: 14.5, height: 1.4, color: SetupColors.text(context))),
+              Text(_headline(r), style: TextStyle(fontSize: AppText.body, height: 1.4, color: SetupColors.text(context))),
               if (r.affectedUsersCount > 0)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),
                   child: Text(
                     'Eski daireden ${r.affectedUsersCount} kullanıcının erişimi kaldırıldı.',
-                    style: TextStyle(fontSize: 13, color: SetupColors.muted(context)),
+                    style: TextStyle(fontSize: AppText.caption, color: SetupColors.muted(context)),
                   ),
                 ),
               if (r.partial)
-                const SetupCard(
+                const ServiceCard(
                   key: Key('reset_partial'),
                   accent: SetupColors.warn,
                   child: SetupInfoRow(
@@ -475,7 +508,7 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                 ),
               for (final note in notes) SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.warn, text: note),
               if (shownPin != null || r.localKey != null)
-                const SetupCard(
+                const ServiceCard(
                   key: Key('reset_secret_warning'),
                   accent: SetupColors.warn,
                   child: SetupInfoRow(
@@ -491,6 +524,7 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                   label: 'Yeni kurulum PIN',
                   shown: shownPin,
                   copyKey: const Key('btn_copy_reset_pin'),
+                  showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
                   onCopy: () => _copy('Kurulum PIN', pin!),
                 ),
               if (r.needsManualLocalKey) ...[
@@ -498,6 +532,7 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                   label: 'Yerel anahtar (panoya iletilemedi)',
                   shown: r.localKey!,
                   copyKey: const Key('btn_copy_reset_key'),
+                  showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
                   onCopy: () => _copy('Yerel anahtar', r.localKey!),
                 ),
                 Padding(
@@ -509,7 +544,7 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                 ),
               ],
               if (canOpenWizard)
-                const SetupCard(
+                const ServiceCard(
                   key: Key('reset_next_step'),
                   accent: SetupColors.info,
                   child: SetupInfoRow(
@@ -521,11 +556,19 @@ class _EmergencyResetResultDialogState extends State<EmergencyResetResultDialog>
                 ),
               if (_copied != null)
                 Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    '$_copied panoya kopyalandı (45 sn sonra silinir).',
-                    key: const Key('reset_copied'),
-                    style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      SecretExpiryRing(key: ValueKey<int>(_copyCount)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '$_copied panoya kopyalandı (45 sn sonra silinir).',
+                          key: const Key('reset_copied'),
+                          style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
             ],

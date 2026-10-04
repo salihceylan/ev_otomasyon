@@ -1,11 +1,17 @@
 import 'package:ev_otomasyon/services/automation_api_service.dart';
+import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/logic/button_logic.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/logic/relay_logic.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_controller.dart';
+import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_wizard_page.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/setup_steps.dart';
+import 'package:ev_otomasyon/ui/pages/service_setup/setup_store.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
 
 import 'f_support.dart';
+import 'f_widget_support.dart';
 
 /// Servis kurulum denetleyicisini (WP-F) belirli bir adıma **gerçek sunucu/pano yanıtlarıyla** götüren
 /// yardımcılar. Her yardımcı, önceki adımın geçiş koşulunu gerçekten sağlar (hiçbir şey zorlanmaz).
@@ -147,4 +153,73 @@ Future<ServiceSetupController> reachStep(ServiceHarness env, int step) async {
   await completeButtons(env, c);
   await waitUntil(env, () => !c.handover.busy);
   return c;
+}
+
+// -----------------------------------------------------------------------------
+// Widget testleri: sihirbazı kayıttan devam kipinde belirli bir adımda açma
+// -----------------------------------------------------------------------------
+
+/// Sihirbazı **kayıttan devam** kipinde [step] adımında açar (claim edilmiş cihaz; telefon ev Wi-Fi ağında, pano
+/// ev ağındaki [kLanIp] adresinde, ev Wi-Fi'sine bağlı ve bulut kimliği yazılı). Başlatıcı sayfa `launcher`
+/// anahtarını taşır; sihirbaz kapanınca ona dönülür.
+///
+/// [data]: kaydın adım verisi (örn. `{'8': {'shutters': {'1': {'dir': true}}}}`: 1. panjurun yönü onaylı).
+/// Widget testlerinde `serviceHarness(flush: () async {})` ile kurulan [env] verilir ve `runAsync` KULLANILMAZ.
+Future<void> openWizardResumedAt(
+  WidgetTester tester,
+  ServiceHarness env,
+  int step, {
+  Map<String, dynamic> data = const <String, dynamic>{},
+  Size size = const Size(900, 2800),
+}) async {
+  env.cloud.seedClaimed();
+  env.device
+    ..wifiConnected = true
+    ..staIp = kLanIp
+    ..mqttConfigured = true
+    ..mqttConnected = true;
+  env.phoneOnHomeNetwork();
+  final now = env.clock.now();
+  final record = SetupProgressRecord(
+    ownerKey: env.access.ownerKey,
+    deviceUuid: kDeviceUid,
+    homeId: kClaimedHome,
+    homeName: 'Daire 5',
+    ip: kLanIp,
+    currentStep: step,
+    data: data,
+    createdAt: now,
+    updatedAt: now,
+  );
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(
+    ChangeNotifierProvider<AutomationState>.value(
+      value: env.state,
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                key: const Key('launcher'),
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => ServiceSetupWizardPage(
+                    resume: record,
+                    store: env.store,
+                    deviceApiFactory: env.deviceFactory,
+                    scanner: fakeScanner(null),
+                  ),
+                )),
+                child: const Text('aç'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.byKey(const Key('launcher')));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
 }

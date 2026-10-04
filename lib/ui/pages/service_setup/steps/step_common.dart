@@ -42,6 +42,8 @@ Widget stepScaffold(
   bool? canContinue,
   VoidCallback? onContinue,
   Widget? banner,
+  bool showBusy = true,
+  bool retrySecondary = false,
 }) {
   final info = SetupSteps.of(step);
   final l = logic ?? c.logicFor(step);
@@ -55,8 +57,10 @@ Widget stepScaffold(
     statusText: statusText,
     problem: l.problem,
     onRetry: l.canRetry ? () => l.retry() : null,
+    retrySecondary: retrySecondary,
     onFixStep: c.goToStep,
-    busyLabel: l.busy ? l.busyLabel : null,
+    // [showBusy] false: adımın kendi bekleme kartı var (aynı bilgi sabit alanda ikinci kez yazılmasın; bkz. 6. adım).
+    busyLabel: (showBusy && l.busy) ? l.busyLabel : null,
     canContinue: canContinue ?? c.canContinue,
     onContinue: onContinue ?? c.continueNext,
     continueLabel: continueLabel,
