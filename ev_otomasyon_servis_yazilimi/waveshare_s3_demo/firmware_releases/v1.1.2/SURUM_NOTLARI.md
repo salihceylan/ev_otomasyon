@@ -1,10 +1,13 @@
 # AHBU Akıllı Ev - ESP32-S3 firmware v1.1.2 (sürüm notları)
 
-> **DONANIMDA DOĞRULANMADI.** Bu imaj yalnızca dosya düzeyinde doğrulandı (başlık, bölüm tablosu, SHA-256 özetleri, dizgi
-> taraması, fabrika aracının imaj doğrulayıcısı) ve değişen kod donanımsız testlerle sınandı (QA simülatörü, fabrika aracı,
-> gerçek `ConfigManager.cpp`'nin PC'de derlenmiş hâli). Hiçbir karta yazılıp çalıştırılmadı. Toplu üretimden önce TEK bir test
-> kartında şunları deneyin: Flash, **USB-seri `FACTORYINIT` provizyonu**, **`RESETKEY` + yeniden `FACTORYINIT`**, Wi-Fi yedek
-> provizyonu (`factory/init`), anahtar değiştirme (`rekey`), web sayfası, röle ve panjur denemesi (aşağıdaki liste).
+> **DONANIMDA YALNIZ YAZMA VE AÇILIŞ DOĞRULANDI.** Bu imaj dosya düzeyinde doğrulandı (başlık, bölüm tablosu, SHA-256
+> özetleri, dizgi taraması, fabrika aracının imaj doğrulayıcısı) ve değişen kod donanımsız testlerle sınandı (QA simülatörü,
+> fabrika aracı, gerçek `ConfigManager.cpp`'nin PC'de derlenmiş hâli). 2026-10-04 14:30'da test kartına (USB, esptool 4.11.0)
+> 0x0 adresine yazıldı ve yazım hash'i doğrulandı; karttan geri okunan bootloader, bölüm tablosu, otadata ve uygulama bölgesi
+> imajla bayt bayt aynı (NVS bölgesi firmware ilk açılışta doldurduğu için farklı: beklenen); seri `STATUS` yanıt verdi (kart
+> provizyonsuz, kurulum ağı açık). Toplu üretimden önce aynı kartta henüz DENENMEYENLERİ deneyin: **USB-seri `FACTORYINIT`
+> provizyonu**, **`RESETKEY` + yeniden `FACTORYINIT`**, Wi-Fi yedek provizyonu (`factory/init`), anahtar değiştirme (`rekey`),
+> web sayfası, röle ve panjur denemesi (aşağıdaki liste).
 
 ## Dosyalar
 

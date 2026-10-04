@@ -1,5 +1,10 @@
 # AHBU Akıllı Ev - ESP32-S3 firmware v1.1.1 (sürüm notları)
 
+> **Yerine geçen sürüm: v1.1.2** (`firmware_releases/v1.1.2/`; birleşik sürüm): web sayfası metinleri düzeltildi (anahtar ipuçları
+> artık anahtarın etikette ve uygulamada gösterilmediğini söyler; provizyon formuna "sunucuya kayıtlı panolarda bu formu
+> kullanmayın" uyarısı eklendi) ve provizyon yolu düzeltildi (kalıcı belleğe yazılamazsa `503 storage`, kilit altında tek
+> seferlik provizyon, yeni `RESETKEY` çıktısı). v1.1.1 kullanılabilir, ancak yeni kartlara v1.1.2 yazılır.
+>
 > **DONANIMDA YALNIZ YAZMA VE AÇILIŞ GÖRÜLDÜ; TARAYICIDA DOĞRULANMADI.** Bu imaj dosya düzeyinde doğrulandı (başlık, bölüm
 > tablosu, SHA-256 özetleri, dizgi taraması, fabrika aracının imaj doğrulayıcısı) ve gömülü web sayfası tarayıcısız (statik)
 > denetlendi. 2026-10-04'te bir test kartına esptool ile 0x0 adresine yazıldı (yazım hash'i doğrulandı) ve seri çıkışta
@@ -164,4 +169,4 @@ esptool.py --chip esp32s3 merge_bin -o firmware_combined_0x0.bin --flash_mode di
 
 `v1.0.0` ve `v1.0.1` klasöründeki imajlar **KULLANILMAZ** (silinmedi; nedenleri o klasörlerdeki `KULLANILMAZ.txt`'de). `v1.1.0`
 klasörü silinmedi (karşılaştırma/geri dönüş için; bootloader ve bölüm tablosu v1.1.1 ile aynı olduğundan v1.1.0 uygulama imajı
-0x10000'a geri yazılabilir). Güncel imaj **v1.1.1**'dir (`version_info.json`).
+0x10000'a geri yazılabilir). Güncel imaj artık **v1.1.2**'dir (`version_info.json`); v1.1.1 kullanılabilir, ancak yeni kartlara v1.1.2 yazılır.

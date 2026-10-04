@@ -144,7 +144,7 @@ Her kart için aynı 8 adımı uygulayın.
 ### Adım 5 — Firmware'i yükleyin (provizyon otomatik başlar)
 
 1. **1. sekmeye** geçin. **COM Port**'un doğru kart olduğundan emin olun.
-2. **Yüklenecek Firmware Seçimi** bölümünde **"Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)"** işaretli olmalı. **Dosya** kutusunda `version_info.json`'un gösterdiği güncel imajın yolu yazar (şu an `...\firmware_releases\v1.1.1\firmware_combined_0x0.bin`). **➕ Versiyon Arttır** düğmesine basmayın: yalnız yeni bir sürüm hazırlayan IT içindir (Teknik Ek E); basılırsa kutudaki dosyayı yeni bir sürüm numarasıyla (ör. v1.1.2) kopyalayıp güncel sürüm yapar. (**"Fabrika Çıkış Orijinal Yazılımı"** yalnızca test/kurtarma içindir: bu yazılım AHBU provizyonu yapmaz; üretimde seçmeyin.)
+2. **Yüklenecek Firmware Seçimi** bölümünde **"Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)"** işaretli olmalı. **Dosya** kutusunda `version_info.json`'un gösterdiği güncel imajın yolu yazar (şu an `...\firmware_releases\v1.1.2\firmware_combined_0x0.bin`). **➕ Versiyon Arttır** düğmesine basmayın: yalnız yeni bir sürüm hazırlayan IT içindir (Teknik Ek E); basılırsa kutudaki dosyayı yeni bir sürüm numarasıyla (ör. v1.1.3) kopyalayıp güncel sürüm yapar. (**"Fabrika Çıkış Orijinal Yazılımı"** yalnızca test/kurtarma içindir: bu yazılım AHBU provizyonu yapmaz; üretimde seçmeyin.)
    - Daha önce kullanılmış/farklı yazılımlı bir kartsa önce **Hafızayı Sil (Erase Flash)** düğmesine basıp onay sorusuna **Evet** deyin; bitince bu adıma dönün.
 3. **FİRMWARE'İ KARTA YÜKLE (FLASH)** düğmesine basın.
    - **"Firmware Uyarısı"** çıkarsa metni okuyun. "FACTORYINIT bulunamadı / ESKİ firmware" diyorsa **Hayır** deyin ve IT'den güncel imajı isteyin (Bölüm 2 ve Teknik Ek E).
@@ -289,6 +289,7 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | `Failed to connect to ESP32-S3` (logda) | Kart yükleme moduna girmedi. | **BOOT** düğmesini basılı tutun, **RESET**'e bir kez basıp bırakın, sonra BOOT'u bırakın; tekrar deneyin. |
 | Dosya Sorunu: … | Firmware dosyası yok/bozuk. | **Gözat** ile doğru `.bin` dosyasını seçin veya "Bizim Geliştirdiğimiz Yazılım"ı yeniden seçin. |
 | Firmware Uyarısı: …BİRLEŞİK imaj gibi görünmüyor | Yanlış dosya (yalnızca uygulama imajı). | **Hayır** deyin; doğru (birleşik) dosyayı seçin. |
+| Cihaz anahtarı kalıcı belleğe yazamadı (storage). / Kart anahtarı kalıcı belleğe yazamadı (persist_failed). | Kart, provizyon anahtarını kendi kalıcı belleğine (NVS) yazamadı (firmware v1.1.2 bunu açıkça bildirir). | Kartı yeniden başlatıp tekrar deneyin; sürerse **Hafızayı Sil (Erase Flash)** ile firmware'i yeniden yükleyin. |
 | Firmware Uyarısı: …USB (seri) provizyon komutu (FACTORYINIT) bulunamadı… ESKİ firmware | İmaj eski sürüm: kart USB ile provizyonlanamaz. | **Hayır** deyin; IT'den güncel imajı isteyin (Teknik Ek E). Yine de **Evet** derseniz kartı provizyonlayamazsınız. |
 | esptool Bulunamadı | Yükleme programı kurulu değil. | IT'ye bildirin. |
 | Meşgul: Kartla başka bir işlem sürüyor | Başka bir işlem bitmedi. | Bitmesini bekleyin. |
@@ -430,10 +431,10 @@ Waveshare **ESP32-S3-ETH-8DI-8RO** endüstriyel pano modülü (DIN-ray):
 Kurulmuş bir kartın içinde küçük bir web sayfası vardır. **Normal kullanıcı için değildir**; teknik servis içindir.
 
 - Kart evin Wi-Fi'sine bağlandığında kendi `AHBU-XXXXXX` ağı **kapanır**. Sayfaya kartın evdeki IP adresiyle (`http://<kart-IP>`) girilir.
-- Sayfa açılınca **cihaz anahtarını** sorar (anahtar sunucuda saklıdır ama mobil uygulama onu ayarlarda göstermez; kayıt bu aracın belleğindeyken 3. sekmedeki **Gizli Bilgiler** kutusundan **📋 Anahtarı kopyala** ile alınır: Adım 6). Anahtar girilmeden sayfa kullanılamaz. Anahtar bir kez girilince **bu tarayıcıda hatırlanır** (firmware v1.1.1): sonraki açılışlarda sayfa kendiliğinden girer ve anahtar kutusu görünmez; sayfa başlığındaki **Çıkış** düğmesi anahtarı tarayıcıdan siler (**ortak bir telefonda işiniz bitince basın**). Yanlış ya da eski anahtarda kayıt kendiliğinden silinir ve anahtar yeniden sorulur. **İSTİSNA (kurulum modu):** telefon/bilgisayar kartın kendi `AHBU-XXXXXX` ağına (WPA2, etiketteki AP parolası) bağlıyken `http://192.168.4.1` açılırsa — müşteride internet olmadığı için anahtar alınamaz — sayfa "**Kurulum modu (AP): yalnızca Wi-Fi ayarlarını değiştirebilirsiniz**" bandıyla açılır ve **anahtarsız** yalnızca **Wi-Fi (Station)** sekmesi çalışır (ağ listesi, modem karekodu, bağlan); diğer sekmeler "Bu işlem için cihaz anahtarı gerekir" der. Bu ayrıcalık yalnızca kurulmuş (provizyonlu) kartta ve **parolalı** kurtarma ağında geçerlidir; açık kurulum ağında verilmez.
+- Sayfa açılınca **cihaz anahtarını** sorar (anahtar sunucuda saklıdır ama mobil uygulama onu ayarlarda göstermez; kayıt bu aracın belleğindeyken 3. sekmedeki **Gizli Bilgiler** kutusundan **📋 Anahtarı kopyala** ile alınır: Adım 6). Anahtar girilmeden sayfa kullanılamaz. Anahtar bir kez girilince **bu tarayıcıda hatırlanır** (firmware v1.1.1 ve sonrası): sonraki açılışlarda sayfa kendiliğinden girer ve anahtar kutusu görünmez; sayfa başlığındaki **Çıkış** düğmesi anahtarı tarayıcıdan siler (**ortak bir telefonda işiniz bitince basın**). Yanlış ya da eski anahtarda kayıt kendiliğinden silinir ve anahtar yeniden sorulur. **İSTİSNA (kurulum modu):** telefon/bilgisayar kartın kendi `AHBU-XXXXXX` ağına (WPA2, etiketteki AP parolası) bağlıyken `http://192.168.4.1` açılırsa — müşteride internet olmadığı için anahtar alınamaz — sayfa "**Kurulum modu (AP): yalnızca Wi-Fi ayarlarını değiştirebilirsiniz**" bandıyla açılır ve **anahtarsız** yalnızca **Wi-Fi (Station)** sekmesi çalışır (ağ listesi, modem karekodu, bağlan); diğer sekmeler "Bu işlem için cihaz anahtarı gerekir" der. Bu ayrıcalık yalnızca kurulmuş (provizyonlu) kartta ve **parolalı** kurtarma ağında geçerlidir; açık kurulum ağında verilmez.
 - Kart Wi-Fi'den **3 dakika** kopuk kalırsa (veya hiç Wi-Fi tanımlı değilse) ya da servis modunda (seri komut `AP ON`) kendi ağını **10 dakikalığına** açar; bilgisayar bağlıysa en çok 30 dakikaya uzar. Bu ağın parolası **etikette yazan AP parolasıdır** (kurulumdan sonra parola **cihaza özeldir**, sabit parola yoktur); telefonla **etiketteki 2. karekodu kamerayla okutarak** tek dokunuşla bağlanabilirsiniz (Adım 7).
 - Sekmeler: **Kontrol** (röle/panjur), **Kanal Ayarları**, **Wi-Fi (Station)**, **RS485 Terminal**, **Sistem**.
-- Provizyonsuz bir karta girilirse sayfa **"Cihaz Kurulumu (Provizyon)"** formunu gösterir (elle provizyon).
+- Provizyonsuz bir karta girilirse sayfa **"Cihaz Kurulumu (Provizyon)"** formunu gösterir (elle provizyon). Firmware v1.1.2'de formda şu uyarı yazar: "Sunucuya kayıtlı (etiketli) panolarda bu formu kullanmayın: kurulumu fabrika aracı (USB) ya da uygulamanın kurulum sihirbazı yapar; burada belirlenen anahtarı sunucu bilmez." Bu araçla kaydedilen (etiketli) kartlarda formu **doldurmayın**: provizyonu araç USB'den yapar (Adım 5–6); formla belirlenen anahtarı sunucu bilmez ve araç sonra "Kartta Eski Anahtar Var" sorusunu sorar.
 
 ---
 
@@ -484,7 +485,7 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 |---|---|
 | `STATUS` | Cihaz, MAC, AP durumu, `local_key` tanımlı/YOK, röle/DI/panjur özeti. |
 | `FACTORYINIT <local_key> <ap_pass>` | Yalnız provizyonsuzken; `local_key` 8–32 ASCII (boşluksuz), `ap_pass` 8–32 karakter. |
-| `RESETKEY` | Yerel anahtarı siler (cihaz provizyonsuz olur). |
+| `RESETKEY` | Yerel anahtarı siler (cihaz provizyonsuz olur). Yanıt (v1.1.2): `[CLI-SONUC] Yerel anahtar SILINDI. Cihaz artik PROVIZYONSUZ (FACTORYINIT <local_key> <ap_pass> ya da /api/factory/init). AP gerekirse: AP ON` (silinemezse `SILINEMEDI`). Yeniden anahtarlama tercihen aynı seri hattan `FACTORYINIT` ile yapılır (anahtar kablosuz ağdan geçmez). |
 | `AP [ON\|OFF\|STATUS]` | Servis AP penceresi (10 dk). |
 | `HELP` | Komut listesi. |
 
@@ -494,7 +495,7 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 
 ### E. Firmware derleme ve sürüm klasörü
 
-> **DİKKAT:** `firmware_releases` altındaki ESKİ imajlar (`v1.0.0`, `v1.0.1`; klasörlerinde `KULLANILMAZ.txt` vardır) **USB provizyon komutunu (`FACTORYINIT`) ve `RESETKEY`'i içermez** (imaj içinde bu metinler aranıp bulunamadı). Bu imajlarla yüklenen kart USB ile provizyonlanamaz; araç bu durumu yüklemeden önce "Firmware Uyarısı" ile bildirir. Güncel imaj `v1.1.1`'dir (`version_info.json` onu gösterir; araç üst şeridinde "Firmware v1.1.1" rozeti görünür; bu komutları içerir). Yeni bir sürüm üretilince aşağıdaki gibi sürüm klasörüne konmalıdır.
+> **DİKKAT:** `firmware_releases` altındaki ESKİ imajlar (`v1.0.0`, `v1.0.1`; klasörlerinde `KULLANILMAZ.txt` vardır) **USB provizyon komutunu (`FACTORYINIT`) ve `RESETKEY`'i içermez** (imaj içinde bu metinler aranıp bulunamadı). Bu imajlarla yüklenen kart USB ile provizyonlanamaz; araç bu durumu yüklemeden önce "Firmware Uyarısı" ile bildirir. Güncel imaj `v1.1.2`'dir (`version_info.json` onu gösterir; araç üst şeridinde "Firmware v1.1.2" rozeti görünür; bu komutları içerir; v1.1.1'den yalnız kartın web sayfasındaki metinler ve sürüm numarasıyla ayrılır: Bölüm 11). Yeni bir sürüm üretilince aşağıdaki gibi sürüm klasörüne konmalıdır.
 
 1. Derleme (PlatformIO; makineye özel çekirdek dizini `waveshare_s3_demo\platformio_local.ini` içindedir, depoya girmez):
 
@@ -512,7 +513,7 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
      0xe000 "$PIO\packages\framework-arduinoespressif32\tools\partitions\boot_app0.bin" 0x10000 "$B\firmware.bin"
    ```
 
-   Not: mevcut eski imajlarda `boot_app0.bin` (0xE000) yoktur. OTA ile güncellenmiş/önceden kullanılmış kartlarda eski sürümün açılmaması için bu kartlara **önce Hafızayı Sil** uygulanır. Bu düzendeki v1.1.1 birleşik imajı 2026-10-04'te bir test kartına esptool ile yazıldı (yazım hash'i doğrulandı) ve seri çıkışta açılışı görüldü; FACTORYINIT provizyonu ve sonrası bu imajla kartta henüz **denenmedi** (`firmware_releases/v1.1.1/SURUM_NOTLARI.md`).
+   Not: mevcut eski imajlarda `boot_app0.bin` (0xE000) yoktur. OTA ile güncellenmiş/önceden kullanılmış kartlarda eski sürümün açılmaması için bu kartlara **önce Hafızayı Sil** uygulanır. Bu düzendeki v1.1.1 birleşik imajı 2026-10-04'te bir test kartına esptool ile yazıldı (yazım hash'i doğrulandı) ve seri çıkışta açılışı görüldü; FACTORYINIT provizyonu ve sonrası bu imajla kartta henüz **denenmedi** (`firmware_releases/v1.1.1/SURUM_NOTLARI.md`). Güncel v1.1.2 birleşik imajı aynı düzendedir (0x0000-0xFFFF bölgesi v1.1.1 ile bayt bayt aynı) ve 2026-10-04'te aynı test kartına yazıldı: yazım hash'i ve karttan geri okuma doğrulandı, seri `STATUS` yanıt verdi; FACTORYINIT provizyonu ve sonrası kartta henüz **denenmedi** (`firmware_releases/v1.1.2/SURUM_NOTLARI.md`).
 
 3. Aracı açın, 1. sekmede **Gözat...** ile `yeni_firmware.bin` dosyasını seçin ve **Versiyon Arttır**'a basın: araç dosyayı yeni sürüm klasörüne (`firmware_releases\vX.Y.Z\`) kopyalar ve "güncel sürüm" olarak `version_info.json`'a yazar. Bundan sonra "Bizim Geliştirdiğimiz Yazılım" bu imajı kullanır.
 
