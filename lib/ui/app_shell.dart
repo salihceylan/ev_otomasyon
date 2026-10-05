@@ -10,6 +10,7 @@ import 'common/deep_links.dart';
 import 'dashboard/command_retry.dart';
 import 'theme/app_theme.dart';
 import 'widgets/circuit_background.dart';
+import 'widgets/content_width_limit.dart';
 import 'widgets/peace_notice_host.dart';
 
 /// Uygulama kabuğu: `MaterialApp` + **tek** komut-hatası abonesi + oturum olayları.
@@ -240,7 +241,8 @@ class _AppShellState extends State<AppShell> {
             value: _peace,
             child: PeaceNoticeHost(
               child: CircuitBackground(
-                child: child ?? const SizedBox.shrink(),
+                // Geniş pencerede (masaüstü) içerik ortalanmış bir sütunda kalır; arka plan tam ekran.
+                child: ContentWidthLimit(child: child ?? const SizedBox.shrink()),
               ),
             ),
           );
