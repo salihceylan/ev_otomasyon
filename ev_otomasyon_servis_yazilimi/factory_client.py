@@ -1120,8 +1120,8 @@ def provision_urgency_notice(ssid: Optional[str] = None) -> str:
     """Açık kurulum ağı riski (CONTRACTS §3b): provizyon flash'tan HEMEN sonra yapılmalıdır."""
     net = ssid or "AHBU-XXXXXX"
     return (
-        f"ÖNEMLİ: Provizyonsuz kart flash'tan sonra PAROLASIZ (açık) '{net}' kurulum ağını yayınlar; "
-        "provizyon bitene kadar yakındaki biri kartı sahiplenebilir. Provizyonu flash'tan HEMEN sonra yapın."
+        f"Bilgi: Provizyon bitene kadar kart '{net}' kurulum ağını PAROLASIZ yayınlar. "
+        "Provizyonu flash'tan HEMEN sonra yapmanız yeterli; araç bunu USB üzerinden otomatik yapar."
     )
 
 

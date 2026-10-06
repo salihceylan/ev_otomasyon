@@ -1045,8 +1045,8 @@ class DeviceProvisionTests(unittest.TestCase):
         text = fc.provision_urgency_notice(SSID)
         self.assertIn(SSID, text)
         self.assertIn("PAROLASIZ", text)
-        self.assertIn("sahiplenebilir", text)
         self.assertIn("HEMEN", text)
+        self.assertNotIn("ÖNEMLİ", text)  # sakin bilgi tonu (kullanıcı kararı 2026-10-06)
         self.assertIn("AHBU-XXXXXX", fc.provision_urgency_notice())
 
     def test_wait_mode_polls_until_device_appears(self):
