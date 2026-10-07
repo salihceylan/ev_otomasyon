@@ -459,6 +459,12 @@ void main() {
       expect(c.relays.untestedCount, 4);
     });
 
+    test('panjura ayrılmış röleler listede yok ama adları/numaraları açıklama için bilinir (adım 8\'de test)', () async {
+      expect(c.relays.shutterRelayIds, <int>[1, 2, 3, 4]);
+      expect(c.relays.shutterNote, contains('Röle 1, 2, 3, 4'));
+      expect(c.relays.shutterNote, contains('Adım 8'));
+    });
+
     test('pano komutu uygulamazsa "röle komutuna cevap vermedi" denir ve röle sorunlu işaretlenir', () async {
       env.device.unresponsiveRelays.add(5);
       expect(await drive(env, c.relays.command(5, true)), isFalse);

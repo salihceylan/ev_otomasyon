@@ -167,6 +167,17 @@ class RelayLogic extends SetupLogic {
   List<RelayCheck> get relays => _relays;
   bool get loaded => _loaded;
 
+  List<int> _shutterRelayIds = const <int>[];
+
+  /// Panoda panjura ayrılmış röleler: bu adımda listelenmez, Adım 8'de panjur olarak test edilir.
+  List<int> get shutterRelayIds => _shutterRelayIds;
+
+  /// "Röle 1-4 neden yok?" sorusunun yanıtı (saha geri bildirimi 2026-10-08); panjur yoksa null.
+  String? get shutterNote => _shutterRelayIds.isEmpty
+      ? null
+      : 'Röle ${_shutterRelayIds.join(', ')} panoda panjur (yukarı/aşağı) olarak tanımlı; burada listelenmez, '
+          'Adım 8\'de (Panjur Testi) denenir.';
+
   /// Girişler: panonun DI'leri (sırayla) + eklenen kablosuz (köprü) yuvaları.
   List<InputAssignment> get inputs => _inputs;
 
@@ -371,6 +382,7 @@ class RelayLogic extends SetupLogic {
   Future<bool> load() => run('Röleler panodan okunuyor', () async {
         final status = await ctx.deviceCall((api) => api.fetchStatus());
         final skip = status.shutterRelayIds;
+        _shutterRelayIds = List<int>.unmodifiable(skip.toList()..sort());
         final items = status.relays
             .where((r) => (r.isLight || r.isImpulse) && !skip.contains(r.id))
             .toList(growable: false);

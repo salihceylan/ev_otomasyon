@@ -71,6 +71,15 @@ class Step7Relays extends StatelessWidget {
                             ServiceStatusPill(label: '${r.untestedCount} bekliyor', color: _tone(r.untestedCount, SetupColors.info)),
                           ],
                         ),
+                        if (r.shutterNote != null) ...[
+                          const SizedBox(height: 8),
+                          SetupInfoRow(
+                            key: const Key('relay_shutter_note'),
+                            icon: Icons.info_outline_rounded,
+                            color: SetupColors.info,
+                            text: r.shutterNote!,
+                          ),
+                        ],
                       ],
                     ),
                   ),
