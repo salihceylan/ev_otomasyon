@@ -24,8 +24,11 @@
         android:allowBackup="false"
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round">
-        <!-- Impeller yerine kararlı Skia render motoru (Qualcomm Adreno Gralloc uyumu) -->
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:enableOnBackInvokedCallback="true">
+        <!-- Impeller yerine kararlı Skia render motoru (Qualcomm Adreno Gralloc uyumu). Flutter bu kapatmayı ileride
+             kaldıracak (log: "Impeller opt-out deprecated"); kaldırmadan önce Adreno'lu cihazda Impeller ile görüntü
+             denenmeli. Geri hareketi PopScope ile (WillPopScope yok) Android 13+ tahmine dayalı geri ile uyumlu. -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"
             android:value="false" />
