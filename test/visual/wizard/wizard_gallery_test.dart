@@ -221,6 +221,11 @@ void main() {
 
           // 7) Röleler
           await pumpUntil(tester, env, () => present('card_relay_5'));
+          // Panjur röleleri (1-4) de listede bilgi kartı olarak görünür; komut düğmeleri yok (Adım 8'de test).
+          for (final id in <int>[1, 2, 3, 4]) {
+            expect(present('card_shutter_relay_$id'), isTrue, reason: 'Röle $id panjur kartı');
+            expect(present('btn_relay_on_$id'), isFalse);
+          }
           await _shot(tester, key, 's07_typical_$tag.png', scale: scale, top: true);
           await tapKey(tester, 'btn_relay_on_5');
           await pumpUntil(tester, env, () => present('btn_relay_lit_yes_5'));

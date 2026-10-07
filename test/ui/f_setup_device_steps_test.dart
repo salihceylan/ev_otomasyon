@@ -460,9 +460,10 @@ void main() {
     });
 
     test('panjura ayrılmış röleler listede yok ama adları/numaraları açıklama için bilinir (adım 8\'de test)', () async {
-      expect(c.relays.shutterRelayIds, <int>[1, 2, 3, 4]);
-      expect(c.relays.shutterNote, contains('Röle 1, 2, 3, 4'));
-      expect(c.relays.shutterNote, contains('Adım 8'));
+      expect(c.relays.shutterRelays.map((r) => r.id), <int>[1, 2, 3, 4]);
+      expect(c.relays.shutterRelays.every((r) => r.name.isNotEmpty), isTrue);
+      // Test/ilerleme sayaçlarına katılmazlar (Adım 8'de panjur olarak test edilir).
+      expect(c.relays.relays.map((r) => r.id), <int>[5, 6, 7, 8]);
     });
 
     test('pano komutu uygulamazsa "röle komutuna cevap vermedi" denir ve röle sorunlu işaretlenir', () async {

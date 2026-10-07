@@ -189,6 +189,22 @@ void main() {
       expect(enabledGradientButtons(tester), 1, reason: 'ekranda tek etkin gradyan hap');
     });
 
+    testWidgets('7. adım panjur röleleri (1-4) numara sırasıyla bilgi kartı olarak görünür, komut düğmesi yok', (tester) async {
+      final env = await _deployed();
+      addTearDown(env.dispose);
+      await _open(tester, env, SetupSteps.relays, phone, 1.0);
+      await pumpUntil(tester, env, () => present('card_relay_5'));
+      await settle(tester);
+      double top(String key) => tester.getTopLeft(find.byKey(Key(key), skipOffstage: false)).dy;
+      for (final id in <int>[1, 2, 3, 4]) {
+        expect(find.byKey(Key('card_shutter_relay_$id'), skipOffstage: false), findsOneWidget);
+        expect(find.byKey(Key('btn_relay_on_$id'), skipOffstage: false), findsNothing);
+      }
+      expect(top('card_shutter_relay_1'), lessThan(top('card_shutter_relay_4')));
+      expect(top('card_shutter_relay_4'), lessThan(top('card_relay_5')), reason: 'röle numarası sırası');
+      expect(find.byKey(const Key('relay_shutter_pill'), skipOffstage: false), findsOneWidget);
+    });
+
     testWidgets('7. adım pano ulaşılmaz (e07): "Panoya Bağlan" gradyan birincil; "Tekrar dene" çerçeveli', (tester) async {
       final env = await _deployed();
       addTearDown(env.dispose);

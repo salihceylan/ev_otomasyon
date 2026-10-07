@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../models/automation_models.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/orb/orb.dart';
 import '../../../widgets/settings/accent_button.dart';
@@ -55,7 +56,7 @@ class Step7Relays extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '${r.relays.length} röle',
+                          '${r.relays.length + r.shutterRelays.length} röle',
                           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
                         ),
                         const SizedBox(height: 6),
@@ -69,17 +70,14 @@ class Step7Relays extends StatelessWidget {
                             ServiceStatusPill(label: '${r.unusedCount} kullanılmıyor', color: _tone(r.unusedCount, SetupColors.warn)),
                             ServiceStatusPill(label: '${r.problemCount} sorunlu', color: _tone(r.problemCount, SetupColors.error)),
                             ServiceStatusPill(label: '${r.untestedCount} bekliyor', color: _tone(r.untestedCount, SetupColors.info)),
+                            if (r.shutterRelays.isNotEmpty)
+                              ServiceStatusPill(
+                                key: const Key('relay_shutter_pill'),
+                                label: '${r.shutterRelays.length} panjur (Adım 8)',
+                                color: AppFamilies.slate.base,
+                              ),
                           ],
                         ),
-                        if (r.shutterNote != null) ...[
-                          const SizedBox(height: 8),
-                          SetupInfoRow(
-                            key: const Key('relay_shutter_note'),
-                            icon: Icons.info_outline_rounded,
-                            color: SetupColors.info,
-                            text: r.shutterNote!,
-                          ),
-                        ],
                       ],
                     ),
                   ),
@@ -93,7 +91,12 @@ class Step7Relays extends StatelessWidget {
                 ],
               ),
             ),
-            for (final relay in r.relays) _RelayCard(logic: r, relay: relay),
+            // Röle numarası sırasıyla: panjur röleleri (bilgi kartı) ve test edilecek röleler karışık sırada olabilir.
+            for (final entry in <(int, Widget)>[
+              for (final s in r.shutterRelays) (s.id, _ShutterRelayCard(relay: s)),
+              for (final relay in r.relays) (relay.id, _RelayCard(logic: r, relay: relay)),
+            ]..sort((a, b) => a.$1.compareTo(b.$1)))
+              entry.$2,
             SafetyInputsCard(logic: r),
             SafetySaveCard(logic: r),
           ] else if (!r.busy && c.conn.ready)
@@ -304,6 +307,51 @@ class _RelayCard extends StatelessWidget {
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Panjura ayrılmış röle: yalnız bilgi. Komut düğmesi yok (yukarı/aşağı tek tek sürülmez); Adım 8'de test edilir.
+class _ShutterRelayCard extends StatelessWidget {
+  const _ShutterRelayCard({required this.relay});
+
+  final RelayItem relay;
+
+  @override
+  Widget build(BuildContext context) {
+    return SetupCard(
+      key: Key('card_shutter_relay_${relay.id}'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              OrbIconBadge(
+                icon: Icons.blinds_rounded,
+                family: AppFamilies.slate,
+                active: relay.state,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '${relay.name} (Röle ${relay.id})',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SetupVerdictChip(label: 'Panjur rölesi', color: SetupColors.muted(context)),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Panjurun yukarı/aşağı çıkışı. Burada tek başına açılıp kapatılmaz; Adım 8\'de (Panjur Testi) yönüyle birlikte denenir.',
+            style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
+          ),
         ],
       ),
     );
