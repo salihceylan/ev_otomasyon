@@ -136,7 +136,13 @@ class _SetupStepScaffoldState extends State<SetupStepScaffold> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final scale = MediaQuery.textScalerOf(context).scale(10) / 10;
-        final compact = constraints.hasBoundedHeight && constraints.maxHeight < _compactBelow * scale;
+        // Klavyenin kapladığı yükseklik karara KATILMAZ: klavye açılınca düzen değişirse gövdedeki metin kutusu
+        // yeniden kurulup odağını kaybediyor, klavye kapanıyor ve döngü oluşuyordu (saha: adım 3 e-posta yazılamıyordu).
+        // Klavye açıkken normal düzenin orta alanı zaten kaydırılabilir.
+        // Scaffold gövdesinin MediaQuery'si viewInsets'i SIFIRLAR (gövdeyi zaten küçültmüştür); ham değer görünümden okunur.
+        final view = View.of(context);
+        final keyboard = view.viewInsets.bottom / view.devicePixelRatio;
+        final compact = constraints.hasBoundedHeight && constraints.maxHeight + keyboard < _compactBelow * scale;
         return compact ? _buildCompact(context) : _buildRegular(context);
       },
     );
