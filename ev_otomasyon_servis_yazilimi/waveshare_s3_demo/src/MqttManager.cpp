@@ -354,6 +354,7 @@ MqttManager::MqttManager()
   _topicStatus[0] = _topicState[0] = _topicCmd[0] = _topicSys[0] = _topicEvent[0] = '\0';
   _clientId[0] = _uid[0] = '\0';
   memset(_recentIds, 0, sizeof(_recentIds));
+  _acceptId[0] = _acceptBase[0] = '\0';
   memset(&_publishedSig, 0, sizeof(_publishedSig));
 }
 
@@ -802,6 +803,7 @@ void MqttManager::watchStateChanges(uint32_t now) {
   _sigCheck.arm(now, 100);
   AutomationSnapshot snap;
   if (!SmartAutomation::instance().getSnapshot(snap)) return;
+  overlayAcceptedId(snap);
   StateSignature cur;
   makeSignature(snap, cur);
   if (memcmp(&cur, &_publishedSig, sizeof(cur)) != 0) triggerPublish();
@@ -834,6 +836,7 @@ bool MqttManager::publishState() {
 
   AutomationSnapshot snap;
   if (!SmartAutomation::instance().getSnapshot(snap)) return fail("anlik goruntu alinamadi");
+  overlayAcceptedId(snap);
 
   // Guvenlik gorunumu (kopya; JSON kilit DISINDA uretilir [B13]) ve v:3 eki. Imza ONCE alinir: kopya sirasinda degisirse bir sonraki
   // gozcu turu yeniden yayinlar.
@@ -1052,6 +1055,32 @@ void MqttManager::rejectCmd(const char* id, uint8_t rej) {
   triggerPublish();
 }
 
+// sys cfg_patch kabulu (WP-C1, Faz 2 F2.D.6): rejectCmd'nin karsiligi. Yama loopTask komut kuyruguna girmedigi icin otomasyonun last_id'si
+// degismez; bu yuzden kabul edilen id MQTT gorevinde tutulur ve otomasyonun son kimligi (kabul anindaki deger) degismedikce state.last_id
+// olarak yazilir. Otomasyon daha yeni bir komut isleyince onun kimligi gecerli olur. Gecersiz/bos id: yalniz yayin tetigi.
+void MqttManager::acceptCmd(const char* id) {
+  if (id && id[0]) {
+    AutomationSnapshot snap;
+    if (SmartAutomation::instance().getSnapshot(snap)) {
+      strncpy(_acceptBase, snap.lastId, sizeof(_acceptBase) - 1);
+      _acceptBase[sizeof(_acceptBase) - 1] = '\0';
+      strncpy(_acceptId, id, sizeof(_acceptId) - 1);
+      _acceptId[sizeof(_acceptId) - 1] = '\0';
+    }
+  }
+  triggerPublish();
+}
+
+void MqttManager::overlayAcceptedId(AutomationSnapshot& snap) {
+  if (_acceptId[0] == '\0') return;
+  if (strcmp(snap.lastId, _acceptBase) != 0) {   // otomasyon yeni bir komut isledi: kabul yankisi biter
+    _acceptId[0] = _acceptBase[0] = '\0';
+    return;
+  }
+  strncpy(snap.lastId, _acceptId, sizeof(snap.lastId) - 1);
+  snap.lastId[sizeof(snap.lastId) - 1] = '\0';
+}
+
 void MqttManager::handleCommand(const uint8_t* payload, unsigned int length) {
   StaticJsonDocument<768> doc;
   const DeserializationError err = deserializeJson(doc, (const char*)payload, length);
@@ -1215,11 +1244,12 @@ void MqttManager::handleSys(uint8_t* payload, unsigned int length) {
     return;
   }
   // Bulut yolu gevsetebilir (owner/servis yetkisi sunucuda denetlenir, karar 7.2b-7); cakismada pano kazanir (cfg_conflict olayi).
+  // Gaz vanasini acilabilir kilan yama (gas_local_only) ve kurulu kipte hirsiz alarmini zayiflatan yama (armed) reddedilir (G-1).
   const safety::CfgOutcome o = safety::SafetyManager::instance().submitEdit(edit, hasBase, baseRev, safety::VIA_CLOUD);
   switch (o.r) {
     case safety::CfgResult::OK:
       printf("[MQTTS] cfg_patch uygulandi (rev %lu).\r\n", (unsigned long)o.rev);
-      triggerPublish();
+      acceptCmd(rejId);                                 // state.last_id = id (sunucunun expectOutcome'u; WP-C1)
       break;
     case safety::CfgResult::CONFLICT:
       printf("[MQTTS] cfg_patch: base_rev %lu != rev %lu (cfg_conflict).\r\n", (unsigned long)baseRev, (unsigned long)o.rev);
@@ -1231,6 +1261,17 @@ void MqttManager::handleSys(uint8_t* payload, unsigned int length) {
     case safety::CfgResult::INVALID:
       printf("[MQTTS] cfg_patch gecersiz: %s\r\n", safety::cfgErrText(o.err));
       rejectCmd(rejId, (uint8_t)safety::Rej::CFG_INVALID);
+      break;
+    case safety::CfgResult::STORAGE:                   // NVS payi yetmedi (inceleme RV-3): eskiden "busy" (WP-C1)
+      rejectCmd(rejId, (uint8_t)safety::Rej::CFG_STORAGE);
+      break;
+    case safety::CfgResult::GAS_LOCAL:                 // gaz vanasini uzaktan acilabilir kilardi (Faz 2 incelemesi G-1a)
+      printf("[MQTTS] cfg_patch reddedildi: gaz vanasi yalniz yerinde degistirilebilir.\r\n");
+      rejectCmd(rejId, (uint8_t)safety::Rej::GAS_LOCAL_ONLY);
+      break;
+    case safety::CfgResult::ARMED:                     // kurulu kipte hirsiz alarmini zayiflatirdi (G-1b)
+      printf("[MQTTS] cfg_patch reddedildi: alarm kurulu.\r\n");
+      rejectCmd(rejId, (uint8_t)safety::Rej::ARMED);
       break;
     default:
       rejectCmd(rejId, (uint8_t)safety::Rej::BUSY);

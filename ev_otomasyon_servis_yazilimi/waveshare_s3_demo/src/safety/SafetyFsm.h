@@ -26,6 +26,9 @@
 //    ne bölge NORMAL'e döner (açılış ya da yapılandırma yaması geri bildirim zamanlayıcısını sıfırlasa bile) [EM-2].
 //  * Açılışta KAPALI komutlu iki röleli vanalara bir KAPAT darbesi daha verilir (yarıda kalmış darbe, gaz vanası K-4) [EM-3].
 //  * Test sonu geri açma: kullanıcı test sırasında kapattıysa açılmaz; açma izni (openPermission) yoksa açılmaz [EM-4].
+// Faz 2 (F2.B.4): siren rölesi iki istek kaynağının VEYA'sıdır: tehlike (bu çekirdek) ve hırsız alarmı (IntrusionCore; setIntrusionSiren).
+// Her kaynak kendi run_limit_s bütçesini tutar (ActuatorCore). Tehlike ACK'i yalnız tehlike isteğini, çözme yalnız hırsız isteğini kaldırır;
+// kullanıcının sireni kapatması ikisini de o alarm dönemi için bastırır. ARM_KEY kumanda rolü vana sürmez (IntrusionCore'a aittir).
 // ============================================================================
 #include "safety/SafetyConfig.h"
 #include "sensors/SensorHub.h"
@@ -48,7 +51,10 @@ inline const char* zoneStText(ZoneSt s) {
 // Ret kodları (state.last_rej.code, LAN yanıtı "rej"); §3.2.
 enum class Rej : uint8_t {
   OK = 0, ZONE_LATCHED, ZONE_TEST, ACTUATOR_RELAY, UNKNOWN_ACTUATOR, BAD_STATE, UNSUPPORTED, CFG_CONFLICT, CFG_INVALID,
-  GAS_LOCAL_ONLY, STALE_ACK, SAFE_MODE, BAD_CMD, BUSY
+  GAS_LOCAL_ONLY, STALE_ACK, SAFE_MODE, BAD_CMD, BUSY,
+  NOT_READY,      // hırsız alarmı kurulamadı: hazır olmayan (açık ya da okunamayan) sensör var (F2.B.7)
+  CFG_STORAGE,    // yapılandırma NVS payı yetmedi (WP-C1; eskiden "busy")
+  ARMED           // hırsız alarmı kurulu: bulut yaması alarmı zayıflatırdı (Faz 2 incelemesi G-1b)
 };
 
 inline const char* rejText(Rej r) {
@@ -67,6 +73,9 @@ inline const char* rejText(Rej r) {
     case Rej::SAFE_MODE: return "safe_mode";
     case Rej::BAD_CMD: return "bad_cmd";
     case Rej::BUSY: return "busy";
+    case Rej::NOT_READY: return "not_ready";
+    case Rej::CFG_STORAGE: return "cfg_storage";
+    case Rej::ARMED: return "armed";
   }
   return "";
 }
@@ -80,6 +89,10 @@ enum class Origin : uint8_t {
 };
 
 enum : uint32_t { TEST_SIREN_MS = 3000, TEST_NOFB_MS = 5000, SAFE_ACK_HOLD_MS = 5000 };
+
+// Hırsız siren tetiği (IntrusionCore -> setIntrusionSiren): yeni alarm bütçeyi her durumda sıfırlar; yeniden tetik (swinger sınırı içinde)
+// yalnız bütçesi bitmiş (durmuş) sireni yeniden çaldırır.
+enum class SirenKick : uint8_t { NONE = 0, FRESH = 1, RETRIGGER = 2 };
 
 struct ZoneRt {
   ZoneSt st;
@@ -100,10 +113,11 @@ class SafetyCore {
 public:
   SafetyCore()
       : cfg_(nullptr), hub_(nullptr), act_(nullptr), out_(nullptr), mode_(SafeReason::NONE), bootAt_(0), epoch_(0),
-        policyOn_(true), cfgUsable_(false), latchDirty_(false), latchAssert_(0), latchLevel_(0), latchRecAssert_(0) {
+        policyOn_(true), cfgUsable_(false), latchDirty_(false), intrReq_(false), latchAssert_(0), latchLevel_(0), latchRecAssert_(0) {
     memset(zone_, 0, sizeof(zone_));
     memset(manualOn_, 0, sizeof(manualOn_));
     memset(userSuppress_, 0, sizeof(userSuppress_));
+    memset(intrSuppress_, 0, sizeof(intrSuppress_));
     memset(holdFired_, 0, sizeof(holdFired_));
   }
 
@@ -121,9 +135,11 @@ public:
     cfgUsable_ = false;
     latchDirty_ = false;
     latchAssert_ = latchLevel_ = latchRecAssert_ = 0;
+    intrReq_ = false;
     memset(zone_, 0, sizeof(zone_));
     memset(manualOn_, 0, sizeof(manualOn_));
     memset(userSuppress_, 0, sizeof(userSuppress_));
+    memset(intrSuppress_, 0, sizeof(intrSuppress_));
     memset(holdFired_, 0, sizeof(holdFired_));
     if (latch && latchValid(*latch) && latchAny(*latch)) {
       for (uint8_t z = 1; z <= MAX_ZONES; z++) {
@@ -163,11 +179,13 @@ public:
   // sıfırlanır; politika yeni yapılandırmadan alınır (değiştiyse policy_changed, via ile). Bölge durumları, aid'ler ve kilit KORUNUR; kilitli
   // bölgedeki vanalar aynı turda yeniden kapalı tutulur. Test bölgesindeki vana bitleri de eşlemeyle taşınır.
   void reconfigured(uint8_t via, uint32_t now_ms, const int8_t* fromOld = nullptr) {
-    bool man[MAX_ACTUATORS], sup[MAX_ACTUATORS];
+    bool man[MAX_ACTUATORS], sup[MAX_ACTUATORS], isup[MAX_ACTUATORS];
     memcpy(man, manualOn_, sizeof(man));
     memcpy(sup, userSuppress_, sizeof(sup));
+    memcpy(isup, intrSuppress_, sizeof(isup));
     memset(manualOn_, 0, sizeof(manualOn_));
     memset(userSuppress_, 0, sizeof(userSuppress_));
+    memset(intrSuppress_, 0, sizeof(intrSuppress_));
     for (uint8_t z = 1; z <= MAX_ZONES; z++) {
       ZoneRt& Z = zone_[z];
       const uint16_t tv = Z.testValves, tp = Z.testPrevOpen;
@@ -184,6 +202,7 @@ public:
       if (i < 0 || i >= (int8_t)MAX_ACTUATORS) continue;
       manualOn_[j] = man[i];
       userSuppress_[j] = sup[i];
+      intrSuppress_[j] = isup[i];
     }
     memset(holdFired_, 0, sizeof(holdFired_));
     if (cfg_) setPolicy(cfg_->pol.policy_on != 0, via, now_ms);
@@ -192,6 +211,20 @@ public:
 
   // Yapılandırma yeniden yüklenip validate geçince ve eylemci röleleri kilit maskesini kapsayınca SafetyManager bildirir.
   void setConfigUsable(bool v) { cfgUsable_ = v; }
+
+  // Hırsız alarmının siren isteği (F2.B.4; IntrusionCore her turda). req kalkınca kullanıcı bastırması da kalkar (alarm dönemi bitti).
+  // FRESH: bütün sirenlerin hırsız bütçesi sıfırlanır; RETRIGGER: yalnız bütçesi bitmiş (durmuş) siren yeniden çalar. Çıkış aynı turda sürülür.
+  void setIntrusionSiren(bool req, SirenKick kick, uint32_t now_ms) {
+    if (!act_) return;
+    if (!req) memset(intrSuppress_, 0, sizeof(intrSuppress_));
+    for (uint8_t i = 0; i < act_->count(); i++) {
+      if (act_->config(i)->kind != (uint8_t)ActKind::SIREN) continue;
+      if (kick == SirenKick::FRESH || (kick == SirenKick::RETRIGGER && act_->intrusionLimited(i))) act_->restartIntrusion(i);
+    }
+    intrReq_ = req;
+    driveSwitches(now_ms);
+  }
+  bool intrusionSirenRequested() const { return intrReq_; }
 
   void tick(uint32_t now_ms, uint32_t epoch, SensorSource* di, SensorSource* bridge) {
     epoch_ = epoch;
@@ -314,9 +347,10 @@ public:
       return Rej::OK;
     }
     if (safe) {
-      const bool was = manualOn_[i] || act_->on(i);
+      const bool was = manualOn_[i] || act_->on(i) || act_->intrusionOn(i);
       manualOn_[i] = false;
       if (autoOn(i, now_ms)) userSuppress_[i] = true;
+      if (intrReq_ && a.kind == (uint8_t)ActKind::SIREN) intrSuppress_[i] = true;   // hırsız isteği de bu alarm dönemi için bastırılır
       if (was) { e.actOff = bit; emit(e, nullptr); }
       return Rej::OK;
     }
@@ -688,7 +722,7 @@ private:
     const uint64_t presses = hub_->takeControlPresses();
     for (uint8_t i = 0; i < hub_->count(); i++) {
       const SensorConfig& s = *hub_->config(i);
-      if (!isControlRole(s.kind)) continue;
+      if (!isControlRole(s.kind) || s.kind == (uint8_t)SensorKind::ARM_KEY) continue;   // ARM_KEY: IntrusionCore
       const uint8_t zmask = (s.zone == 0) ? 0x0F : zbit(s.zone);
       if (presses & (1ULL << i)) {
         if (s.kind == (uint8_t)SensorKind::ALARM_ACK) {
@@ -744,6 +778,7 @@ private:
       if (fo) manualOn_[i] = false;
       const bool on = !fo && ((au && !userSuppress_[i]) || manualOn_[i]);
       act_->commandSwitch(i, on, now_ms);
+      if (act_->config(i)->kind == (uint8_t)ActKind::SIREN) act_->commandIntrusion(i, intrReq_ && !intrSuppress_[i], now_ms);
     }
   }
 
@@ -771,12 +806,14 @@ private:
   bool policyOn_;
   bool cfgUsable_;
   bool latchDirty_;
+  bool intrReq_;              // hırsız alarmının siren isteği (F2.B.4)
   uint64_t latchAssert_;
   uint64_t latchLevel_;
   uint64_t latchRecAssert_;   // kilit kaydından gelen maske (açılış güvenli maskesi hariç)
   ZoneRt zone_[MAX_ZONES + 1];
   bool manualOn_[MAX_ACTUATORS];
   bool userSuppress_[MAX_ACTUATORS];
+  bool intrSuppress_[MAX_ACTUATORS];   // kullanıcı hırsız sirenini kapattı (alarm dönemi boyunca)
   bool holdFired_[MAX_SENSORS];
 };
 

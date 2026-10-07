@@ -184,6 +184,9 @@ const Map<String, String> _serverSafetyMessages = <String, String>{
   'ACTUATOR_USE_SAFETY_COMMAND': 'Bu kanal bir güvenlik cihazına bağlı; lamba gibi açılamaz.',
   'FIRMWARE_UNSUPPORTED': 'Pano yazılımı güvenlik modülünü desteklemiyor. Pano yazılımını güncelleyin.',
   'ALARM_NOT_OPEN': 'Bu alarm zaten kapanmış.',
+  // Faz 2 (F2.B.9): hırsız alarmı kipi.
+  'ARM_FIRMWARE_UNSUPPORTED': "Bu pano yazılımı alarm kipini desteklemiyor; v1.2.1'e güncelleyin.",
+  'ALARM_USE_DISARM': 'Hırsız alarmı onaylanmaz, çözülür.',
 };
 
 /// `submit` çağrısının REST/LAN gönderim sonucu.
@@ -700,6 +703,14 @@ class CommandConfirm {
   static ConfirmPredicate actuatorOn(String id, bool on, {String? uid}) => (s) {
         final value = _actuator(s, id, uid)?.on;
         return value != null && value == on;
+      };
+
+  /// Alarm kipi [mode] oldu (`safety.arm.mode`; F2.B.9). Kurma/çözme iyimser değildir: onay bu yansımadır.
+  static ConfirmPredicate armMode(String mode, {String? uid}) => (s) {
+        final safety = s.safety;
+        if (!safety.supported) return false;
+        if (uid != null && safety.deviceUid != null && safety.deviceUid != uid.toUpperCase()) return false;
+        return safety.arm?.mode.wire == mode;
       };
 
   /// Bölge [zone] alarmı susturuldu ya da kilit kalktı (bölge `normal`).

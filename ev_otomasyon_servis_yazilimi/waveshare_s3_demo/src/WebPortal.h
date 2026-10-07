@@ -116,6 +116,7 @@ private:
   void handleApiActuator();
   void handleApiAlarmAck();
   void handleApiAlarmTest();
+  void handleApiArm();                     // Faz 2 F2.B.3: hirsiz alarmi kurma/cozme (yerel anahtar, resident duzeyi)
   void handleApiEvents();
   void handleApiSafetyConfigGet();
   void handleApiSafetyConfigPost();

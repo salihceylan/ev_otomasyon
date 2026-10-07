@@ -184,7 +184,14 @@ class _RelayCard extends StatelessWidget {
                     icon: Icons.science_outlined,
                     family: AppFamilies.sky,
                     label: 'Bölge Testi',
-                    onTap: busy ? null : () => logic.testActuator(id),
+                    onTap: busy
+                        ? null
+                        : () async {
+                            // F2.A.3: gaz vanalı bölgede test vanayı kapalı bırakır; önce sorulur.
+                            final zone = logic.byId(id)?.assign.zone;
+                            final gas = logic.assignments.values.any((a) => a.isGasValve && a.zone == zone);
+                            if (await confirmGasValveTest(context, hasGasValve: gas)) await logic.testActuator(id);
+                          },
                   )
                 else if (relay.isImpulse)
                   SetupOrbAction(

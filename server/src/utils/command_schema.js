@@ -25,8 +25,9 @@
 //                           (closed/off -> actuator_close: misafir dahil; open/on -> actuator_control: misafir YOK)
 //   'alarm_ack'          -> alarm onayi/susturma     (safety_ack: misafir YOK)
 //   'alarm_test'         -> bolge testi              (safety_test: owner/servis/super)
+//   'safety_arm'         -> hirsiz alarmi kurma/cozme (safety_arm: YALNIZ owner/resident; Faz 2 F2.B.6)
 //
-// Guvenlik komutlari (actuator, alarm_ack, alarm_test) `uid` ZORUNLU tasir: komut ev konusuna gider ve evdeki tum
+// Guvenlik komutlari (actuator, alarm_ack, alarm_test, safety_arm) `uid` ZORUNLU tasir: komut ev konusuna gider ve evdeki tum
 // panolar alir; eylemci (a1..a16) ve bolge numaralari pano basinadir. uid eslesmeyen pano komutu SESSIZCE yok sayar.
 // `event_ack` ve `cfg_*` YALNIZ backend'den cikar: bu sema onlari tanimaz (uygulama gonderemez).
 // ==============================================================================
@@ -47,6 +48,7 @@ const UID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/; // mqtt_bridge UID_RE i
 const ACTUATOR_TARGETS = Object.freeze(['closed', 'open', 'on', 'off']);
 const SAFE_TARGETS = Object.freeze(['closed', 'off']); // guvenli yon: kapatmak / susturmak
 const MAX_ZONE = 4;
+const ARM_MODES = Object.freeze(['away', 'home', 'off']); // F2.B.7: off = cozme
 
 const SHUTTER_ACTIONS = Object.freeze(['up', 'down', 'stop', 'step']);
 const GROUP_COMMANDS = Object.freeze([
@@ -66,6 +68,7 @@ const KINDS = Object.freeze({
   ACTUATOR: 'actuator',
   ALARM_ACK: 'alarm_ack',
   ALARM_TEST: 'alarm_test',
+  SAFETY_ARM: 'safety_arm',
 });
 
 function fail(error, field = null) {
@@ -257,6 +260,18 @@ function validateAlarmTestCommand(input, keys, id) {
   return { ok: true, kind: KINDS.ALARM_TEST, command: withId({ cmd: 'alarm_test', zone: zone.value, uid: uid.value }, id) };
 }
 
+/** Faz 2 F2.B.7: {cmd:'safety_arm', mode:'away'|'home'|'off', uid, id?} (firmware ayristiricisi aynen). */
+function validateSafetyArmCommand(input, keys, id) {
+  const unknown = findUnknownKey(keys, ['cmd', 'mode', 'uid', 'id']);
+  if (unknown) return fail(`Bilinmeyen alan: ${safeKey(unknown)}`, unknown);
+  if (typeof input.mode !== 'string' || !ARM_MODES.includes(input.mode)) {
+    return fail(`Alarm kipi (mode) şu değerlerden biri olmalı: ${ARM_MODES.join(', ')}.`, 'mode');
+  }
+  const uid = readRequiredUid(input);
+  if (!uid.ok) return fail(uid.error, 'uid');
+  return { ok: true, kind: KINDS.SAFETY_ARM, command: withId({ cmd: 'safety_arm', mode: input.mode, uid: uid.value }, id) };
+}
+
 // Hata mesajina girecek anahtar adini guvenli/kisa tut (log/yanit enjeksiyonunu onler).
 function safeKey(key) {
   return String(key).replace(/[^A-Za-z0-9_.-]/g, '?').slice(0, 32);
@@ -324,6 +339,10 @@ function validateCommand(input) {
     return validateAlarmTestCommand(input, keys, id);
   }
 
+  if (input.cmd === 'safety_arm') {
+    return validateSafetyArmCommand(input, keys, id);
+  }
+
   return fail('Bilinmeyen komut.', 'cmd');
 }
 
@@ -346,6 +365,8 @@ function capabilityForKind(kind) {
       return 'safety_ack';
     case KINDS.ALARM_TEST:
       return 'safety_test';
+    case KINDS.SAFETY_ARM:
+      return 'safety_arm';
     default:
       return null; // ACTUATOR: yon komuttan okunur (capabilityForCommand)
   }
@@ -378,6 +399,7 @@ module.exports = {
   ACTUATOR_TARGETS,
   SAFE_TARGETS,
   MAX_ZONE,
+  ARM_MODES,
   isValidCommandId: (id) => typeof id === 'string' && COMMAND_ID_PATTERN.test(id),
   KINDS,
   MAX_RELAY,

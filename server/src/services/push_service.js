@@ -74,6 +74,8 @@ const APP_VERSION_MAX = 32;
 const APP_VERSION_RE = /^[\x20-\x7E]+$/;
 const PLATFORMS = Object.freeze(['android', 'ios']);
 const SAFE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+// Faz 2 F2.C.8: push data.device_uuid (uygulama SafetyPushNotice ile ayni kural: ^[A-Z0-9-]{1,32}$).
+const DEVICE_UUID_DATA_RE = /^[A-Z0-9-]{1,32}$/;
 const SAFE_CODE_RE = /^[A-Z][A-Z0-9_]{1,39}$/;
 
 // FCM hata kodlarının sınıflandırması (https://firebase.google.com/docs/reference/fcm/rest/v1/ErrorCode).
@@ -177,6 +179,11 @@ function buildSafetyData(type, data) {
     device_id: safeId(pick('device_id', 'deviceId')),
     alarm_id: safeId(pick('alarm_id', 'alarmId')),
   };
+  // Faz 2 F2.C.8: panonun uid'si (devices.device_uuid; uygulama kart anahtari). Gecersiz bicim ATILIR (alan yazilmaz).
+  const uuidRaw = pick('device_uuid', 'deviceUuid');
+  if (typeof uuidRaw === 'string' && DEVICE_UUID_DATA_RE.test(uuidRaw.trim().toUpperCase())) {
+    out.device_uuid = uuidRaw.trim().toUpperCase();
+  }
   if (type === 'safety_alarm') {
     const zone = Math.trunc(Number(pick('zone')));
     out.zone = Number.isInteger(zone) && zone >= 1 && zone <= 4 ? String(zone) : '';

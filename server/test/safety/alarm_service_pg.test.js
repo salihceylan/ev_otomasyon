@@ -373,3 +373,20 @@ test('E2E-2: kilitli bolgede yeni tur yeni aid ile gelir: yeni satir + push; esk
   assert.equal(rows[1].kind, 'gas');
   assert.equal(w.pushes.filter((p) => p.kind !== 'safety_info').length, 2, 'tirmanma ayri alarm push u uretir');
 });
+
+// Faz 2 incelemesi RG-1: pano rev'i geriledi (fabrika sifirlamasi NVS_NS_SAFETY'yi siler; device_configs satiri korunur). Panonun
+// SON BILDIRDIGI (devices.safety_state.cfg) rev+crc ile ayni dokum, kopyadan kucuk rev'li olsa da yazilir; aksi halde kopya kalici bayat
+// kalir (bulut okumasi suresiz CONFIG_NOT_AVAILABLE). Panonun bildirmedigi eski dokum yine yazilmaz.
+test('RG-1: pano rev\'i geriledi -> state ile ayni (rev, crc) dokum kopyayi gunceller; bayat dokum yine reddedilir', { skip: SKIP }, async () => {
+  const w = await world();
+  const dump = (rev, crc) => w.svc.handleCfgDump({ deviceId: w.dev.id, dump: { cfgDump: true, uid: w.uid, module: 'safety', rev, crc, part: 1, parts: 1, body: { sensors: [], actuators: [] } } });
+  assert.equal((await dump(7, '00000007')).status, 'stored');
+  await w.db.query('UPDATE devices SET safety_state = $2::jsonb WHERE id = $1', [w.dev.id, JSON.stringify({ present: true, mode: 'normal', cfg: { rev: 1, crc: '0000abcd' } })]);
+  assert.equal((await dump(3, '00000003')).status, 'stale', 'panonun bildirmedigi eski rev');
+  assert.equal((await dump(1, '0000ffff')).status, 'stale', 'ayni rev ama farkli crc');
+  assert.equal((await dump(1, '0000abcd')).status, 'stored', 'panonun bildirdigi rev + crc');
+  const row = (await w.db.query("SELECT rev, crc FROM device_configs WHERE device_id = $1 AND module = 'safety'", [w.dev.id])).rows[0];
+  assert.equal(Number(row.rev), 1);
+  assert.equal(String(row.crc).toLowerCase(), '0000abcd');
+  assert.equal((await dump(2, '00000002')).status, 'stored', 'ileri rev her zaman yazilir');
+});

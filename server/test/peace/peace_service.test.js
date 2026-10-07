@@ -1147,7 +1147,7 @@ test("claim/markSending kaynak sozlesmesi: 'resolved' satir yeniden talep edilem
   assert.match(REMINDER_SQL.markSending, /status = 'claimed'/);
   assert.match(REMINDER_SQL.finish, /status IN \('claimed', 'sending'\)/);
   for (const sql of [REMINDER_SQL.claim, REMINDER_SQL.markSending, REMINDER_SQL.finish]) assert.equal(sql.includes("'resolved'"), false);
-  assert.match(REMINDER_SQL.claim, /status IN \('skipped_offline', 'failed'\)/);
+  assert.match(REMINDER_SQL.claim, /status IN \('skipped_offline', 'skipped_hazard', 'failed'\)/);
 });
 
 // ==============================================================================
@@ -1343,4 +1343,24 @@ test('SQL sozlesmesi: yer tutucular 1..N bitisik, calisma zamani parametre sayis
   assert.match(SQL.insertManual, /\$5::uuid/);
   assert.match(SQL.insertManual, /\$6::varchar/);
   assert.match(SQL.resolveNotice, /COALESCE\(\$3::int, \(SELECT id FROM/);
+});
+
+// ------------------------------------------------------------------------------
+// Faz 2 / WP-G1 (F2.A.4): gaz alarmi acik evde "Hepsini kapat" -> 409 HAZARD_ACTIVE
+// ------------------------------------------------------------------------------
+test('F2.A.4 closeAll: evde acik gaz alarmi -> 409 HAZARD_ACTIVE, HICBIR komut yayinlanmaz, kayit yazilmaz', async () => {
+  const env = makeEnv({ homes: [{ id: HOME_A, name: 'Gül Apartmanı 5', mqtt_username: TOPIC, gas_alarm: true }], endpoints: standardEndpoints() });
+  const err = await rejects(env.svc.closeAll({ actor: ACTOR, homeId: HOME_A }));
+  assert.equal(err.status, 409);
+  assert.equal(err.code, 'HAZARD_ACTIVE');
+  assert.match(err.message, /[Gg]az alarmı/);
+  assert.equal(env.published.length, 0);
+  assert.equal(env.audits.length, 0);
+});
+
+test('F2.A.4 closeAll: gaz alarmi yokken davranis aynen (komutlar gider)', async () => {
+  const env = makeEnv({ homes: [{ id: HOME_A, name: 'Gül Apartmanı 5', mqtt_username: TOPIC, gas_alarm: false }], endpoints: standardEndpoints() });
+  const out = await env.svc.closeAll({ actor: ACTOR, homeId: HOME_A });
+  assert.ok(env.published.length > 0);
+  assert.equal(out.delivered, true);
 });

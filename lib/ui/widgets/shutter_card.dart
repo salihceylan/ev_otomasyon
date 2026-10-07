@@ -8,6 +8,7 @@ import '../../models/automation_models.dart';
 import '../../services/automation_state.dart';
 import '../dashboard/command_retry.dart';
 import '../dashboard/connection_status.dart';
+import '../dashboard/gas_switch_guard.dart';
 import '../dashboard/module_badge.dart';
 import '../motion/motion.dart';
 import '../theme/app_theme.dart';
@@ -95,18 +96,24 @@ class _ShutterCardState extends State<ShutterCard> {
     );
   }
 
-  void _setPosition(int percent) {
+  void _setPosition(int percent) => unawaited(_setPositionGuarded(percent));
+
+  Future<void> _setPositionGuarded(int percent) async {
     HapticFeedback.selectionClick();
     _lastAction = 'pos';
     setState(() => _dragValue = null);
     final state = context.read<AutomationState>();
+    if (!await confirmSwitchingDuringGasAlarm(context) || !mounted) return; // F2.A.4
     unawaited(runCommand(context, 'shutter:$_pair', () => state.cmdShutter(_pair, 'pos', percent: percent)));
   }
 
-  void _command(String action) {
+  void _command(String action) => unawaited(_commandGuarded(action));
+
+  Future<void> _commandGuarded(String action) async {
     HapticFeedback.selectionClick();
     _lastAction = action;
     final state = context.read<AutomationState>();
+    if (!await confirmSwitchingDuringGasAlarm(context) || !mounted) return; // F2.A.4
     unawaited(runCommand(context, 'shutter:$_pair', () => state.cmdShutter(_pair, action)));
   }
 }

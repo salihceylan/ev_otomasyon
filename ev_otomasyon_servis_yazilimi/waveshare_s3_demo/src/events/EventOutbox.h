@@ -15,6 +15,8 @@
 //  * Yeniden başlatmada tampon kaybolur (RAM); kilitli bölge NVS'ten geri gelir ve state üzerinden uzlaştırılır.
 //  * LAN olay halkası (GET /api/events?after=<eid>, §3.5 [B16]): her push'un kopyası ayrı bir 32'lik halkada da tutulur (onaylanmış olanlar
 //    dahil; ack/taşma outbox'ı etkiler, halkayı etkilemez). İnternetsiz uygulama alarm geçmişini buradan okur (K5).
+//  * Faz 2 (F2.B.7): intrusion_alarm alarm sınıfıdır (atılmaz), intrusion_cleared *_cleared sınıfı, arm_changed en düşük öncelik
+//    (actuator_changed ile aynı). Kapı/pencere kenarları olay kutusuna YAZILMAZ (F2-5).
 // ============================================================================
 #include <stdint.h>
 #include <stddef.h>
@@ -31,7 +33,8 @@ enum class EvType : uint8_t {
   NONE = 0,
   ALARM_RAISED = 1, VALVE_FAULT = 2, VALVE_FAULT_CLEARED = 3, ALARM_SILENCED = 4, ALARM_CLEARED = 5, TEST_RESULT = 6,
   SENSOR_FAULT = 7, SENSOR_FAULT_CLEARED = 8, ACTUATOR_FAULT = 9, SAFE_MODE = 10, NVS_FAIL = 11, POLICY_CHANGED = 12,
-  ACTUATOR_CHANGED = 13, CFG_CONFLICT = 14
+  ACTUATOR_CHANGED = 13, CFG_CONFLICT = 14,
+  INTRUSION_ALARM = 15, INTRUSION_CLEARED = 16, ARM_CHANGED = 17
 };
 
 inline const char* evTypeText(uint8_t t) {
@@ -50,14 +53,18 @@ inline const char* evTypeText(uint8_t t) {
     case EvType::POLICY_CHANGED: return "policy_changed";
     case EvType::ACTUATOR_CHANGED: return "actuator_changed";
     case EvType::CFG_CONFLICT: return "cfg_conflict";
+    case EvType::INTRUSION_ALARM: return "intrusion_alarm";
+    case EvType::INTRUSION_CLEARED: return "intrusion_cleared";
+    case EvType::ARM_CHANGED: return "arm_changed";
     default: return "";
   }
 }
 
-// policy_changed "via" (Event.sub)
-enum : uint8_t { VIA_CLI = 0, VIA_LAN = 1, VIA_CLOUD = 2, VIA_LOCAL_WEB = 3 };
+// policy_changed / intrusion_cleared / arm_changed "via" (Event.sub). VIA_DI (ARM_KEY girişi) ve VIA_BOOT (açılışta geri yüklenen kip)
+// yalnız hırsız olaylarındadır.
+enum : uint8_t { VIA_CLI = 0, VIA_LAN = 1, VIA_CLOUD = 2, VIA_LOCAL_WEB = 3, VIA_DI = 4, VIA_BOOT = 5 };
 // nvs_fail "key" (Event.sub)
-enum : uint8_t { NVSK_LATCH = 1, NVSK_ACT_POS = 2, NVSK_CFG = 3, NVSK_SIREN = 4, NVSK_CRASH = 5 };
+enum : uint8_t { NVSK_LATCH = 1, NVSK_ACT_POS = 2, NVSK_CFG = 3, NVSK_SIREN = 4, NVSK_CRASH = 5, NVSK_ARM = 6 };
 
 struct Event {              // sabit yapılı yuva [Y6]
   uint8_t type;             // EvType
@@ -72,7 +79,7 @@ struct Event {              // sabit yapılı yuva [Y6]
   uint32_t atUp;            // olay anı, açılıştan beri sn
   uint32_t atEpoch;         // time_ok ise epoch sn, değilse 0 ("at" yazılmaz)
   uint16_t val;             // test_result fb_ms
-  uint8_t flag;             // test_result ok / policy_changed açık mı
+  uint8_t flag;             // test_result ok / policy_changed açık mı / arm_changed kip (ArmMode: 0 off, 1 away, 2 home)
   uint8_t sub;              // safe_mode nedeni / policy via / nvs_fail anahtarı / test_result: 1 = geri bildirim ölçüldü
   uint32_t rev;             // cfg_conflict
   uint32_t crc;
@@ -122,18 +129,26 @@ inline const char* reasonText(uint8_t r) {
   switch (r) { case 1: return "cfg_corrupt"; case 2: return "latch_orphan"; case 3: return "crash_loop"; default: return ""; }
 }
 inline const char* viaText(uint8_t v) {
-  switch (v) { case VIA_LAN: return "lan"; case VIA_CLOUD: return "cloud"; case VIA_LOCAL_WEB: return "local_web"; default: return "cli"; }
+  switch (v) {
+    case VIA_LAN: return "lan"; case VIA_CLOUD: return "cloud"; case VIA_LOCAL_WEB: return "local_web";
+    case VIA_DI: return "di"; case VIA_BOOT: return "boot"; default: return "cli";
+  }
 }
+inline const char* armModeTextOf(uint8_t m) { return m == 1 ? "away" : (m == 2 ? "home" : "off"); }
 inline const char* nvsKeyText(uint8_t k) {
   switch (k) {
     case NVSK_LATCH: return "latch"; case NVSK_ACT_POS: return "act_pos"; case NVSK_CFG: return "cfg";
-    case NVSK_SIREN: return "siren_s"; case NVSK_CRASH: return "crash"; default: return "";
+    case NVSK_SIREN: return "siren_s"; case NVSK_CRASH: return "crash"; case NVSK_ARM: return "arm"; default: return "";
   }
 }
-inline bool isAlarmClass(uint8_t t) { return t == (uint8_t)EvType::ALARM_RAISED || t == (uint8_t)EvType::VALVE_FAULT; }
-inline bool isCleared(uint8_t t) {
-  return t == (uint8_t)EvType::ALARM_CLEARED || t == (uint8_t)EvType::VALVE_FAULT_CLEARED || t == (uint8_t)EvType::SENSOR_FAULT_CLEARED;
+inline bool isAlarmClass(uint8_t t) {
+  return t == (uint8_t)EvType::ALARM_RAISED || t == (uint8_t)EvType::VALVE_FAULT || t == (uint8_t)EvType::INTRUSION_ALARM;
 }
+inline bool isCleared(uint8_t t) {
+  return t == (uint8_t)EvType::ALARM_CLEARED || t == (uint8_t)EvType::VALVE_FAULT_CLEARED || t == (uint8_t)EvType::SENSOR_FAULT_CLEARED ||
+         t == (uint8_t)EvType::INTRUSION_CLEARED;
+}
+inline bool isLowest(uint8_t t) { return t == (uint8_t)EvType::ACTUATOR_CHANGED || t == (uint8_t)EvType::ARM_CHANGED; }
 }  // namespace ev_detail
 
 inline void formatEid(uint32_t bn, uint32_t n, char* out) {
@@ -286,7 +301,7 @@ private:
     w.num("n", n);
     w.str("type", evTypeText(e.type));
     if (e.zone) w.num("zone", e.zone);
-    const char* k = kindText(e.kinds);
+    const char* k = (e.type == (uint8_t)EvType::INTRUSION_ALARM) ? "intrusion" : kindText(e.kinds);
     if (k) w.str("kind", k);
     if (e.aid[0]) {
       char aid[EID_LEN];
@@ -323,6 +338,11 @@ private:
         w.str("via", viaText(e.sub));
         break;
       case EvType::NVS_FAIL: w.str("key", nvsKeyText(e.sub)); break;
+      case EvType::INTRUSION_CLEARED: w.str("via", viaText(e.sub)); break;
+      case EvType::ARM_CHANGED:
+        w.str("mode", armModeTextOf(e.flag));
+        w.str("via", viaText(e.sub));
+        break;
       default: break;
     }
     if (e.atEpoch) w.num("at", e.atEpoch);
@@ -367,12 +387,12 @@ private:
     for (int i = 0; i < CAP; i++) if (!slot_[i].used) return i;
     return -1;
   }
-  int oldestWhere(int cls) const {   // 0: actuator_changed, 1: *_cleared, 2: alarm dışı, 3: hepsi
+  int oldestWhere(int cls) const {   // 0: actuator_changed/arm_changed, 1: *_cleared, 2: alarm dışı, 3: hepsi
     int best = -1;
     for (int i = 0; i < CAP; i++) {
       const uint8_t t = slot_[i].ev.type;
       bool match;
-      if (cls == 0) match = t == (uint8_t)EvType::ACTUATOR_CHANGED;
+      if (cls == 0) match = ev_detail::isLowest(t);
       else if (cls == 1) match = ev_detail::isCleared(t);
       else if (cls == 2) match = !ev_detail::isAlarmClass(t);
       else match = true;

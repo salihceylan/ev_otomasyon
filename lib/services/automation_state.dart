@@ -261,6 +261,10 @@ class AutomationState extends ChangeNotifier {
   /// `cfg.safety.rev/crc` değişince yeniden okunur: bulutta `GET …/devices/:uid/safety-config` (sunucunun `cfg_dump`
   /// kopyası), LAN'da `GET /api/safety/config` (CONTRACTS §1.5d, §2.6). Okunamazsa kimlik / uç nokta adı gösterilir.
   final Map<String, SafetyConfigNames> _safetyNames = <String, SafetyConfigNames>{};
+
+  /// Pano anahtarı başına son `state`'in `uptime`'ı ve alındığı an (F2.B.9 geri sayımı: kalan süre
+  /// `until_up - (uptime + geçen süre)`; `until_up` sabit olduğundan görünüm imzası her saniye değişmez).
+  final Map<String, ({int uptime, DateTime at})> _armClock = <String, ({int uptime, DateTime at})>{};
   final Set<String> _safetyNamesInFlight = <String>{};
   final Map<String, DateTime> _safetyNamesRetryAt = <String, DateTime>{};
   static const Duration _safetyNamesRetry = Duration(seconds: 60);
@@ -1078,6 +1082,7 @@ class AutomationState extends ChangeNotifier {
     _presence = DevicePresence.unknown;
     _shutterRuntime.clear();
     _safetyByUid.clear();
+    _armClock.clear();
     _safetyNames.clear();
     _safetyNamesInFlight.clear();
     _safetyNamesRetryAt.clear();
@@ -2670,6 +2675,7 @@ class AutomationState extends ChangeNotifier {
       changed = true;
     }
     if (safety.supported) _ensureSafetyNames(safetyKey, safety); // ad kopyası (cfg rev değişince)
+    if (safety.arm != null) _armClock[safetyKey] = (uptime: snapshot.uptimeSec, at: clock.now());
     if (!retained) {
       // Canlı ileti = cihaz yaşıyor (retained "offline" status'u da düzeltilir). Saklı/retained
       // `state` çevrimiçiliği KANITLAMAZ.
@@ -2938,6 +2944,9 @@ class AutomationState extends ChangeNotifier {
         _status = st;
         _invalidateViews();
         if (st.safety.supported) _ensureSafetyNames(st.uid ?? st.safety.deviceUid ?? '_lan', st.safety);
+        if (st.safety.arm != null) {
+          _armClock[st.uid ?? st.safety.deviceUid ?? '_lan'] = (uptime: st.uptimeSec, at: clock.now());
+        }
         if (st.childLockKnown) {
           _childLockByUid['_lan'] = st.childLock;
           _childLockDeviceAt = clock.now();
@@ -3415,6 +3424,10 @@ class AutomationState extends ChangeNotifier {
 
   List<SensorItem> get sensorItems => <SensorItem>[for (final s in safetyByDevice.values) ...s.sensors];
 
+  /// Evde (herhangi bir panoda) kilitli gaz alarmı sürüyor (Faz 2 F2.A.4): arayüz lamba/priz/panjur komutundan ve
+  /// hızlı senaryodan önce "elektrik anahtarlamak kıvılcım oluşturabilir" onayı ister. Komut engellenmez.
+  bool get hasOpenGasAlarm => alarmItems.any((a) => a.isActive && a.kind == 'gas');
+
   /// Yapılandırma kopyasındaki adlar [_safetyNames] (eylemci adı yoksa röle kanalının uç nokta / röle adı) ve bekleyen
   /// güvenli-yön komutları.
   SafetyState _decorateSafety(SafetyState base, String key) {
@@ -3425,7 +3438,11 @@ class AutomationState extends ChangeNotifier {
       if (name != null) names[a.id] = name;
     }
     final sensorNames = cfg?.sensors ?? const <String, String>{};
-    var out = (names.isEmpty && sensorNames.isEmpty) ? base : base.withNames(actuators: names, sensors: sensorNames);
+    final exproof = cfg?.exproof ?? const <String>{};
+    final sensorFlags = cfg?.sensorFlags ?? const <String, int>{};
+    var out = (names.isEmpty && sensorNames.isEmpty && exproof.isEmpty && sensorFlags.isEmpty)
+        ? base
+        : base.withNames(actuators: names, sensors: sensorNames, exproof: exproof, sensorFlags: sensorFlags);
     if (_pipeline.hasPending) {
       var touched = false;
       final actuators = <ActuatorItem>[
@@ -3452,6 +3469,7 @@ class AutomationState extends ChangeNotifier {
           deviceUid: out.deviceUid,
           cfgRev: out.cfgRev,
           cfgCrc: out.cfgCrc,
+          arm: out.arm,
         );
       }
     }
@@ -3708,12 +3726,113 @@ class AutomationState extends ChangeNotifier {
     final uid = alarm.deviceUid?.toUpperCase();
     AlarmRecord? byZone;
     for (final r in records) {
-      if (!r.isOpen || r.zone != alarm.zone) continue;
+      // Hırsız alarmı satırı onaylanmaz, çözülür (F2.B.9): tehlike alarmı onayında aranmaz.
+      if (!r.isOpen || r.zone != alarm.zone || r.kind == 'intrusion') continue;
       if (uid != null && r.deviceUuid != null && r.deviceUuid != uid) continue;
       if (alarm.aid != null && r.aid == alarm.aid) return r;
       byZone ??= alarm.aid == null ? r : null;
     }
     return byZone;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hırsız alarmı kipi (Faz 2 F2.B.9): kurma/çözme iyimser DEĞİL (onaya kadar "Uygulanıyor…").
+  // ---------------------------------------------------------------------------
+
+  String _armKey(String? uid) => _scoped('arm', uid?.toUpperCase());
+
+  /// Kurma/çözme komutu yolda / panonun onayını bekliyor.
+  bool isArmPending(String? uid) => _pipeline.isPending(_armKey(uid));
+
+  /// Çıkış/giriş gecikmesinin kalan saniyesi (F2.B.7 `until_up`); gecikme yoksa `null`, süre dolduysa 0.
+  int? armRemainingSec(String? uid) {
+    final key = uid?.toUpperCase();
+    final arm = _decoratedSafetyFor(key).arm;
+    final until = arm?.untilUp;
+    if (arm == null || until == null || (arm.st != ArmStatus.exit && arm.st != ArmStatus.entry)) return null;
+    final ref = _armClock[key] ?? (_armClock.length == 1 ? _armClock.values.first : null);
+    if (ref == null) return null;
+    final elapsed = clock.now().difference(ref.at).inSeconds;
+    final left = until - ref.uptime - elapsed;
+    return left < 0 ? 0 : left;
+  }
+
+  SafetyState _decoratedSafetyFor(String? uid) {
+    final all = safetyByDevice;
+    final key = uid?.toUpperCase();
+    if (key != null && all.containsKey(key)) return all[key]!;
+    if (key == null && all.length == 1) return all.values.first;
+    if (_mode == AppMode.direct && all.length == 1) return all.values.first;
+    return SafetyState.unsupported;
+  }
+
+  /// [mode] kipinde kurmanın önündeki engel (ağa çıkmadan; F2.B.9): "Kurulamaz: Salon penceresi açık." `null` = hazır.
+  /// Çözme (`off`) hiçbir zaman engellenmez.
+  String? armBlockReason(String? uid, ArmMode mode) {
+    if (!mode.isArmed) return null;
+    final blocked = _decoratedSafetyFor(uid).armBlockSensors(mode);
+    if (blocked.isEmpty) return null;
+    final parts = <String>[for (final s in blocked) s.ok ? '${s.displayName} açık' : '${s.displayName} yanıt vermiyor'];
+    return 'Kurulamaz: ${parts.join(', ')}.';
+  }
+
+  /// Alarm kipini kurar (`home`/`away`) ya da çözer (`off`). Bulutta `POST …/arm`, LAN'da `POST /api/arm`. Yetki
+  /// ([Capabilities.canArm]), yetenek (`caps` `intrusion`) ve hazırlık ([armBlockReason]) ağa çıkmadan denetlenir.
+  Future<bool> setArmMode(String? deviceUid, ArmMode mode) async {
+    final uid = deviceUid?.toUpperCase();
+    final key = _armKey(uid);
+    if (mode == ArmMode.unknown) {
+      _reject(key, 'Geçersiz alarm kipi.', reason: CommandFailureReason.validation);
+      return false;
+    }
+    if (!_safetyAllowed(key, capabilities.canArm)) return false;
+    final raw = _mode == AppMode.direct ? (_status?.safety ?? SafetyState.unsupported) : _rawSafetyFor(uid);
+    if (!raw.supportsIntrusion) {
+      _reject(key, "Bu pano yazılımı alarm kipini desteklemiyor; v1.2.1'e güncelleyin.", code: 'FIRMWARE_UNSUPPORTED');
+      return false;
+    }
+    final block = armBlockReason(uid, mode);
+    if (block != null) {
+      _reject(key, block, code: 'not_ready');
+      return false;
+    }
+    final confirms = CommandConfirm.armMode(mode.wire, uid: uid);
+    if (_mode == AppMode.direct) {
+      return _dispatch(
+        key: key,
+        original: null,
+        target: null,
+        send: (id) async {
+          await directApi.postArm(mode.wire, id: id);
+          return CommandResult.accepted;
+        },
+        confirms: confirms,
+      );
+    }
+    final home = _activeHome;
+    final ref = uid ?? _primaryDeviceRef();
+    if (home == null || ref == null) {
+      _reject(key, 'Pano bulunamadı.');
+      return false;
+    }
+    return _dispatch(
+      key: key,
+      original: null,
+      target: null,
+      targetUid: uid,
+      send: (id) async {
+        try {
+          return await cloudApi.armCommand(homeId: home.id, deviceId: ref, mode: mode.wire, commandId: id);
+        } on ApiException catch (e) {
+          // Kurma bağlamında "güvenlik modülü desteklenmiyor" değil, "alarm kipi desteklenmiyor" (F2.B.9).
+          if (e.statusCode == 409 && e.code == 'FIRMWARE_UNSUPPORTED') {
+            throw ApiException(statusCode: 409, code: 'ARM_FIRMWARE_UNSUPPORTED', message: e.message);
+          }
+          rethrow;
+        }
+      },
+      confirms: confirms,
+    );
   }
 
   /// Bölge testi (§5.1.1 NORMAL -> TEST): vanalar kapanır, siren 3 sn çalar, geri bildirim süresi ölçülür. İletim

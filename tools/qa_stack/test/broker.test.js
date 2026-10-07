@@ -408,3 +408,30 @@ test('DB\'de is_superuser=true kimlik ACL\'yi atlar (EMQX authn is_superuser)', 
     await ctx.broker.close();
   }
 });
+
+test('retained yayin ardindan ayni okuma parcasinda gelen retained-siz yayin, retained mesaji DUSURMEZ (cihaz state + event ayni anda)', async () => {
+  // aedes 1.2.0: iki yayin es zamanli islenir; storeRetained'i bekleyen state, sonraki event'ten SONRA dagitilir ve abonenin kopya
+  // denetimi (brokerCounter) onu "eski" sayardi. EMQX'te boyle bir kayip yok; QA brokeri esdeger davranmali.
+  const ctx = await startTestBroker();
+  const devPass = 'dev-pass-9';
+  ctx.store.addCredential({ username: DEV_USER, password_hash: hashPw(devPass), kind: 'device' });
+  ctx.store.addAcl({ username: DEV_USER, permission: 'allow', action: 'publish', topic: `ev/${T}/state` });
+  ctx.store.addAcl({ username: DEV_USER, permission: 'allow', action: 'publish', topic: `ev/${T}/event` });
+  const backend = await connect({ port: ctx.port, username: ctx.backend.username, password: ctx.backend.password, clientId: 'qa-backend-rt' });
+  const dev = await connect({ port: ctx.port, username: DEV_USER, password: devPass, clientId: 'ESP32S3_0000000000AA' });
+  try {
+    const msgs = collect(backend);
+    await subscribe(backend, `ev/${T}/state`);
+    await subscribe(backend, `ev/${T}/event`);
+    for (let k = 0; k < 20; k++) {
+      dev.publish(`ev/${T}/state`, JSON.stringify({ k }), { qos: 0, retain: true });
+      dev.publish(`ev/${T}/event`, JSON.stringify({ k }), { qos: 0, retain: false });
+    }
+    await waitFor(() => msgs.filter((m) => m.topic.endsWith('/event')).length === 20, { timeoutMs: 3000, label: 'olaylar' });
+    await sleep(200);
+    assert.deepEqual(msgs.filter((m) => m.topic.endsWith('/state')).map((m) => JSON.parse(m.payload).k), Array.from({ length: 20 }, (_, k) => k));
+  } finally {
+    await endClients(dev, backend);
+    await ctx.broker.close();
+  }
+});

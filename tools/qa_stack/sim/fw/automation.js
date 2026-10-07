@@ -293,14 +293,14 @@ export class Automation {
    * @param {number} [o.bootHoldMs]  acilis sonrasi komut/DI islenmeyen pencere (firmware: 500 ms)
    * @param {{event?:Function, beep?:Function, changed?:Function, preRestart?:Function, restart?:Function}} [o.hooks]
    */
-  constructor({ config, nvs, ext, timeScale = 1, hooks = {}, bootHoldMs = BOOT_HOLD_MS, safety = true, safetyNonce, resetReason = 'poweron', epoch = null }) {
+  constructor({ config, nvs, ext, timeScale = 1, hooks = {}, bootHoldMs = BOOT_HOLD_MS, safety = true, intrusion = true, safetyNonce, resetReason = 'poweron', epoch = null }) {
     // firmware: NetUtil::isTimeSynced() ? time(nullptr) : 0 (alarm "since"); QA saat kaynagi (DeviceSimulator: SNTP modeli)
     this.epochFn = typeof epoch === 'function' ? epoch : () => 0;
     this.safetyMasksGen = 0;
     this.cm = config;
     // Guvenlik katmani (safety/SafetyManager). QA: safety=false katmani HIC kurmaz (esdegerlik testi: "katman yokken" izi).
     this.safetyOn = safety !== false;
-    this.safety = new SafetyManager({ nvs, bootNonce: safetyNonce });
+    this.safety = new SafetyManager({ nvs, bootNonce: safetyNonce, intrusion });   // QA: intrusion=false hirsiz katmani yok (v1.2.0 esdegerligi)
     this.resetReason = resetReason;
     this.actuatorMask = 0n;      // bit i = role i+1 eylemci
     this.sensorDiMask = 0n;      // bit i = DI i+1 sensor/kontrol rolu/geri bildirim
@@ -398,7 +398,8 @@ export class Automation {
 
   markChanged() { this.stateChanged = true; }
 
-  beep(ms, reason = '') { if (this.buzzerAlarm) return; this.hooks.beep?.(ms, reason); }
+  // Buzzer_Open_Time: tehlike alarm kipinde ve hirsiz deseni (cikis/giris/alarm) surerken komut bipleri yutulur (Faz 2 incelemesi RG-3).
+  beep(ms, reason = '') { if (this.buzzerAlarm || this.safety?.buzzerPattern?.()) return; this.hooks.beep?.(ms, reason); }
 
   /** Relay_SignalFailure(): surucu/emniyet hatasi sinyali. */
   signalFailure(reason) { this.event('failure_signal', { reason }); this.beep(400, 'failure'); }

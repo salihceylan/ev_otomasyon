@@ -7,8 +7,10 @@
 //  * SensorConfig 28 bayttır (NVS "ahbu_safety/sens" blob öğesi; boyut static_assert ile sabit).
 //  * Kaynak (DI ya da köprü) güvenlik çekirdeğine görünmez: ikisi de SensorSource::sample() ile aynı
 //    {level, ok} örneğini verir; SensorHub NC çevirmeyi, onay süzgecini ve sağlık (ok) semantiğini uygular.
-//  * Güvenlik DI rolleri (ALARM_ACK / VALVE_CLOSE / GAS_RESET) sensör değil yerel kumandadır; DIMode'a
+//  * Güvenlik DI rolleri (ALARM_ACK / VALVE_CLOSE / GAS_RESET / ARM_KEY) sensör değil yerel kumandadır; DIMode'a
 //    girmezler (DiGate ve static_assert korunur), sensör tablosunun `kind` alanındadır [B15][K-4].
+//  * Faz 2 (F2.B.1): kapı/pencere/hareket sensörleri hırsız alarmına SF_REACT ile katılır; SF_ENTRY giriş yolu (gecikmeli),
+//    SF_AWAY_ONLY yalnız "dışarıda" kipinde etkin. ARM_KEY anahtarlı kontak: pasif->aktif kenarı kurar, aktif->pasif çözer.
 // ============================================================================
 #include <stdint.h>
 #include <stddef.h>
@@ -30,7 +32,7 @@ enum class SensorKind : uint8_t {
   NONE = 0,
   WATER = 1, GAS = 2, SMOKE = 3, DOOR = 4, WINDOW = 5, MOTION = 6, GENERIC = 7,
   // Güvenlik DI rolleri (sensör değil, yerel kumanda) [B15][K-4]
-  ALARM_ACK = 16, VALVE_CLOSE = 17, GAS_RESET = 18
+  ALARM_ACK = 16, VALVE_CLOSE = 17, GAS_RESET = 18, ARM_KEY = 19
 };
 
 enum class SensorSrc : uint8_t { DI = 0, BRIDGE = 1 };
@@ -39,7 +41,10 @@ enum class SensorSrc : uint8_t { DI = 0, BRIDGE = 1 };
 enum : uint8_t {
   SF_REACT = 0x01,       // tepki etkin (bölge ıslaklığına girer)
   SF_TAMPER = 0x02,      // sabotaj/hat izleme (ileride)
-  SF_FAULT_CLOSE = 0x04  // arıza (ok=false) vana kapatmayı tetikler (varsayılan: su 0, gaz 1, duman 0)
+  SF_FAULT_CLOSE = 0x04, // arıza (ok=false) vana kapatmayı tetikler (varsayılan: su 0, gaz 1, duman 0)
+  SF_ENTRY = 0x08,       // hırsız: giriş yolu, tetiklenince önce giriş gecikmesi (varsayılan: kapı 1, pencere 0, hareket 0)
+  SF_AWAY_ONLY = 0x10,   // hırsız: yalnız "dışarıda" kipinde etkin (varsayılan: hareket 1, kapı/pencere 0)
+  SF_ALL = 0x1F          // tanımlı bayrakların tamamı (yama sınırı; v1.2.0'da 0x07)
 };
 
 // Tehlike sınıfı bit maskesi: bölge ıslaklık/arıza özeti ve kilit türü bunu kullanır.
@@ -88,7 +93,12 @@ inline uint8_t hazardOf(uint8_t kind) {
 
 inline bool isControlRole(uint8_t kind) {
   return kind == (uint8_t)SensorKind::ALARM_ACK || kind == (uint8_t)SensorKind::VALVE_CLOSE ||
-         kind == (uint8_t)SensorKind::GAS_RESET;
+         kind == (uint8_t)SensorKind::GAS_RESET || kind == (uint8_t)SensorKind::ARM_KEY;
+}
+
+// Hırsız alarmına katılabilen sensör türleri (F2.B.1).
+inline bool isIntrusionKind(uint8_t kind) {
+  return kind == (uint8_t)SensorKind::DOOR || kind == (uint8_t)SensorKind::WINDOW || kind == (uint8_t)SensorKind::MOTION;
 }
 
 inline bool isKnownKind(uint8_t kind) {
@@ -113,6 +123,8 @@ inline uint16_t confirmWindowMs(uint8_t kind) {
 inline uint8_t defaultFlags(uint8_t kind) {
   uint8_t f = SF_REACT;
   if (kind == (uint8_t)SensorKind::GAS) f |= SF_FAULT_CLOSE;
+  if (kind == (uint8_t)SensorKind::DOOR) f |= SF_ENTRY;
+  if (kind == (uint8_t)SensorKind::MOTION) f |= SF_AWAY_ONLY;
   return f;
 }
 

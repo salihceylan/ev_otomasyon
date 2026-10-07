@@ -98,6 +98,7 @@ void main() {
     route('POST', '/api/actuator', (_) => jsonResponse(<String, dynamic>{'ok': true}));
     route('POST', '/api/alarm/ack', (_) => jsonResponse(<String, dynamic>{'ok': true}));
     route('POST', '/api/alarm/test', (_) => jsonResponse(<String, dynamic>{'ok': true}));
+    route('POST', '/api/arm', (_) => jsonResponse(<String, dynamic>{'ok': true}));
     route('GET', '/api/events', (_) => jsonResponse(<String, dynamic>{'events': <dynamic>[]}));
     route('GET', '/api/safety/config', (_) => jsonResponse(<String, dynamic>{'rev': 1}));
     route('POST', '/api/safety/config', (_) => jsonResponse(<String, dynamic>{'ok': true, 'rev': 2}));
@@ -195,6 +196,7 @@ void main() {
     'postActuator': ((a) => a.postActuator('a1', 'closed', id: 'c1'), 'POST /api/actuator'),
     'ackAlarm': ((a) => a.ackAlarm(1, aid: '9f3a11c0-3', id: 'c2'), 'POST /api/alarm/ack'),
     'testAlarm': ((a) => a.testAlarm(1, id: 'c3'), 'POST /api/alarm/test'),
+    'postArm': ((a) => a.postArm('away', id: 'c4'), 'POST /api/arm'),
     'fetchEvents': ((a) => a.fetchEvents(), 'GET /api/events'),
     'fetchSafetyConfig': ((a) => a.fetchSafetyConfig(), 'GET /api/safety/config'),
     'saveSafetyConfig': ((a) => a.saveSafetyConfig(<String, dynamic>{'base_rev': 1}), 'POST /api/safety/config'),

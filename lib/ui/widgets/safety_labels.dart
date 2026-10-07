@@ -25,9 +25,32 @@ String safetyKindTitle(String kind) {
       return 'Pencere açıldı';
     case 'motion':
       return 'Hareket algılandı';
+    case 'intrusion':
+      return 'Hırsız alarmı';
   }
   return 'Güvenlik alarmı';
 }
+
+/// Kritik alarm kartının davranış talimatı (Faz 2 F2.A.6); su ve diğer türlerde `null` (satır çizilmez).
+String? safetyKindInstruction(String kind) {
+  switch (kind) {
+    case 'gas':
+      return 'Ortamı havalandırın. Elektrik anahtarlarına ve prizlere dokunmayın, ateş yakmayın. Kokuyu hâlâ alıyorsanız '
+          "evden çıkın ve 187'yi arayın.";
+    case 'smoke':
+      return "Evde biri varsa hemen dışarı çıkın ve 112'yi arayın. Pano su vanasını kapatmaz; havalandırma fanları durduruldu.";
+  }
+  return null;
+}
+
+/// Vana arızası (kapanmadı) satırı, türe göre (F2.A.5 push metinleriyle aynı yönlendirme).
+String valveFaultText(String kind) => kind == 'gas'
+    ? "Gaz vanası kapanmadı! Sayaçtaki ana gaz vanasını elle kapatın, ortamı havalandırın ve 187'yi arayın."
+    : 'Vana kapanmadı! Ana vanayı elle kapatın.';
+
+/// Gaz vanası satırının kalıcı açıklaması ("Vanayı Aç" düğmesinin yerine; F2.A.6).
+const String kGasValveLocalOnlyNote =
+    'Gaz vanası güvenlik gereği yalnız yerinde açılır: vananın yanındaki düğme ya da vananın kurma kolu.';
 
 IconData safetyKindIcon(String kind) {
   switch (kind) {
@@ -43,6 +66,8 @@ IconData safetyKindIcon(String kind) {
       return Icons.window_outlined;
     case 'motion':
       return Icons.directions_walk_rounded;
+    case 'intrusion':
+      return Icons.local_police_outlined;
   }
   return Icons.shield_outlined;
 }
@@ -187,6 +212,12 @@ String deviceEventLabel(DeviceEventRecord e) {
       return 'Güvenlik cihazı kullanıldı';
     case 'cfg_conflict':
       return 'Ayar çakışması';
+    case 'intrusion_alarm':
+      return 'Hırsız alarmı';
+    case 'intrusion_cleared':
+      return 'Hırsız alarmı çözüldü';
+    case 'arm_changed':
+      return 'Alarm kipi değişti';
   }
   return e.type;
 }

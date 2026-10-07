@@ -11,6 +11,8 @@
 //     firmware `stale_ack` doner); uid cihazin device_uuid'sidir.
 //   - pano cevrimdisiysa onay ISTEGI kaydedilir (alarms.ack_requested_*); uzlastirici pano donunce YALNIZ ayni aid ile
 //     iletir. Vana acma ASLA kuyruga alinmaz (cevrimdisi -> 409).
+// Faz 2 (tasarim "Faz 2 tasarimi"): hirsiz alarmi kipi (armDevice, F2.B) ve buluttan yapilandirma yamasi
+//   (patchSafetyConfig / cancelSafetyConfigPending, GET ekleri; mantik services/safety_cfg_sync.js, F2.D).
 
 const { httpError } = require('../utils/http_errors');
 const { can } = require('../utils/role_matrix');
@@ -33,6 +35,28 @@ class SafetyService {
 
   get deviceService() {
     return this._deps.deviceService || require('./device_service');
+  }
+
+  /**
+   * Buluttan yapilandirma yamasi (F2.D). Kopru tekilinin yayin/bekleyici yollarini ve alarm servisinin cfg_get sinirini
+   * paylasir. Test enjeksiyonunda (alarmService verilip db verilmezse) null: GET ekleri atlanir.
+   */
+  get cfgSync() {
+    if (this._deps.cfgSync) return this._deps.cfgSync;
+    if (this._deps.alarmService && !this._deps.db) return null;
+    if (!this._cfgSync) {
+      const { SafetyCfgSync } = require('./safety_cfg_sync');
+      const bridge = require('../mqtt_bridge');
+      this._cfgSync = new SafetyCfgSync({
+        db: this._deps.db || require('../db'),
+        publishSys: (t, o) => bridge.publishSys(t, o),
+        expectOutcome: (...a) => bridge.expectOutcome(...a),
+        cancelAck: (t, id) => bridge.cancelAck(t, id),
+        isConnected: () => (typeof bridge.isConnected === 'function' ? bridge.isConnected() : false),
+        requestConfig: (a) => (typeof bridge.requestSafetyConfig === 'function' ? bridge.requestSafetyConfig(a) : null),
+      });
+    }
+    return this._cfgSync;
   }
 
   /** Durumsuz alarm sorgulari (liste, satir, onay istegi): ayri ornek; olay hatti kopruye aittir. */
@@ -69,6 +93,10 @@ class SafetyService {
     const row = await this.alarms.getAlarm({ alarmId, homeId });
     if (!row) throw httpError(404, 'Alarm bulunamadı.', 'NOT_FOUND');
     if (!OPEN_STATUSES.includes(row.status)) throw httpError(409, 'Alarm zaten kapanmış.', 'ALARM_NOT_OPEN');
+    if (row.kind === 'intrusion') {
+      // F2.B.7: hirsiz alarmi onaylanmaz, kip cozulerek kapatilir (POST .../devices/:id/arm {mode:'off'}).
+      throw httpError(409, 'Hırsız alarmı onaylanmaz, çözülür.', 'ALARM_USE_DISARM');
+    }
     if (!row.is_online) {
       const queued = await this.alarms.requestAck({ alarmId, homeId, userId: (actor && actor.userId) || null });
       throw httpError(409, 'Pano çevrimdışı; onay pano bağlanınca (aynı alarm sürüyorsa) iletilecek.', 'DEVICE_OFFLINE', {
@@ -102,14 +130,40 @@ class SafetyService {
    * ADLARI yalniz burada, state'te yok [B12]). Bicim panonun GET /api/safety/config yanitiyla aynidir (+ device_uuid,
    * updated_at). Kopya henuz gelmediyse 404 CONFIG_NOT_AVAILABLE (sunucu farki gorunce cfg_get ister).
    */
-  async getSafetyConfig({ homeId, deviceRef }) {
+  async getSafetyConfig({ actor, homeId, deviceRef }) {
     const ref = typeof deviceRef === 'string' ? deviceRef.trim() : '';
     if (!ref) throw httpError(400, 'Cihaz kimliği zorunludur.', 'VALIDATION');
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
     const device = await this.deviceService._findHomeDevice(homeId, isUuid ? { id: ref } : { uuid: ref.toUpperCase() });
     const cfg = await this.alarms.getConfig({ deviceId: device.id, module: 'safety' });
     if (!cfg) throw httpError(404, 'Panonun güvenlik yapılandırması henüz sunucuya ulaşmadı.', 'CONFIG_NOT_AVAILABLE');
-    return { device_uuid: String(device.device_uuid || '').toUpperCase(), ...cfg };
+    const out = { device_uuid: String(device.device_uuid || '').toUpperCase(), ...cfg };
+    // Faz 2 F2.D.6: state_rev (panonun son bildirdigi rev), next_base_rev (kuyruk varsa son oge + 1) ve bekleyen ozeti
+    // (yalniz safety_config yetkilisine; deger/ad icermez).
+    const sync = this.cfgSync;
+    if (sync) Object.assign(out, await sync.view({ deviceId: device.id, includePending: can('safety_config', actor && actor.access) }));
+    return out;
+  }
+
+  /** POST /homes/:homeId/devices/:deviceId/safety-config (F2.D.1): tek ogelik yama; 200 uygulandi / 202 kuyruk ya da sonuc yok. */
+  async patchSafetyConfig({ actor, homeId, deviceRef, body }) {
+    if (!can('safety_config', actor && actor.access)) throw httpError(403, 'Güvenlik yapılandırmasını değiştirme yetkiniz yok.', 'FORBIDDEN');
+    const device = await this._deviceOf(homeId, deviceRef);
+    return this.cfgSync.patch({ actor, homeId, device, body });
+  }
+
+  /** DELETE /homes/:homeId/devices/:deviceId/safety-config/pending (F2.D.2): {dropped: n}. */
+  async cancelSafetyConfigPending({ actor, homeId, deviceRef }) {
+    if (!can('safety_config', actor && actor.access)) throw httpError(403, 'Güvenlik yapılandırmasını değiştirme yetkiniz yok.', 'FORBIDDEN');
+    const device = await this._deviceOf(homeId, deviceRef);
+    return this.cfgSync.cancel({ actor, homeId, device });
+  }
+
+  async _deviceOf(homeId, deviceRef) {
+    const ref = typeof deviceRef === 'string' ? deviceRef.trim() : '';
+    if (!ref) throw httpError(400, 'Cihaz kimliği zorunludur.', 'VALIDATION');
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
+    return this.deviceService._findHomeDevice(homeId, isUuid ? { id: ref } : { uuid: ref.toUpperCase() });
   }
 
   /** POST /homes/:homeId/devices/:deviceId/actuators/:actuatorId { to } */
@@ -121,6 +175,23 @@ class SafetyService {
       homeId,
       deviceRef: ref,
       command: withCommandId({ actuator: actuatorId, to, uid }, commandId),
+    });
+  }
+
+  /**
+   * POST /homes/:homeId/devices/:deviceId/arm { mode, id? } (Faz 2 F2.B.7): hirsiz alarmi kurma (away|home) / cozme (off).
+   * Yetki safety_arm (YALNIZ owner/resident). caps 'intrusion' yoksa 409 FIRMWARE_UNSUPPORTED; cevrimdisi 409 DEVICE_OFFLINE
+   * (KUYRUGA ALINMAZ); last_rej -> 409 DEVICE_REJECTED reason not_ready|unsupported. Yanit {delivered, applied, command_id}.
+   */
+  async armDevice({ actor, homeId, deviceRef, mode, commandId }) {
+    if (!can('safety_arm', actor && actor.access)) throw httpError(403, 'Alarm kipini değiştirme yetkiniz yok.', 'FORBIDDEN');
+    if (typeof mode !== 'string') throw httpError(400, 'Alarm kipi (mode) zorunludur: away | home | off.', 'VALIDATION');
+    const { ref, uid } = await this._uidOf(homeId, deviceRef);
+    return this.deviceService.sendCommand({
+      actor,
+      homeId,
+      deviceRef: ref,
+      command: withCommandId({ cmd: 'safety_arm', mode, uid }, commandId),
     });
   }
 

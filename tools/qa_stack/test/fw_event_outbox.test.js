@@ -2,7 +2,7 @@
 // (ev_otomasyon_servis_yazilimi/waveshare_s3_demo/test/test_event_outbox/test_main.cpp) BIREBIR portu.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventOutbox, EvType, makeEvent, EID_LEN } from '../sim/fw/event_outbox.js';
+import { EventOutbox, EvType, makeEvent, EID_LEN, VIA_CLI, VIA_LAN, VIA_CLOUD, VIA_LOCAL_WEB, VIA_DI, VIA_BOOT } from '../sim/fw/event_outbox.js';
 import { HZ_WATER, HZ_GAS, HZ_SMOKE } from '../sim/fw/sensor_hub.js';
 
 const ev = (type, zone = 1) => makeEvent({ type, zone });
@@ -142,4 +142,37 @@ test('fw_event_outbox: alarm olaylari aid tasir; geri bildirimsiz test_result fb
   const j = o.toJson(2, 'U', 1);
   assert.ok(j.includes('"type":"test_result","zone":2,"ok":true,"at_up":0'));
   assert.ok(!j.includes('fb_ms'));
+});
+
+// Faz 2 (F2.B.7; Unity test_intrusion_events): hirsiz olaylarinin JSON'u ve tasma siniflari.
+test('fw_event_outbox: hirsiz olaylari (intrusion_alarm / intrusion_cleared / arm_changed)', () => {
+  const o = new EventOutbox();
+  o.begin(0x0badf00d);
+  o.push(makeEvent({ type: EvType.INTRUSION_ALARM, zone: 2, nsrcs: 2, srcs: [4, 0x83], atUp: 77 }));
+  assert.ok(o.toJson(0, 'U', 1).includes('"type":"intrusion_alarm","zone":2,"kind":"intrusion","srcs":["d4","b3"],"at_up":77}'));
+  o.push(makeEvent({ type: EvType.INTRUSION_CLEARED, aid: '0badf00d-1', sub: VIA_DI }));
+  assert.ok(o.toJson(1, 'U', 1).includes('"type":"intrusion_cleared","aid":"0badf00d-1","via":"di","at_up":0}'));
+  const MODES = ['off', 'away', 'home'];
+  const VIAS = [[VIA_CLI, 'cli'], [VIA_LAN, 'lan'], [VIA_CLOUD, 'cloud'], [VIA_LOCAL_WEB, 'local_web'], [VIA_DI, 'di'], [VIA_BOOT, 'boot']];
+  VIAS.forEach(([via, txt], i) => {
+    const q = new EventOutbox();
+    q.begin(1);
+    q.push(makeEvent({ type: EvType.ARM_CHANGED, flag: i % 3, sub: via }));
+    assert.ok(q.toJson(0, 'U', 1).includes(`"type":"arm_changed","mode":"${MODES[i % 3]}","via":"${txt}","at_up":0}`));
+  });
+  const f = new EventOutbox();
+  f.begin(1);
+  f.push(ev(EvType.ALARM_RAISED, 1));
+  f.push(ev(EvType.INTRUSION_ALARM, 1));
+  f.push(ev(EvType.ARM_CHANGED));
+  f.push(ev(EvType.INTRUSION_CLEARED));
+  for (let i = 0; i < 12; i++) f.push(ev(EvType.ALARM_RAISED, 1));
+  assert.equal(f.count(), 16);
+  f.push(ev(EvType.VALVE_FAULT, 1));
+  assert.equal(f.countOf(EvType.ARM_CHANGED), 0);
+  f.push(ev(EvType.VALVE_FAULT, 1));
+  assert.equal(f.countOf(EvType.INTRUSION_CLEARED), 0);
+  f.push(ev(EvType.VALVE_FAULT, 1));
+  assert.equal(f.countOf(EvType.INTRUSION_ALARM), 1);
+  assert.equal(f.overwrites(), 1);
 });

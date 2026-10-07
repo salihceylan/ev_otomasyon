@@ -8,6 +8,7 @@ import '../../models/automation_models.dart';
 import '../../services/automation_state.dart';
 import '../dashboard/command_retry.dart';
 import '../dashboard/connection_status.dart';
+import '../dashboard/gas_switch_guard.dart';
 import '../dashboard/module_badge.dart';
 import '../motion/motion.dart';
 import '../theme/app_theme.dart';
@@ -74,20 +75,22 @@ class RelaySwitchCard extends StatelessWidget {
     return RelayCardView(
       relay: relay,
       vm: vm,
-      onSet: (on) => _set(context, on),
-      onImpulse: () => _impulse(context),
+      onSet: (on) => unawaited(_set(context, on)),
+      onImpulse: () => unawaited(_impulse(context)),
     );
   }
 
-  void _set(BuildContext context, bool on) {
+  Future<void> _set(BuildContext context, bool on) async {
     HapticFeedback.selectionClick();
     final state = context.read<AutomationState>();
+    if (!await confirmSwitchingDuringGasAlarm(context) || !context.mounted) return; // F2.A.4
     unawaited(runCommand(context, 'relay:${relay.id}', () => state.setRelay(relay.id, on)));
   }
 
-  void _impulse(BuildContext context) {
+  Future<void> _impulse(BuildContext context) async {
     HapticFeedback.selectionClick();
     final state = context.read<AutomationState>();
+    if (!await confirmSwitchingDuringGasAlarm(context) || !context.mounted) return; // F2.A.4
     unawaited(runCommand(context, 'impulse:${relay.id}', () => state.triggerImpulse(relay.id)));
   }
 }

@@ -1,6 +1,7 @@
 // safety/SafetyCfgApi.{h,cpp} (firmware) JavaScript portu: guvenlik yapilandirmasi yamasinin JSON ayristiricisi (LAN POST /api/safety/config
 // ve bulut sys cfg_patch ortak bicimi; spec 4.1-4.2). "set" ya da "del" icinde TEK oge; bilinmeyen alan / tip / aralik disi -> UYGULANMAZ.
-import { SensorKind, SensorSrc, MAX_DI, MAX_BRIDGE, MAX_ACTUATORS, MAX_ZONES, MAX_RELAYS, NAME_LEN, defaultFlags, defaultConfirmMs, makeSensorConfig } from './sensor_hub.js';
+// Faz 2 (F2.B.7): set.intrusion {exit_s, entry_s} (0..255, en az biri); sensor flags 0..0x1F (v1.2.0: 0x07); kind "arm_key".
+import { SensorKind, SensorSrc, MAX_DI, MAX_BRIDGE, MAX_ACTUATORS, MAX_ZONES, MAX_RELAYS, NAME_LEN, SF_ALL, defaultFlags, defaultConfirmMs, makeSensorConfig } from './sensor_hub.js';
 import { ActKind, CloseMode, Medium, AF_FAN_EXPROOF, FB_TIMEOUT_DEFAULT_S, SIREN_RUN_DEFAULT_S, PULSE_DEFAULT_S, makeActuatorConfig } from './actuator_map.js';
 import { ZONE_NAME_LEN } from './safety_config.js';
 import { EditOp, editInit, KIND_BY_TEXT } from './safety_cfg_edit.js';
@@ -54,7 +55,7 @@ function parseSensor(o, e) {
   const ao = getFlag(o, 'active_open');
   if (ao.s === 'bad') return 'bad_value';
   const fl = getInt(o, 'flags');
-  if (fl.s === 'bad' || (fl.s === 'ok' && (fl.v < 0 || fl.v > 7))) return 'bad_value';
+  if (fl.s === 'bad' || (fl.s === 'ok' && (fl.v < 0 || fl.v > SF_ALL))) return 'bad_value';
   const cm = getInt(o, 'confirm_ms');
   if (cm.s === 'bad' || (cm.s === 'ok' && (cm.v < 0 || cm.v > 60000))) return 'bad_value';
   const nm = getStr(o, 'name');
@@ -210,6 +211,20 @@ export function parseCfgEdit(root, sysEnvelope = false) {
     e.zoneId = id.v;
     e.zoneName = nm.v;
     e.op = EditOp.SET_ZONE;
+    return r(null);
+  }
+  if (what === 'intrusion') {
+    if (!onlyKeys(val, ['exit_s', 'entry_s'])) return r('bad_field');
+    const ex = getInt(val, 'exit_s');
+    if (ex.s === 'bad' || (ex.s === 'ok' && (ex.v < 0 || ex.v > 255))) return r('bad_value');
+    const en = getInt(val, 'entry_s');
+    if (en.s === 'bad' || (en.s === 'ok' && (en.v < 0 || en.v > 255))) return r('bad_value');
+    e.hasExit = ex.s === 'ok' ? 1 : 0;
+    e.exitS = ex.s === 'ok' ? ex.v : 0;
+    e.hasEntry = en.s === 'ok' ? 1 : 0;
+    e.entryS = en.s === 'ok' ? en.v : 0;
+    if (!e.hasExit && !e.hasEntry) return r('bad_field');
+    e.op = EditOp.SET_INTRUSION;
     return r(null);
   }
   if (what === 'light') {

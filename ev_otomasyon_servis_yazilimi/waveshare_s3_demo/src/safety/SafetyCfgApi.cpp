@@ -74,7 +74,8 @@ uint8_t sensorKindOf(const char* s) {
   static const struct { const char* t; SensorKind k; } T[] = {
       {"water", SensorKind::WATER}, {"gas", SensorKind::GAS}, {"smoke", SensorKind::SMOKE}, {"door", SensorKind::DOOR},
       {"window", SensorKind::WINDOW}, {"motion", SensorKind::MOTION}, {"generic", SensorKind::GENERIC},
-      {"alarm_ack", SensorKind::ALARM_ACK}, {"valve_close", SensorKind::VALVE_CLOSE}, {"gas_reset", SensorKind::GAS_RESET}};
+      {"alarm_ack", SensorKind::ALARM_ACK}, {"valve_close", SensorKind::VALVE_CLOSE}, {"gas_reset", SensorKind::GAS_RESET},
+      {"arm_key", SensorKind::ARM_KEY}};
   for (const auto& x : T) if (strcmp(s, x.t) == 0) return (uint8_t)x.k;
   return 0;
 }
@@ -99,7 +100,7 @@ const char* parseSensor(JsonObject o, CfgEdit& e) {
   if (getFlag(o, "active_open", e.sens.active_open) == FS_BAD) return "bad_value";
   int32_t v = 0;
   Fs f = getInt(o, "flags", v);
-  if (f == FS_BAD || (f == FS_OK && (v < 0 || v > 0x07))) return "bad_value";
+  if (f == FS_BAD || (f == FS_OK && (v < 0 || v > SF_ALL))) return "bad_value";
   e.sens.flags = (f == FS_OK) ? (uint8_t)v : defaultFlags(e.sens.kind);
   f = getInt(o, "confirm_ms", v);
   if (f == FS_BAD || (f == FS_OK && (v < 0 || v > 60000))) return "bad_value";
@@ -269,6 +270,22 @@ const char* parseCfgEdit(JsonObject root, CfgEdit& e, bool& hasBase, uint32_t& b
     if (getStr(o, "name", name) != FS_OK || !copyName(name, e.zoneName, ZONE_NAME_LEN)) return "bad_name";
     e.zoneId = (uint8_t)id;
     e.op = EditOp::SET_ZONE;
+    return nullptr;
+  }
+  if (!strcmp(what, "intrusion")) {
+    static const char* const K[] = {"exit_s", "entry_s"};
+    if (!onlyKeys(o, K, 2)) return "bad_field";
+    int32_t v = 0;
+    Fs f = getInt(o, "exit_s", v);
+    if (f == FS_BAD || (f == FS_OK && (v < 0 || v > 255))) return "bad_value";
+    e.hasExit = f == FS_OK;
+    e.exitS = (uint8_t)(f == FS_OK ? v : 0);
+    f = getInt(o, "entry_s", v);
+    if (f == FS_BAD || (f == FS_OK && (v < 0 || v > 255))) return "bad_value";
+    e.hasEntry = f == FS_OK;
+    e.entryS = (uint8_t)(f == FS_OK ? v : 0);
+    if (!e.hasExit && !e.hasEntry) return "bad_field";
+    e.op = EditOp::SET_INTRUSION;
     return nullptr;
   }
   if (!strcmp(what, "light")) {

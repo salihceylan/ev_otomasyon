@@ -110,10 +110,137 @@ const Set<String> _sensorKinds = <String>{
   'alarm_ack',
   'valve_close',
   'gas_reset',
+  'arm_key',
 };
 
-/// Yerel kumanda rolleri (sensör listesinde, tehlike sensörü değil).
-const Set<String> kSafetyControlKinds = <String>{'alarm_ack', 'valve_close', 'gas_reset'};
+/// Yerel kumanda rolleri (sensör listesinde, tehlike sensörü değil). `arm_key` anahtarlı alarm kontağıdır (F2.B.3).
+const Set<String> kSafetyControlKinds = <String>{'alarm_ack', 'valve_close', 'gas_reset', 'arm_key'};
+
+/// Hırsız alarmı sensör türleri (F2.B.1).
+const Set<String> kIntrusionSensorKinds = <String>{'door', 'window', 'motion'};
+
+/// Sensör bayrakları (`SensorConfig.flags`; CONTRACTS §2.6, F2.B.1).
+const int kSensorFlagReact = 0x01;
+const int kSensorFlagEntry = 0x08;
+const int kSensorFlagAwayOnly = 0x10;
+
+/// Yapılandırma kopyası yokken türün varsayılan bayrakları (F2.B.1: kapı giriş yolu; hareket yalnız dışarıda).
+int defaultSensorFlags(String kind) {
+  switch (kind) {
+    case 'door':
+      return kSensorFlagReact | kSensorFlagEntry;
+    case 'motion':
+      return kSensorFlagReact | kSensorFlagAwayOnly;
+  }
+  return kSensorFlagReact;
+}
+
+/// Alarm kipi (`state.safety.arm.mode`).
+enum ArmMode {
+  off('off'),
+  home('home'),
+  away('away'),
+  unknown('unknown');
+
+  const ArmMode(this.wire);
+
+  final String wire;
+
+  static ArmMode parse(Object? raw) {
+    final text = asNonEmptyString(raw)?.toLowerCase();
+    for (final m in ArmMode.values) {
+      if (m != ArmMode.unknown && m.wire == text) return m;
+    }
+    return ArmMode.unknown;
+  }
+
+  bool get isArmed => this == ArmMode.home || this == ArmMode.away;
+}
+
+/// Alarm kipi durumu (`state.safety.arm.st`).
+enum ArmStatus {
+  idle('idle'),
+  exit('exit'),
+  entry('entry'),
+  alarm('alarm'),
+  unknown('unknown');
+
+  const ArmStatus(this.wire);
+
+  final String wire;
+
+  static ArmStatus parse(Object? raw) {
+    final text = asNonEmptyString(raw)?.toLowerCase();
+    for (final s in ArmStatus.values) {
+      if (s != ArmStatus.unknown && s.wire == text) return s;
+    }
+    return ArmStatus.unknown;
+  }
+}
+
+/// Hırsız alarmı katmanının durumu (`state.safety.arm`; F2.B.7). Yalnız `SF_REACT`'li en az bir kapı/pencere/hareket
+/// sensörü varsa pano yazar. Ayrıştırma fırlatmaz; bilinmeyen değer `unknown`.
+@immutable
+class ArmState {
+  const ArmState({
+    required this.mode,
+    required this.st,
+    this.ok = false,
+    this.untilUp,
+    this.aid,
+    this.srcs = const <String>[],
+  });
+
+  final ArmMode mode;
+  final ArmStatus st;
+
+  /// `false`: güvenli kipte sensör tablosu yok; hırsız katmanı etkisiz.
+  final bool ok;
+
+  /// `exit`/`entry` gecikmesinin bittiği pano `uptime` saniyesi (kalan süre `untilUp - uptime`).
+  final int? untilUp;
+
+  /// `alarm`: `intrusion_alarm` olayının eid'si.
+  final String? aid;
+
+  /// `alarm`: tetikleyen sensör kimlikleri (≤ 8).
+  final List<String> srcs;
+
+  bool get isAlarm => st == ArmStatus.alarm;
+
+  static ArmState? fromJson(Object? raw) {
+    final map = asMap(raw);
+    if (map == null) return null;
+    final aid = asNonEmptyString(map['aid']);
+    return ArmState(
+      mode: ArmMode.parse(map['mode']),
+      st: ArmStatus.parse(map['st']),
+      ok: asBool(map['ok']) == true && map['ok'] is bool,
+      untilUp: asInt(map['until_up']),
+      aid: (aid != null && aid.length <= 14) ? aid : null,
+      srcs: List<String>.unmodifiable(<String>[
+        for (final s in asList(map['srcs']) ?? const <dynamic>[])
+          if (asNonEmptyString(s) != null && asNonEmptyString(s)!.length <= 8) asNonEmptyString(s)!,
+      ].take(_maxSources)),
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is ArmState &&
+      other.mode == mode &&
+      other.st == st &&
+      other.ok == ok &&
+      other.untilUp == untilUp &&
+      other.aid == aid &&
+      listEquals(other.srcs, srcs);
+
+  @override
+  int get hashCode => Object.hash(mode, st, ok, untilUp, aid, Object.hashAll(srcs));
+
+  @override
+  String toString() => 'ArmState(${mode.wire}, ${st.wire}, ok=$ok)';
+}
 
 /// Kimlik + kod üst sınırı (`last_rej {id ≤ 24, code ≤ 24}`).
 const int _maxRejField = 24;
@@ -162,6 +289,8 @@ const Map<String, String> _rejectMessages = <String, String>{
   'gas_local_only': 'Gaz vanası güvenlik gereği yalnız yerinde, panodaki düğmeyle açılır.',
   'stale_ack': 'Bu arada yeni bir alarm oluştu; lütfen güncel alarmı inceleyip yeniden onaylayın.',
   'safe_mode': 'Pano güvenli kipte; vanalar açılamaz. Kurulumcunuza başvurun.',
+  // Hırsız alarmı kurma reddi (F2.B.7): hazır olmayan sensör var.
+  'not_ready': 'Alarm kurulamadı: açık kapı ya da pencere var.',
   'bad_cmd': 'Pano komutu anlayamadı (sürüm uyumsuz olabilir).',
   'busy': 'Pano şu anda meşgul. Biraz bekleyip tekrar deneyin.',
   // LAN yanıt kodları (CONTRACTS §2.6 "LAN yanıtları"; karar 7.2b-7)
@@ -191,6 +320,7 @@ class SensorItem {
     this.active = false,
     this.ok = false,
     String? name,
+    this.flags,
   }) : name = name ?? id;
 
   /// `d<1..40>` (DI) ya da `b<1..16>` (köprü yuvası).
@@ -212,6 +342,22 @@ class SensorItem {
 
   /// Yapılandırma adı; yoksa kimlik.
   final String name;
+
+  /// Yapılandırma bayrakları (`flags`; state'te yoktur, kopyadan gelir). Bilinmiyorsa `null` ([defaultSensorFlags]).
+  final int? flags;
+
+  /// Okunur ad: yapılandırma adı; yoksa kimlikten ("d3" -> "Giriş 3", "b1" -> "Kablosuz sensör 1").
+  String get displayName {
+    if (name != id) return name;
+    final n = id.length > 1 ? id.substring(1) : '';
+    if (int.tryParse(n) == null) return id;
+    if (id.startsWith('d')) return 'Giriş $n';
+    if (id.startsWith('b')) return 'Kablosuz sensör $n';
+    return id;
+  }
+
+  /// Etkin bayraklar (kopya yoksa türün varsayılanı).
+  int get effectiveFlags => flags ?? defaultSensorFlags(kind);
 
   /// Arayüz etiketi: "Islak" / "Kuru" / "Bağlantı yok" ayrımı için.
   bool get isWet => ok && active;
@@ -242,7 +388,11 @@ class SensorItem {
         active: active,
         ok: ok,
         name: (value == null || value.trim().isEmpty) ? id : value.trim(),
+        flags: flags,
       );
+
+  SensorItem withFlags(int? value) =>
+      SensorItem(id: id, src: src, kind: kind, zone: zone, active: active, ok: ok, name: name, flags: value);
 
   @override
   bool operator ==(Object other) =>
@@ -253,10 +403,11 @@ class SensorItem {
       other.zone == zone &&
       other.active == active &&
       other.ok == ok &&
-      other.name == name;
+      other.name == name &&
+      other.flags == flags;
 
   @override
-  int get hashCode => Object.hash(id, src, kind, zone, active, ok, name);
+  int get hashCode => Object.hash(id, src, kind, zone, active, ok, name, flags);
 }
 
 /// Normal olmayan bir bölge (`state.safety.zones[]`): kilitli alarm, vana arızası ya da test.
@@ -353,6 +504,7 @@ class ActuatorItem {
     this.fault = false,
     String? name,
     this.deviceUid,
+    this.exproof = false,
   }) : name = name ?? id;
 
   /// `a1`…`a16` (röleden bağımsız, kararlı kimlik).
@@ -377,6 +529,10 @@ class ActuatorItem {
   final bool fault;
   final String name;
   final String? deviceUid;
+
+  /// Fan gaz kaçağında çalıştırılabilir (ex-proof / ATEX). State'te yoktur; yapılandırma kopyasından gelir
+  /// ([SafetyConfigNames.exproof]). Bilinmiyorsa `false` (tutucu: "gazda çalıştırılmaz").
+  final bool exproof;
 
   bool get isValve => kind == ActuatorKind.valve;
   bool get isGasValve => isValve && medium == 'gas';
@@ -409,7 +565,7 @@ class ActuatorItem {
     );
   }
 
-  ActuatorItem copyWith({ValvePos? pos, bool? on, String? name}) => ActuatorItem(
+  ActuatorItem copyWith({ValvePos? pos, bool? on, String? name, bool? exproof}) => ActuatorItem(
         id: id,
         relay: relay,
         kind: kind,
@@ -421,6 +577,7 @@ class ActuatorItem {
         fault: fault,
         name: name ?? this.name,
         deviceUid: deviceUid,
+        exproof: exproof ?? this.exproof,
       );
 
   @override
@@ -436,11 +593,12 @@ class ActuatorItem {
       other.fault == fault &&
       other.name == name &&
       other.deviceUid == deviceUid &&
+      other.exproof == exproof &&
       listEquals(other.zones, zones);
 
   @override
   int get hashCode =>
-      Object.hash(id, relay, kind, medium, pos, on, feedback, fault, name, deviceUid, Object.hashAll(zones));
+      Object.hash(id, relay, kind, medium, pos, on, feedback, fault, name, deviceUid, exproof, Object.hashAll(zones));
 }
 
 /// Panonun güvenlik durumu (tek pano). `caps` içinde `safety` yoksa [unsupported].
@@ -460,6 +618,7 @@ class SafetyState {
     this.deviceUid,
     this.cfgRev,
     this.cfgCrc,
+    this.arm,
   });
 
   const SafetyState._unsupported()
@@ -475,7 +634,8 @@ class SafetyState {
         lastRej = null,
         deviceUid = null,
         cfgRev = null,
-        cfgCrc = null;
+        cfgCrc = null,
+        arm = null;
 
   /// Eski pano yazılımı (`v:2`, `caps` yok) ya da güvenlik yeteneği ilan edilmemiş.
   static const SafetyState unsupported = SafetyState._unsupported();
@@ -508,6 +668,27 @@ class SafetyState {
   /// `GET /api/safety/config`) yenilenir. Yapılandırılmamış panoda `null`.
   final int? cfgRev;
   final String? cfgCrc;
+
+  /// Hırsız alarmı katmanı (`safety.arm`; F2.B.7). Pano yazmadıysa (sensör yok / eski yazılım) `null`.
+  final ArmState? arm;
+
+  /// Pano hırsız alarmı kipini destekliyor (`caps` içinde `intrusion`; firmware v1.2.1+).
+  bool get supportsIntrusion => caps.contains('intrusion');
+
+  /// Hırsız alarmı sürüyor (`arm.st == alarm`).
+  bool get intrusionAlarmActive => arm?.isAlarm ?? false;
+
+  /// [mode] kipinde kurmayı engelleyen sensörler (F2.B.9 ön denetim; firmware hazırlık denetiminin istemci kopyası):
+  /// kipte etkin, giriş yolu OLMAYAN ve açık (`active`) ya da `ok=false` kapı/pencere/hareket sensörleri.
+  List<SensorItem> armBlockSensors(ArmMode mode) => <SensorItem>[
+        for (final s in sensors)
+          if (kIntrusionSensorKinds.contains(s.kind) &&
+              (s.effectiveFlags & kSensorFlagReact) != 0 &&
+              !(mode == ArmMode.home && (s.effectiveFlags & kSensorFlagAwayOnly) != 0) &&
+              (s.effectiveFlags & kSensorFlagEntry) == 0 &&
+              (!s.ok || s.active))
+            s,
+      ];
 
   /// Bölgenin durumu: bildirilmeyen bölge yapılandırılmış panoda `normal`dır (firmware yalnız normal olmayanları
   /// yazar); güvenlik özeti hiç yoksa (yapılandırılmamış / eski pano) [ZoneStatus.unknown].
@@ -594,6 +775,7 @@ class SafetyState {
       deviceUid: uid,
       cfgRev: asInt(cfg?['rev']),
       cfgCrc: (crc != null && crc.length <= 8) ? crc : null,
+      arm: ArmState.fromJson(safety?['arm']),
     );
   }
 
@@ -605,7 +787,12 @@ class SafetyState {
   }
 
   /// Yapılandırma kopyasından gelen adlarla (kimlik -> ad) yeni durum; bilinmeyen kimlik adını korur.
-  SafetyState withNames({Map<String, String> sensors = const {}, Map<String, String> actuators = const {}}) {
+  SafetyState withNames({
+    Map<String, String> sensors = const {},
+    Map<String, String> actuators = const {},
+    Set<String> exproof = const <String>{},
+    Map<String, int> sensorFlags = const <String, int>{},
+  }) {
     if (!supported) return this;
     return SafetyState(
       supported: supported,
@@ -614,17 +801,24 @@ class SafetyState {
       safeMode: safeMode,
       caps: caps,
       sensors: List<SensorItem>.unmodifiable(
-        this.sensors.map((s) => sensors.containsKey(s.id) ? s.withName(sensors[s.id]) : s),
+        this.sensors.map((s) {
+          final named = sensors.containsKey(s.id) ? s.withName(sensors[s.id]) : s;
+          return sensorFlags.containsKey(s.id) ? named.withFlags(sensorFlags[s.id]) : named;
+        }),
       ),
       alarms: alarms,
       actuators: List<ActuatorItem>.unmodifiable(
-        this.actuators.map((a) => actuators.containsKey(a.id) ? a.copyWith(name: actuators[a.id]) : a),
+        this.actuators.map((a) {
+          final named = actuators.containsKey(a.id) ? a.copyWith(name: actuators[a.id]) : a;
+          return exproof.contains(a.id) ? named.copyWith(exproof: true) : named;
+        }),
       ),
       zones: zones,
       lastRej: lastRej,
       deviceUid: deviceUid,
       cfgRev: cfgRev,
       cfgCrc: cfgCrc,
+      arm: arm,
     );
   }
 
@@ -661,6 +855,7 @@ class SafetyState {
       other.deviceUid == deviceUid &&
       other.cfgRev == cfgRev &&
       other.cfgCrc == cfgCrc &&
+      other.arm == arm &&
       listEquals(other.caps, caps) &&
       listEquals(other.sensors, sensors) &&
       listEquals(other.alarms, alarms) &&
@@ -677,6 +872,7 @@ class SafetyState {
         deviceUid,
         cfgRev,
         cfgCrc,
+        arm,
         Object.hashAll(caps),
         Object.hashAll(sensors),
         Object.hashAll(alarms),
@@ -991,6 +1187,8 @@ class SafetyConfigNames {
     this.sensors = const <String, String>{},
     this.actuators = const <String, String>{},
     this.zones = const <int, String>{},
+    this.exproof = const <String>{},
+    this.sensorFlags = const <String, int>{},
   });
 
   final int? rev;
@@ -1004,6 +1202,12 @@ class SafetyConfigNames {
 
   /// Bölge (1..4) -> ad.
   final Map<int, String> zones;
+
+  /// `exproof:true` işaretli eylemci kimlikleri (gaz alarmında çalıştırılabilen fan; F2.A.6 fan satırı).
+  final Set<String> exproof;
+
+  /// Sensör kimliği -> `flags` (hırsız alarmı ön denetimi; F2.B.9).
+  final Map<String, int> sensorFlags;
 
   /// Kopya bu durumun yapılandırmasına mı ait (`cfg.safety.rev/crc`).
   bool matches(SafetyState state) => state.cfgRev == rev && (state.cfgCrc == null || crc == null || state.cfgCrc == crc);
@@ -1039,12 +1243,26 @@ class SafetyConfigNames {
       if (id != null && id >= 1 && id <= _maxZones && name != null) zones[id] = name;
     }
     final crc = asNonEmptyString(json['crc'])?.toLowerCase();
+    final exproof = <String>{
+      for (final item in (asList(json['actuators']) ?? const <dynamic>[]).take(_maxActuators))
+        if (asBool(asMap(item)?['exproof']) == true && asNonEmptyString(asMap(item)?['id']) != null)
+          asNonEmptyString(asMap(item)?['id'])!.toLowerCase(),
+    };
+    final sensorFlags = <String, int>{};
+    for (final item in (asList(json['sensors']) ?? const <dynamic>[]).take(_maxSensors)) {
+      final map = asMap(item);
+      final id = asNonEmptyString(map?['id'])?.toLowerCase();
+      final flags = asInt(map?['flags']);
+      if (id != null && flags != null && flags >= 0 && flags <= 0xFF) sensorFlags[id] = flags;
+    }
     return SafetyConfigNames(
       rev: asInt(json['rev']),
       crc: (crc != null && crc.length <= 8) ? crc : null,
       sensors: byId(json['sensors'], RegExp(r'^[db][0-9]{1,2}$'), _maxSensors),
       actuators: byId(json['actuators'], RegExp(r'^a[0-9]{1,2}$'), _maxActuators),
       zones: Map<int, String>.unmodifiable(zones),
+      exproof: Set<String>.unmodifiable(exproof),
+      sensorFlags: Map<String, int>.unmodifiable(sensorFlags),
     );
   }
 }

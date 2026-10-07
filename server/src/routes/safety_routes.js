@@ -12,6 +12,10 @@
 // Istege bagli `id` (<= 24, [A-Za-z0-9_.:-]) istemcinin komut kimligidir: panoya AYNEN gider ve state.last_id /
 // last_rej.id'de geri yankilanir (uygulama reddi aninda kendi komutuyla eslestirir). Yoksa sunucu uretir.
 //   GET  /:homeId/devices/:deviceId/safety-config               yapilandirma kopyasi    (view: tum roller; adlar)
+// Faz 2 (2026-10-07; tasarim "Faz 2 tasarimi" F2.B / F2.D):
+//   POST /:homeId/devices/:deviceId/arm {mode, id?}             hirsiz alarmi kip       (safety_arm: YALNIZ owner/resident)
+//   POST /:homeId/devices/:deviceId/safety-config {base_rev, set|del, id?}  yama (tek oge)  (safety_config) 200 | 202
+//   DELETE /:homeId/devices/:deviceId/safety-config/pending     bekleyen kuyrugu bosalt (safety_config)
 //
 // `homeId` YALNIZCA requireHomeAccess'ten (req.homeAccess.home_id) okunur. Eylemci yonu (acma/kapatma) yetkisi
 // servis katmaninda (DeviceService.sendCommand -> capabilityForCommand) denetlenir: rota misafire de aciktir
@@ -131,6 +135,66 @@ function createRouter(deps = {}) {
         commandId: pick(req.body, 'id'),
       });
       return successResponse(res, result, 'Bölge testi başlatıldı.', 200);
+    })
+  );
+
+  // Faz 2 F2.B.7: hirsiz alarmi kurma (away|home) / cozme (off). YALNIZ owner + resident (F2-3).
+  router.post(
+    '/:homeId/devices/:deviceId/arm',
+    authenticateToken,
+    requireHomeAccess(rolesFor('safety_arm')),
+    requireCapability('safety_arm'),
+    commandLimiter,
+    handle(async (req, res) => {
+      const result = await safetyService.armDevice({
+        actor: actorOf(req),
+        homeId: req.homeAccess.home_id,
+        deviceRef: String(req.params.deviceId || ''),
+        mode: pick(req.body, 'mode'),
+        commandId: pick(req.body, 'id'),
+      });
+      return successResponse(res, result, result && result.applied ? 'Alarm kipi uygulandı.' : 'Komut panoya iletildi.', 200);
+    })
+  );
+
+  // Faz 2 F2.D: buluttan guvenlik yapilandirmasi yamasi (tek oge). 200 = panoda uygulandi; 202 = cevrimdisi panoda
+  // kuyruga alindi (queued) ya da 10 sn icinde sonuc gelmedi (applied:null, sonuc state'te gorunur).
+  router.post(
+    '/:homeId/devices/:deviceId/safety-config',
+    authenticateToken,
+    requireHomeAccess(rolesFor('safety_config')),
+    requireCapability('safety_config'),
+    commandLimiter,
+    handle(async (req, res) => {
+      const result = await safetyService.patchSafetyConfig({
+        actor: actorOf(req),
+        homeId: req.homeAccess.home_id,
+        deviceRef: String(req.params.deviceId || ''),
+        body: req.body,
+      });
+      noStore(res);
+      const applied = Boolean(result && result.applied === true);
+      let message = 'Yapılandırma panoya iletildi.';
+      if (applied) message = 'Yapılandırma panoda uygulandı.';
+      else if (result && result.queued) message = 'Pano çevrimdışı; değişiklik pano bağlanınca uygulanacak.';
+      return successResponse(res, result, message, applied ? 200 : 202);
+    })
+  );
+
+  router.delete(
+    '/:homeId/devices/:deviceId/safety-config/pending',
+    authenticateToken,
+    requireHomeAccess(rolesFor('safety_config')),
+    requireCapability('safety_config'),
+    commandLimiter,
+    handle(async (req, res) => {
+      const result = await safetyService.cancelSafetyConfigPending({
+        actor: actorOf(req),
+        homeId: req.homeAccess.home_id,
+        deviceRef: String(req.params.deviceId || ''),
+      });
+      noStore(res);
+      return successResponse(res, result, 'Bekleyen yapılandırma değişiklikleri iptal edildi.', 200);
     })
   );
 

@@ -120,9 +120,15 @@ void Buzzer_SetAlarm(bool on)
 {
   s_buzzerAlarm = on;
 }
+static volatile uint8_t s_buzzerPattern = 0;    // hirsiz deseni (SafetyManager, loopTask yazar)
+void Buzzer_SetPattern(uint8_t pattern)
+{
+  s_buzzerPattern = pattern <= 3 ? pattern : 0;
+}
 void Buzzer_Open_Time(uint16_t Time, uint16_t flicker_time) 
 {
-  if(s_buzzerAlarm) return;                     // alarm kipinde komut bipleri yutulur
+  if(s_buzzerAlarm || s_buzzerPattern) return;  // alarm kipinde ve hirsiz deseni surerken komut bipleri yutulur (birikip desen bitince
+                                                // art arda calmasin; Faz 2 incelemesi RG-3). ARM_KEY hata bip'i desen yokken uretilir.
   if(Buzzer_indicate_Num + 1 >= Buzzer_Indicate_Number)
   {
     printf("Note : The buzzer indicates that the cache is full and has been ignored\r\n");
@@ -140,8 +146,23 @@ void BuzzerTask(void *parameter) {
   bool alarmWas = false;
   uint16_t alarmTick = 0;
   while(1){
-    if(s_buzzerAlarm){                          // alarm kipi: 500 ms ac / 500 ms kapa (50 ms adim), FIFO beklemede
+    const uint8_t pattern = s_buzzerPattern;
+    if((s_buzzerAlarm || pattern != 0) && Buzzer_indicate_Num){   // desen/alarm basladi: once gelmis bipler de atilir (RG-3)
+      for (int i = 0; i < Buzzer_Indicate_Number; i++) { Buzzer_indicate[i].Buzzer_Time = 0; Buzzer_indicate[i].Buzzer_Flicker = 0; }
+      Buzzer_indicate_Num = 0;
+      Buzzer_Flag = 0;
+    }
+    if(s_buzzerAlarm || pattern == 3){          // alarm kipi (tehlike ya da hirsiz): 500 ms ac / 500 ms kapa (50 ms adim)
       if((alarmTick / 10) % 2 == 0) Buzzer_Open(); else Buzzer_Closs();
+      alarmTick++;
+      alarmWas = true;
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+    if(pattern == 1 || pattern == 2){           // cikis: 100 ms / 1 sn; giris: 200 ms / 400 ms
+      const uint16_t period = (pattern == 1) ? 20 : 8;
+      const uint16_t onTicks = (pattern == 1) ? 2 : 4;
+      if((alarmTick % period) < onTicks) Buzzer_Open(); else Buzzer_Closs();
       alarmTick++;
       alarmWas = true;
       vTaskDelay(pdMS_TO_TICKS(50));

@@ -132,7 +132,7 @@ test('cift numarasi CIHAZA ozeldir: iki cihazda da "1. panjur" acikse iki ayri c
 test('hic cihaz yok: live=false, sayilar 0, listeler bos', async () => {
   const { db } = build({ devices: [], endpoints: [] });
   const snap = await loadLiveSnapshot(db, HOME_A);
-  assert.deepEqual(snap, { devicesTotal: 0, devicesLive: 0, live: false, lights: [], shutters: [] });
+  assert.deepEqual(snap, { devicesTotal: 0, devicesLive: 0, live: false, lights: [], shutters: [], gasAlarm: false });
 });
 
 test('baska evin cihazi karismaz', async () => {
@@ -198,4 +198,17 @@ test('pg metin boolean/sayi donusleri (t, "100") tolere edilir', async () => {
   assert.equal(snap.live, true);
   assert.deepEqual(snap.shutters, [{ pair: 1, deviceId: DEV_A, room: 'Salon', position: 100 }]);
   assert.equal(snap.lights[0].channel, 5);
+});
+
+test('F2.A.4: anlik goruntu evde acik gaz alarmini tasir (gasAlarm); sorgu tek, alarms EXISTS', async () => {
+  const { loadLiveSnapshot: load, SQL: S } = require('../../src/services/peace_snapshot');
+  const rows = [{ device_id: 'd1', live: true, gas_alarm: true, endpoint_id: null }];
+  const calls = [];
+  const db = { query: async (t, p) => { calls.push(t); return { rows }; } };
+  const snap = await load(db, 'h1');
+  assert.equal(snap.gasAlarm, true);
+  assert.equal(calls.length, 1);
+  assert.match(S.snapshot, /EXISTS \(SELECT 1 FROM alarms a WHERE a\.home_id = \$1 AND a\.kind = 'gas' AND a\.status IN \('latched', 'fault', 'silenced'\)\) AS gas_alarm/);
+  const none = await load({ query: async () => ({ rows: [{ device_id: 'd1', live: true, endpoint_id: null }] }) }, 'h1');
+  assert.equal(none.gasAlarm, false, 'kolon yoksa (eski sorgu/sahte) gaz alarmi yok sayilir');
 });

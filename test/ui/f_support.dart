@@ -182,6 +182,14 @@ class FakeDevice {
   /// Pano güvenlik yeteneği ilan ediyor mu (`caps`); `false`: v1.1 yazılımı (uçlar 404).
   bool safetyCaps = false;
 
+  /// Pano hırsız alarmı katmanını ilan ediyor mu (`caps` `intrusion`; firmware v1.2.1, Faz 2 F2.B.7). `false`: v1.2.0
+  /// davranışı (sensör `flags` > 0x07 `bad_value` ile reddedilir, `intrusion` öğesi bilinmez).
+  bool intrusionCaps = false;
+
+  /// `true`: yerel anahtarla yapılandırma yazımı gevşetme sayılır ve reddedilir (`403 local_loosen_forbidden`, karar
+  /// 7.2b-7; Faz 2 F2.D.5 bulut önerisi testleri).
+  bool loosenForbidden = false;
+
   /// Ek röle modülü (`/api/config`, `/api/status`).
   bool extEnabled = false;
   int extAddress = 1;
@@ -381,7 +389,7 @@ class FakeDevice {
       'child_lock': childLock,
       'last_id': '',
       if (extEnabled) 'ext_module_enabled': true,
-      if (safetyCaps) 'caps': <String>['safety', 'actuator', 'event', 'cfg'],
+      if (safetyCaps) 'caps': <String>['safety', 'actuator', 'event', 'cfg', if (intrusionCaps) 'intrusion'],
       'relays': <Map<String, dynamic>>[
         for (final r in relays)
           <String, dynamic>{'id': r.id, 'name': r.name, 'type': r.type, 'state': r.state, 'act': ?relayAct[r.id]},
@@ -617,6 +625,7 @@ class FakeDevice {
     final denied = _auth(r);
     if (denied != null) return denied;
     if (!safetyCaps) return _err(404, 'not_found');
+    if (loosenForbidden) return _json(<String, dynamic>{'error': 'local_loosen_forbidden'}, status: 403);
     // Firmware F5 sözleşmesi (CONTRACTS §2.6): {base_rev?, set:{sensor|actuator|light:{…}}} ya da {base_rev?, del:{…}}.
     final body = r.json ?? const <String, dynamic>{};
     if (body.containsKey('base_rev') && body['base_rev'] != safetyRev) {
@@ -653,6 +662,17 @@ class FakeDevice {
       }
     } else {
       final item = Map<String, dynamic>.from(value as Map);
+      final flags = item['flags'];
+      if (what == 'sensor' && !intrusionCaps && flags is int && flags > 0x07) {
+        return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_value'}, status: 400);
+      }
+      if (what == 'intrusion') {
+        if (!intrusionCaps) return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_field'}, status: 400);
+        savedSafetyConfig = <String, dynamic>{...cfg, 'intrusion': item};
+        safetyPatches.add(Map<String, dynamic>.of(body));
+        safetyRev++;
+        return _json(<String, dynamic>{'status': 'ok', 'rev': safetyRev, 'crc': '00000000'});
+      }
       if (what == 'sensor') {
         final i = sensors.indexWhere((s) => s['id'] == item['id']);
         if (i >= 0) {

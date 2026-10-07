@@ -24,6 +24,7 @@ const char* const K_CRASH = "crash";
 const char* const K_SIREN = "siren_s";
 const char* const K_SAFEMSK = "safe_msk";
 const char* const K_DIHIST = "di_hist";
+const char* const K_ARM = "arm";
 
 struct Handle {
   nvs_handle_t h;
@@ -148,6 +149,35 @@ bool SafetyStore::reserveLatch() {
   LatchRecord r;
   latchClear(r);
   return saveLatch(r);
+}
+
+bool SafetyStore::loadArm(ArmRecord& r) {
+  memset(&r, 0, sizeof(r));
+  Handle hd(NVS_NS_LATCH, NVS_READONLY);
+  if (!hd.ok) return false;
+  ArmRecord t;
+  size_t len = sizeof(t);
+  if (nvs_get_blob(hd.h, K_ARM, &t, &len) != ESP_OK || len != sizeof(t) || t.ver != ARM_REC_VER) return false;
+  r = t;
+  return true;
+}
+
+bool SafetyStore::saveArm(const ArmRecord& r) {
+  Handle hd(NVS_NS_LATCH, NVS_READWRITE);
+  if (!hd.ok) return false;
+  return nvs_set_blob(hd.h, K_ARM, &r, sizeof(r)) == ESP_OK && nvs_commit(hd.h) == ESP_OK;
+}
+
+bool SafetyStore::reserveArm() {
+  {
+    Handle hd(NVS_NS_LATCH, NVS_READONLY);
+    size_t len = 0;
+    if (hd.ok && nvs_get_blob(hd.h, K_ARM, nullptr, &len) == ESP_OK) return true;
+  }
+  ArmRecord r;
+  memset(&r, 0, sizeof(r));
+  r.ver = ARM_REC_VER;
+  return saveArm(r);
 }
 
 bool SafetyStore::loadSafeMask(uint64_t& assertMask, uint64_t& levelMask) {

@@ -42,6 +42,7 @@ import { validateSystemChange, cfgErrText, CfgErr } from './fw/safety_config.js'
 import { VIA_LAN } from './fw/event_outbox.js';
 import { Rej } from './fw/safety_fsm.js';
 import { ACT_TO } from './command_schema.js';
+import { ARM_MODE_BY_TEXT } from './fw/intrusion_fsm.js';
 
 export const MAX_BODY_BYTES = 24576;
 export const AUTH_MAX_FAILS = AuthLimiter.MAX_FAILS;
@@ -951,6 +952,18 @@ function makeHandlers(sim, fw, ctx) {
     return takeId(j.doc, c) || postAndWait(c);
   };
 
+  /** POST /api/arm {mode, uid?, id?} (Faz 2 F2.B.3/B.7; firmware WebPortal::handleApiArm): hirsiz alarmi kurma/cozme. */
+  h.arm = async () => {
+    const j = readJson();
+    if (j.e) return j.e;
+    if (!Object.keys(j.doc).every((k) => ['mode', 'uid', 'id'].includes(k))) return err(400, 'unknown_field');
+    if (!lanUidOk(j.doc)) return err(400, 'uid_mismatch');
+    const m = fieldString(j.doc, 'mode');
+    if (m.s !== 'ok' || !Object.prototype.hasOwnProperty.call(ARM_MODE_BY_TEXT, m.v)) return err(400, 'invalid_value');
+    const c = makeCommand(CmdType.SAFETY_ARM, CmdSource.WEB, 0, ARM_MODE_BY_TEXT[m.v]);
+    return takeId(j.doc, c) || postAndWait(c);
+  };
+
   /** GET /api/events?after=<eid>: LAN olay halkasi (son 32, onaylananlar dahil), after'dan sonrakiler, en cok 16 (+ more). */
   h.events = () => {
     const after = ctx.args.has('after') ? ctx.args.get('after') : '';
@@ -988,6 +1001,8 @@ function makeHandlers(sim, fw, ctx) {
       case CfgResult.LATCHED: return err(409, 'zone_latched');
       case CfgResult.LOOSEN: return err(403, 'local_loosen_forbidden');
       case CfgResult.STORAGE: return err(500, 'storage_error');
+      case CfgResult.GAS_LOCAL: return err(403, 'gas_local_only');   // yalniz bulut yolunda uretilir (savunma)
+      case CfgResult.ARMED: return err(409, 'armed');
       default: return err(503, 'busy');
     }
   };
@@ -1008,7 +1023,8 @@ const ROOT_HTML = (sim, wifi) => `<!doctype html><html lang="tr"><head><meta cha
 <p><b>${wifi.getDeviceUid()}</b> &mdash; QA simulatoru (firmware degildir). Yerel API: <code>/api/status</code>.</p>
 <p>QA kontrol ucu yalnizca 127.0.0.1: <code>/__sim/state</code></p></body></html>`;
 
-// route tablosu: [yol, yontem] -> {handler, access: PUBLIC|KEYED|FACTORY|AP_OR_KEYED} (firmware setupRoutes: 32 rota, 3'u AP_OR_KEYED; v1.2.0 guvenlik +6)
+// route tablosu: [yol, yontem] -> {handler, access: PUBLIC|KEYED|FACTORY|AP_OR_KEYED} (firmware setupRoutes: 33 rota, 3'u AP_OR_KEYED; v1.2.0 guvenlik +6,
+// v1.2.1 Faz 2 POST /api/arm +1)
 //   PUBLIC: anahtarsiz. KEYED: yalniz gecerli X-Device-Key. FACTORY: provizyonsuz cihazda factory/init.
 //   AP_OR_KEYED: gecerli X-Device-Key YA DA AP kaynakli yetki (ApAccess::via) -- yalniz wifi/scan|connect|status.
 export const ROUTES = [
@@ -1040,6 +1056,7 @@ export const ROUTES = [
   ['/api/actuator', 'POST', 'actuator', 'KEYED'],
   ['/api/alarm/ack', 'POST', 'alarmAck', 'KEYED'],
   ['/api/alarm/test', 'POST', 'alarmTest', 'KEYED'],
+  ['/api/arm', 'POST', 'arm', 'KEYED'],
   ['/api/events', 'GET', 'events', 'KEYED'],
   ['/api/safety/config', 'GET', 'safetyConfigGet', 'KEYED'],
   ['/api/safety/config', 'POST', 'safetyConfigPost', 'KEYED'],

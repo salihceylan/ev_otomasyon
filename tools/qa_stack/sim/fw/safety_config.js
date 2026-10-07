@@ -7,7 +7,7 @@
 // Dogrulama: test/fw_safety_config.test.js, firmware'in Unity testlerinin (test/test_safety_config) BIREBIR portudur.
 import { RelayType } from './sysconfig.js';
 import {
-  MAX_SENSORS, MAX_ACTUATORS, MAX_ZONES, MAX_BRIDGE, MAX_RELAYS, NAME_LEN, SensorSrc, isKnownKind, isControlRole, hazardOf,
+  MAX_SENSORS, MAX_ACTUATORS, MAX_ZONES, MAX_BRIDGE, MAX_RELAYS, NAME_LEN, SensorSrc, SensorKind, isKnownKind, isControlRole, hazardOf,
   HZ_GAS, HZ_SMOKE,
 } from './sensor_hub.js';
 import {
@@ -19,6 +19,11 @@ export const ZONE_NAME_LEN = 16;
 export const DRY_HOLD_DEFAULT_MS = 10000;
 export const DRY_HOLD_MIN_MS = 1000;
 export const DRY_HOLD_MAX_MS = 600000;
+// Hirsiz gecikmelerinin etkin degeri (0 = varsayilan; F2.B.1): IntrusionCore ve gevsetme siniflandirmasi ortak kullanir.
+export const EXIT_DEFAULT_S = 45;
+export const ENTRY_DEFAULT_S = 30;
+export const exitDelayS = (p) => ((p.exit_s || 0) & 0xFF) || EXIT_DEFAULT_S;
+export const entryDelayS = (p) => ((p.entry_s || 0) & 0xFF) || ENTRY_DEFAULT_S;
 export const CONFIRM_MIN_MS = 100;
 export const CONFIRM_MAX_MS = 10000;
 export const FB_TIMEOUT_MIN_S = 2;
@@ -31,7 +36,7 @@ export const CRASH_LOOP_COUNT = 3;
 export function defaultSafetyConfig() {
   return {
     rev: 0,
-    pol: { policy_on: 1, flags: 0, dry_hold_ms: DRY_HOLD_DEFAULT_MS },
+    pol: { policy_on: 1, flags: 0, dry_hold_ms: DRY_HOLD_DEFAULT_MS, exit_s: 0, entry_s: 0 },   // exit_s/entry_s: Faz 2 (rsv2[0..1])
     zones: [{ name: 'Ev' }, { name: '' }, { name: '' }, { name: '' }],
     nSens: 0,
     sens: [],
@@ -50,12 +55,13 @@ export const CfgErr = Object.freeze({
   VALVE_MEDIUM: 19, VALVE_MODE: 20, PULSE_RELAY2: 21, PULSE_TIME: 22, SIREN_RUN_LIMIT: 23,
   FB_DI_RANGE: 24, FB_DI_CONFLICT: 25, FB_TIMEOUT_RANGE: 26,
   NOT_FOUND: 27, FULL: 28, BAD_EDIT: 29,
+  ARM_KEY_NOT_NC: 30,   // anahtarli kontak NC olmali (Faz 2 incelemesi RV-E3)
 });
 const CFG_ERR_TEXT = [
   'ok', 'count', 'dry_hold', 'name', 'sensor_src', 'sensor_kind', 'sensor_zone', 'sensor_di_range', 'sensor_bridge_range',
   'sensor_dup', 'sensor_di_is_button', 'gas_smoke_not_nc', 'confirm_range', 'act_kind', 'act_relay_range', 'act_relay_dup',
   'act_relay_shutter', 'act_relay_impulse', 'act_zone', 'valve_medium', 'valve_mode', 'pulse_relay2', 'pulse_time',
-  'siren_run_limit', 'fb_di_range', 'fb_di_conflict', 'fb_timeout_range', 'not_found', 'full', 'bad_edit',
+  'siren_run_limit', 'fb_di_range', 'fb_di_conflict', 'fb_timeout_range', 'not_found', 'full', 'bad_edit', 'arm_key_not_nc',
 ];
 export const cfgErrText = (e) => CFG_ERR_TEXT[e] ?? '?';
 
@@ -99,6 +105,8 @@ export function validate(sys, c) {
     if (control ? s.zone > MAX_ZONES : (s.zone < 1 || s.zone > MAX_ZONES)) return CfgErr.SENSOR_ZONE;
     const hz = hazardOf(s.kind);
     if ((hz === HZ_GAS || hz === HZ_SMOKE) && !s.active_open) return CfgErr.GAS_SMOKE_NOT_NC;
+    // Anahtarli kontak yalniz NC: kablo kesilince "aktif" (kurulu) okunur; NO'da kablo kesmek alarmi cozerdi (Faz 2 incelemesi RV-E3)
+    if (s.kind === SensorKind.ARM_KEY && !s.active_open) return CfgErr.ARM_KEY_NOT_NC;
     if (hz !== 0 && (s.confirm_ms < CONFIRM_MIN_MS || s.confirm_ms > CONFIRM_MAX_MS)) return CfgErr.CONFIRM_RANGE;
     if (hz === 0 && s.confirm_ms > CONFIRM_MAX_MS) return CfgErr.CONFIRM_RANGE;
   }
@@ -206,6 +214,8 @@ export function encodePolicy(p) {
   const b = Buffer.alloc(16);
   b[0] = p.policy_on; b[1] = p.flags || 0;
   b.writeUInt32LE(p.dry_hold_ms >>> 0, 4);
+  b[8] = (p.exit_s || 0) & 0xFF;     // hirsiz cikis gecikmesi (0 = 45 sn; F2.B.1)
+  b[9] = (p.entry_s || 0) & 0xFF;    // hirsiz giris gecikmesi (0 = 30 sn)
   return b;
 }
 

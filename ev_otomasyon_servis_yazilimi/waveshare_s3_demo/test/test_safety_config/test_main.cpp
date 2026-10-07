@@ -5,6 +5,7 @@
 // acilis kipi karari (cfg_corrupt / latch_orphan / crash_loop).
 #include <unity.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 #include "SystemConfig.h"
 #include "safety/SafetyConfig.h"
@@ -437,6 +438,41 @@ void test_boot_mask_for_system_filters_shutter_and_missing(void) {
   TEST_ASSERT_EQUAL_HEX64(0xF8ULL, bootMaskForSystem(s, all));
 }
 
+// Faz 2 (F2.B.1): hirsiz gecikmeleri Policy'nin ayrilmis baytlarinda (yeni NVS girdisi yok); 16 B duzen ve fabrika CRC'si degismez.
+// ARM_KEY yalniz panodaki DI'den (kumanda rolu), bolge 0 = tum ev; kapi/pencere/hareket sensorlerinin hirsiz bitleri gecerli.
+void test_intrusion_policy_layout_and_roles(void) {
+  TEST_ASSERT_EQUAL_INT(8, (int)offsetof(Policy, exit_s));
+  TEST_ASSERT_EQUAL_INT(9, (int)offsetof(Policy, entry_s));
+  TEST_ASSERT_EQUAL_INT(16, (int)sizeof(Policy));
+  SafetyConfig c;
+  c.setDefaults();
+  TEST_ASSERT_EQUAL_UINT8(0, c.pol.exit_s);
+  TEST_ASSERT_EQUAL_UINT8(0, c.pol.entry_s);
+  uint8_t raw[16];
+  memset(raw, 0, sizeof(raw));
+  raw[0] = 1;
+  const uint32_t dh = DRY_HOLD_DEFAULT_MS;
+  memcpy(raw + 4, &dh, 4);
+  TEST_ASSERT_EQUAL_MEMORY(raw, &c.pol, 16);           // eski (v1.2.0) Policy blob'u ile bayt bayt ayni
+  const SystemConfig sys = sys8();
+  SafetyConfig k = base();
+  k.sens[1] = sensor(4, SensorKind::ARM_KEY, 0, 1);
+  k.sens[2] = sensor(7, SensorKind::DOOR, 2, 1);
+  k.sens[2].flags = SF_REACT | SF_ENTRY | SF_AWAY_ONLY;
+  k.nSens = 3;
+  k.pol.exit_s = 255;
+  k.pol.entry_s = 1;
+  TEST_ASSERT_EQUAL(CfgErr::OK, validate(sys, k));
+  // Faz 2 incelemesi RV-E3: anahtarli kontak yalniz NC (active_open=1): kablo kesilince "aktif" (kurulu) okunur, alarm COZULMEZ.
+  k.sens[1].active_open = 0;
+  TEST_ASSERT_EQUAL(CfgErr::ARM_KEY_NOT_NC, validate(sys, k));
+  TEST_ASSERT_EQUAL_STRING("arm_key_not_nc", cfgErrText(CfgErr::ARM_KEY_NOT_NC));
+  k.sens[1].active_open = 1;
+  k.sens[1].src = (uint8_t)SensorSrc::BRIDGE;          // kumanda rolu kopruden olamaz
+  k.sens[1].index = 2;
+  TEST_ASSERT_EQUAL(CfgErr::SENSOR_SRC, validate(sys, k));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_sizes);
@@ -463,5 +499,6 @@ int main(int, char**) {
   RUN_TEST(test_boot_mask_for_system_filters_shutter_and_missing);
   RUN_TEST(test_nvs_budget_excludes_gc_page);
   RUN_TEST(test_system_change_respects_relay_guard);
+  RUN_TEST(test_intrusion_policy_layout_and_roles);
   return UNITY_END();
 }

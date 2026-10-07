@@ -76,7 +76,8 @@ test('alarm_test: {cmd, zone, uid, id?}', () => {
 test('event_ack / cfg_* uygulamadan GONDERILEMEZ (sema bilmez): yalniz backend uretir', () => {
   assert.equal(validateCommand({ cmd: 'event_ack', eids: ['9f3a11c0-1'], uid: UID }).ok, false);
   assert.equal(validateCommand({ cmd: 'cfg_patch', module: 'safety', uid: UID }).ok, false);
-  assert.equal(validateCommand({ cmd: 'safety_arm', mode: 'away', uid: UID }).ok, false, 'modul 2.5 gelene kadar yok');
+  // Faz 2 F2.B.7: safety_arm artik uygulamadan gonderilebilir (yetenek safety_arm); ayrintili testler phase2_intrusion.test.js
+  assert.equal(validateCommand({ cmd: 'safety_arm', mode: 'away', uid: UID }).ok, true);
 });
 
 test('mevcut komutlar AYNEN: relay/shutter/group/child_lock/runtime ciktilari degismedi', () => {

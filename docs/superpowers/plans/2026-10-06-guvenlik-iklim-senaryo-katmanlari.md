@@ -27,9 +27,9 @@
 - [x] 2.1 **Su baskını + akıllı vana (İLK MODÜL)** — firmware `SafetyManager`: sensör tetiklenince (debounce sonrası) bulut/uygulamadan BAĞIMSIZ vanayı kapat, kilitli alarm (latched) durumu, NVS'e yaz, yeniden başlatmada kapalı kalır; yalnız onay + sensör kuruyken açılabilir; vana geri bildirimi/zaman aşımı arızası
 - [x] 2.2 Su modülü sözleşmesi + sunucu: alarm olayı → `alarms` kaydı → yüksek öncelikli push
 - [x] 2.3 Su modülü Flutter durum modeli: `SafetyState` / `AlarmItem` / `ValveItem`, kritik alarm kartı, "vanayı kapat" / "alarmı onayla" tek dokunuş
-- [ ] 2.4 Gaz ve duman algılama: yerel siren rölesi, gaz vanası kesme, (isteğe bağlı) tahliye fanı; aynı SafetyManager deseni
-- [ ] 2.5 Kapı/pencere kontakları: alarm (kurulu/çözülü kip) + iklim/enerji senaryolarına girdi
-- [ ] 2.6 Flutter: kritik bildirim kanalı (Android high-importance, iOS critical alert izni), alarm geçmişi ekranı
+- [x] 2.4 Gaz ve duman algılama: yerel siren rölesi, gaz vanası kesme, (isteğe bağlı) tahliye fanı; aynı SafetyManager deseni
+- [ ] 2.5 Kapı/pencere kontakları: alarm (kurulu/çözülü kip) + iklim/enerji senaryolarına girdi — *alarm kipi tamam (firmware 1.2.1); iklim/senaryo girdisi 3.2/5.2 ile*
+- [x] 2.6 Flutter: kritik bildirim kanalı (Android high-importance, iOS critical alert izni), alarm geçmişi ekranı — *uygulama tarafı hazır; uygulama kapalıyken teslim için Firebase (FCM) bağlantısı ayrı karar (WP-N4)*
 
 ## 3. İklimlendirme ve enerji
 
@@ -95,3 +95,27 @@ Tasarım: `docs/superpowers/specs/2026-10-06-guvenlik-iklim-senaryo-mimarisi-des
 - Kalan (sonraki adımlar): 2.4 gaz/duman uçtan uca (çekirdek destekli; sunucu/uygulama akışları ve saha), 2.5 kapı/pencere
   alarm kipi, 2.6 Flutter FCM alıcısı + alarm kanalları, buluttan yapılandırma yazımı (`sys cfg_patch`), somut Zigbee/Thread
   köprü sürücüsü, gerçek kartta deneme + NVS ölçümü; 3.x, 4.2–4.3, 5.2–5.4.
+- **2026-10-07 — Faz 2 tasarımı yazıldı** (kod yok): 2.4 gaz/duman uçtan uca, 2.5 alarm kipi (+ `ContactBus`), 2.6 bildirim alıcısı
+  (gerçek FCM ağ geçidi ayrı karar, WP-N4), buluttan yapılandırma yazımı (`cfg_patch`, `device_configs.pending`). Tasarım belgesi
+  "Faz 2 tasarımı (2026-10-07)" bölümü; iş paketleri WP-G1..G3, WP-I1..I6, WP-N1..N4, WP-C1..C3; kararlar F2-1..F2-10.
+- **2026-10-07 — Faz 2 uygulandı ve birleştirildi** (2.4 gaz/duman, 2.5 alarm kipi + `ContactBus`, 2.6 bildirim alıcısı,
+  buluttan yapılandırma yazımı): FW (WP-I1/I2/C1, firmware **1.2.1**, sürüm paketi `firmware_releases/v1.2.1`), SRV (WP-G1/N1/I4/C2,
+  migration 034), APP (WP-G2/N2/N3/I5/I6/C3) ayrı dallarda yazılıp tek ağaçta birleştirildi; üç katman alan alan karşılaştırıldı
+  (CONTRACTS §2.6/§2.7 "Faz 2 birleştirme hizalaması"; uçtan uca bağlayıcı test `tools/qa_stack/test/f2_cross_layer_contract.test.js`).
+  Düzeltilen uyumsuzluklar: `cfg_dump` `intrusion` sunucuda atılıyordu, state `arm_key` sunucuda `generic` oluyordu, sunucu gevşetme
+  portunda `arm_key` kuralı yoktu (ortak vektör 44 -> 51), sunucu kopyasında kapı/hareket varsayılan bayrakları, "v1.3.0" sürüm metni.
+  Doğrulama: server 2259 test 0 kırık (PG'siz 2103 geçti/156 atlandı; PG'li 2258/1 atlandı), qa_stack 595/595, firmware Unity 356/356
+  (MSVC /W4, 0 uyarı), PlatformIO derlemesi 0 uyarı ve yayın paketiyle bayt bayt aynı, fabrika aracı 358, flutter analyze 0,
+  flutter test +4492 0 kırık. Firmware DONANIMDA DOĞRULANMADI. Kalan: WP-N4 (gerçek FCM ağ geçidi, iOS entitlements), gerçek kartta
+  deneme (sürüm notları "İlk kartta denenecekler" 1-10) + NVS ölçümü, iki davranış kararı (giriş yolu olmayan hareket sensörü dışarıda
+  kurmayı engeller; v1.2.0'da tanımlı kapılarda giriş gecikmesi bayrağı yok -> anlık tetik).
+- **2026-10-07 — Faz 2 karşıt inceleme düzeltmeleri TAMAM** (tasarım belgesi sonu "Faz 2 inceleme"; 2.4 ve 2.6 [x]; 2.5'in alarm kısmı
+  bitti, iklim/senaryo girdisi yalnız `ContactBus` arabirimi olarak hazır, 3.2/5.2 ile tamamlanacak): G-1 bulut yolunun yetki sınırı
+  (gaz vanası uzaktan açılabilir kılınamaz `gas_local_only` / `403 GAS_VALVE_LOCAL_ONLY`; kurulu kipte hırsız alarmı zayıflatılamaz
+  `armed` / `409 INTRUSION_ARMED`; ortak vektörler 51 -> 68), RV-E2 giriş gecikmesi enerji kesintisinden sağ çıkar, RV-E3 anahtarlı kontak
+  yalnız NC, R2 yankılı firmware'de rev çıkarımı yok, R3 yanıt durum yazımından sonra + uygulama bayat kopya planı göndermez, RG-1 rev
+  gerileyince kopya güncellenir, RG-2 yapılandırma kuyruğu ayrı şerit, RG-3 desen sırasında bip yutulur. Ertelenen: RV-E4 (kurulu kipte
+  sensör arızası; ürün kararı, köprü sürücüsüyle), RV-E5 ("follow" bölge iyileştirmesi). Migration yok. Firmware **1.2.1** paketi yeniden
+  üretildi (ana imaj SHA-256 `abe7f685…f398`, uygulama `68f300a4…fd40`). Doğrulama: server 2270 test 0 kırık (PG'siz 2113 geçti/157
+  atlandı; PG'li 2269/1 atlandı), qa_stack 603/603, firmware Unity 360/360 (MSVC /W4, 0 uyarı), PlatformIO temiz derleme 0 uyarı, fabrika
+  aracı 358, flutter analyze 0, flutter test +4495 0 kırık. Firmware DONANIMDA DOĞRULANMADI ("İlk kartta denenecekler" 11-14 eklendi).

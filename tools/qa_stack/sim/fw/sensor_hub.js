@@ -5,7 +5,9 @@
 //    >= confirm_ms ise sensor onayli aktiftir (damla deseni birikir, tek kisa sicrama dolduramaz).
 //  * ok=false sensor BILINMEYENDIR [Y-3]: ne islak ne kuru; kuruluk sayacini durdurur. Ariza kenari yalniz once ok=true
 //    gorulmus sensorde uretilir. SF_FAULT_CLOSE: ariza, turunun tehlike sinifi icin "islak" sayilir (acilista 30 sn tolerans).
-//  * Kontrol rolleri (ALARM_ACK / VALVE_CLOSE / GAS_RESET): pasif->aktif kenari bir kez bildirilir; ilk okuma kenar degildir.
+//  * Kontrol rolleri (ALARM_ACK / VALVE_CLOSE / GAS_RESET / ARM_KEY): pasif->aktif kenari bir kez bildirilir; ilk okuma kenar degildir.
+//  * Faz 2 (F2.B.1): SF_ENTRY (giris yolu) ve SF_AWAY_ONLY (yalniz disarida) hirsiz bitleri; varsayilan bayraklar kapi=REACT|ENTRY,
+//    hareket=REACT|AWAY_ONLY; ARM_KEY (19) anahtarli kontak kumanda rolu.
 //
 // Dogrulama: test/fw_sensor_hub.test.js, firmware'in Unity testlerinin (test/test_sensor_hub) BIREBIR portudur.
 
@@ -18,12 +20,15 @@ export const MAX_RELAYS = 40;
 export const NAME_LEN = 20;
 
 export const SensorKind = Object.freeze({
-  NONE: 0, WATER: 1, GAS: 2, SMOKE: 3, DOOR: 4, WINDOW: 5, MOTION: 6, GENERIC: 7, ALARM_ACK: 16, VALVE_CLOSE: 17, GAS_RESET: 18,
+  NONE: 0, WATER: 1, GAS: 2, SMOKE: 3, DOOR: 4, WINDOW: 5, MOTION: 6, GENERIC: 7, ALARM_ACK: 16, VALVE_CLOSE: 17, GAS_RESET: 18, ARM_KEY: 19,
 });
 export const SensorSrc = Object.freeze({ DI: 0, BRIDGE: 1 });
 export const SF_REACT = 0x01;
 export const SF_TAMPER = 0x02;
 export const SF_FAULT_CLOSE = 0x04;
+export const SF_ENTRY = 0x08;
+export const SF_AWAY_ONLY = 0x10;
+export const SF_ALL = 0x1F;
 export const HZ_WATER = 0x01;
 export const HZ_GAS = 0x02;
 export const HZ_SMOKE = 0x04;
@@ -37,7 +42,9 @@ export function hazardOf(kind) {
   if (kind === SensorKind.SMOKE) return HZ_SMOKE;
   return 0;
 }
-export const isControlRole = (kind) => kind === SensorKind.ALARM_ACK || kind === SensorKind.VALVE_CLOSE || kind === SensorKind.GAS_RESET;
+export const isControlRole = (kind) => kind === SensorKind.ALARM_ACK || kind === SensorKind.VALVE_CLOSE || kind === SensorKind.GAS_RESET
+  || kind === SensorKind.ARM_KEY;
+export const isIntrusionKind = (kind) => kind === SensorKind.DOOR || kind === SensorKind.WINDOW || kind === SensorKind.MOTION;
 export const isKnownKind = (kind) => (kind >= SensorKind.WATER && kind <= SensorKind.GENERIC) || isControlRole(kind);
 export function defaultConfirmMs(kind) {
   const hz = hazardOf(kind);
@@ -51,7 +58,8 @@ export function confirmWindowMs(kind) {
   if (hz === HZ_GAS || hz === HZ_SMOKE) return 1000;
   return 0;
 }
-export const defaultFlags = (kind) => SF_REACT | (kind === SensorKind.GAS ? SF_FAULT_CLOSE : 0);
+export const defaultFlags = (kind) => SF_REACT | (kind === SensorKind.GAS ? SF_FAULT_CLOSE : 0) | (kind === SensorKind.DOOR ? SF_ENTRY : 0)
+  | (kind === SensorKind.MOTION ? SF_AWAY_ONLY : 0);
 export const sensorIdCode = (c) => (c.src === SensorSrc.BRIDGE ? (0x80 | c.index) : c.index);
 export const sensorIdText = (code) => `${code & 0x80 ? 'b' : 'd'}${code & 0x7F}`;
 

@@ -59,6 +59,9 @@ const CAPABILITIES = Object.freeze({
   // Bolge testi ve guvenlik yapilandirmasi: aile sakini ve misafir YOK
   safety_test: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER]),
   safety_config: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER]),
+  // Hirsiz alarmi kurma/cozme (Faz 2 F2.B.6, karar F2-3): YALNIZ ev sakinleri. Misafir ve servis rolleri (super/staff/
+  // servis oturumu) buluttan YAPAMAZ (gizlilik/hirsizlik riski); kurulumda test LAN (yerel anahtar) ya da CLI ile yapilir.
+  safety_arm: Object.freeze([ROLES.OWNER, ROLES.RESIDENT]),
 });
 
 /**

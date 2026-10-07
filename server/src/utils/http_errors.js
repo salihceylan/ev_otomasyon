@@ -31,7 +31,8 @@ const DEADLOCK_MESSAGE = 'Eşzamanlı işlem çakışması oluştu. Lütfen tekr
 
 // Yanita eklenmesine izin verilen ek alanlar (beyaz liste; ic bilgi sizmasin).
 // ack_queued (WP-S4): cevrimdisi panoya alarm onayi istegi kaydedildi (pano donunce ayni alarm surerse iletilir).
-const EXPOSED_EXTRA_KEYS = Object.freeze(['retry_after', 'remaining_attempts', 'device_online', 'offline_devices', 'reason', 'ack_queued']);
+// data (Faz 2 F2.D.3): 409 CONFIG_CHANGED_ON_DEVICE -> {rev, crc, copy_rev} (panonun guncel yapilandirma surumu).
+const EXPOSED_EXTRA_KEYS = Object.freeze(['retry_after', 'remaining_attempts', 'device_online', 'offline_devices', 'reason', 'ack_queued', 'data']);
 
 /**
  * @param {number} status

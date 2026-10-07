@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../services/automation_state.dart';
 import '../services/peace_notice_controller.dart';
+import '../services/safety_notice_controller.dart';
 import 'common/app_dialogs.dart';
 import 'common/deep_links.dart';
 import 'dashboard/command_retry.dart';
@@ -12,6 +13,7 @@ import 'theme/app_theme.dart';
 import 'widgets/circuit_background.dart';
 import 'widgets/content_width_limit.dart';
 import 'widgets/peace_notice_host.dart';
+import 'widgets/safety_notice_host.dart';
 
 /// Uygulama kabuğu: `MaterialApp` + **tek** komut-hatası abonesi + oturum olayları.
 ///
@@ -57,6 +59,9 @@ class _AppShellState extends State<AppShell> {
 
   /// Gece hatırlatması (push + afiş) mantığı: sayfalara/AutomationState'e değil kabuğa bağlıdır.
   late final PeaceNoticeController _peace;
+
+  /// Güvenlik bildirimi (alarm push'u) yönlendirmesi ve ön plan afişi (Faz 2 F2.C.4-C.7).
+  late final SafetyNoticeController _safety;
   StreamSubscription<CommandFailure>? _failureSub;
   StreamSubscription<SessionEvent>? _sessionSub;
 
@@ -71,6 +76,7 @@ class _AppShellState extends State<AppShell> {
     final state = context.read<AutomationState>();
     _state = state;
     _peace = PeaceNoticeController(state: state);
+    _safety = SafetyNoticeController(state: state, notices: _peace.push.safetyNotices);
     _failureSub = state.commandFailures.listen(_onFailure);
     _sessionSub = state.sessionEvents.listen(_onSessionEvent);
     state.addListener(_onStateChanged);
@@ -82,6 +88,7 @@ class _AppShellState extends State<AppShell> {
     _sessionSub?.cancel();
     _state?.removeListener(_onStateChanged);
     _retry.clear();
+    _safety.dispose();
     _peace.dispose();
     super.dispose();
   }
@@ -239,10 +246,16 @@ class _AppShellState extends State<AppShell> {
           // ScaffoldMessenger üzerinden (MaterialBanner/SnackBar) gösterilir, köprü kendisi bir şey çizmez.
           return ChangeNotifierProvider<PeaceNoticeController>.value(
             value: _peace,
-            child: PeaceNoticeHost(
-              child: CircuitBackground(
-                // Geniş pencerede (masaüstü) içerik ortalanmış bir sütunda kalır; arka plan tam ekran.
-                child: ContentWidthLimit(child: child ?? const SizedBox.shrink()),
+            child: ChangeNotifierProvider<SafetyNoticeController>.value(
+              value: _safety,
+              child: SafetyNoticeHost(
+                navigatorKey: _navigatorKey,
+                child: PeaceNoticeHost(
+                  child: CircuitBackground(
+                    // Geniş pencerede (masaüstü) içerik ortalanmış bir sütunda kalır; arka plan tam ekran.
+                    child: ContentWidthLimit(child: child ?? const SizedBox.shrink()),
+                  ),
+                ),
               ),
             ),
           );

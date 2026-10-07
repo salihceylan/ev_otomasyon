@@ -5,6 +5,7 @@
 //    bosaltilmaz [D4].
 //  * Tasma (16): once en eski actuator_changed, sonra en eski *_cleared, sonra alarm disi en eski; hepsi alarmsa en eski
 //    alarmin ustune yazilir.
+//  * Faz 2 (F2.B.7): intrusion_alarm alarm sinifi, intrusion_cleared *_cleared sinifi, arm_changed en dusuk (actuator_changed ile).
 //
 // Dogrulama: test/fw_event_outbox.test.js, firmware'in Unity testlerinin (test/test_event_outbox) BIREBIR portudur.
 import { HZ_GAS, HZ_SMOKE, HZ_WATER, MAX_ACTUATORS, sensorIdText } from './sensor_hub.js';
@@ -16,11 +17,12 @@ export const EID_N_MAX = 99999;
 export const EvType = Object.freeze({
   NONE: 0, ALARM_RAISED: 1, VALVE_FAULT: 2, VALVE_FAULT_CLEARED: 3, ALARM_SILENCED: 4, ALARM_CLEARED: 5, TEST_RESULT: 6,
   SENSOR_FAULT: 7, SENSOR_FAULT_CLEARED: 8, ACTUATOR_FAULT: 9, SAFE_MODE: 10, NVS_FAIL: 11, POLICY_CHANGED: 12,
-  ACTUATOR_CHANGED: 13, CFG_CONFLICT: 14,
+  ACTUATOR_CHANGED: 13, CFG_CONFLICT: 14, INTRUSION_ALARM: 15, INTRUSION_CLEARED: 16, ARM_CHANGED: 17,
 });
 const EV_TEXT = [
   '', 'alarm_raised', 'valve_fault', 'valve_fault_cleared', 'alarm_silenced', 'alarm_cleared', 'test_result', 'sensor_fault',
   'sensor_fault_cleared', 'actuator_fault', 'safe_mode', 'nvs_fail', 'policy_changed', 'actuator_changed', 'cfg_conflict',
+  'intrusion_alarm', 'intrusion_cleared', 'arm_changed',
 ];
 export const evTypeText = (t) => EV_TEXT[t] ?? '';
 
@@ -28,11 +30,14 @@ export const VIA_CLI = 0;
 export const VIA_LAN = 1;
 export const VIA_CLOUD = 2;
 export const VIA_LOCAL_WEB = 3;
+export const VIA_DI = 4;     // hirsiz olaylari: ARM_KEY girisi
+export const VIA_BOOT = 5;   // hirsiz olaylari: acilista geri yuklenen kip
 export const NVSK_LATCH = 1;
 export const NVSK_ACT_POS = 2;
 export const NVSK_CFG = 3;
 export const NVSK_SIREN = 4;
 export const NVSK_CRASH = 5;
+export const NVSK_ARM = 6;
 
 const u32 = (x) => x >>> 0;
 const hex8 = (v) => u32(v).toString(16).padStart(8, '0');
@@ -49,10 +54,13 @@ export const formatEid = (bn, n) => `${hex8(bn)}-${n}`;
 
 const kindText = (k) => ((k & HZ_GAS) ? 'gas' : (k & HZ_SMOKE) ? 'smoke' : (k & HZ_WATER) ? 'water' : null);
 const reasonText = (r) => ({ 1: 'cfg_corrupt', 2: 'latch_orphan', 3: 'crash_loop' }[r] || '');
-const viaText = (v) => ({ [VIA_LAN]: 'lan', [VIA_CLOUD]: 'cloud', [VIA_LOCAL_WEB]: 'local_web' }[v] || 'cli');
-const nvsKeyText = (k) => ({ 1: 'latch', 2: 'act_pos', 3: 'cfg', 4: 'siren_s', 5: 'crash' }[k] || '');
-const isAlarmClass = (t) => t === EvType.ALARM_RAISED || t === EvType.VALVE_FAULT;
-const isCleared = (t) => t === EvType.ALARM_CLEARED || t === EvType.VALVE_FAULT_CLEARED || t === EvType.SENSOR_FAULT_CLEARED;
+const viaText = (v) => ({ [VIA_LAN]: 'lan', [VIA_CLOUD]: 'cloud', [VIA_LOCAL_WEB]: 'local_web', [VIA_DI]: 'di', [VIA_BOOT]: 'boot' }[v] || 'cli');
+const armModeTextOf = (m) => (m === 1 ? 'away' : m === 2 ? 'home' : 'off');
+const nvsKeyText = (k) => ({ 1: 'latch', 2: 'act_pos', 3: 'cfg', 4: 'siren_s', 5: 'crash', 6: 'arm' }[k] || '');
+const isAlarmClass = (t) => t === EvType.ALARM_RAISED || t === EvType.VALVE_FAULT || t === EvType.INTRUSION_ALARM;
+const isCleared = (t) => t === EvType.ALARM_CLEARED || t === EvType.VALVE_FAULT_CLEARED || t === EvType.SENSOR_FAULT_CLEARED
+  || t === EvType.INTRUSION_CLEARED;
+const isLowest = (t) => t === EvType.ACTUATOR_CHANGED || t === EvType.ARM_CHANGED;
 
 export class EventOutbox {
   static CAP = 16;
@@ -147,7 +155,7 @@ export class EventOutbox {
     let s = `{"v":1,"uid":"${uid ?? ''}","eid":"${formatEid(this.bn_, n)}","bn":"${hex8(this.bn_)}","boot":${u32(bootCount)},"n":${n}`;
     s += `,"type":"${evTypeText(e.type)}"`;
     if (e.zone) s += `,"zone":${e.zone}`;
-    const k = kindText(e.kinds);
+    const k = e.type === EvType.INTRUSION_ALARM ? 'intrusion' : kindText(e.kinds);
     if (k) s += `,"kind":"${k}"`;
     if (e.aid) s += `,"aid":"${String(e.aid).slice(0, 14)}"`;
     if (e.nsrcs) s += `,"srcs":[${e.srcs.slice(0, Math.min(8, e.nsrcs)).map((c) => `"${sensorIdText(c)}"`).join(',')}]`;
@@ -157,6 +165,8 @@ export class EventOutbox {
       case EvType.CFG_CONFLICT: s += `,"rev":${u32(e.rev)},"crc":"${hex8(e.crc)}"`; break;
       case EvType.POLICY_CHANGED: s += `,"policy":"${e.flag ? 'on' : 'off'}","via":"${viaText(e.sub)}"`; break;
       case EvType.NVS_FAIL: s += `,"key":"${nvsKeyText(e.sub)}"`; break;
+      case EvType.INTRUSION_CLEARED: s += `,"via":"${viaText(e.sub)}"`; break;
+      case EvType.ARM_CHANGED: s += `,"mode":"${armModeTextOf(e.flag)}","via":"${viaText(e.sub)}"`; break;
       default: break;
     }
     if (e.atEpoch) s += `,"at":${u32(e.atEpoch)}`;
@@ -178,7 +188,7 @@ export class EventOutbox {
     let best = -1;
     for (let i = 0; i < EventOutbox.CAP; i++) {
       const t = this.slot_[i].ev ? this.slot_[i].ev.type : 0;
-      const match = cls === 0 ? t === EvType.ACTUATOR_CHANGED : cls === 1 ? isCleared(t) : cls === 2 ? !isAlarmClass(t) : true;
+      const match = cls === 0 ? isLowest(t) : cls === 1 ? isCleared(t) : cls === 2 ? !isAlarmClass(t) : true;
       if (!match) continue;
       if (best < 0 || ((this.slot_[i].ord - this.slot_[best].ord) | 0) < 0) best = i;
     }

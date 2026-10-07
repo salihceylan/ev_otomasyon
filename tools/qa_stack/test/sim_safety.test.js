@@ -123,7 +123,7 @@ test('Q1: islak -> vana ayni dongude kapanir -> state v:3 (latched, aid) -> ev/{
     // LAN: /api/status ayni ek alanlari tasir; /api/events onaylanan olayi da listeler (K5)
     const st = await h.http(sim, 'GET', '/api/status');
     assert.equal(st.json.safety.zones[0].aid, z.aid);
-    assert.deepEqual(st.json.caps, ['safety', 'actuator', 'event', 'cfg']);
+    assert.deepEqual(st.json.caps, ['safety', 'actuator', 'event', 'cfg', 'intrusion']);
     const evs = await h.http(sim, 'GET', '/api/events');
     assert.ok(evs.json.events.some((e) => e.eid === ev.eid && e.type === 'alarm_raised'));
     const after = await h.http(sim, 'GET', `/api/events?after=${ev.eid}`);
@@ -470,6 +470,37 @@ test('Q1 (inceleme RV-2): uid\'siz duz role komutu eylemci rolesine dusmez (cala
     // ayni komut uid ile: bu panonun komutu, kapatma yonu kabul (sustur)
     await h.cmd({ relay: 6, state: false, uid: A, id: 'x3' });
     await h.waitState(A, (x) => x.last_id === 'x3' && x.relays[5].state === false, 'uid\'li komut sireni susturdu');
+  } finally {
+    await h.close();
+  }
+});
+
+test('C1 (Faz 2 F2.D.6): cfg_patch basarisinda last_id = id (otomasyon yeni komut isleyene dek); NVS payi yetmezse last_rej cfg_storage', async () => {
+  const h = await startHome();
+  const [sim] = h.sims;
+  const uid = sim.uid;
+  try {
+    await h.ready(sim);
+    let rev = await configure(h, sim, WATER);
+    await h.sys({ cmd: 'cfg_patch', module: 'safety', uid, base_rev: rev, id: 'cfg-1', set: { zone: { id: 2, name: 'Mutfak' } } });
+    let s = await h.waitState(uid, (x) => x.last_id === 'cfg-1', 'cfg_patch kabul yankisi (last_id)');
+    assert.equal(s.cfg.safety.rev, rev + 1);
+    assert.equal(s.last_rej, undefined);
+    // otomasyon yeni bir komut isleyince onun kimligi gecerli olur
+    await h.cmd({ relay: 1, state: true, id: 'r-1' });
+    await h.waitState(uid, (x) => x.last_id === 'r-1', 'role komutu last_id');
+    // id'siz yama: last_id degismez (yalniz yayin)
+    await h.sys({ cmd: 'cfg_patch', module: 'safety', uid, base_rev: rev + 1, set: { zone: { id: 3, name: 'Salon' } } });
+    s = await h.waitState(uid, (x) => x.cfg.safety.rev === rev + 2, 'id\'siz yama');
+    assert.equal(s.last_id, 'r-1');
+    // NVS payi yetmedi: eskiden "busy", artik "cfg_storage"
+    sim.nvs.failKeys.add('safety');
+    await h.sys({ cmd: 'cfg_patch', module: 'safety', uid, base_rev: rev + 2, id: 'cfg-2', set: { zone: { id: 4, name: 'Bahce' } } });
+    s = await h.waitState(uid, (x) => x.last_rej?.id === 'cfg-2', 'cfg_storage reddi');
+    assert.equal(s.last_rej.code, 'cfg_storage');
+    assert.equal(s.cfg.safety.rev, rev + 2);
+    sim.nvs.failKeys.delete('safety');
+    assert.deepEqual(sim.violations, []);
   } finally {
     await h.close();
   }

@@ -113,7 +113,7 @@ function makePeaceWorld({ homes = [], devices = [], endpoints = [], schemaRows =
       .filter((h) => {
         const l = logFor(h, nowHHMM, today, previous);
         if (!l) return true; // LEFT JOIN: kayit yok
-        return l.attempts < maxAttempts && (l.status === 'claimed' || (['skipped_offline', 'failed'].includes(l.status) && retryDue(l)));
+        return l.attempts < maxAttempts && (l.status === 'claimed' || (['skipped_offline', 'skipped_hazard', 'failed'].includes(l.status) && retryDue(l)));
       })
       // ORDER BY COALESCE(l.attempts, 0), h.id: hic denenmemisler once
       .sort((a, b) => {
@@ -147,7 +147,7 @@ function makePeaceWorld({ homes = [], devices = [], endpoints = [], schemaRows =
       return { rows: [{ id: row.id, attempts: 1 }], rowCount: 1 };
     }
     const leaseExpired = existing.status === 'claimed' && existing.updated_at < nowMs() - 2 * MIN;
-    if (existing.attempts < maxAttempts && ((['skipped_offline', 'failed'].includes(existing.status) && retryDue(existing)) || leaseExpired)) {
+    if (existing.attempts < maxAttempts && ((['skipped_offline', 'skipped_hazard', 'failed'].includes(existing.status) && retryDue(existing)) || leaseExpired)) {
       existing.status = 'claimed';
       existing.attempts += 1;
       existing.updated_at = nowMs();
@@ -189,7 +189,9 @@ function makePeaceWorld({ homes = [], devices = [], endpoints = [], schemaRows =
       const open = world.endpoints.filter(
         (e) => e.device_id === d.id && ((e.type === 'light' && e.current_state === true) || (e.type === 'shutter' && e.current_position >= minPos))
       );
-      const base = { device_id: d.id, live };
+      // F2.A.4: evde acik gaz alarmi (gercek SQL: alarms EXISTS; her satirda ayni deger)
+      const gas = world.homes.some((h) => h.id === homeId && h.gas_alarm === true);
+      const base = { device_id: d.id, live, gas_alarm: gas };
       if (open.length === 0) rows.push({ ...base, endpoint_id: null, type: null, channel_index: null, pair: null, name: null, room: null, current_state: null, current_position: null });
       for (const e of open) {
         rows.push({

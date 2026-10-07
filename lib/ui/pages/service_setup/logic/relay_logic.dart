@@ -7,6 +7,7 @@ import '../setup_context.dart';
 import '../setup_problem.dart';
 import '../setup_steps.dart';
 import 'safety_assignment.dart';
+import 'safety_config_transport.dart';
 
 export 'safety_assignment.dart';
 
@@ -148,6 +149,17 @@ class RelayLogic extends SetupLogic {
   bool _safetyDirty = false;
   bool _boardHasDevices = false;
   bool _safetySupported = false;
+  bool _intrusionSupported = false;
+
+  // Buluttan yapılandırma yazımı (Faz 2 WP-C3; tasarım F2.D.5).
+  bool _boardCfgCap = false;
+  bool _preferCloud = false;
+  bool _cloudOffer = false;
+  bool _usedCloud = false;
+  SafetyApplyResult? _queued;
+  bool _unconfirmed = false;
+  int _exitDelay = kDefaultExitDelaySec;
+  int _entryDelay = kDefaultEntryDelaySec;
   bool _extEnabled = false;
   int? _extAddress;
   List<SafetyTestResult> _testResults = const <SafetyTestResult>[];
@@ -160,6 +172,126 @@ class RelayLogic extends SetupLogic {
 
   /// Pano güvenlik modülünü destekliyor mu (`caps` içinde `safety`; v1.2.0+).
   bool get safetySupported => _safetySupported;
+
+  /// Pano hırsız alarmı katmanını destekliyor mu (`caps` `intrusion`; v1.2.1+). Değilse kapı/pencere bayrakları,
+  /// alarm anahtarı rolü ve gecikmeler gösterilmez ve panoya yazılmaz (F2.B.7).
+  bool get intrusionSupported => _intrusionSupported;
+  /// Pano `caps` `cfg` ilan ediyor ve hedef (ev + pano) belli: bulut yazımı mümkün. Sihirbaz erişimi (servis
+  /// personeli, servis oturumu, süper kullanıcı) sunucu `safety_config` yeteneğinin içindedir (F2.D.4).
+  bool get cloudConfigAllowed => _boardCfgCap && ctx.target != null;
+
+  /// LAN `403 local_loosen_forbidden` döndü ve bulut mümkün: arayüz "İnternet üzerinden uygulansın mı?" sorar.
+  bool get cloudOffer => _cloudOffer;
+
+  /// Son kayıt bulut taşımasıyla yapıldı.
+  bool get usedCloud => _usedCloud;
+
+  /// Pano çevrimdışıydı: yamalar sunucu kuyruğunda (adım tamamlanmaz; F2.D.5).
+  SafetyApplyResult? get queued => _queued;
+
+  /// Pano 10 sn içinde yanıt vermedi (`202 applied:null`): sonuç state'te görünecek.
+  bool get unconfirmed => _unconfirmed;
+
+  /// Bulut önerisi onaylandı: planın kalanı bulut taşımasıyla sürer.
+  void useCloudTransport() {
+    _preferCloud = true;
+    _cloudOffer = false;
+    ctx.notify();
+  }
+
+  void dismissCloudOffer() {
+    if (!_cloudOffer) return;
+    _cloudOffer = false;
+    ctx.notify();
+  }
+
+  /// Bekleyen (kuyruklanmış) yapılandırma değişikliklerini iptal eder (`DELETE …/safety-config/pending`).
+  Future<bool> cancelQueuedSafety() => run('Bekleyen değişiklikler iptal ediliyor', () async {
+        final t = ctx.requireTarget;
+        await ctx.cloud.clearSafetyConfigPending(t.homeId, t.deviceUuid);
+        _queued = null;
+      });
+
+  /// Adım yeniden açılınca kuyruk durumu sunucudan okunur (F2.D.5); kuyruk boşaldıysa not kalkar. En iyi çaba.
+  Future<void> _refreshQueue() async {
+    if (_queued == null || !cloudConfigAllowed) return;
+    try {
+      final t = ctx.requireTarget;
+      final data = await ctx.cloud.safetyConfig(t.homeId, t.deviceUuid); // tek okuma: yükleme bekletilmez
+      if ((asList(data['pending']) ?? const <dynamic>[]).isEmpty) _queued = null;
+    } on Exception {
+      // Okunamadı: not kalır (kurulumcu "Kuyruğu iptal et" ya da yeniden kaydet ile sürdürür).
+    }
+  }
+
+  SafetyConfigTransport _transportFor({required bool cloud}) {
+    if (!cloud) {
+      return LanSafetyConfigTransport(
+        readConfig: () => ctx.deviceCall((api) => api.fetchSafetyConfig()),
+        applyPatches: (patches, baseRev) =>
+            ctx.deviceCall((api) => api.applySafetyConfigPatches(patches, baseRev: baseRev)),
+      );
+    }
+    final t = ctx.requireTarget;
+    return CloudSafetyConfigTransport(
+      cloud: ctx.cloud,
+      homeId: t.homeId,
+      deviceId: t.deviceUuid,
+      clock: ctx.clock,
+      delay: (d) async {
+        await ctx.delay(d);
+        ctx.ensureActive();
+      },
+    );
+  }
+
+  /// Planı taşımayla yazar; `CONFIG_CHANGED_ON_DEVICE` olursa kopyanın yeni sürüme ulaşmasını bekler, planı YENİDEN
+  /// HESAPLAR (fark tabanlı) ve bir kez daha dener; ikinci çakışma kullanıcıya gösterilir (F2.D.3).
+  Future<SafetyApplyResult> _writePlan(SafetyConfigTransport transport) async {
+    var current = await transport.read();
+    for (var attempt = 0; ; attempt++) {
+      final patches = buildSafetyPatches(
+        current: current,
+        channels: assignments,
+        inputs: _inputs,
+        extEnabled: _extEnabled,
+        extAddress: _extAddress,
+        intrusion: _intrusionSupported,
+        intrusionDelays: (exit: _exitDelay, entry: _entryDelay),
+      );
+      // base_rev planın hesaplandığı kopyanın rev'idir; yalnız sunucu kuyruğunda bekleyen yama varsa zincir kuyruğun sonundan
+      // sürer (F2.D.2). Kopya bayatsa sunucu/pano 409 döner; bayat plan daha yeni bir base_rev ile gönderilmez (R3).
+      final queued = transport is CloudSafetyConfigTransport && transport.pending.isNotEmpty;
+      final queueBase = queued ? transport.nextBaseRev : null;
+      final baseRev = queueBase ?? asInt(current['rev']) ?? 0;
+      try {
+        // Tek öğelik yamalar sırayla (her biri bir öncekinin `rev`'iyle; CONTRACTS §2.6).
+        return await transport.apply(patches, baseRev: baseRev);
+      } on SafetyConfigConflict catch (e) {
+        if (attempt > 0) {
+          throw SetupProblemException(SetupProblem(
+            kind: SetupProblemKind.deviceRejected,
+            title: 'Pano yapılandırması değişti',
+            why: e.message,
+            todo: 'Panodaki son değişikliği kontrol edip yeniden kaydedin.',
+          ));
+        }
+        current = await transport.read(minRev: e.rev);
+      }
+    }
+  }
+  int get exitDelay => _exitDelay;
+  int get entryDelay => _entryDelay;
+
+  /// Çıkış / giriş gecikmesi (sn, 1..255; F2.B.1).
+  void setIntrusionDelays({int? exit, int? entry}) {
+    final nextExit = (exit ?? _exitDelay).clamp(1, 255);
+    final nextEntry = (entry ?? _entryDelay).clamp(1, 255);
+    if (nextExit == _exitDelay && nextEntry == _entryDelay) return;
+    _exitDelay = nextExit;
+    _entryDelay = nextEntry;
+    _changedSafety();
+  }
   bool get extEnabled => _extEnabled;
   int? get extAddress => _extAddress;
 
@@ -262,6 +394,7 @@ class RelayLogic extends SetupLogic {
         _inputs = _mergeInputs(status, board.inputs);
         _boardHasDevices = hasSafetyDevices(board.channels, board.inputs);
         _loaded = true;
+        await _refreshQueue();
       });
 
   /// Panonun güvenlik yeteneği, ek modül adresi ve mevcut güvenlik yapılandırması (en iyi çaba: okunamazsa boş).
@@ -270,6 +403,8 @@ class RelayLogic extends SetupLogic {
     DeviceStatus status,
   ) async {
     _safetySupported = status.safety.supported;
+    _intrusionSupported = status.safety.supportsIntrusion;
+    _boardCfgCap = status.safety.caps.contains('cfg');
     _extEnabled = status.extModuleEnabled ?? false;
     if (_extEnabled) {
       try {
@@ -300,6 +435,13 @@ class RelayLogic extends SetupLogic {
     }
     try {
       final cfg = await ctx.deviceCall((api) => api.fetchSafetyConfig());
+      final intrusion = asMap(cfg['intrusion']);
+      if (intrusion != null && !_safetyDirty) {
+        final exit = asInt(intrusion['exit_s']);
+        final entry = asInt(intrusion['entry_s']);
+        _exitDelay = (exit == null || exit <= 0) ? kDefaultExitDelaySec : exit.clamp(1, 255);
+        _entryDelay = (entry == null || entry <= 0) ? kDefaultEntryDelaySec : entry.clamp(1, 255);
+      }
       for (final raw in asList(cfg['actuators']) ?? const <dynamic>[]) {
         final map = asMap(raw);
         final relay = map == null ? null : asInt(map['relay']);
@@ -448,8 +590,29 @@ class RelayLogic extends SetupLogic {
             retryable: false,
           ));
         }
-        final status = await ctx.deviceCall((api) => api.fetchStatus());
-        _safetySupported = status.safety.supported;
+        _cloudOffer = false;
+        _unconfirmed = false;
+        // Seçim kuralı (K5: yerel öncelikli): LAN erişilebilirse LAN; değilse yetki + `caps cfg` varsa bulut.
+        var cloud = _preferCloud && cloudConfigAllowed;
+        if (!cloud) {
+          try {
+            final status = await ctx.deviceCall((api) => api.fetchStatus());
+            _safetySupported = status.safety.supported;
+            _intrusionSupported = status.safety.supportsIntrusion;
+            _boardCfgCap = status.safety.caps.contains('cfg');
+          } on LocalApiException catch (e) {
+            if (!e.isNetwork) rethrow;
+            if (!cloudConfigAllowed) {
+              throw const SetupProblemException(SetupProblem(
+                kind: SetupProblemKind.deviceNetwork,
+                title: 'Panoya ulaşılamadı',
+                why: 'Yapılandırma için panoya yerel ağdan bağlanın ya da yetkili bir hesapla internet üzerinden deneyin.',
+                todo: 'Telefonu panonun ağına bağlayıp yeniden deneyin.',
+              ));
+            }
+            cloud = true;
+          }
+        }
         if (!_safetySupported) {
           throw const SetupProblemException(SetupProblem(
             kind: SetupProblemKind.deviceRejected,
@@ -459,16 +622,32 @@ class RelayLogic extends SetupLogic {
             retryable: false,
           ));
         }
-        final current = await ctx.deviceCall((api) => api.fetchSafetyConfig());
-        final patches = buildSafetyPatches(
-          current: current,
-          channels: assignments,
-          inputs: _inputs,
-          extEnabled: _extEnabled,
-          extAddress: _extAddress,
-        );
-        // Tek öğelik yamalar sırayla (her biri bir öncekinin `rev`'iyle; CONTRACTS §2.6).
-        await ctx.deviceCall((api) => api.applySafetyConfigPatches(patches, baseRev: asInt(current['rev']) ?? 0));
+        final transport = _transportFor(cloud: cloud);
+        SafetyApplyResult result;
+        try {
+          result = await _writePlan(transport);
+        } on LocalApiException catch (e) {
+          // Yerel anahtarla gevşetme yasak (7.2b-7): yetkili hesapla bulut önerilir (F2.D.5).
+          if (e.code == 'local_loosen_forbidden' && cloudConfigAllowed) {
+            _cloudOffer = true;
+            return;
+          }
+          rethrow;
+        }
+        _usedCloud = transport.isCloud;
+        if (result.queued) {
+          // Pano çevrimdışı: 24 sa içinde uygulanacak; adım TAMAMLANMAZ (panoya yazılmış olmak koşuldur).
+          _queued = result;
+          ctx.persist();
+          return;
+        }
+        _queued = null;
+        if (result.unconfirmed) {
+          _unconfirmed = true;
+          ctx.persist();
+          return;
+        }
+        _preferCloud = false;
         _safetyDirty = false;
         _boardHasDevices = hasSafetyDevices(assignments, _inputs);
         _testResults = const <SafetyTestResult>[];
@@ -482,7 +661,9 @@ class RelayLogic extends SetupLogic {
         final results = <SafetyTestResult>[];
         for (final zone in zones) {
           final hasValve = assignments.values.any((a) => a.isValve && a.zone == zone);
-          results.add(await _runZoneTest(zone, hasValve: hasValve));
+          results.add(transport.isCloud
+              ? await _runCloudZoneTest(zone, hasValve: hasValve)
+              : await _runZoneTest(zone, hasValve: hasValve));
         }
         _testResults = List<SafetyTestResult>.unmodifiable(results);
         final failed = results.where((t) => t.failed).toList();
@@ -495,6 +676,14 @@ class RelayLogic extends SetupLogic {
           ));
         }
       });
+
+  /// Bulutta bölge testi (`POST …/alarm-test`): sonuç sunucuda saklanmaz (karar F2-10); yalnız gönderim doğrulanır.
+  Future<SafetyTestResult> _runCloudZoneTest(int zone, {required bool hasValve}) async {
+    final t = ctx.requireTarget;
+    final id = 'tst${ctx.clock.now().microsecondsSinceEpoch.toRadixString(36)}$zone';
+    await ctx.cloud.alarmTest(homeId: t.homeId, deviceId: t.deviceUuid, zone: zone, commandId: id);
+    return SafetyTestResult(zone: zone, hasValve: hasValve, cloud: true);
+  }
 
   /// Bölge testini gönderir ve sonucu (`test_result`) panonun olay halkasından okur (en çok 15 sn).
   Future<SafetyTestResult> _runZoneTest(int zone, {required bool hasValve}) async {
@@ -676,6 +865,7 @@ class RelayLogic extends SetupLogic {
       if (assign.isNotEmpty) 'assign': assign,
       if (inputs.isNotEmpty) 'inputs': inputs,
       if (_safetyDirty) 'safety_dirty': true,
+      if (_queued != null) 'safety_queued': true,
     };
   }
 
@@ -708,6 +898,7 @@ class RelayLogic extends SetupLogic {
       _savedInputs = parsed;
     }
     _safetyDirty = asBool(json['safety_dirty']) ?? _safetyDirty;
+    if (asBool(json['safety_queued']) == true) _queued ??= const SafetyApplyResult(rev: 0, queued: true);
     final raw = json['relays'];
     if (raw is Map) {
       _saved = <int, String>{

@@ -10,6 +10,7 @@ import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../pages/alarm_history_page.dart';
 import '../widgets/actuator_card.dart';
+import '../widgets/alarm_mode_tile.dart';
 import '../widgets/app_pill.dart';
 import '../widgets/orb/orb.dart';
 import '../widgets/di_status_pill.dart';
@@ -447,6 +448,7 @@ class _SafetySection extends StatelessWidget {
               : null,
         ),
         const SizedBox(height: 10),
+        const AlarmModeTile(), // F2.B.9: yalnız hırsız alarmı katmanı olan panoda çizilir
         if (actuators.isNotEmpty)
           CardGrid(
             children: [

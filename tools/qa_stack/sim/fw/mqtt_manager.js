@@ -118,6 +118,8 @@ export class MqttManager {
     this.publishedSig = '';
     this.publishedSigValid = false;
     this.recentIds = new Array(8).fill('');
+    this.acceptId = '';      // sys cfg_patch kabul yankisi (WP-C1): otomasyonun last_id'si degismedikce state.last_id
+    this.acceptBase = '';
     this.recentHead = 0;
     this.subscribed = { cmd: null, sys: null };   // SUBACK sonucu (QA gorunurlugu; firmware SUBACK'e bakmaz)
   }
@@ -384,7 +386,7 @@ export class MqttManager {
     if (!this.publishedSigValid || this.needPublish || this.pace.isPending()) return;
     if (!this.sigCheck.elapsed(now)) return;
     this.sigCheck.arm(now, SIG_CHECK_MS);
-    if (this.#signature(this.automation.getSnapshot()) !== this.publishedSig) this.triggerPublish(now);
+    if (this.#signature(this.#snap()) !== this.publishedSig) this.triggerPublish(now);
   }
 
   /** Yayin zamani: tetik bayragi gozlenince 250 ms birlestirme; yayin yoksa 30 sn kalp atisi; hata sonrasi ustel bekleme (PublishPacer). */
@@ -405,7 +407,7 @@ export class MqttManager {
 
   /** MQTT `state` yuku (v:3 = v:2'nin kati ust kumesi). Yalniz gercekten panjur olarak tanimli ciftler raporlanir ("hayalet panjur" yok). */
   buildState() {
-    const snap = this.automation.getSnapshot();
+    const snap = this.#snap();
     const c = this.cm.config;
     const nR = Math.min(snap.totalRelays, 40);
     const nD = Math.min(snap.totalDIs, 40);
@@ -552,6 +554,20 @@ export class MqttManager {
     this.triggerPublish(now);
   }
 
+  /** sys cfg_patch kabulu (firmware MqttManager::acceptCmd, WP-C1): kabul edilen id, otomasyonun son kimligi degismedikce last_id olur. */
+  #acceptCmd(id, now) {
+    if (id) { this.acceptBase = this.automation.getSnapshot().lastId; this.acceptId = id; }
+    this.triggerPublish(now);
+  }
+
+  /** Anlik goruntu + kabul yankisi (firmware overlayAcceptedId). */
+  #snap() {
+    const s = this.automation.getSnapshot();
+    if (!this.acceptId) return s;
+    if (s.lastId !== this.acceptBase) { this.acceptId = ''; this.acceptBase = ''; return s; }
+    return { ...s, lastId: this.acceptId };
+  }
+
   #handleSys(payload) {
     let obj;
     try { obj = JSON.parse(Buffer.from(payload).toString('utf8')); } catch (_) { obj = null; }
@@ -619,10 +635,13 @@ export class MqttManager {
     const res = sm.submitEdit(p.edit, p.hasBase, p.baseRev, VIA_CLOUD, this.cm.config, { nowMs: now });
     const done = (o) => {
       this.event('cfg_patch', { result: o.r, rev: o.rev });
-      if (o.r === CfgResult.OK) this.triggerPublish(now);
+      if (o.r === CfgResult.OK) this.#acceptCmd(rejId, now);
       else if (o.r === CfgResult.CONFLICT) this.#rejectCmd(rejId, Rej.CFG_CONFLICT, now);
       else if (o.r === CfgResult.LATCHED) this.#rejectCmd(rejId, Rej.ZONE_LATCHED, now);
       else if (o.r === CfgResult.INVALID) this.#rejectCmd(rejId, Rej.CFG_INVALID, now);
+      else if (o.r === CfgResult.STORAGE) this.#rejectCmd(rejId, Rej.CFG_STORAGE, now);   // WP-C1: eskiden busy
+      else if (o.r === CfgResult.GAS_LOCAL) this.#rejectCmd(rejId, Rej.GAS_LOCAL_ONLY, now);   // Faz 2 incelemesi G-1a
+      else if (o.r === CfgResult.ARMED) this.#rejectCmd(rejId, Rej.ARMED, now);              // G-1b
       else this.#rejectCmd(rejId, Rej.BUSY, now);
       return { kind: 'cfg_patch', result: o.r, rev: o.rev, err: o.err };
     };

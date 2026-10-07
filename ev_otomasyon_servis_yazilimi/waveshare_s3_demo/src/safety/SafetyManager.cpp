@@ -3,6 +3,7 @@
 #include "safety/SafetyStore.h"
 #include "safety/ValveGuard.h"
 #include "ConfigManager.h"
+#include "WS_GPIO.h"
 #include <esp_system.h>
 
 namespace safety {
@@ -32,6 +33,21 @@ SafetyManager::SafetyManager()
 uint8_t SafetyManager::shutdownKeepLocal() { return s_keepLocal; }
 uint32_t SafetyManager::shutdownKeepExt() { return s_keepExt; }
 
+// Hırsız olaylarının "via" alanı (intrusion_cleared / arm_changed).
+uint8_t SafetyManager::viaOf(CmdSource s) {
+  switch (s) {
+    case CmdSource::WEB: return VIA_LAN;
+    case CmdSource::CLI: return VIA_CLI;
+    case CmdSource::DI: return VIA_DI;
+    default: return VIA_CLOUD;
+  }
+}
+
+bool SafetyManager::intrusionUsable() const {
+  const SafeReason r = core_.safeReason();
+  return r != SafeReason::CFG_CORRUPT && r != SafeReason::LATCH_ORPHAN;
+}
+
 Origin SafetyManager::originOf(CmdSource s) {
   switch (s) {
     case CmdSource::DI:
@@ -55,6 +71,9 @@ void SafetyManager::begin(const digate::DiGate* gate, uint32_t now_ms) {
   static LatchRecord latch;                            // 164 B; yalnız açılışta
   const bool haveLatch = SafetyStore::loadLatch(latch);
   SafetyStore::reserveLatch();
+  ArmRecord armRec;
+  const bool haveArm = SafetyStore::loadArm(armRec);
+  SafetyStore::reserveArm();
   uint16_t posOpen = 0, posKnown = 0;
   SafetyStore::loadActPos(posOpen, posKnown);
   SafetyStore::loadSafeMask(safeMaskA_, safeMaskL_);
@@ -84,6 +103,10 @@ void SafetyManager::begin(const digate::DiGate* gate, uint32_t now_ms) {
   {
     EventOutboxRtos::Guard g(outbox_, portMAX_DELAY);
     core_.begin(&cfg_, &hub_, &act_, &outbox_.box(), haveLatch ? &latch : nullptr, mode, now_ms);
+    // Hırsız kipi ve alarm belleği (F2-4): kip geri yüklenir, çıkış gecikmesi yok; bellekteki alarm sirensiz (bütçe tükenmiş başlar).
+    intr_.begin(&cfg_, &hub_, &outbox_.box(), haveArm ? &armRec : nullptr, now_ms);
+    intr_.setUsable(intrusionUsable());
+    core_.setIntrusionSiren(intr_.sirenReq(), intr_.takeSirenKick(), now_ms);
     if (present && crcOk && ve != CfgErr::OK) {
       Event e;
       memset(&e, 0, sizeof(e));
@@ -199,7 +222,7 @@ void SafetyManager::mergeDiHist(uint64_t used) {
 }
 
 void SafetyManager::refreshView(uint32_t now_ms, bool force) {
-  buildView(cfg_, hub_, act_, core_, now_ms, scratch_);
+  buildView(cfg_, hub_, act_, core_, now_ms, scratch_, &intr_);
   const uint32_t sig = viewSignature(scratch_);
   if (!force && sig == viewSig_ && (uint32_t)(now_ms - lastViewAt_) < 1000UL) return;
   if (!viewMux_ || xSemaphoreTake(viewMux_, pdMS_TO_TICKS(5)) != pdTRUE) return;   // bir sonraki turda yeniden denenir
@@ -236,7 +259,13 @@ void SafetyManager::tick(uint32_t now_ms, uint32_t epoch) {
     // Kilit altında ağ/bekleme YOK (MqttTask da yalnız kopyalar): sınırlı süre, öncelik kalıtımlı mutex.
     EventOutboxRtos::Guard g(outbox_, portMAX_DELAY);
     core_.tick(now_ms, epoch, &di_, &bridge_);
+    intr_.setUsable(intrusionUsable());
+    intr_.tick(now_ms, epoch);
+    core_.setIntrusionSiren(intr_.sirenReq(), intr_.takeSirenKick(), now_ms);
   }
+  feedContacts(hub_, contacts_, now_ms);
+  Buzzer_SetPattern((uint8_t)intr_.buzzer());
+  if (intr_.takeKeyError()) Buzzer_Open_Time(450, 100);   // ARM_KEY kurulamadı: kısa hata bip'leri (hazır olmayan sensör var)
   active_ = core_.active();
   latchedMask_ = core_.latchedZoneMask();
   safeMode_ = core_.safeMode();
@@ -279,6 +308,11 @@ void SafetyManager::emitCfgConflict(uint32_t rev, uint32_t crc) {
 
 void SafetyManager::persist(uint32_t now_ms) {
   if (!active_) return;
+  if (intr_.takeDirty()) {                                  // hırsız kipi/alarm belleği: yalnız kip değişiminde ve alarm geçişinde
+    ArmRecord r;
+    intr_.record(r);
+    if (!SafetyStore::saveArm(r)) emitNvsFail(NVSK_ARM, now_ms);
+  }
   if (core_.takeLatchDirty()) {
     static LatchRecord rec;
     core_.buildLatch(rec);
@@ -381,6 +415,15 @@ Rej SafetyManager::handleCommand(const DeviceCommand& cmd, uint32_t now_ms) {
       case CmdType::ALARM_TEST:
         r = core_.test(cmd.index, now_ms);
         break;
+      case CmdType::SAFETY_ARM:                        // value: 0 off, 1 away, 2 home (MQTT/LAN/CLI ayrıştırıcıları)
+        if (cmd.value < 0 || cmd.value > (int32_t)ArmMode::HOME) {
+          r = Rej::BAD_CMD;
+          break;
+        }
+        intr_.setUsable(intrusionUsable());
+        r = intr_.command((ArmMode)cmd.value, viaOf(cmd.source), now_ms);
+        core_.setIntrusionSiren(intr_.sirenReq(), intr_.takeSirenKick(), now_ms);
+        break;
       default:
         r = Rej::UNSUPPORTED;
         break;
@@ -479,6 +522,16 @@ CfgOutcome SafetyManager::submitEdit(const CfgEdit& e, bool hasBase, uint32_t ba
     o.r = CfgResult::LOOSEN;
     return finishEdit(o, curP, nextP);
   }
+  // Bulut yolu gevşetebilir (owner/servis, D.4) ama gaz vanasını uzaktan açılabilir kılamaz (karar 7.2b-8) ve kurulu kipte hırsız alarmını
+  // zayıflatamaz (F2-3). Kip okuması tek bayt (loopTask yazar); yarış en kötü ihtimalle kurma anındaki yamayı bir tur önceki kiple değerlendirir.
+  if (via == VIA_CLOUD && isGasRelease(cur, next, diHist)) {   // Faz 2 incelemesi G-1a
+    o.r = CfgResult::GAS_LOCAL;
+    return finishEdit(o, curP, nextP);
+  }
+  if (via == VIA_CLOUD && intr_.mode() != ArmMode::OFF && isIntrusionLoosening(cur, next, diHist)) {   // Faz 2 incelemesi G-1b
+    o.r = CfgResult::ARMED;
+    return finishEdit(o, curP, nextP);
+  }
   next.rev = cur.rev + 1;
   bool touched = false;
   if (!SafetyStore::saveConfig(next, &touched)) {
@@ -545,6 +598,9 @@ bool SafetyManager::applyConfigOnLoop(const SafetyConfig& next, uint8_t via, uin
     hub_.configure(cfg_.sens, cfg_.nSens, now_ms);
     act_.reconfigure(cfg_.act, cfg_.nAct, open, known, fromOld, now_ms);
     core_.reconfigured(via, now_ms, fromOld);
+    intr_.reconfigured(now_ms);                             // kip/durum/aid korunur; kenar belleği ve tetik sayaçları sıfırlanır
+    contacts_.reset();
+    core_.setIntrusionSiren(intr_.sirenReq(), SirenKick::NONE, now_ms);
     if (core_.safeMode()) {
       // Çıkış kullanılabilirliği yalnız kilit kaydının maskesiyle: açılış güvenli maskesindeki silinmiş vana çıkışı kilitlemez [EM-5].
       core_.setConfigUsable(cfg_.nAct > 0 && (core_.latchRecordAssert() & ~act_.relayMask()) == 0);
@@ -557,6 +613,7 @@ bool SafetyManager::applyConfigOnLoop(const SafetyConfig& next, uint8_t via, uin
   refreshKeep();
   persistSafeMask(now_ms);
   refreshView(now_ms, true);
+  if (!active_) Buzzer_SetPattern(0);                       // katman boşa düştü: hırsız deseni kalmasın
   printf("[GUVENLIK] Yapilandirma uygulandi (rev %lu): %u sensor, %u eylemci.\r\n", (unsigned long)cfg_.rev, (unsigned)cfg_.nSens,
          (unsigned)cfg_.nAct);
   return true;

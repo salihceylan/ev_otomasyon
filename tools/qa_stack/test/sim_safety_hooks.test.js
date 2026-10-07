@@ -255,3 +255,32 @@ test('sim_safety_hooks: LAN dan sil + yeniden ekle ile kullanilmis DI ye GAS_RES
   const cli = r.a.safety.submitEdit({ ...editInit(), op: EditOp.SET_SENSOR, sens: sens(4, SensorKind.GAS_RESET) }, false, 0, VIA_CLI, r.cm.config, { inLoop: true, curLevels: 0n, nowMs: r.t });
   assert.equal(cli.r, 'ok');
 });
+
+// Faz 2 incelemesi RG-3: hirsiz deseni (cikis/giris bip'i, alarm) surerken komut bipleri FIFO'da birikmez; yutulur (firmware Buzzer_Open_Time,
+// tehlike alarm kipindeki gibi). Desen bitince birikmis bip seli calmaz.
+test('sim_safety_hooks: hirsiz deseni surerken komut bipleri yutulur (RG-3)', () => {
+  const nvs = new NvsImage(null);
+  const cfg = defaultSafetyConfig();
+  cfg.sens = [makeSensorConfig({ src: SensorSrc.DI, index: 3, kind: SensorKind.DOOR, zone: 1, active_open: 1, flags: defaultFlags(SensorKind.DOOR), confirm_ms: 0 })];
+  cfg.nSens = 1;
+  cfg.act = [makeActuatorConfig({ relay: 6, kind: ActKind.SIREN, zone_mask: 1, run_limit_s: 30 })];
+  cfg.nAct = 1;
+  cfg.pol.exit_s = 5;
+  SafetyStore.saveConfig(nvs, cfg);
+  const r = rig(nvs);
+  r.a.setRawDi(2, true);                     // NC kapi kapali
+  r.run(300);
+  r.a.post(makeCommand(CmdType.SAFETY_ARM, CmdSource.MQTT, 0, 1));
+  r.run(100);
+  assert.equal(r.a.safety.buzzerPattern(), 1, 'cikis deseni');
+  const before = r.beeps.length;
+  r.cmd(CmdType.RELAY_SET, 7, 1);
+  r.run(50);
+  assert.equal(r.relay(7), true);
+  assert.equal(r.beeps.length, before, 'cikis deseni surerken komut bipi yok');
+  r.run(5200);
+  assert.equal(r.a.safety.buzzerPattern(), 0, 'bekci: desen yok');
+  r.cmd(CmdType.RELAY_SET, 7, 0);
+  r.run(50);
+  assert.ok(r.beeps.length > before, 'desen yokken komut bipi calar');
+});

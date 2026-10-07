@@ -3,11 +3,16 @@
 //  * isLoosening(): karar 7.2b-7 -- LAN'dan yalniz ekleme/sikilastirma.
 //  * remapActPos(): silinen eylemciden sonraki konum bitleri kayar; calisirken eklenen su vanasinin konumu anlik role seviyesinden benimsenir.
 //  * writeConfigJson()/planDump()/writeDumpPart(): GET /api/safety/config ve cfg_dump (her parca <= 3500 bayt).
-import { MAX_SENSORS, MAX_ACTUATORS, MAX_ZONES, MAX_RELAYS, SF_REACT, SF_FAULT_CLOSE, SensorKind, SensorSrc, MAX_DI, hazardOf, sensorIdCode, sensorIdText } from './sensor_hub.js';
+import {
+  MAX_SENSORS, MAX_ACTUATORS, MAX_ZONES, MAX_RELAYS, SF_REACT, SF_FAULT_CLOSE, SF_ENTRY, SF_AWAY_ONLY, SensorKind, SensorSrc, MAX_DI, hazardOf, sensorIdCode,
+  sensorIdText, isIntrusionKind,
+} from './sensor_hub.js';
 import { ActKind, CloseMode, Medium, AF_FAN_EXPROOF, isValve, isPulseValve, isGasValve, relayBit, relayLevelFor, actKindText } from './actuator_map.js';
-import { CfgErr, configCrc } from './safety_config.js';
+import { CfgErr, configCrc, exitDelayS, entryDelayS } from './safety_config.js';
 
-export const EditOp = Object.freeze({ NONE: 0, SET_SENSOR: 1, SET_ACTUATOR: 2, SET_POLICY: 3, SET_ZONE: 4, SET_LIGHT: 5, DEL_SENSOR: 6, DEL_ACTUATOR: 7 });
+export const EditOp = Object.freeze({
+  NONE: 0, SET_SENSOR: 1, SET_ACTUATOR: 2, SET_POLICY: 3, SET_ZONE: 4, SET_LIGHT: 5, DEL_SENSOR: 6, DEL_ACTUATOR: 7, SET_INTRUSION: 8,
+});
 export const DUMP_PART_CAP = 3500;
 export const DUMP_ENVELOPE_RESERVE = 260;
 export const DUMP_MAX_PARTS = 12;
@@ -19,7 +24,7 @@ const blen = (s) => Buffer.byteLength(s, 'utf8');
 export function editInit() {
   return {
     op: EditOp.NONE, sens: null, act: null, actIndex: 0xFF, hasPolicyOn: 0, policyOn: 0, hasDryHold: 0, dryHoldMs: 0,
-    zoneId: 0, zoneName: '', lightRelay: 0, light: null,
+    zoneId: 0, zoneName: '', lightRelay: 0, light: null, hasExit: 0, exitS: 0, hasEntry: 0, entryS: 0,
   };
 }
 
@@ -79,6 +84,11 @@ export function applyEdit(cur, e) {
       if (e.lightRelay < 1 || e.lightRelay > MAX_RELAYS) return r(CfgErr.BAD_EDIT);
       out.light[e.lightRelay - 1] = clone(e.light);
       return r(CfgErr.OK);
+    case EditOp.SET_INTRUSION:   // Faz 2 (F2.B.7): hirsiz cikis/giris gecikmeleri (Policy.exit_s/entry_s)
+      if (!e.hasExit && !e.hasEntry) return r(CfgErr.BAD_EDIT);
+      if (e.hasExit) out.pol.exit_s = e.exitS & 0xFF;
+      if (e.hasEntry) out.pol.entry_s = e.entryS & 0xFF;
+      return r(CfgErr.OK);
     default:
       return r(CfgErr.BAD_EDIT);
   }
@@ -101,24 +111,30 @@ export function diUseMask(c) {
   return m;
 }
 
-export function isLoosening(a, b, diHist = 0n) {
-  if (a.pol.policy_on && !b.pol.policy_on) return true;
-  if (b.pol.dry_hold_ms < a.pol.dry_hold_ms) return true;
-  // EM-6: mevcut satiri GAS_RESET'e cevirmek ya da GAS_RESET'in bolgesini degistirmek gevsetmedir.
-  // FW2-2: karsiligi olmayan YENI GAS_RESET satiri, DI'si kalici kullanim gecmisindeyse (sil + yeniden ekle) gevsetmedir.
-  const hist = BigInt(diHist);
+// Kumanda rolu satiri kurali (firmware roleRowLoosening): EM-6 mevcut satiri role cevirmek / GAS_RESET bolgesi; FW2-2 karsiligi olmayan
+// YENI satirin DI'si kalici kullanim gecmisinde; Faz 2 (F2.B.3) ARM_KEY ayni kuralla (bolge anlamsiz).
+export function roleRowLoosening(a, b, diHist, role) {
+  const hist = BigInt(diHist || 0);
+  const armKey = role === SensorKind.ARM_KEY;
   for (let j = 0; j < b.nSens; j++) {
     const t = b.sens[j];
-    if (t.kind !== SensorKind.GAS_RESET) continue;
+    if (t.kind !== role) continue;
     let existed = false;
     for (let i = 0; i < a.nSens; i++) {
       const s = a.sens[i];
       if (s.src !== t.src || s.index !== t.index) continue;
       existed = true;
-      if (s.kind !== t.kind || s.zone !== t.zone) return true;
+      if (s.kind !== t.kind || (!armKey && s.zone !== t.zone)) return true;
     }
     if (!existed && t.src === SensorSrc.DI && t.index >= 1 && t.index <= MAX_DI && (hist & (1n << BigInt(t.index - 1)))) return true;
   }
+  return false;
+}
+
+export function isLoosening(a, b, diHist = 0n) {
+  if (a.pol.policy_on && !b.pol.policy_on) return true;
+  if (b.pol.dry_hold_ms < a.pol.dry_hold_ms) return true;
+  if (roleRowLoosening(a, b, diHist, SensorKind.GAS_RESET) || roleRowLoosening(a, b, diHist, SensorKind.ARM_KEY)) return true;
   for (let i = 0; i < a.nSens; i++) {
     const s = a.sens[i];
     if (hazardOf(s.kind) === 0) continue;
@@ -141,6 +157,38 @@ export function isLoosening(a, b, diHist = 0n) {
   }
   for (let i = a.nAct; i < b.nAct; i++) {   // EM-7: yeni ex-proof fan satiri
     if (b.act[i].kind === ActKind.FAN && (b.act[i].aflags & AF_FAN_EXPROOF)) return true;
+  }
+  return false;
+}
+
+/** Faz 2 incelemesi G-1a (firmware isGasRelease): b gaz vanasini uzaktan acilabilir kiliyor mu? Bulut yolu uygulayamaz (gas_local_only). */
+export function isGasRelease(a, b, diHist = 0n) {
+  if (roleRowLoosening(a, b, diHist, SensorKind.GAS_RESET)) return true;
+  for (let i = 0; i < a.nAct && i < MAX_ACTUATORS; i++) {
+    const x = a.act[i];
+    if (!isGasValve(x)) continue;
+    let kept = false;
+    for (let j = 0; j < b.nAct && j < MAX_ACTUATORS && !kept; j++) {
+      const y = b.act[j];
+      kept = isGasValve(y) && y.relay === x.relay && (y.relay2 || 0) === (x.relay2 || 0) && y.close_mode === x.close_mode;
+    }
+    if (!kept) return true;
+  }
+  return false;
+}
+
+/** Faz 2 incelemesi G-1b (firmware isIntrusionLoosening): b hirsiz alarmini zayiflatiyor mu? Kurulu kipte bulut yolu uygulayamaz (armed). */
+export function isIntrusionLoosening(a, b, diHist = 0n) {
+  if (roleRowLoosening(a, b, diHist, SensorKind.ARM_KEY)) return true;
+  if (exitDelayS(b.pol) > exitDelayS(a.pol) || entryDelayS(b.pol) > entryDelayS(a.pol)) return true;
+  for (let i = 0; i < a.nSens && i < MAX_SENSORS; i++) {
+    const s = a.sens[i];
+    if (!isIntrusionKind(s.kind) || !(s.flags & SF_REACT)) continue;
+    const t = b.sens.slice(0, b.nSens).find((x) => x.src === s.src && x.index === s.index);
+    if (!t || !isIntrusionKind(t.kind) || !(t.flags & SF_REACT)) return true;
+    if ((t.flags & ~s.flags) & (SF_ENTRY | SF_AWAY_ONLY)) return true;
+    if (s.active_open && !t.active_open) return true;
+    if (t.confirm_ms > s.confirm_ms) return true;
   }
   return false;
 }
@@ -193,7 +241,7 @@ export function remapActPos(oldC, oldOpen, oldKnown, newC, curLevels) {
 const KIND = {
   [SensorKind.WATER]: 'water', [SensorKind.GAS]: 'gas', [SensorKind.SMOKE]: 'smoke', [SensorKind.DOOR]: 'door', [SensorKind.WINDOW]: 'window',
   [SensorKind.MOTION]: 'motion', [SensorKind.GENERIC]: 'generic', [SensorKind.ALARM_ACK]: 'alarm_ack', [SensorKind.VALVE_CLOSE]: 'valve_close',
-  [SensorKind.GAS_RESET]: 'gas_reset',
+  [SensorKind.GAS_RESET]: 'gas_reset', [SensorKind.ARM_KEY]: 'arm_key',
 };
 export const KIND_BY_TEXT = Object.fromEntries(Object.entries(KIND).map(([k, v]) => [v, Number(k)]));
 export const closeModeText = (m) => (m === CloseMode.DEENERGIZE_TO_CLOSE ? 'deenergize' : m === CloseMode.PULSE_TWO_RELAY ? 'pulse' : 'energize');
@@ -219,7 +267,9 @@ export function writeCfgHead(c) {
     if (!l || (!l.dimmable && !l.dimmer_src && !l.dimmer_addr && !l.dimmer_ch)) continue;
     lights.push(`{"relay":${r + 1},"dimmable":${l.dimmable},"src":${l.dimmer_src},"addr":${l.dimmer_addr},"ch":${l.dimmer_ch}}`);
   }
-  return `,"policy":{"on":${c.pol.policy_on ? 'true' : 'false'},"dry_hold_ms":${c.pol.dry_hold_ms >>> 0}},"zones":[${zones.join(',')}],"lights":[${lights.join(',')}]`;
+  return `,"policy":{"on":${c.pol.policy_on ? 'true' : 'false'},"dry_hold_ms":${c.pol.dry_hold_ms >>> 0}}`
+    + `,"intrusion":{"exit_s":${(c.pol.exit_s || 0) & 0xFF},"entry_s":${(c.pol.entry_s || 0) & 0xFF}}`
+    + `,"zones":[${zones.join(',')}],"lights":[${lights.join(',')}]`;
 }
 
 export function writeConfigJson(c) {

@@ -483,6 +483,14 @@ class Capabilities {
   /// Bölge testi (`alarm_test`): owner, kalıcı servis personeli, servis oturumu, süper kullanıcı.
   final bool canTestSafety;
 
+  /// Hırsız alarmı kipini kurma/çözme (Faz 2 F2.B.6, karar F2-3; sunucu `safety_arm` = owner, resident). Misafir ve
+  /// servis rolleri (süper, servis personeli, servis oturumu) buluttan YAPAMAZ; yerel anahtar (LAN) resident düzeyidir.
+  /// Mevcut bayraklardan türetilir (eşitlik maskesi değişmez).
+  bool get canArm {
+    if (!isAuthenticated) return canControlActuators; // yerel anahtar sahibi (Capabilities.localKeyHolder)
+    return hasHomeAccess && (isOwner || isResident) && !isSuperUser && !isStaff && !isServiceSession;
+  }
+
   /// Test/hata ayıklama için tüm bayrakların adlı görünümü.
   Map<String, bool> toMap() => <String, bool>{
         'isAuthenticated': isAuthenticated,

@@ -1674,3 +1674,823 @@ sonra düzeltme yapıldı. Simülatör portlarının bulguyu yakaladığı mutas
 - Firmware derleme: temiz, uyarı 0, RAM %20,6 (67488 B), Flash %39,7 (1247673 B). v1.2.0 ana imaj SHA-256
   `dd39a3ef765ea50213ef8585f4a4f695673ef2f2f6f8e78793bb5eb2f7888374`, uygulama SHA-256
   `165ccc0dc304cb22d574ea06577b5dd670838f26a1a0c8f8569eb7fd1b00df39`. 0x0000-0xFFFF bölgesi v1.1.2 ile bayt bayt aynı.
+
+## Faz 2 tasarımı (2026-10-07)
+
+- Kapsam: plan 2.4 (gaz/duman uçtan uca), 2.5 (kapı/pencere alarm kipi), 2.6 (Flutter bildirim alıcısı) ve buluttan yapılandırma
+  yazımı (`sys cfg_patch`). Taban `751f815` (canlı). **Durum: TASARIM; kod yazılmadı.** Uygulama F2.E'deki iş paketleriyle, TDD ile
+  (önce kırmızı test) yapılır.
+- Değişmez ilkeler: (1) K5: bütün kararlar panoda; bulut yalnız uzaktan erişim, bildirim, geçmiş ve yapılandırma eşitlemesi.
+  (2) Mevcut davranış korunur: yeni alanlar yalnız ilgili sensör/eylemci yapılandırılmışsa yazılır; yapılandırılmamış panoda
+  `state`, `_want`/`_hw` izleri ve sunucu sorguları bugünkü ile bit bit aynıdır (§2.9 eşdeğerlik testi her pakette yeşil kalır).
+  (3) Tehlike katmanı (su/gaz/duman, `SafetyCore`) ile hırsız alarmı katmanı birbirinden ayrıdır; ortak tek kaynak siren ve buzzer'dır.
+  (4) Kararlar §7.2b'de verilmiş olanlarla çelişmez; yeni kararlar F2.E.3'te listelenir.
+
+### F2.0 Kodda doğrulanan dayanaklar (bu tasarım için açıldı)
+
+| Olgu | Yer |
+|---|---|
+| Gaz/duman tepkisi çekirdekte hazır: tür→akışkan vana eşlemesi, duman vana kapatmaz, gaz alarmında ex-proof olmayan fana dokunulmaz, dumanda fan kapatılır | `src/safety/SafetyFsm.h:323-326,530-532,725-734`; `src/sensors/SensorTypes.h:46,102-115` |
+| Sensör bayrakları `SF_REACT 0x01`, `SF_TAMPER 0x02`, `SF_FAULT_CLOSE 0x04`; varsayılan gazda `SF_FAULT_CLOSE` | `src/sensors/SensorTypes.h:40-42,113-115` |
+| `SensorKind` `DOOR=4, WINDOW=5, MOTION=6` var; bunlara bağlı tepki yok | `src/sensors/SensorTypes.h:31` |
+| `CmdType::SAFETY_ARM` var, `safety_arm {mode}` MQTT'de ayrıştırılıyor, `SafetyManager::handleCommand` `unsupported` döndürüyor | `src/DeviceCommand.h:34`, `src/MqttManager.cpp:258-266`, `src/SmartAutomation.cpp:746-756` |
+| `Policy` 16 B; `rsv` (2 B) ve `rsv2[8]` boş | `src/safety/SafetyConfig.h:32-39` |
+| sys `cfg_patch` firmware'de var (`VIA_CLOUD`, gevşetebilir); başarıda `last_id` YAZILMIYOR, yalnız `triggerPublish`; ret `last_rej` (`cfg_conflict`, `zone_latched`, `cfg_invalid`, diğerleri `busy`) | `src/MqttManager.cpp:1160-1239` |
+| `caps` sabit `["safety","actuator","event","cfg"]` | `src/safety/SafetyView.h:188` |
+| Sunucu push türleri `peace`, `safety_alarm`, `safety_info`; kanal kimlikleri `safety_alarm`, `safety_info` | `server/src/services/push_service.js:55-65,180-237` |
+| Alarm metinleri türe göre; `valve_fault` gövdesi türden bağımsız | `server/src/services/alarm_service.js:130-153,593-594` |
+| Yapılandırma kopyası farkında `cfg_get` (cihaz başına dakikada bir) | `server/src/services/alarm_service.js:411,477,504` |
+| Bekleyen değişiklik uzlaştırma deseni (yerel anahtar, `publishSys`) | `server/src/services/device_reconciler.js:39,227-244,327,704-794` |
+| `device_configs.pending JSONB` kolonu var, kullanılmıyor | `server/migrations/033_safety_alarms.sql:108` |
+| `alarms.kind VARCHAR(12)` CHECK'siz; `zone` 1..4 zorunlu; `scheduled_rule_runs.status VARCHAR(24)` CHECK'siz | `033_safety_alarms.sql:44-45,61-65`; `022_scheduled_rules_fix.sql:185` |
+| `safety_config` yeteneği SUPER, STAFF, SESSION, OWNER | `server/src/utils/role_matrix.js:61` |
+| Uygulama push'u Firebase'siz: `createPushGateway` her zaman `UnsupportedPushGateway`; `pubspec.yaml`'da `firebase_*` yok | `lib/services/push/push_gateway_factory.dart:14`, `push_gateway.dart:84-121` |
+| `PushCoordinator` yalnız `PeaceNotice` üretir (`_handleMessage`), tanınmayan mesajı sessizce atar | `lib/services/push/push_coordinator.dart:581-600` |
+| Android'de bildirim kanalı oluşturan kod yok (`peace_reminder` dahil); `POST_NOTIFICATIONS` izni manifestte yok | `android/app/src/main/kotlin/.../MainActivity.kt`, `AndroidManifest.xml:4-8` |
+| Kritik alarm kartı anahtarı `card_critical_alarm_<uid>_<bölge>` (pano `uid`'si, DB kimliği değil) | `lib/ui/widgets/critical_alarm_card.dart:31,235` |
+
+---
+
+### F2.A Gaz ve duman uçtan uca (plan 2.4)
+
+#### A.1 Bugünkü durum ve eksikler
+
+Firmware çekirdeği gaz/duman tepkisini zaten uygular (F2.0). Sunucu `alarm_raised` olayını türden bağımsız işler ve push başlığını
+türe göre seçer. Uygulamada kart türe göre vana satırı süzer. Uçtan uca eksikler şunlardır:
+
+1. Sihirbazda dedektör bağlantı yönergesi eksik (arıza rölesi, besleme, sertifika notu); gaz bölgesi testinin vanayı kapalı bıraktığı
+   test öncesi söylenmiyor.
+2. `valve_fault` push gövdesi türden bağımsız ("Ana vanayı elle kapatın"); gaz için 187 yönlendirmesi yok.
+3. Gaz alarmı sürerken bulut zamanlayıcısı ve gece "Hepsini kapat" akışı röle anahtarlamaya devam ediyor (kıvılcım kaynağı).
+4. Uygulamada gaz/duman kartında davranış talimatı (havalandır, anahtarlara dokunma, dışarı çık, 112/187) yok; duman kartında
+   "pano su vanasını kapatmaz" açıklaması yok.
+5. QA simülatöründe gaz/duman uçtan uca senaryosu yok (Unity çekirdek testleri var).
+
+#### A.2 Davranış tablosu (tek doğru kaynak; firmware zaten böyle, değişmez)
+
+| | Gaz (`kind=gas`) | Duman (`kind=smoke`) |
+|---|---|---|
+| Algılama | Sertifikalı dedektör (TS EN 50194-1 doğalgaz/LPG); pano yalnız kuru kontağına bakar (K3). Eşik/kalibrasyon kodu YOK | Sertifikalı dedektör (TS EN 14604 ya da EN 54); aynı |
+| Bağlantı | NC zorunlu (`active_open=1`) [O-2]; onay 300 ms / pencere 1 sn | Aynı |
+| Vana | Bölgedeki `medium=GAS` vanalar KAPANIR; su vanasına dokunulmaz | **Hiçbir vana kapanmaz** (yangın suyu) |
+| Siren | Bölge sirenleri `run_limit_s` (vars. 180 sn) | Aynı |
+| Fan | Yalnız `exproof` işaretliyse AÇILIR; değilse dokunulmaz (açma da kapatma da yok: anahtarlama kıvılcımı) [Y-1] | Bölge fanları zorla KAPATILIR (duman yayılmasın) |
+| Kart buzzer'ı | Alarm kipi (ACK susturur) | Aynı |
+| Arıza (`ok=false`) | `SF_FAULT_CLOSE` varsayılan 1: arıza vana kapatmayı tetikler (açılışta 30 sn tolerans, dalga 1 not 8) | 0: yalnız `sensor_fault` olayı |
+| Vana açma | Yalnız yerinde: `GAS_RESET` DI'si ya da elle kurmalı vana (K-4, 7.2b-8). Uzak yollar `gas_local_only` | — |
+| Test | Gaz vanası test sonunda KAPALI kalır | Siren 3 sn, vana yok |
+| Açılış | Gaz vanası her açılışta kapalı | — |
+
+#### A.3 Dedektör bağlantısı ve sihirbaz metinleri (APP, `step_7_safety.dart`)
+
+Girişler sekmesinde rol "Gaz dedektörü çıkışı" ya da "Duman dedektörü çıkışı" seçilince açılan bilgi kutusu (Türkçe arayüz dizgesi):
+
+> **Dedektör bağlantısı.** Pano gaz ya da dumanı kendisi ölçmez; yalnız sertifikalı dedektörün röle çıkışına tepki verir.
+> 1. Dedektörün **alarm rölesini NC (normalde kapalı)** uçtan bağlayın. Kablo koparsa ya da dedektörün enerjisi kesilirse pano bunu alarm sayar.
+> 2. Dedektörde ayrı bir **arıza rölesi** varsa onu da alarm kontağıyla **seri** bağlayın; dedektör arızası da alarm olarak görünür.
+> 3. Dedektörü panodan değil, kendi besleme kaynağından (tercihen yedekli) besleyin; dedektör panodan bağımsız da ses vermelidir.
+> 4. Dedektörün montaj yeri ve bakım süresi için üreticinin kılavuzuna uyun.
+
+Gaz vanası seçilen rölede mevcut not korunur ("yalnız yerinde açılır") ve şu eklenir: **"Önerilen: elle kurmalı (manuel reset) gaz
+vanası. Panodaki 'Gaz vanası açma düğmesi' isteğe bağlıdır."** (7.2b-8).
+
+Bölge testi düğmesine basınca, bölgede gaz vanası varsa onay diyaloğu (`showSimpleConfirm`):
+
+> **Test gaz vanasını kapatır.** Test bittiğinde gaz vanası kapalı kalır; yeniden açmak için vananın yanındaki düğmeyi ya da vananın
+> kendi kurma kolunu kullanmanız gerekir. Devam edilsin mi?
+
+#### A.4 Gaz alarmında anahtarlama kısıtı (SRV + APP)
+
+Gerekçe: gaz kaçağında elektrik anahtarlamak tutuşma kaynağıdır (alarm push metni de "elektrik anahtarlarına dokunmayın" diyor).
+Pano rölesi elektrik panosundadır, ama lamba ve priz devresinin yükünü anahtarlamak yine kıvılcım üretebilir. Kural yalnız **otomatik**
+anahtarlamayı durdurur; kullanıcının bilinçli komutu engellenmez (yalnız uyarılır), çünkü karanlıkta tahliye için ışık gerekebilir.
+
+- **Sunucu zamanlayıcısı** (`scheduler.js` `_dispatch`): kuralın evinde `alarms` tablosunda açık (`status IN ('latched','fault','silenced')`)
+  ve `kind='gas'` satırı varsa röle/panjur kuralı yayınlanmaz; çalıştırma kaydı `status='skipped_hazard'`, `detail='gas_alarm'`.
+  Sorgu ev başına tek `EXISTS`; `alarms_home_open_idx` kullanılır. Gaz alarmı yoksa sorgu sonucu yanlış, davranış bugünkü gibi.
+- **Gece hatırlatması:** `peace_service` gaz alarmı açık evde push'u göndermez (`skipped`, neden `gas_alarm`) ve `POST …/close-all`
+  `409 HAZARD_ACTIVE` döner. Gaz alarmında "lambaları kapat" önerisi tehlikelidir.
+- **Uygulama:** gaz alarmı açıkken lamba/priz/panjur komutu ilk dokunuşta onay ister (`showSimpleConfirm`):
+  "**Gaz alarmı sürüyor.** Elektrik anahtarlamak kıvılcım oluşturabilir. Yine de uygulansın mı?" Onaylanırsa komut normal hattan gider.
+  Hızlı senaryolar ("İyi Geceler", "Evden Çıkıyorum", "Tüm Lambalar") gaz alarmında aynı onayı ister.
+- **Firmware:** değişiklik yok (yerel duvar butonu fiziksel kullanıcı eylemidir; senaryo motoru henüz panoda yok, 5.2 geldiğinde
+  `CmdSource::RULE` röle yazımı gaz kilidi sürerken atlanır; bu kural o pakete not olarak eklenir).
+
+#### A.5 Sunucu metinleri (push, `alarm_service.js`)
+
+| Durum | Başlık | Gövde |
+|---|---|---|
+| Gaz alarmı | Gaz kaçağı alarmı | Gaz kaçağı algılandı (bölge N). Gaz vanası kapatıldı. Ortamı havalandırın, elektrik anahtarlarına dokunmayın; gerekirse 187'yi arayın. |
+| Duman alarmı | Duman alarmı | Duman algılandı (bölge N). Evde biri varsa hemen dışarı çıkın ve 112'yi arayın. Pano su vanasını kapatmaz. |
+| Su alarmı | Su baskını alarmı | (bugünkü metin aynen) |
+| Vana arızası, su | Vana kapanmadı! | Su vanası kapanmadı! Ana su vanasını elle kapatın ve panoyu kontrol edin. |
+| Vana arızası, gaz | Gaz vanası kapanmadı! | Gaz vanası kapanmadı! Sayaçtaki ana gaz vanasını elle kapatın, ortamı havalandırın ve 187'yi arayın. |
+
+`faultBody(kind)` türe göre seçer; bilinmeyen tür bugünkü genel metni alır. Push `data` alanlarında değişiklik yalnız F2.C.8'dedir.
+
+#### A.6 Uygulama metinleri (`critical_alarm_card.dart`, `safety_labels.dart`)
+
+Kartın başlığının altına türe göre **talimat satırı** (ikonlu, `liveRegion` başlıktan sonra okunur):
+
+- Gaz: "Ortamı havalandırın. Elektrik anahtarlarına ve prizlere dokunmayın, ateş yakmayın. Kokuyu hâlâ alıyorsanız evden çıkın ve 187'yi arayın."
+- Duman: "Evde biri varsa hemen dışarı çıkın ve 112'yi arayın. Pano su vanasını kapatmaz; havalandırma fanları durduruldu."
+- Gaz vanası satırında "Vanayı Aç" düğmesi hiç çizilmez (bugün de çizilmiyor); yerine kalıcı açıklama:
+  "Gaz vanası güvenlik gereği yalnız yerinde açılır: vananın yanındaki düğme ya da vananın kurma kolu."
+- Gaz alarmında fan satırı: ex-proof olmayan fan "Fan güvenlik gereği çalıştırılmıyor (gaz)"; ex-proof fan "Havalandırma çalışıyor".
+
+Telefon araması (`tel:`) için `url_launcher` yok; numara yalnız metindir (yeni bağımlılık eklenmez).
+
+#### A.7 Sözleşme değişiklikleri (alan alan)
+
+| Yer | Alan / değer | Değişiklik |
+|---|---|---|
+| CONTRACTS §1.5d | `POST …/close-all` | Yeni hata `409 HAZARD_ACTIVE` (evde açık gaz alarmı) |
+| CONTRACTS §2.4b / §1.5 zamanlayıcı | `scheduled_rule_runs.status` | Yeni değer `skipped_hazard` (`detail='gas_alarm'`); şema değişmez (VARCHAR(24), CHECK yok) |
+| CONTRACTS §2.5 güvenlik push'u | `notification.body` | A.5 metinleri (alan değil, metin) |
+| `state`, `cmd`, `event`, LAN | — | **değişiklik yok** (çekirdek davranışı zaten sözleşmede) |
+
+#### A.8 İş paketleri ve dosya sahipliği
+
+| Paket | İçerik | Dosyalar |
+|---|---|---|
+| **WP-G1 (SRV)** | `faultBody(kind)`, A.5 metinleri; zamanlayıcı `skipped_hazard`; gece hatırlatması gaz kısıtı ve `409 HAZARD_ACTIVE` | `server/src/services/alarm_service.js`, `server/src/scheduler.js`, `server/src/services/peace_service.js`, `server/src/routes/device_routes.js` (yalnız close-all hata eşlemesi) |
+| **WP-G2 (APP)** | A.3 sihirbaz metinleri ve test onayı; A.4 anahtarlama onayı; A.6 kart talimatları; `HAZARD_ACTIVE` Türkçe metni | `lib/ui/pages/service_setup/steps/step_7_safety.dart`, `lib/ui/widgets/critical_alarm_card.dart`, `lib/ui/widgets/safety_labels.dart`, `lib/services/automation_state.dart` (yalnız `hasOpenGasAlarm` getter'ı ve onay kancası), `lib/ui/dashboard/*` (onay çağrısı) |
+| **WP-G3 (QA)** | Gaz/duman uçtan uca sim senaryoları (A.9) | `tools/qa_stack/test/sim_safety_gas.test.js` (yeni) |
+
+Firmware'e dokunulmaz. G1, G2, G3 birbirinden bağımsızdır.
+
+#### A.9 Test planı
+
+- **QA (`sim_safety_gas.test.js`):** (1) gaz sensörü → gaz vanası kapalı, su vanası açık kalır, siren çalar, `alarm_raised kind=gas`;
+  (2) ex-proof olmayan fan gaz alarmında dokunulmadan kalır, ex-proof fan açılır, kullanıcının ex-proof olmayan fanı açma isteği
+  `zone_latched`; (3) duman → hiçbir vana kapanmaz, fan kapatılır; (4) gaz kuruyup ACK sonrası gaz vanası kapalı kalır, MQTT ve LAN
+  `open` → `gas_local_only`, `GAS_RESET` DI'si ile açılır; `GAS_RESET` sensör hâlâ aktifken açmaz; (5) kilitliyken `reboot` ve
+  kilitsizken `reboot` → gaz vanası kapalı; (6) gaz ek modülü yanıt vermiyor → 30 sn sonra vana kapanır (`SF_FAULT_CLOSE`);
+  (7) su alarmı sürerken gaz → yeni `aid`, `kind=gas` (E2E-2). Kırmızı kanıtı: senaryolar önce gaz kuralı mutasyonuyla (ör. dumanda
+  vana kapatma) kırmızıya döndürülüp doğrulanır.
+- **Sunucu:** `alarm_service` metin testleri (gaz/duman/su, `valve_fault` gaz ve su); `scheduler_tick` gaz alarmlı evde
+  `skipped_hazard`, alarmsız evde bugünkü sonuç (sorgu sayısı dahil); `peace_service` gaz alarmında push yok + `close-all` 409; PG'li
+  testte `EXISTS` sorgusu.
+- **Flutter:** kart talimat satırları (gaz/duman), gaz vanasında "Aç" yokluğu, fan satırı metinleri; gaz alarmında lamba komutu onay
+  diyaloğu (iptal → komut gitmez, onay → gider); sihirbaz test onay diyaloğu yalnız gaz vanalı bölgede; `HAZARD_ACTIVE` metni.
+
+---
+
+### F2.B Kapı/pencere alarm kipi (plan 2.5)
+
+#### B.1 Kavramlar
+
+- **Kip** (`mode`): `off` (çözülü), `home` (evde kurulu: yalnız çevre), `away` (dışarıda kurulu: hepsi). Kip pano başınadır; evde
+  birden çok pano varsa uygulama "evin kipi"ni panoların kiplerinden gösterir (hepsi aynıysa o, değilse "karışık").
+- **Durum** (`st`): `idle` (kip `off` ise çözülü bekleme; kurulu kipte bekçi), `exit` (çıkış gecikmesi), `entry` (giriş gecikmesi),
+  `alarm`.
+- **Sensör sınıfı** (mevcut `SensorConfig.flags`'e iki bit eklenir; `kind` `door|window|motion`, `SF_REACT` alarm sistemine dahil demektir):
+  - `SF_ENTRY = 0x08` giriş yolu: tetiklenince önce giriş gecikmesi başlar (varsayılan: kapı 1, pencere 0, hareket 0).
+  - `SF_AWAY_ONLY = 0x10` yalnız `away` kipinde etkin (varsayılan: hareket 1, kapı/pencere 0). `home` kipinde etkin sensörler çevredir.
+  - Diğerleri **anlık**: etkin kipte tetiklenince hemen alarm.
+- **Gecikmeler** (`Policy.rsv2`'nin ilk 2 baytı; yeni NVS girdisi yok): `exit_s` (vars. 45, 0..255), `entry_s` (vars. 30, 0..255).
+  0 değeri "varsayılan" demektir; gecikmesiz istenirse 255 yerine ayrı bayrak kullanılmaz, en küçük değer 1 sn'dir (sözleşme: 1..255,
+  0 = varsayılan).
+- **Kalıcılık:** kip ve alarm belleği `ahbu_latch/arm` blob'u (20 B: `mode u8`, `alarm u8`, `aid[15]`, CRC yok, sürüm baytı 1).
+  Yalnız kip değişiminde ve alarm geçişinde yazılır. Fabrika sıfırlaması silmez (kilit ilkesiyle aynı: kurulu ev sıfırlamayla çözülmez).
+  NVS bütçesine +1 girdi (dalga 1 F0: en kötü %105,6 → %105,8; NVS bütçe kararı açık ve bu kalemle değişmez).
+
+#### B.2 Saf çekirdek `safety/IntrusionFsm.h` (SAF, `now_ms` parametreli)
+
+Girdi her turda: `armedMask(mode)` içindeki sensörlerin onaylı aktifliği ve `ok` bitleri (SensorHub'dan), komut (`ARM home|away`,
+`DISARM`), saat. Çıktı: `IntrusionActions {sirenOn, sirenOff, buzzerPattern, events[]}`.
+
+| Geçiş | Koşul | Eylem | Olay |
+|---|---|---|---|
+| off → (home/away, `exit`) | `ARM m` ve **hazır**: `m` kipinde etkin, giriş yolu OLMAYAN her sensör `ok && !active` | `until = now + exit_s`; buzzer çıkış bip'i (1 sn'de bir) | `arm_changed {mode, via}` |
+| off → off | `ARM m` hazır değil | — (ret `not_ready`) | — |
+| `exit` → `idle` | süre doldu ve giriş yolu sensörleri kapalı | buzzer susar | — |
+| `exit` → `entry` | süre doldu ama giriş yolu sensörü hâlâ açık ("çıkış hatası") | `until = now + entry_s` | — |
+| `exit` → `alarm` | anlık sensör aktif | sirenler + buzzer alarm | `intrusion_alarm` |
+| `idle` → `entry` | giriş yolu sensörü aktif | buzzer giriş bip'i (hızlı) | — |
+| `idle`/`entry` → `alarm` | anlık sensör aktif ya da giriş süresi doldu | sirenler + buzzer alarm | `intrusion_alarm` (`aid` = eid, `srcs`) |
+| `alarm` → `alarm` | yeni sensör aktif | `srcs`'e eklenir; siren durmuşsa ve sensörün bu kurulumdaki tetik sayısı < 3 ise siren yeniden `run_limit_s` | — |
+| herhangi → off | `DISARM` | sirenlerin hırsız isteği kalkar, buzzer susar, alarm belleği silinir | `arm_changed {mode:"off"}`; `alarm` idiyse ayrıca `intrusion_cleared {aid, via}` |
+| kurulu `idle` → aynı | `ARM` farklı kip | yeni kip için `exit` (hazırlık denetimi yeni kipe göre) | `arm_changed` |
+
+- **Swinger sınırı:** sensör başına kurulum dönemi boyunca en çok 3 alarm tetiği (EN 50131-1 yaklaşımı); sonra o sensör yalnız
+  `srcs`'e eklenir, sireni yeniden başlatmaz.
+- **`ok=false` sensör kurulu kipte** alarm üretmez (NC kontak kopması zaten "açık" = aktif okunur); `sensor_fault` olayı mevcut yoldan
+  gelir. Hazırlık denetiminde `ok=false` sensör "hazır değil" sayılır.
+- **Gecikme sayaçları** `(uint32_t)(now - start) >= span` kuralıyla, `millis` taşmasına dayanıklı.
+
+#### B.3 Açılış, buluttan bağımsızlık ve yerel yollar (K5)
+
+- **Açılış:** `ahbu_latch/arm` okunur; kip geri yüklenir, `st=idle`, çıkış gecikmesi YOK. Sensörler ilk okuma turuna kadar `ok=false`
+  olduğundan sahte alarm olmaz. Alarm belleği varsa `st=alarm` ve aynı `aid` ile açılır, siren **çalmaz** (bütçe tükenmiş sayılır);
+  kullanıcı çözene kadar state'te alarm görünür (sunucu uzlaştırması tutarlı kalır).
+- **Güvenli kip** (`cfg_corrupt`/`latch_orphan`): sensör tablosu kullanılamaz; kip korunur, `arm.ok=false` yazılır, alarm üretilmez.
+  `crash_loop`'ta tablo kullanılabilir olduğundan hırsız katmanı çalışır.
+- **Yerel yollar:** (1) LAN `POST /api/arm` (yerel anahtar, resident düzeyi); (2) seri CLI `ARM AWAY|HOME|OFF`; (3) yeni DI rolü
+  `ARM_KEY = 19` (`kind:"arm_key"`): **anahtarlı kontak** içindir; pasif→aktif kenarı `away` kurar (hazır değilse kurulmaz, buzzer 3
+  kısa hata bip'i), aktif→pasif kenarı çözer. Sıradan bir duvar butonu bu role atanmamalıdır (sihirbaz uyarısı:
+  "Bu giriş alarmı çözer. Yalnız anahtarlı ya da korumalı bir kontak bağlayın.").
+- **`ARM_KEY` gevşetme kuralı (EM-6/FW2-2 ile aynı mantık):** LAN'dan daha önce herhangi bir satırda kullanılmış bir DI'ye (`di_hist`)
+  yeni `arm_key` eklemek ya da mevcut satırı `arm_key`'e çevirmek gevşetmedir (`403 local_loosen_forbidden`); aksi halde kapı kontağı
+  girişi "çözme anahtarı" yapılabilirdi. Hiç kullanılmamış girişe yeni `arm_key` serbesttir.
+- **Diğer hırsız ayarları LAN'dan serbesttir** (kapı/pencere/hareket sensörü ekleme/silme, `SF_ENTRY`/`SF_AWAY_ONLY`, gecikmeler):
+  yerel anahtar sahibi zaten çözebilir; ek bir yetki yükseltmesi yoktur (dalga 2 not 15 ile uyumlu).
+
+#### B.4 Tehlike katmanıyla ilişki
+
+- Hırsız alarmı **vana sürmez**, bölge kilidi (`zones[]`) üretmez, vana açma iznini etkilemez; `policy:off` hırsız katmanını kapatmaz
+  (politika yalnız tehlike tepkisidir).
+- **Siren paylaşımı:** siren rölesi iki istek kaynağının VEYA'sıdır: `hazardReq` (SafetyCore, mevcut) ve `intrusionReq` (yeni). Her
+  kaynak kendi `run_limit_s` bütçesini tutar. Tehlike ACK'i yalnız `hazardReq`'i, çözme yalnız `intrusionReq`'i kaldırır. Kullanıcının
+  sireni `off` yapması (eylemci komutu) iki isteği de o alarm dönemi için bastırır (dalga 1 not 14 ile aynı). Hırsız alarmı tüm
+  pano sirenlerini sürer (bölge eşlemesi yok; hırsız alarmı ev genelidir). Gaz kilidi sürerken siren zaten açıktır; ek anahtarlama yok.
+- **Buzzer önceliği:** tehlike alarmı > hırsız alarmı > giriş bip'i > çıkış bip'i. `Buzzer_SetAlarm(bool)` yanına
+  `Buzzer_SetPattern(OFF|EXIT|ENTRY|ALARM)` gelir; tehlike alarm kipi açıkken desen yok sayılır.
+- **ValveGuard etkilenmez** (siren tutulmaz, dalga 2 not 1).
+
+#### B.5 Kontak sinyali iklim ve senaryolara olay olarak (`sensors/ContactBus.h`, SAF)
+
+- SensorHub, `door`/`window` sensörlerinin onaylı seviye değişiminde (`confirm_ms` kapı/pencere vars. 0, DiGate 60 ms süzgeci)
+  sabit boyutlu halkaya `ContactEdge {slot, kind, zone, open, at_ms}` yazar (16 yuva; taşmada en eski atılır, seviye zaten state'te).
+- Tüketiciler aynı loopTask turunda halkayı okur, kendi okuma imleçleriyle (çok tüketicili, kilitsiz: tek yazıcı ve okuyucular aynı görevde):
+  1. `IntrusionCore` (bu paket).
+  2. `ClimateCore` (plan 3.2, ileride): pencere `window_hold_s` (vars. 60) kesintisiz açıksa o bölgede ısıtma durur; kapanınca devam.
+     Bu tasarım yalnız arabirimi sabitler: `bool zoneWindowOpenFor(zone, now, hold_ms)`.
+  3. `SceneEngine` (plan 5.2, ileride): tetik türü `contact {sensor|zone, kind, edge: open|close}`.
+- Kontak değişimi **olay kutusuna (outbox) yazılmaz** (16 yuvalık tampon kapı aç/kapa ile dolmasın); bulut ve uygulama seviyeyi
+  `state.sensors[].active`'ten okur. Yayın tetiği mevcut görünüm imzasıyla zaten değişir.
+
+#### B.6 Yetkiler
+
+| Yol | Kurma / çözme | Not |
+|---|---|---|
+| Bulut, owner | evet | |
+| Bulut, resident | evet | |
+| Bulut, guest | **hayır** | `403`; arayüzde kip yalnız okunur |
+| Bulut, super / staff / service_session | **hayır** | Gizlilik ve hırsızlık riski: servis personeli bir evin hırsız alarmını uzaktan çözememeli. Kurulumda test LAN (yerel anahtar) ya da CLI ile yapılır |
+| LAN (yerel anahtar) | evet | Yerel anahtar resident düzeyindedir (`role_matrix.js:44`) |
+| Seri CLI, `ARM_KEY` DI'si | evet | Fiziksel erişim |
+
+Rol matrisi: yeni yetenek `safety_arm` = `[OWNER, RESIDENT]`. CONTRACTS §1.4 tablosuna satır eklenir.
+
+#### B.7 Sözleşme değişiklikleri (alan alan)
+
+| Yer | Alan | Tür / sınır | Anlam |
+|---|---|---|---|
+| `state.caps` | `"intrusion"` | dizge | yalnız firmware hırsız katmanını destekliyorsa (v1.3.0+). Sunucu ve uygulama kurma komutunu yalnız bu yetenekle gönderir |
+| `state.safety.arm` | nesne | yalnız `SF_REACT`'li en az bir `door|window|motion` sensörü varsa yazılır | |
+| `arm.mode` | `"off"\|"home"\|"away"` | | kip |
+| `arm.st` | `"idle"\|"exit"\|"entry"\|"alarm"` | | durum |
+| `arm.ok` | bool | | `false`: güvenli kipte sensör tablosu yok; hırsız katmanı etkisiz |
+| `arm.until_up` | u32 | yalnız `exit`/`entry` | gecikmenin bittiği `uptime` saniyesi (sabit değer: görünüm imzasını her saniye değiştirmez). İstemci kalan süreyi `until_up - uptime` ile hesaplar |
+| `arm.aid` | ≤ 14 | yalnız `alarm` | `intrusion_alarm` olayının eid'si |
+| `arm.srcs` | dizge dizisi ≤ 8 | yalnız `alarm` | tetikleyen sensör kimlikleri |
+| `last_rej.code` | yeni `not_ready` | | kurma reddi: hazır olmayan sensör var |
+| `cmd` | `{"cmd":"safety_arm","mode":"away"\|"home"\|"off","uid","id"?}` | mevcut ayrıştırıcı aynen | `uid` zorunlu (zaten); `off` = çözme |
+| `ev/{t}/event` | `intrusion_alarm` | `zone` (ilk tetikleyen sensörün bölgesi), `kind:"intrusion"`, `srcs`, `at?`, `at_up`; `aid` yazılmaz (alarm kimliği olayın eid'si) | taşmada ATILMAZ (alarm sınıfı) |
+| | `intrusion_cleared` | `aid`, `via` (`cloud\|lan\|cli\|di`) | `*_cleared` sınıfı |
+| | `arm_changed` | `mode`, `via` (`cloud\|lan\|cli\|di\|boot`) | en düşük öncelik (`actuator_changed` sınıfı) |
+| LAN | `POST /api/arm {mode, uid?, id?}` | `KEYED` | yanıt `{ok,id,rej?}`, 1 sn bekleme, `504 timeout`; bilinmeyen alan `400 unknown_field`, geçersiz `400 invalid_value`. Rota tablosu 32 → 33 |
+| LAN | `GET /api/status` | | `safety.arm` aynı biçimde |
+| cfg (`cfg_dump`, `GET /api/safety/config`, yama) | `"intrusion":{"exit_s","entry_s"}` | 1..255, 0 = varsayılan | 1. parçada; yama `set:{intrusion:{…}}` |
+| cfg sensör öğesi | `flags` | bit3 `entry`, bit4 `away_only` | mevcut alan; v1.2.0 `0x07`'den büyük değeri `bad_value` ile reddeder (`SafetyCfgApi.cpp:101-103`), bu yüzden sunucu ve sihirbaz bu bitleri yalnız `caps` `intrusion` varken yazar; 1.3.0 sınırı `0x1F` olur |
+| cfg sensör `kind` | `"arm_key"` | yerel kumanda rolü | state `sensors[]`'te `active` = ham seviye; tehlike sensörü değil |
+| CLI | `ARM [STATUS]`, `ARM AWAY\|HOME\|OFF` | | |
+| REST | `POST /homes/:homeId/devices/:deviceId/arm {mode, id?}` | `safety_arm` | panoya `safety_arm`; yanıt güvenlik komutlarıyla aynı (`expectOutcome`): `{delivered, applied: true\|null, command_id}`; `last_rej` → `409 DEVICE_REJECTED reason:not_ready\|unsupported`; `caps` `intrusion` yok → `409 FIRMWARE_UNSUPPORTED`; çevrimdışı → `409 DEVICE_OFFLINE` (**kuyruğa alınmaz**) |
+| REST | `GET /homes/:homeId/alarms` | | `kind:"intrusion"` satırları da listelenir |
+| REST | `POST …/alarms/:id/ack` | | `kind='intrusion'` satırına `409 ALARM_USE_DISARM` |
+| `devices.safety_state` | `arm` | `{mode, st, ok, aid?, srcs?}` | `parseStateSafety` sınırlarıyla (`srcs ≤ 8`); `until_up` saklanmaz |
+| Push `safety_alarm` | `kind:"intrusion"`, `status:"latched"` | | başlık "Hırsız alarmı", gövde "Ev alarmı tetiklendi (bölge N). Uygulamadan durumu kontrol edin; tehlikedeyseniz 112'yi arayın." Alıcılar owner + resident (mevcut kural) |
+
+Sürüm: firmware **1.3.0** (yeni yetenek). Sunucu ve uygulama `caps` yoksa bugünkü gibi davranır.
+
+#### B.8 Sunucu akışları
+
+- `validateEventPayload`: üç yeni tür (katı alan listesi). `alarm_service`:
+  - `intrusion_alarm` → `alarms` `INSERT … kind='intrusion', zone=<olay zone>, aid=<eid>, status='latched'` + `safety_alarm` push (en çok bir).
+  - `intrusion_cleared` → satır `cleared`, `cleared_by='device_event'`; bilinmeyen `aid` → mezar taşı (mevcut desen).
+  - `arm_changed` → yalnız `device_audit_logs` (`event='safety_arm_changed'`, `mode`, `via`); push yok.
+- **Uzlaştırma ayrımı (kritik):** mevcut bölge uzlaştırması (`onLiveState`, `alarm_service.js:414-470`) `kind='intrusion'` satırlarını
+  **atlar**; aksi halde `zones[]`'ta olmayan bölge "normal" sayılıp hırsız alarmı kapatılırdı. Hırsız satırı ayrı kuralla uzlaştırılır:
+  `arm.st='alarm'` ve `arm.aid` açık satırı yoksa satır açılır (`origin='state'`); açık satır var ve `arm` mevcut, `arm.ok=true`,
+  (`st≠alarm` ya da `aid` farklı) → `cleared` (`device_state`); `safety`/`caps` yok ya da `arm.ok=false` → `lost` (mevcut bilgi push'u).
+  `arm` anahtarı yoksa ve `caps` `intrusion` içeriyorsa (hırsız sensörü kalmamış) açık satır `lost`.
+- `command_schema`: `safety_arm` türü (`mode ∈ away|home|off`, `uid` zorunlu, `id`); `capabilityForCommand` → `safety_arm`.
+- `_assertCommandTarget`: `caps` `intrusion` yoksa `409 FIRMWARE_UNSUPPORTED`.
+- Uygulamanın açık alarm listesinden onay araması `kind='intrusion'` satırını kullanmaz (F2.B.9).
+
+#### B.9 Uygulama
+
+- Model: `SafetyState.arm` (`ArmState {mode, st, ok, untilUp, aid, srcs}`; bilinmeyen değer `unknown`, fırlatmaz; eşitlik dahil).
+  `SafetyState.supportsIntrusion` (`caps`). `DeviceStatus.uptime` zaten okunuyor; kalan süre `untilUp - uptime`, sonra yerel geri sayım.
+- Komut: `AutomationState.setArmMode(deviceUid, mode)`; anahtar `arm:<uid>`; iyimser DEĞİL (çözme dahil; onaya kadar "Uygulanıyor…").
+  Bulutta REST, LAN'da `POST /api/arm`. Ön denetim (`armBlockReason`): kurulacak kipte etkin, giriş yolu olmayan açık ya da `ok=false`
+  sensör varsa ağa çıkmadan ret ve liste: "Kurulamaz: Salon penceresi açık." Panonun `not_ready` reddi aynı metne çevrilir.
+- Arayüz:
+  - `AlarmModeTile` (pano bölümünde, "Güvenlik ve Eylemciler" bölümünün başı): üç seçenekli seçici "Kapalı / Evde / Dışarıda";
+    çözme ve kurma onay diyaloğuyla. Çıkış gecikmesinde "Çıkış için 38 sn" geri sayımı. Misafirde seçici çizilmez, yalnız kip metni.
+  - `SafetyAlertsPanel`'e `IntrusionAlarmCard` (kritik kartlarla aynı yer, tehlike kartlarından SONRA): başlık "Hırsız alarmı",
+    tetikleyen sensör adları, "**[Alarmı Çöz]**" (owner/resident). Giriş gecikmesinde bilgi kartı: "Giriş gecikmesi: 23 sn içinde alarmı çözün."
+  - Alarm geçmişinde tür adı "Hırsız alarmı" (`safety_labels.dart`).
+  - Açık alarm listesinden `alarm_ack` için kayıt aranırken `kind=='intrusion'` satırlar atlanır.
+  - Hızlı senaryo "Evden Çıkıyorum" (`caps` `intrusion` ve yetki varsa) son adımda "Alarmı dışarıda kip ile kurayım mı?" onayı sorar;
+    hayır seçilirse bugünkü davranış aynen.
+  - Sihirbaz Girişler sekmesi: kapı/pencere/hareket için "Giriş yolu (gecikmeli)" ve "Yalnız dışarıda kipte" anahtarları
+    (varsayılanlar B.1); `arm_key` rolü ve uyarı metni (B.3); "Çıkış gecikmesi" / "Giriş gecikmesi" alanları (sn).
+- Ret metinleri: `not_ready` "Alarm kurulamadı: açık kapı ya da pencere var."; `ALARM_USE_DISARM` "Hırsız alarmı onaylanmaz, çözülür.";
+  `FIRMWARE_UNSUPPORTED` (kurma) "Bu pano yazılımı alarm kipini desteklemiyor; v1.3.0'a güncelleyin."
+
+#### B.10 İş paketleri ve dosya sahipliği
+
+| Paket | İçerik | Dosyalar | Bağımlılık |
+|---|---|---|---|
+| **WP-I1 (FW, saf)** | `IntrusionFsm.h`, `ContactBus.h`, `SensorTypes.h` bitleri ve `ARM_KEY`, `SafetyCfgEdit.h` (`arm_key` gevşetmesi), `SafetyConfig.h` (`Policy.rsv2` gecikmeleri, validate), Unity testleri + sim portları + `fwcheck --update` | `src/safety/IntrusionFsm.h`, `src/sensors/ContactBus.h`, `src/sensors/SensorTypes.h`, `src/safety/SafetyCfgEdit.h`, `src/safety/SafetyConfig.h`, `test/test_intrusion_fsm/`, `test/test_contact_bus/`, `tools/qa_stack/sim/fw/{intrusion_fsm,contact_bus}.js`, `SOURCES.json` | — |
+| **WP-I2 (FW, bağ)** | `SafetyManager` (tick, komut, siren VEYA'sı, buzzer deseni, `ahbu_latch/arm`), `SafetyStore`, `SafetyView` (`arm`, `caps`), `EventOutbox` (3 tür + öncelik), `SafetyCfgApi`/`SafetyCfgJson` (`intrusion` öğesi, bayraklar), `WS_GPIO` (`Buzzer_SetPattern`), `WebPortal` (`/api/arm`), `main.cpp` (CLI `ARM`), sürüm 1.3.0; sim portları | `src/safety/SafetyManager.*`, `src/safety/SafetyStore.*`, `src/safety/SafetyView.h`, `src/events/EventOutbox.h`, `src/safety/SafetyCfgApi.cpp`, `src/safety/SafetyCfgJson.h`, `src/WS_GPIO.*`, `src/WebPortal.cpp`, `src/main.cpp` (yalnız CLI), `src/WiFiManager.h` (sürüm), `tools/qa_stack/sim/**` karşılıkları | I1 |
+| **WP-I3 (QA)** | Uçtan uca hırsız senaryoları (B.11) | `tools/qa_stack/test/sim_intrusion.test.js`, `sim/device_sim.js` (`setContact`) | I2 |
+| **WP-I4 (SRV)** | Olay türleri, alarm servisi (ayrı uzlaştırma), şema/rol/rota, push metni | `server/src/mqtt_bridge.js` (yalnız `validateEventPayload`), `server/src/services/alarm_service.js`, `server/src/utils/safety_payload.js`, `server/src/utils/command_schema.js`, `server/src/utils/role_matrix.js`, `server/src/services/safety_service.js`, `server/src/routes/safety_routes.js`, `server/src/services/device_service.js` (yalnız `_assertCommandTarget`) | sözleşme (B.7) |
+| **WP-I5 (APP, model+durum)** | `ArmState`, ayrıştırma, komut, ön denetim, ret metinleri, yetenek `canArm` | `lib/models/safety_models.dart`, `lib/models/capabilities.dart`, `lib/services/automation_state.dart`, `lib/services/automation_api_service.dart`, `lib/services/ev_cloud_api_service.dart`, `lib/services/command_pipeline.dart` | sözleşme |
+| **WP-I6 (APP, arayüz)** | `AlarmModeTile`, `IntrusionAlarmCard`, senaryo onayı, sihirbaz anahtarları | `lib/ui/widgets/alarm_mode_tile.dart` (yeni), `lib/ui/widgets/critical_alarm_card.dart`, `lib/ui/widgets/safety_labels.dart`, `lib/ui/dashboard/endpoint_sections.dart`, `lib/ui/dashboard/apartment_dashboard.dart`, `lib/ui/pages/service_setup/steps/step_7_safety.dart`, `.../logic/safety_assignment.dart` | I5 |
+
+`WP-G2` ile `WP-I6` aynı iki dosyaya (`critical_alarm_card.dart`, `step_7_safety.dart`) dokunur: sırayla birleştirilir (G2 → I6).
+
+#### B.11 Test planı
+
+- **Unity (`test_intrusion_fsm`)**: hazır olmayan kurma `not_ready`; giriş yolu açıkken kurma kabul + çıkış hatası → giriş gecikmesi;
+  çıkış gecikmesinde anlık sensör → alarm; giriş süresinde çözme → alarm yok; giriş süresi dolunca alarm; `home` kipinde hareket yok
+  sayılır; swinger 3; `ok=false` alarm üretmez ama kurmayı engeller; `millis` taşması (0xFFFFF000); açılışta kip geri yükleme ve
+  alarm belleğinde siren çalmama; kip değişimi (`home`→`away`) yeni çıkış gecikmesi; `until_up` sabitliği (görünüm imzası).
+  `test_contact_bus`: halka taşması, çok okuyucu imleç, yalnız door/window kenarı. `test_safety_cfg_edit`: `arm_key` gevşetme kuralı
+  (kullanılmış DI reddi, yeni DI serbest), hırsız ayarlarının LAN'dan serbest olması. Siren VEYA'sı: tehlike ACK hırsız sirenini
+  susturmaz, çözme tehlike sirenini susturmaz.
+- **QA (`sim_intrusion.test.js`)**: uçtan uca kur/çık/gir/çöz, alarm → `intrusion_alarm` + ack, çözme → `intrusion_cleared`;
+  kurulu kipte yeniden başlatma; LAN `/api/arm` ve `not_ready`; `ARM_KEY` DI kenarları; su alarmı + hırsız alarmı birlikte (vana ve
+  siren bağımsız); **eşdeğerlik**: kapı/pencere sensörü olmayan panoda iz bit bit aynı (`sim_safety_equivalence` genişletilir);
+  `sim_http` rota sayısı 33.
+- **Sunucu**: olay doğrulama (3 tür, bilinmeyen alan reddi); `intrusion_alarm` → satır + tek push; `intrusion_cleared` ve mezar taşı;
+  **bölge uzlaştırması hırsız satırına dokunmaz** (kırmızı testi: atlama olmadan satır `cleared` olur); `arm` ile uzlaştırma
+  (açma/kapama/`lost`); `ALARM_USE_DISARM`; rol matrisi (misafir ve servis rollerinde `403`); `FIRMWARE_UNSUPPORTED`; PG'li test.
+- **Flutter**: `ArmState` ayrıştırma ve eşitlik; ön denetim metni; kurma/çözme iyimser değil; misafirde seçici yok; geri sayım
+  (`AmbientClock`/sahte saat); `IntrusionAlarmCard` ve geçmiş etiketi; onay aramasında `intrusion` satırının atlanması; "Evden
+  Çıkıyorum" onayı (hayır → bugünkü komut dizisi birebir).
+
+---
+
+### F2.C Flutter bildirim alıcısı (plan 2.6)
+
+#### C.1 Mevcut altyapı (okundu)
+
+- İstemci: `PushGateway` (dar platform arayüzü), `PushCoordinator` (izin, belirteç kaydı, `onForegroundMessage` /
+  `onMessageOpened` / `getInitialMessage`, tekilleştirme, dinleyici yokken tampon), `PeaceNotice.tryParse` (sıkı doğrulama),
+  `PeaceNoticeController` + `PeaceNoticeHost` (kabuk düzeyi). Fabrika **her zaman** `UnsupportedPushGateway` döndürür: uygulama
+  Firebase'siz derlenir (`pubspec.yaml`'da `firebase_core`/`firebase_messaging` yok).
+- Sunucu: `push_service.sendNotice({kind})`; `safety_alarm` (owner + resident, `channel_id=safety_alarm`, `priority=HIGH`,
+  `apns-priority=10`, `interruption-level=time-sensitive`, `category=SAFETY_ALARM`, `collapse=alarm_<home>_<device>_<zone>`) ve
+  `safety_info` (owner, `channel_id=safety_info`). Gece hatırlatması `channel_id=peace_reminder`.
+
+#### C.2 Ön koşul ve karar: gerçek FCM ağ geçidi
+
+Bu paket **alıcı mantığını, kanalları ve yönlendirmeyi** üretir ve sahte ağ geçidiyle uçtan uca test eder. Gerçek FCM ağ geçidi
+(`FirebasePushGateway`) `firebase_core` + `firebase_messaging` bağımlılığı, `google-services.json` / `GoogleService-Info.plist`,
+APNs anahtarı ve `pub get` gerektirir; bu, 2026-10-02'de bilinçli alınan "Firebase'siz uygulama" kararını değiştirir. Bu yüzden ağ
+geçidi ayrı bir iş paketidir (**WP-N4**, F2.E.3 karar F2-6): kullanıcı onayı ve yapılandırma değerleri gelince yazılır; fabrikanın
+imzası (`createPushGateway(PushConfig?)`) değişmez. O zamana kadar:
+
+- Uygulama açıkken ve açılınca alarm, state (`DeviceStatus.safety`) ve `GET …/alarms?state=open` üzerinden zaten görünür.
+- **Kalan risk (7.1 "Push hiç yok") sürer:** uygulama kapalıyken alarm telefona ulaşmaz; yerel siren ve kart buzzer'ı tek uyarıdır.
+  Sürüm notu ve sihirbaz bitiş ekranı bunu yazar: "Uygulama kapalıyken alarm bildirimi bu sürümde gelmez; siren takmanız önerilir."
+
+#### C.3 Ayrıştırma: `SafetyPushNotice` (`lib/services/push/safety_notice.dart`, yeni)
+
+`PeaceNotice` deseninde, `data` güvenilmeyen girdidir; `tryParse` asla fırlatmaz, geçersizde `null`.
+
+| `data` anahtarı | Kural |
+|---|---|
+| `type` | `safety_alarm` ya da `safety_info`; başka değer → `null` (peace ayrıştırıcısına bırakılır) |
+| `v` | `"1"`; başka → `null` |
+| `home_id`, `device_id` | `[A-Za-z0-9_-]`, ≤ 64 |
+| `device_uuid` | **yeni, isteğe bağlı** (C.8): `^[A-Z0-9-]{1,32}$`; yoksa `null` |
+| `alarm_id` | rakam metni ≤ 18 hane |
+| `zone` | `1..4` (yalnız `safety_alarm`) |
+| `kind` | `water|gas|smoke|intrusion`; başka kısa kod `generic` (gösterimde "Güvenlik alarmı") |
+| `status` | `latched|fault` (alarm); `reason` `alarm_lost|policy_off|policy_on|cfg_pending_dropped` (bilgi); bilinmeyen → `null` |
+| `title`, `body` | `PeaceNotice` temizleyicisiyle (denetim/çift yön karakterleri atılır, 120/300 karakter) |
+
+`dedupeKey`: alarm `a:<alarm_id>:<status>` (aynı alarmın `fault` push'u ayrı bildirimdir), bilgi `i:<alarm_id|home_id>:<reason>`.
+
+#### C.4 Koordinatör genelleştirmesi (gece hatırlatması birebir korunur)
+
+- `PushCoordinator._handleMessage` sırayla dener: `PeaceNotice.tryParse` → `SafetyPushNotice.tryParse`. Gece bildirimi yolu, akışı
+  (`notices`), tamponu ve tekilleştirmesi **değişmez** (mevcut koordinatör testleri değiştirilmeden geçer).
+- Yeni akış `safetyNotices` (`Stream<SafetyPushNotice>`, broadcast) ve ayrı tampon (en çok 8, süre 30 dk). Tekilleştirme penceresi
+  ortak `_seenNotices` haritasını kullanır (anahtar önekleri çakışmaz).
+- Yeni denetleyici `SafetyNoticeController` (`lib/services/safety_notice_controller.dart`): kabuğa bağlanır (Peace deseni:
+  `AutomationState`'in yalnız public arayüzü), oturum/ev değişiminde nesil artırır, içerik loglamaz.
+
+#### C.5 Platform kanalları ve izinler (bağımlılıksız)
+
+- **Android** (`MainActivity.onCreate`, Kotlin, yalnız `NotificationManager`; API 26+). Oluşturma idempotenttir; FCM gelmeden de zararsızdır
+  ve gelecekteki ağ geçidi için kanalları hazır eder:
+
+  | Kanal kimliği | Ad (kullanıcı görür) | Önem | Ses / titreşim | Kilit ekranı |
+  |---|---|---|---|---|
+  | `safety_alarm` | Güvenlik alarmları | `IMPORTANCE_HIGH` | `RingtoneManager.TYPE_ALARM` sesi, `AudioAttributes.USAGE_ALARM`; uzun titreşim deseni; `setBypassDnd(true)` (yalnız kullanıcı izin verirse etkili) | `VISIBILITY_PUBLIC` |
+  | `safety_info` | Güvenlik bilgileri | `IMPORTANCE_DEFAULT` | varsayılan | `VISIBILITY_PRIVATE` |
+  | `peace_reminder` | Gece hatırlatması | `IMPORTANCE_DEFAULT` | varsayılan | `VISIBILITY_PRIVATE` |
+
+  Kanal tanımları saf bir Kotlin nesnesinde (`NotificationChannels.specs`) tutulur; `peace_reminder` bugün sunucunun kullandığı ama
+  uygulamanın hiç oluşturmadığı kanaldı (mevcut eksik kapanır). `AndroidManifest.xml`'e `android.permission.POST_NOTIFICATIONS` eklenir
+  (Android 13+; izin penceresi yine yalnız kullanıcı isteyince, mevcut koordinatör kuralı).
+- **iOS:** `Runner.entitlements`'a `com.apple.developer.usernotifications.time-sensitive` (kritik uyarı izni YOK, 7.2b-3).
+  `AppDelegate` `UNUserNotificationCenter.setNotificationCategories` ile `SAFETY_ALARM`, `SAFETY_INFO`, `PEACE_CLOSE_ALL`
+  kategorilerini **eylemsiz** kaydeder. Bildirimden doğrudan "Onayla"/"Vanayı Kapat" eylemleri bu sürümde YOK: arka planda kimlik
+  doğrulamalı komut gerektirir; dokunma uygulamayı açar (F2.E.3 karar F2-7). `aps-environment` (push yeteneği) WP-N4'e aittir.
+
+#### C.6 Bildirime dokununca alarm kartına git
+
+Kaynak `opened` ya da `initial` olan `SafetyPushNotice` için `SafetyNoticeController.open(notice)`:
+
+1. Oturum yoksa bildirim bekletilir (oturum açılınca bir kez işlenir, 30 dk geçerlilik).
+2. `notice.homeId` kullanıcının evlerinden biri değilse yok sayılır (çıkış yapmış/rolü düşmüş telefon).
+3. Etkin ev farklıysa `selectHome(homeId)`; gezinti yığını panoya (kök) indirilir (`Navigator.popUntil(isFirst)`).
+4. `refresh()` beklenir (en çok 5 sn), ardından alarm aranır:
+   - `kind=intrusion` → `IntrusionAlarmCard` (`card_intrusion_<uid>`);
+   - diğerleri → `card_critical_alarm_<device_uuid>_<zone>`; `device_uuid` yoksa aynı `zone`'daki ilk kritik kart.
+5. Kart varsa `Scrollable.ensureVisible` (Hareket v3 süresi, `MotionScope.off`'ta 0) ve kart bir kez vurgulanır (tek seferlik
+   çerçeve animasyonu; yanıp sönme yok). Ekran okuyucuya "Alarm kartı açıldı: <başlık>" duyurusu.
+6. Kart yoksa (alarm bu arada kapanmış): alarm geçmişi sayfası açılır ve alt bilgi "Bu alarm kapanmış." gösterilir. Misafir (rolü
+  sonradan düşmüş) için geçmiş açılmaz, yalnız pano.
+7. `safety_info` dokunuşu: `alarm_lost` → ilgili panonun kartı ya da pano; `policy_*` ve `cfg_pending_dropped` → cihaz ayarları
+   sayfası (yoksa pano).
+
+#### C.7 Uygulama açıkken gelen bildirim (`foreground`)
+
+Sistem bildirimi gösterilmez (sunucu `notification` alanı yine gelir; ön planda platform göstermez). Alarm zaten etkin evdeyse state
+kartı gösterir; ek olarak `SafetyAlertsPanel` yoksa (başka sayfadaysa) kabuk üst afişi: "**Gaz kaçağı alarmı** – dokunun" (dokunma C.6).
+Başka evdeyse afiş "Diğer evinizde alarm: <ev adı>". Afiş Hareket v3 giriş animasyonu, `liveRegion`, 10 dk aynı `dedupeKey` için tek.
+
+#### C.8 Sözleşme değişiklikleri (alan alan)
+
+| Yer | Alan | Değişiklik |
+|---|---|---|
+| CONTRACTS §2.5 `safety_alarm` `data` | `device_uuid` | **Yeni, metin**: panonun `uid`'si (`devices.device_uuid`). Uygulama kart anahtarı pano `uid`'siyle kurulduğu için gerekli. `v` `"1"` kalır (ek alan; eski istemci yok sayar) |
+| §2.5 `safety_info` `data` | `device_uuid` | aynı |
+| §2.5 `safety_info` `reason` | `cfg_pending_dropped` | yeni değer (F2.D.2) |
+| §2.5 `safety_alarm` `kind` | `intrusion` | yeni değer (F2.B) |
+| §2.5 istemci kuralları | — | "Android kanalları `safety_alarm`/`safety_info`/`peace_reminder` uygulama ilk açılışta oluşturur; iOS kategorileri eylemsizdir" notu |
+
+#### C.9 İş paketleri ve dosya sahipliği
+
+| Paket | İçerik | Dosyalar |
+|---|---|---|
+| **WP-N1 (SRV)** | push `data`'ya `device_uuid` (alarm ve bilgi); push testleri | `server/src/services/push_service.js` (`buildSafetyData`), `server/src/services/alarm_service.js` (çağrı yeri) |
+| **WP-N2 (APP, servis)** | `SafetyPushNotice`, koordinatör genelleştirmesi, `SafetyNoticeController` | `lib/services/push/safety_notice.dart` (yeni), `lib/services/push/push_coordinator.dart`, `lib/services/safety_notice_controller.dart` (yeni) |
+| **WP-N3 (APP, arayüz + platform)** | yönlendirme ve vurgu, ön plan afişi, kabuk bağlantısı; Android kanalları + izin; iOS yetki + kategoriler | `lib/ui/app_shell.dart`, `lib/ui/widgets/safety_notice_host.dart` (yeni), `lib/ui/widgets/critical_alarm_card.dart` (yalnız vurgu kancası), `android/app/src/main/kotlin/.../MainActivity.kt`, `.../NotificationChannels.kt` (yeni), `android/app/src/main/AndroidManifest.xml`, `ios/Runner/AppDelegate.swift`, `ios/Runner/Runner.entitlements` |
+| **WP-N4 (APP, ertelenmiş)** | `FirebasePushGateway` + fabrika + derleme yapılandırması | `lib/services/push/firebase_push_gateway.dart`, `push_gateway_factory.dart`, `pubspec.yaml`, platform dosyaları. **Kullanıcı kararı bekler** (C.2) |
+
+`critical_alarm_card.dart`: G2 → I6 → N3 sırasıyla birleştirilir.
+
+#### C.10 Test planı
+
+- `safety_notice_test.dart`: geçerli alarm/bilgi; her alanın sınır ve bozuk değerleri (`null`, fırlatmaz); denetim karakteri
+  temizliği; bilinmeyen `kind` → `generic`; `device_uuid` yok/var; `dedupeKey` (`latched` ve `fault` ayrı).
+- `push_coordinator_test.dart`: **mevcut testler değiştirilmeden** geçer; yeni: güvenlik mesajı `safetyNotices`'a gider, `notices`'a
+  gitmez; dinleyici yokken tampon ve süre; aynı mesaj `foreground` + `opened` tek olay.
+- `safety_notice_controller_test.dart` (sahte ağ geçidi + sahte `AutomationState`): oturum yokken bekletme; yabancı ev yok sayılır;
+  ev değişimi + `refresh`; kart bulunur / bulunamaz → geçmiş; misafir; nesil değişiminde uçuştaki yönlendirme iptali.
+- Widget: `opened` mesajı → pano kaydırılır ve `card_critical_alarm_<uid>_<z>` görünür; vurgu tek seferlik (`MotionScope.off` süre 0);
+  ön plan afişi ve dokunma.
+- Android/iOS: JVM birim testi yok; `flutter analyze` + derleme denetimi; cihazda kanal ayarları ekranı kullanıcı denemesine bırakılır.
+- Sunucu: `buildSafetyData` `device_uuid` (geçerli/geçersiz biçim atılır), mevcut push testleri aynen.
+
+---
+
+### F2.D Buluttan yapılandırma yazımı (`sys cfg_patch`)
+
+#### D.1 Çevrimiçi akış
+
+`POST /homes/:homeId/devices/:deviceId/safety-config` (gövde F2.D.6) sırası, tek transaction + cihaz satırı kilidi
+(`SELECT … FROM device_configs WHERE device_id=$1 AND module='safety' FOR UPDATE`; aynı panoya aynı anda tek yama):
+
+1. Üyelik ve yetenek `safety_config` (SUPER, STAFF, SESSION, OWNER). Misafir/resident `403`.
+2. Şema doğrulaması `utils/safety_cfg_patch.js` (firmware `parseCfgEdit` ile aynı alan listesi ve aralıklar; bilinmeyen alan `400`).
+   sys yükü (`cmd`, `module`, `uid`, `id`, `base_rev` eklenmiş) seri hali > 1024 bayt ise `400 PAYLOAD_TOO_LARGE`.
+3. `devices.caps` `cfg` içermiyorsa `409 FIRMWARE_UNSUPPORTED`. Kopya (`device_configs`) yoksa `409 CONFIG_NOT_AVAILABLE`
+   (önce `cfg_get` tetiklenir; kullanıcı yeniden dener).
+4. `pending` boş değilse ve pano çevrimiçiyse `409 CONFIG_PENDING` (önce kuyruk boşalmalı ya da iptal edilmeli).
+5. **Ön çakışma denetimi:** `base_rev` ≠ panonun son bildirdiği `cfg.safety.rev` (`devices.safety_state.cfg.rev`) → `409
+   CONFIG_CHANGED_ON_DEVICE` (`data: {rev, crc, copy_rev}`) ve kopya eskiyse `cfg_get`. Ağa çıkılmaz.
+6. Gevşetme sınıflandırması (`utils/safety_cfg_loosen.js`, firmware `isLoosening`'in portu; yalnız denetim kaydı ve bilgi push'u
+   içindir, yetki kararı değildir).
+7. Çevrimdışı → D.2. Çevrimiçi → `expectOutcome(topic, id, 10 sn, {uid})` kurulur, `publishSys(t, {cmd:"cfg_patch", module:"safety",
+   uid, id, base_rev, set|del})`.
+8. Sonuç:
+   - `last_id = id` (FW değişikliği, D.6) **ya da** aynı `uid`'den canlı state'te `cfg.safety.rev = base_rev + 1` → `200 {applied:true,
+     rev, crc, command_id}`; ardından `cfg_get` (adlar ve kopya için; mevcut dakika sınırı) ve denetim kaydı `safety_config_patch`
+     (`actor`, rol, öğe türü ve kimliği, `loosening`; değer içeriği ve ad yazılmaz).
+   - `last_rej.code`: `cfg_conflict` → `409 CONFIG_CHANGED_ON_DEVICE {rev, crc}` + `cfg_get`; `cfg_invalid` → `400 CONFIG_INVALID`;
+     `zone_latched` → `409 ZONE_ALARM_ACTIVE`; `cfg_storage` → `507 DEVICE_STORAGE_FULL`; `busy` → `503 DEVICE_BUSY`.
+   - 10 sn içinde sonuç yok → `202 {applied:null, command_id}` (sonuç state'te görünür).
+9. Gevşetme ve aktör owner değilse owner'a `safety_info` (`reason:"policy_off"` zaten firmware olayıyla gider; diğer gevşetmeler için
+   yeni push üretilmez, denetim kaydı yeterli; F2.E.3 karar F2-9).
+
+#### D.2 Çevrimdışı pano: `device_configs.pending` uzlaştırması
+
+- `pending` JSON biçimi (sürüm 1):
+  `{"v":1,"items":[{"id":"<komut kimliği>","base_rev":N,"patch":{"set"|"del":…},"by":"<user uuid>","role":"owner|service_user|service_session|super_user","at":"<ISO>","loosening":bool}]}`.
+  En çok 16 öğe (`409 CONFIG_QUEUE_FULL`); öğe ömrü 24 sa.
+- Kuyruğa ekleme: kuyruk boşsa `base_rev` = panonun son `cfg.safety.rev`'i olmalı; doluysa `base_rev` = son öğenin `base_rev + 1`
+  (uygulama bunu `GET …/safety-config` yanıtındaki `next_base_rev`'ten okur). Uyuşmazsa `409 CONFIG_CHANGED_ON_DEVICE`.
+  Yanıt `202 {queued:true, position, expires_at, command_id}`.
+- Uzlaştırma (`device_reconciler.onLiveState`, yerel anahtar deseni; `publishSys` köprüden): canlı state + `caps` `cfg`:
+  1. Süresi dolan öğeler atılır (denetim `safety_config_pending_dropped {reason:"expired"}`).
+  2. İsteyen kullanıcının eve erişimi kalmadıysa (üyelikten çıkarıldı, hesap silindi) öğesi ve sonrakiler atılır (`reason:"revoked"`).
+     Rol yetkisi istek anında denetlendi; yeniden denetlenmez (servis oturumunun bitmesi kuyruğu düşürmez, 24 sa ömür sınırlar).
+  3. Baş öğenin `base_rev` ≠ state `cfg.safety.rev` → **pano kazanır** (K5): bütün kuyruk atılır (`reason:"conflict"`), owner'a
+     `safety_info {reason:"cfg_pending_dropped"}`.
+  4. Eşitse baş öğe D.1 madde 7-8 ile gönderilir. `applied` → öğe çıkarılır, sonraki öğe bir sonraki canlı state'te (rev artmış
+     olarak) gönderilir. `cfg_invalid`/`zone_latched`/`cfg_conflict` → baş öğe ve sonrakiler atılır (bağımlıdırlar) + bilgi push'u.
+     Zaman aşımı → aynı çevrimiçi oturumda en çok 3 deneme (bekleyici yeniden kurulur; firmware aynı `id`'yi tekilleştirmez, ama
+     `base_rev` artık eşleşmeyeceği için ikinci uygulama `cfg_conflict` olur: çift uygulama mümkün değildir).
+  5. Kuyruk anahtarlı iş kuyruğunda cihaz başına tek uçuştadır.
+- `DELETE /homes/:homeId/devices/:deviceId/safety-config/pending` (`safety_config`): kuyruğu boşaltır (denetim kaydı).
+
+#### D.3 `409 CONFIG_CHANGED_ON_DEVICE`
+
+Üç kaynaktan doğar: ön denetim (D.1-5), firmware `cfg_conflict` (D.1-8), kuyruk ekleme (D.2). Gövde
+`{error:{code:"CONFIG_CHANGED_ON_DEVICE", message:"Pano yapılandırması bu arada değişti; güncel hali okunup yeniden denenmeli."}, data:{rev, crc, copy_rev}}`.
+Sunucu her durumda kopyayı tazelemek için `cfg_get` ister (dakika sınırı). İstemci kuralı: kopyanın `rev`'i `data.rev`'e ulaşana kadar
+(en çok 15 sn, `GET …/safety-config` yoklaması) bekle, planı **yeniden hesapla** (`buildSafetyPatches` fark tabanlıdır) ve bir kez
+daha dene; ikinci çakışmada kullanıcıya göster.
+
+#### D.4 Yetki ve gevşetme (karar 7.2b-7 aynen)
+
+| Yol | Ekleme / sıkılaştırma | Gevşetme | Denetim |
+|---|---|---|---|
+| Bulut, owner | evet | evet | firmware `VIA_CLOUD`; sunucu denetim kaydı |
+| Bulut, super / staff / service_session | evet | evet | aynı; politika kapatma owner'a `safety_info` (mevcut `policy_changed` yolu) |
+| Bulut, resident / guest | hayır (`403`) | hayır | |
+| LAN (yerel anahtar) | evet | **hayır** (`403 local_loosen_forbidden`, firmware) | |
+| Seri CLI | evet | evet | fiziksel erişim |
+
+**Faz 2 incelemesi (G-1) istisnası:** bulut yolu gevşetebilir ama gaz vanasını uzaktan açılabilir kılan değişikliği (her zaman) ve kurulu kipte
+hırsız alarmını zayıflatan değişikliği uygulayamaz; ayrıntı belge sonundaki "Faz 2 inceleme" bölümü.
+
+Gevşetmenin tanımı firmware'dedir (`isLoosening`, CONTRACTS §2.6 "Gevşetme"); sunucu portu yalnız denetim ve arayüz uyarısı içindir.
+Port ile firmware'in ayrışmaması için ortak test vektörü dosyası kullanılır: `tools/qa_stack/sim/fw/fixtures/loosening_vectors.json`
+(QA portu üretir; sunucu testi okur).
+
+#### D.5 Sihirbazın bulut yolu (APP)
+
+- Taşıma soyutlaması `SafetyConfigTransport` (`logic/safety_config_transport.dart`, yeni): `read()` ve `apply(patch, baseRev)`;
+  gerçeklemeler `LanSafetyConfigTransport` (bugünkü `automation_api_service` çağrıları) ve `CloudSafetyConfigTransport` (REST).
+  `applySafetyConfigPatches` taşımadan bağımsız olur (davranışı LAN'da birebir aynı).
+- **Seçim kuralı (K5: yerel öncelikli):** (1) LAN/AP erişilebilir ve yerel anahtar varsa LAN. (2) Değilse kullanıcının `safety_config`
+  yeteneği varsa ve pano `caps` `cfg` ilan ediyorsa bulut. (3) Hiçbiri değilse kayıt kapalı: "Yapılandırma için panoya yerel ağdan
+  bağlanın ya da yetkili bir hesapla internet üzerinden deneyin."
+- **LAN gevşetme reddinde bulut önerisi:** LAN `403 local_loosen_forbidden` dönerse ve kullanıcının `safety_config` yeteneği varsa
+  diyalog: "Bu değişiklik güvenliği azaltır ve yerel ağdan yapılamaz. İnternet üzerinden yetkili hesabınızla uygulansın mı?" Onayla
+  aynı yama bulut taşımasıyla gönderilir (planın kalanı da bulut taşımasıyla sürer).
+- **Bulutta okuma:** `GET …/safety-config` kopyası `rev`'i panonun state'teki `cfg.safety.rev`'ine eşit olana kadar beklenir (en çok
+  15 sn); eşit değilse "Pano yapılandırması okunuyor…" ve yeniden deneme.
+- **Çevrimdışı pano:** `202 queued` → adım sonunda "Pano çevrimdışı. Değişiklikler pano bağlanınca (24 saat içinde) uygulanacak."
+  Adım 7 **tamamlanmış sayılmaz** (tamamlanma koşulu panoya yazılmış olmaktır, dalga 2 not 18); kurulumcu daha sonra adımı yeniden
+  açtığında kuyruk durumu (`pending`) gösterilir, "Kuyruğu iptal et" düğmesi `DELETE …/pending` çağırır.
+- **Bölge testi** bulutta mevcut `POST …/alarm-test` ile; sonuç LAN'daki `/api/events` yerine state (`test` bölgesi) ve alarm
+  listesinden okunamadığı için bulutta "Geri bildirim sonucu yalnız yerel bağlantıda görünür; vananın kapandığını gözle doğrulayın"
+  yazılır (sunucuya `test_result` saklama eklenmez; F2.E.3 karar F2-10).
+
+#### D.6 Sözleşme değişiklikleri (alan alan)
+
+| Yer | Alan | Değişiklik |
+|---|---|---|
+| FW sys `cfg_patch` | başarı yankısı | Başarıda ve `id` geçerliyse `last_id = id` (`rejectCmd`'nin kabul karşılığı `acceptCmd(id)`); bugün yalnız `triggerPublish` |
+| FW sys `cfg_patch` | `last_rej.code` | `CfgResult::STORAGE` artık `busy` değil yeni `cfg_storage` (NVS payı yetmedi, inceleme RV-3) |
+| FW yama gövdesi | `set.intrusion` | F2.B.7 |
+| REST yeni | `POST /homes/:homeId/devices/:deviceId/safety-config` gövde `{base_rev: int ≥ 0, set?: {sensor|actuator|policy|zone|light|intrusion: {…}}, del?: {sensor: "dN|bN"} | {actuator: "aN"}, id?}` (`set` ya da `del`'den tam biri) | yanıtlar: `200 {applied:true, rev, crc, command_id}`, `202 {applied:null, command_id}`, `202 {queued:true, position, expires_at, command_id}`, `400 VALIDATION|CONFIG_INVALID|PAYLOAD_TOO_LARGE`, `403`, `409 FIRMWARE_UNSUPPORTED|CONFIG_NOT_AVAILABLE|CONFIG_PENDING|CONFIG_CHANGED_ON_DEVICE|CONFIG_QUEUE_FULL|ZONE_ALARM_ACTIVE`, `503 DEVICE_BUSY`, `507 DEVICE_STORAGE_FULL` |
+| REST yeni | `DELETE /homes/:homeId/devices/:deviceId/safety-config/pending` | `200 {dropped: n}` |
+| REST mevcut | `GET …/safety-config` | ek alanlar: `state_rev` (panonun son bildirdiği rev), `next_base_rev` (kuyruk varsa son öğe + 1, yoksa `state_rev`), `pending: [{id, op:"set|del", item:"sensor|actuator|…", target, at, role, loosening}]` (yalnız `safety_config` yeteneği olanlara; diğerlerine alan yok) |
+| `device_configs.pending` | JSONB | D.2 biçimi (migration gerekmez; kolon 033'te var) |
+| Push `safety_info.reason` | `cfg_pending_dropped` | F2.C.8 |
+| Denetim kaydı | `safety_config_patch`, `safety_config_pending_dropped` | `device_audit_logs.event` değerleri |
+| Uygulama hata eşlemesi | yeni kodlar | `CONFIG_CHANGED_ON_DEVICE` "Pano yapılandırması bu arada değişti; güncel hali okundu, yeniden deneyin."; `CONFIG_PENDING` "Bu pano için bekleyen değişiklikler var."; `CONFIG_QUEUE_FULL` "Bekleyen değişiklik sınırı doldu."; `DEVICE_STORAGE_FULL` "Panonun yapılandırma belleği dolu; kurulumcunuza başvurun."; `CONFIG_NOT_AVAILABLE` "Pano yapılandırması henüz okunmadı; biraz sonra yeniden deneyin." |
+
+#### D.7 İş paketleri ve dosya sahipliği
+
+| Paket | İçerik | Dosyalar | Bağımlılık |
+|---|---|---|---|
+| **WP-C1 (FW)** | `acceptCmd` yankısı, `cfg_storage` kodu; sim portu | `src/MqttManager.cpp`, `src/safety/SafetyFsm.h` (yalnız `Rej` metni), `tools/qa_stack/sim/fw/mqtt_manager.js` | — (I2 ile aynı sürüm 1.3.0'a girer; `MqttManager.cpp` I2'de yoktur) |
+| **WP-C2 (SRV)** | yama şeması, gevşetme portu + ortak vektörler, rota, `safety_service.patchConfig`, kuyruk + uzlaştırma, `GET` ekleri, denetim, push nedeni | `server/src/utils/safety_cfg_patch.js` (yeni), `server/src/utils/safety_cfg_loosen.js` (yeni), `server/src/services/safety_service.js`, `server/src/routes/safety_routes.js`, `server/src/services/device_reconciler.js` (yalnız güvenlik yapılandırması kuyruğu), `server/src/services/alarm_service.js` (yalnız `requestConfig` dışa açımı), `server/src/services/push_service.js` (yeni neden), `tools/qa_stack/sim/fw/fixtures/loosening_vectors.json` (QA üretir) | C1 (sözleşme) |
+| **WP-C3 (APP)** | taşıma soyutlaması, bulut taşıması, seçim kuralı, LAN gevşetme reddinde bulut önerisi, kuyruk görünümü, hata metinleri | `lib/ui/pages/service_setup/logic/safety_config_transport.dart` (yeni), `.../logic/safety_assignment.dart`, `.../steps/step_7_safety.dart`, `lib/services/ev_cloud_api_service.dart`, `lib/services/api_exception.dart` (metinler) | C2 |
+
+`device_reconciler.js` C2 ile birlikte yalnız bu pakette değişir; `step_7_safety.dart` ve `safety_assignment.dart` sırası G2 → I6 → C3.
+
+#### D.8 Test planı
+
+- **FW/QA:** `cfg_patch` başarıda `last_id` yankısı (kırmızı: bugün yok); `cfg_storage` kodu (NVS payı dolu sahte depo);
+  uid uyuşmazlığında sessizlik (mevcut); `base_rev` yanlış → `cfg_conflict` + olay. `sim_safety.test.js`'e bulut yaması senaryosu.
+- **Sunucu (PG'siz):** şema (her öğe türü, sınırlar, `set`+`del` birlikte reddi, 1024 bayt sınırı); gevşetme portu ortak vektörlerle
+  firmware portuyla aynı sonucu verir; rol matrisi (resident/guest `403`); ön çakışma `409`; `expectOutcome` ile `applied`,
+  `cfg_conflict`, `cfg_invalid`, `zone_latched`, zaman aşımı; çevrimdışı kuyruğa ekleme ve `next_base_rev` kuralı; kuyruk dolu.
+- **Sunucu (PG'li):** satır kilidiyle iki eşzamanlı yamadan biri `409 CONFIG_PENDING`/`CONFIG_CHANGED_ON_DEVICE`; uzlaştırma
+  zinciri (3 öğe sırayla, her biri bir canlı state sonrası); baş öğe çakışması → tüm kuyruk düşer + bilgi push'u; süre dolumu;
+  üyelikten çıkarılan isteyen; `DELETE …/pending`; denetim kaydında değer/ad olmaması.
+- **Flutter:** `CloudSafetyConfigTransport` istek/yanıt eşlemesi; seçim kuralı (LAN var/yok, yetenek var/yok, `caps` `cfg` var/yok);
+  LAN `local_loosen_forbidden` → bulut önerisi diyaloğu (onay/iptal); `CONFIG_CHANGED_ON_DEVICE` → kopya bekleme + plan yeniden
+  hesaplama + tek yeniden deneme; `queued` → adım tamamlanmaz ve kuyruk görünür; LAN yolunun mevcut testleri
+  (`f_setup_safety_assignment_test.dart`) değiştirilmeden geçer.
+
+---
+
+### F2.E Uygulama sırası, riskler, kararlar
+
+#### E.1 Sıra ve paralellik
+
+1. **Dalga A (bağımsız):** WP-G1, WP-G2, WP-G3, WP-N1, WP-N2, WP-I1, WP-C1.
+2. **Dalga B:** WP-I2 (I1'den sonra), WP-C2 (C1 sözleşmesiyle), WP-N3 (N2'den sonra), WP-I5.
+3. **Dalga C:** WP-I3, WP-I4, WP-I6, WP-C3.
+4. **Sürüm (WP-R2):** firmware 1.3.0 (I2 + C1), dağıtım sırası **sunucu → firmware → uygulama** (yeni sunucu `intrusion`/`cfg` yeteneği
+   ilan etmeyen panoda bugünkü gibi çalışır). WP-N4 ayrı karara bağlıdır.
+
+Paylaşılan dosyalar ve birleşme sırası: `critical_alarm_card.dart` (G2 → I6 → N3), `step_7_safety.dart` ve `safety_assignment.dart`
+(G2 → I6 → C3), `alarm_service.js` (G1 → N1 → I4 → C2), `SOURCES.json` (I1 → I2 → C1, her birleşmeden sonra `fwcheck --update`),
+`safety_routes.js` / `safety_service.js` (I4 → C2).
+
+#### E.2 Riskler
+
+| Risk | Etki | Azaltma |
+|---|---|---|
+| Push alıcısı var ama ağ geçidi yok (C.2) | Uygulama kapalıyken alarm ulaşmaz | Açık ürün kararı (F2-6); siren önerisi metni; WP-N4 hazır arayüze oturur |
+| Hırsız satırının bölge uzlaştırmasında kapanması | Sessizce kapanan hırsız alarmı | B.8 ayrım kuralı + kırmızı testi |
+| `ARM_KEY`'in kapı kontağı girişine atanması | Kapıyı kapatmak alarmı çözer | `di_hist` gevşetme kuralı (B.3) |
+| Kuyruktaki eski yamanın sahadaki yerel değişikliği ezmesi | Kurulumcunun yaptığı değişiklik kaybolur | `base_rev` zinciri; pano kazanır, kuyruk düşer (D.2-3) |
+| Gaz alarmında otomatik anahtarlama | Tutuşma | A.4 (zamanlayıcı, gece hatırlatması, uygulama onayı) |
+| NVS bütçesi (`ahbu_latch/arm` +1) | Kilit yazımı | Bütçe kararı zaten açık (dalga 1 F0); `reserveLatch` payına `arm` dahil edilir (I2) |
+| Hırsız alarmında sahte tetik (uzun kablo) | Komşu rahatsızlığı | DiGate süzgeci + swinger 3 + siren `run_limit_s` |
+| v1.2.0 `parseCfgEdit` `flags > 0x07`'yi reddeder (doğrulandı) | Eski panoda sihirbaz yazımı `cfg_invalid` | Uygulama ve sunucu yeni bitleri yalnız `caps` `intrusion` varken yazar (B.7) |
+
+#### E.3 Bu tasarımda verilen kararlar (kullanıcı "soru sorma, gerekeni yap"; standart/emniyet önceliği)
+
+- **F2-1** Gaz alarmında otomatik anahtarlama (bulut zamanlayıcısı, gece hatırlatması) durur; kullanıcı komutu onayla serbesttir.
+- **F2-2** Hırsız alarmı ev geneli: bütün pano sirenleri; bölge eşlemesi yok.
+- **F2-3** Kurma/çözme: owner ve resident; misafir ve **servis rolleri buluttan yapamaz** (yerelde LAN/CLI ile test).
+- **F2-4** Kip ve alarm belleği güç kesintisinden sağ çıkar; açılışta çıkış gecikmesi yok, bellekteki alarm sirensiz geri gelir.
+- **F2-5** Kontak kenarları olay kutusuna yazılmaz; yerel `ContactBus` ve state seviyesi yeterli.
+- **F2-6** Firebase'siz karar korunur; gerçek FCM ağ geçidi (WP-N4) kullanıcı onayı ve yapılandırma değerleriyle ayrı yapılır.
+- **F2-7** Bildirim eylem düğmeleri (Onayla / Vanayı Kapat) bu sürümde yok; dokunma uygulamayı açar.
+- **F2-8** Çevrimdışı yapılandırma kuyruğu en çok 16 öğe, 24 sa; çakışmada pano kazanır, kuyruk bütünüyle düşer.
+- **F2-9** Bulut gevşetmesi denetim kaydına yazılır; politika kapatma dışındaki gevşetmeler için ayrı push yok.
+- **F2-10** Bulutta bölge testi sonucu (`test_result`) saklanmaz; yalnız LAN'da gösterilir.
+
+#### E.4 Açık kalanlar (bu fazın dışında)
+
+Somut Zigbee/Thread köprü sürücüsü; RTC↔SNTP; termostat (3.x) ve senaryo motoru (5.x) — `ContactBus` arabirimi bunlara hazırdır;
+gömülü web sayfası güvenlik/alarm ekranı; NVS bölüm büyütme kararı; donanım doğrulaması ("İlk kartta denenecekler" listesine
+eklenecekler: hırsız giriş/çıkış gecikmesi gerçek kapı kontağıyla, `ARM_KEY` anahtarlı kontak, sirenin iki kaynakla sürülmesi,
+kurulu kipte güç kesintisi).
+
+---
+
+## Uygulama notları (SRV Faz 2: WP-G1, WP-N1, WP-I4, WP-C2)
+
+Ekip SRV, 2026-10-07, taban `caa41ef` (tasarım) / `751f815` (canlı). TDD: her paketin testi önce yazıldı ve kırmızı görüldü
+(eksik modül/alan, yanlış metin, eski davranış), sonra kod. Sözleşme ayrıntısı `docs/CONTRACTS.md` §1.4, §1.5b, yeni §1.5e, §2.5,
+§2.6 ve §2.7. Firmware ve uygulamaya dokunulmadı.
+
+**WP-G1 (gaz/duman).**
+- Push metinleri F2.A.5 aynen; `faultTitle(kind)` / `faultBody(kind)` türe göre, bilinmeyen tür eski genel metin. Su metni değişmedi.
+- "Açık gaz alarmı" = `alarms.kind='gas'` ve `status IN ('latched','fault','silenced')`. **Ek sorgu yok:** zamanlayıcıda mevcut cihaz
+  sorgusuna, gece hatırlatmasında mevcut canlı anlık görüntü sorgusuna `EXISTS … AS gas_alarm` kolonu eklendi (ilintisiz alt sorgu,
+  `alarms_home_open_idx`). Gaz alarmı yokken sonuç ve sorgu sayısı aynen (test).
+- Zamanlayıcı: `skipped_hazard` / `gas_alarm`, yuva **tüketilir** (alarm kapanınca gecikmiş anahtarlama yapılmaz).
+- **Sapma:** gece hatırlatmasının değerlendiricisi `peace_service.js` değil `peace_reminder.js`'tir. Tasarımdaki "`skipped`" durumu CHECK'te yoktu:
+  yeni durum `skipped_hazard` için **migration 034** yazıldı (yalnız `peace_logs_status_check` genişletildi; idempotent, NOT VALID + VALIDATE;
+  gerçek PG'de yalıtılmış veritabanında `migrate.js` iki kez + dosya iki kez daha). `skipped_hazard` `skipped_offline` gibi pencere içinde
+  yeniden denenir (alarm kapanırsa bildirim yine gider). Gönderim öncesi ikinci anlık görüntüde de denetlenir.
+- `POST …/close-all` → `409 HAZARD_ACTIVE` `peace_service.closeAll` içinde, yayından önce (rota dosyasına değişiklik gerekmedi).
+  Kullanıcının toplu `all_lights_off` komutu (`closeLightsKeepingPlugs`) bilinçli komuttur, engellenmez (F2-1).
+
+**WP-N1 (push `device_uuid`).** `buildSafetyData` yalnız uygulamanın kuralına (`^[A-Z0-9-]{1,32}$`, büyük harfe çevrilir) uyan değeri yazar;
+geçersizde anahtar hiç yoktur. Alarm push'unda değer talep sorgusunun `RETURNING` alt sorgusundan, bilgi push'unda çağıranın bildiği
+`uid`'den gelir (ek sorgu yok).
+
+**WP-I4 (hırsız alarmı).**
+- Yeni olay türleri **katı alan listesiyle** doğrulanır (bilinmeyen alan → olay atılır); eski türler eskisi gibi esnek. `intrusion_alarm`
+  için `zone` zorunlu (alarms.zone NOT NULL 1..4).
+- **Ek savunma (tasarımda yoktu):** `findAlarm`'ın `aid`'siz bölge dalı `kind <> 'intrusion'` ile süzülür; aksi halde aid taşımayan bir
+  `valve_fault`/`alarm_cleared` aynı bölgedeki hırsız satırını değiştirebilirdi.
+- `intrusion_cleared` bilinmeyen `aid` → mezar taşı; olay bölge taşımadığı için bölge yer tutucusu 1 (mezar taşı listelenmez).
+  State'ten açılan hırsız satırının bölgesi ilk kaynak sensörün bölgesi (yoksa 1).
+- `arm` özetinde bilinmeyen `mode`/`st` → `"unknown"`; uzlaştırma `unknown` durumda satıra dokunmaz (RV2-1 ilkesi).
+- Temiz-pano önbelleği `arm.st='alarm'` iken kurulmaz.
+- Rota `POST /homes/:homeId/devices/:deviceId/arm`; yetki `safety_arm` (owner, resident) rota + servis + rol matrisi testli.
+
+**WP-C2 (buluttan yapılandırma yazımı).**
+- **Sapma (dosya yerleşimi):** iş mantığı yeni `server/src/services/safety_cfg_sync.js`'tedir (REST yolu ve kuyruk aynı kodu kullanır);
+  `safety_service.js` yalnız yetki + cihaz çözümü, `device_reconciler.js` yalnız `onSafetyState` bağlantısı (cihaz başına sıralı iş) içerir.
+- **Sapma (kilit):** tasarım "tek transaction + satır kilidi" diyordu; ağ beklemesi (≤ 10 sn) boyunca transaction açık tutulmadı
+  (havuz bağlantısı ve `idle_in_transaction_session_timeout` 20 sn). Bunun yerine satır kilidi altında `pending.inflight = {id, at}` yazılır,
+  gönderim transaction dışında yapılır, sonuç ikinci transaction'da temizlenir; uçuş işareti 30 sn sonra geçersizdir (süreç çökerse kilit
+  kalıcı olmaz). Gerçek PG testi: aynı anda iki yamadan biri uygulanır, diğeri `409 CONFIG_PENDING`.
+- Kuyruk biçimi tasarımdaki sürüm 1'e iki isteğe bağlı alan ekler: `inflight` ve öğede `sent_at`. `sent_at`'li baş öğe ve state rev =
+  `base_rev + 1` → **uygulandı** sayılır (`applied_inferred`): zaman aşımından sonra panonun uyguladığı yama "pano kazanır" kuralıyla
+  kuyruğu yanlışlıkla düşürmez ve çift uygulanmaz. Açık ret (busy vb.) ya da yayın hatası `sent_at`'i siler.
+- Sonuç tespiti: köprü `expectOutcome(..., {uid, cfgRev})` (firmware v1.2.0 başarıda `last_id` yazmaz; C1 sonrası `last_id` de çalışır).
+  Ret anındaki panonun `{rev, crc}`'si `409 CONFIG_CHANGED_ON_DEVICE` `data`'sına girer (`http_errors` beyaz listesine `data`).
+- `caps` `intrusion` olmadan `set.intrusion`, sensör `flags > 0x07` ya da `kind:"arm_key"` → `409 FIRMWARE_UNSUPPORTED` (B.7: v1.2.0 bunları
+  `bad_value` ile reddeder). Gövde kuralları firmware `parseCfgEdit` JS portuyla 37 örnekte birebir karşılaştırılır (test).
+- **Kusur düzeltmesi (alarm_service):** dakika sınırına takılan `cfg_get` bir daha istenmiyordu (sonraki state'ler aynı rev'i taşıdığı için
+  erken dönüş); sihirbazın art arda yamalarında kopya kalıcı bayat kalırdı. Artık kopyanın eşitliği doğrulanana kadar dakikada en çok bir
+  kez yeniden denenir; `requestConfig({force})` yama/çakışma sonrası 5 sn taban aralıkla ister.
+- Erişimi kalmayan isteyen: kullanıcı yok / pasif / engelli durum ya da evde (süresi dolmamış) üyeliği yok ve süper değil. Servis oturumu
+  (kullanıcısız) öğeleri yalnız 24 sa ömürle sınırlanır (tasarım D.2-2).
+- Denetim: `queued` sonucu da yazılır (tasarım yalnız `applied` diyordu); değer ve ad hiçbir kayıtta yok (test).
+- Gevşetme ortak vektörleri: `tools/qa_stack/sim/fw/fixtures/gen_loosening_vectors.js` firmware JS portundan 44 vektör üretir
+  (`loosening_vectors.json`); QA testi dosyanın portla güncel olduğunu, sunucu testi sunucu portunun her vektörde aynı sonucu verdiğini
+  denetler. Mutasyon kanıtı: sunucu portundan EM-7 / DI geçmişi / siren kuralı çıkarılınca sırasıyla 1 / 2 / 1 vektör kırmızı.
+  Sunucu panonun `di_hist` kaydını bilmez; alt sınır olarak kopyadaki kullanım (`diUseMask`) verilir (yalnız denetim bilgisi).
+
+**Dağıtım sırası:** migration 034 → sunucu → (firmware 1.3.0 / C1) → uygulama. Yeni sunucu `caps` `intrusion`/`cfg` ilan etmeyen panoda
+bugünkü gibi çalışır.
+
+**Kalanlar / riskler (bu paketlerde yapılmadı).**
+- Firmware C1 (`acceptCmd` yankısı, `cfg_storage`) ve I1/I2 (hırsız katmanı); sunucu ikisini de bekleyerek hazır (testli).
+- Uygulama paketleri (G2, I5, I6, N2, N3, C3) ve QA senaryoları (G3, I3).
+- Uzlaştırıcının iş kuyruğu eşzamanlılığı 2'dir; bir panoya yama gönderimi (≤ 10 sn) bir şeridi meşgul eder. Çok sayıda çevrimdışı
+  kuyruklu pano aynı anda dönerse çocuk kilidi / yerel anahtar uzlaştırmaları gecikebilir (doğruluk etkilenmez).
+- Gevşetme sınıflandırması kopyaya göre yapılır; kopya bayatsa bilgi amaçlı sonuç yanlış olabilir (yetki kararı değildir).
+
+## Faz 2 inceleme
+
+Faz 2'nin (taban `751f815`, HEAD `d867346`) karşıt doğrulamasında 11 bulgudan 8'i CONFIRMED, 2'si PARTIAL, 1'i REFUTED çıktı; RV-E1 ile R1
+tek kökte (G-1) birleştirildi. Geçerli bulguların hepsi bu turda TDD ile düzeltildi: önce kırmızı test (Unity, QA simülatörü, sunucu,
+gerçek PG, Flutter), sonra düzeltme. Doğrulayıcının yeniden üretim testlerinden `rv_e2_entry`, `rv_cfgrev_race` ve `rv_settle_order` artık
+yeşil; `rv_e1_medium`, `rv_arm_bypass` ve `rv_e3_armkey` düzeltmeyle anlamını yitirdi (yama artık reddedilir / NO yapılandırma geçersizdir)
+ve beklentisi ters çevrilmiş halleriyle takıma girdi. Firmware sürümü **1.2.1** olarak kaldı (hiçbir karta yazılmadı); paket yeniden
+üretildi. **Migration yok.**
+
+### Karar: G-1, K-4 / 7.2b-8 ile D.4 arasındaki boşluk
+
+D.4 bulutta owner/servis rolüne gevşetmeyi (eylemci silme dahil) açar; 7.2b-8 "gaz vanası buluttan açılmaz" der. İkisi birlikte, gaz
+vanasını önce bulut yamasıyla "su vanası" ya da sıradan röle yapıp sonra uzaktan açmaya izin veriyordu. Emniyet önceliğiyle karar:
+**bulut yolu gevşetebilir, ama iki sınıfı uygulayamaz.** (1) `isGasRelease`: mevcut gaz vanasının röle(ler)/tür/kip/akışkan kimliğini
+değiştirmek ya da onu silmek ve `gas_reset` satır kuralı (EM-6/FW2-2). Bu değişiklik her zaman reddedilir (`gas_local_only`, sunucuda
+`403 GAS_VALVE_LOCAL_ONLY`) ve yalnız seri CLI'dan yapılabilir. (2) `isIntrusionLoosening`: hırsız alarmını zayıflatmak. Bu yalnız kurulu
+kipte reddedilir (`armed`, sunucuda `409 INTRUSION_ARMED`). F2-3 servis rollerinin buluttan çözmesini yasaklar; sensörü susturarak
+dolaylı çözme de aynı kapsamdadır. B.3'teki LAN serbestliği değişmedi (yerel anahtar sahibi zaten çözebilir). D.4 tablosu bu iki sınıf
+dışında aynen geçerlidir.
+
+### Düzeltilenler
+
+| Bulgu | Önem | Ne yapıldı | Nerede |
+|---|---|---|---|
+| G-1a (RV-E1): bulut yaması gaz vanasının akışkanını suya çevirip ya da eylemciyi silip vanayı uzaktan açılabilir kılıyordu | yüksek | `isGasRelease(a, b, diHist)` (saf; `roleRowLoosening` ortak yardımcı). `submitEdit` `VIA_CLOUD`'da `CfgResult::GAS_LOCAL` döner, MQTT `last_rej = gas_local_only`. Sunucu kopyaya göre önceden reddeder (`403`, ağa çıkmaz, kuyruğa girmez, denetim `rejected_gas_local`); kuyruktaki öğe firmware reddinde düşer. Bölge daraltma ya da gaz sensörünü silme vanayı açmadığı için bu sınıfa girmez (yine gevşetmedir) | `SafetyCfgEdit.h`, `SafetyManager.{h,cpp}`, `MqttManager.cpp`, `WebPortal.cpp`, `main.cpp`; `utils/safety_cfg_loosen.js`, `services/safety_cfg_sync.js`; QA portları |
+| G-1b (R1): kurulu evde bulut yaması hırsız sensörünü alarm dışı bırakıyordu (`isLoosening` yalnız tehlike sensörlerine bakıyordu) | yüksek | `isIntrusionLoosening`: SF_REACT'li kapı/pencere/hareket sensörünü silmek ya da alarm dışı bırakmak, `SF_ENTRY`/`SF_AWAY_ONLY` eklemek, NC->NO, onay süresini ya da etkin çıkış/giriş gecikmesini uzatmak, `arm_key` satır kuralı. `submitEdit` `VIA_CLOUD` ve kip ≠ `off` -> `CfgResult::ARMED` (yeni `Rej::ARMED`, `armed`). Sunucu son state'teki `arm.mode`'a göre `409 INTRUSION_ARMED` (çevrimiçi ve kuyruk); hırsız zayıflatması denetimde `loosening:true` sayılır. Ortak vektörler 51 -> 68, her vektörde `gas_release` ve `intrusion_loosening` beklentisi | aynı dosyalar; `fixtures/gen_loosening_vectors.js`, `loosening_vectors.json` |
+| RV-E2: giriş gecikmesi sürerken enerji kesilirse olay kayboluyordu | orta | Giriş gecikmesi başlangıcı `dirty` (NVS yazımı); `ArmRecord.alarm = ARM_REC_ENTRY (2)`, giriş yolu sensör kodları `aid[]`'de (en çok 8, sayısı `rsv[0]`). Açılışta giriş gecikmesi baştan başlar, süre dolunca kaydedilen kaynakla alarm; çözme önler. Bilinmeyen `alarm` değeri durum uydurmaz (kip geri gelir, `idle`). Yapı boyutu 20 B değişmedi | `IntrusionFsm.h`, `intrusion_fsm.js` |
+| RV-E3: anahtarlı kontak NO bağlıyken kablo kesmek alarmı çözüyordu | orta | `validate`: `arm_key` satırında `active_open = 0` -> `CfgErr::ARM_KEY_NOT_NC` (`arm_key_not_nc`); bütün yollar (LAN, bulut, CLI) aynı doğrulamadan geçer. Uygulama: `InputRole.armKey.requiresNc` (rol seçilince NC, NO plan engelli), dedektör notu yalnız sensörlerde, anahtar notunda NC açıklaması. Kurulu konumda kontak açık: kablo kesilirse "kurulu" okunur | `SafetyConfig.h`, `safety_config.js`; `safety_assignment.dart`, `step_7_safety.dart` |
+| R2: bekleyici `rev == base_rev + 1` ile başka kaynaklı değişikliği "uygulandı" sayıyordu | orta | Köprü: rev çıkarımı yalnız `last_id` yankısı vermeyen panoda (`caps` `intrusion` yok; yankı ve hırsız katmanı aynı sürüm 1.2.1). Kuyruk: yankılı panoda `applied_inferred` yalnız state `last_id` = baş öğe kimliğiyse; aksi halde "pano kazanır" (köprü uzlaştırıcıya `lastId` iletir). v1.2.0 davranışı aynen | `mqtt_bridge.js`, `safety_cfg_sync.js` |
+| R3: yanıt cihaz durumu DB'ye yazılmadan dönüyordu; uygulama bayat kopyayla planı daha yeni `base_rev` ile gönderebiliyordu | düşük | Köprü: `cfgRev`'li bekleyici eşleşmesi aynı yerde yapılır, çözümü state işi (`devices.safety_state`) bittikten sonra verilir (diğer bekleyiciler eskisi gibi hemen). Uygulama: `read()` kopyanın `max(minRev, state_rev)`'e ulaşmasını bekler; `base_rev` planın hesaplandığı kopyanın rev'idir (yalnız sunucu kuyruğu doluysa `next_base_rev`) | `mqtt_bridge.js`; `safety_config_transport.dart`, `relay_logic.dart` |
+| RG-1: pano rev'i gerileyince (fabrika sıfırlaması) kopya kalıcı bayat kalıyordu | orta | `upsertConfig`: eski döküm yenisini yine ezmez; ama panonun son bildirdiği `(rev, crc)` (`devices.safety_state.cfg`) ile aynı döküm, kopyadan küçük rev'li olsa da yazılır. Gerçek PG testiyle doğrulandı (panonun bildirmediği eski rev ve aynı rev/farklı crc yine `stale`) | `alarm_service.js` |
+| RG-2: yapılandırma kuyruğu ev uzlaştırmasıyla aynı (eşzamanlılık 2) kuyruğu kullanıyordu | düşük-orta | Ayrı şerit `_cfgQueue` (eşzamanlılık 4); `whenIdle` ikisini bekler, `stop` ikisini boşaltır, `stats().safety_cfg_queue` | `device_reconciler.js` |
+| RG-3: hırsız deseni sürerken komut bip'leri birikiyordu | düşük | `Buzzer_Open_Time` desen sürerken de yutar; desen/alarm başlarken FIFO boşaltılır. Simülatör `beep` aynı kural (kırmızı/yeşil test) | `WS_GPIO.{h,cpp}`, `automation.js` |
+
+### Ertelenenler ve gerekçeleri
+
+- **RV-E4 (PARTIAL, ürün kararı): kurulu kipte sensör arızası alarm ya da push üretmiyor.** B.2 bunu açıkça karar olarak yazdı
+  ("`ok=false` kurulu kipte alarm üretmez"): kablolu NC kontakta kopma zaten "aktif" okunup alarm verir. Boşluk yalnız köprü (kablosuz) ve
+  RS485 ek modül sensörlerinde, ikisi de bu sürümde sahada yok (somut köprü sürücüsü E.4'te açık). Kurulu kipte arızayı alarma ya da
+  push'a çevirmek EN 50131 "tamper/fault" sınıfına ve yanlış alarm oranına dair ürün kararıdır (kablosuz denetim süresi, kaç kaçırılmış
+  okuma); köprü sürücüsüyle birlikte ele alınacak. Bugün arıza `sensor_fault` olayıyla günlük ve denetim kaydına yazılıyor, kurmayı da
+  engelliyor ("hazır değil").
+- **RV-E5 (REFUTED, iyileştirme): giriş gecikmesinde hareket sensörü anında alarm veriyor.** Davranış B.1 tablosuyla aynıdır;
+  kurulumcu hareket sensörüne `SF_ENTRY` atayarak (sihirbaz anahtarı) bunu zaten önleyebilir. EN 50131'deki "follow" (giriş yolunu izleyen)
+  bölge türü yeni bir bayrak ve sihirbaz sorusu ister; sonraki hırsız katmanı iyileştirmesine bırakıldı.
+- **RG-1, ek geri çekilme:** kök neden (upsert koşulu) giderildi. Kopya panodan farklı kaldığı sürece dakikalık `cfg_get` tasarım §4.2
+  gereği sürer. Başka bir nedenle hiç yakınsamayan kopya için üstel geri çekilme bu turda eklenmedi; yeniden doğrulamada görülürse eklenir.
+- **G-1, sunucunun kopyası bayatsa:** sunucunun ön reddi kopyaya göredir. Asıl karar panodadır (`gas_local_only` / `armed`), sunucu
+  bu kodları `403` / `409`'a eşler ve kuyruktaki öğeyi düşürür. Kurulu kip bilgisi son canlı state'ten okunur: pano çevrimdışıyken
+  kurulduysa kuyruk öğesi gönderimde firmware tarafından reddedilir.
+- **R2, yankılı panoda yanlış "düşürme":** zaman aşımından sonra `last_id` başka bir komutla ezilmişse uygulanmış bir kuyruk öğesi "pano
+  kazanır" kuralıyla düşer ve owner'a `cfg_pending_dropped` bilgisi gider. Bu güvenli yönde bir hatadır (yanlış "uygulandı" demez);
+  kullanıcı adımı yeniden açınca güncel kopyayı görür.
+
+### Bu turun test sonuçları
+
+- Firmware Unity (MSVC 2022, `/W4`): 19 paket, **360 test**, 0 hata, derleme uyarısı 0. Yeni testler: `test_gas_release_rules`,
+  `test_intrusion_loosening_rules` (`test_safety_cfg_edit`), `test_boot_restores_entry_delay`, `test_boot_entry_disarm_and_bad_record`
+  (`test_intrusion_fsm`); `test_safety_config` NO anahtar reddi; `test_intrusion_fsm` `rejText(ARMED)`. Kırmızı kanıtı: önce derleme hatası (sembol yok), sonra
+  boş saplamalarla 3 pakette davranış hataları (`isGasRelease` / `isIntrusionLoosening` beklenen `true`, `takeDirty` beklenen `true`,
+  açılış durumu 2 yerine 0, `validate` 30 yerine 0).
+- QA simülatörü (`tools/qa_stack`, `npm test`): **603/603** (önce 595). Yeni: Unity portları (+4), G-1a ve G-1b uçtan uca (MQTT `last_rej`
+  `gas_local_only` / `armed`; vana ve rölesi uzaktan açılmaz; çözülüyken uygulanır; LAN serbest), RG-3 buzzer, ortak vektör sınıfları; I3
+  `arm_key` senaryosu NC'ye güncellendi (NO -> `400 cfg_invalid arm_key_not_nc`). `fwcheck --update`: 64 kaynak.
+- Sunucu `npm test`: **2270 test** (önce 2259). PG'siz 2113 geçti / 157 atlandı / 0 hata; PG'li (`evy_g2_ver`, 001..034) 2269 geçti / 1
+  atlandı / 0 hata. Yeni: gevşetme portu G-1 sınıfları (ortak vektörler), `safety_cfg_sync` G-1a/G-1b/ret eşlemesi/R2 kuyruk/RG-2 şeridi,
+  köprü R2/R3 (+lastId), gerçek PG RG-1.
+- Fabrika aracı: **358/358**; `inspect_firmware_file` yeni imajda uyarısız, `FACTORYINIT` imzası bulundu.
+- Flutter: `analyze` 0 sorun; `test` **4495 geçti**, 485 atlandı, 0 hata (önce 4492; yeni: R3 kopya bekleme + `base_rev`, `arm_key` NC saf mantık, G-1 hata metinleri; `arm_key` arayüz testi NC ve dedektör notu yokluğuyla genişledi).
+- Firmware derleme (temiz, `G:\.platformio`, ağ yok): uyarı 0, RAM %20,9 (68624 B), Flash %39,9 (1256049 B). v1.2.1 ana imaj SHA-256
+  `abe7f6852afdd387378395e403f82032300f3d4b850a7e01eb3d59508699f398`, uygulama SHA-256
+  `68f300a44d92e77af2d45af72f41297f8f1f764dc25ec130d108bb4e0025fd40`, ELF SHA-256
+  `e0f930caacaf7c462902f60d18246fcb251cabe262e6e1e8db71cd6b6b69ec7e`. 0x0000-0xFFFF bölgesi v1.2.0 ve v1.1.2 ile bayt bayt aynı.
+  Önceki 1.2.1 paketinin özetleri (`f5d439bf…` / `f3fb8c41…`) geçersizdir. **Firmware DONANIMDA DOĞRULANMADI**; "İlk kartta denenecekler"
+  listesine 11-14 eklendi (giriş gecikmesinde enerji kesintisi, NC anahtar kablosu, bulut yaması sınırları, desen sırasında bip).

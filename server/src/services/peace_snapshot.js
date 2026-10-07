@@ -44,7 +44,9 @@ const SQL = Object.freeze({
     'COALESCE(d.is_online IS TRUE AND d.last_seen_at >= CURRENT_TIMESTAMP - ($2::int * INTERVAL \'1 second\'), FALSE) AS live, ' +
     'e.id AS endpoint_id, e.type, e.channel_index, ' +
     'COALESCE(e.shutter_pair_index, (e.channel_index + 1) / 2) AS pair, ' +
-    "e.name, COALESCE(e.room, '" + DEFAULT_ROOM + "') AS room, e.current_state, e.current_position " +
+    "e.name, COALESCE(e.room, '" + DEFAULT_ROOM + "') AS room, e.current_state, e.current_position, " +
+    // Faz 2 F2.A.4: evde acik gaz alarmi (ilintisiz alt sorgu: PG bir kez hesaplar; alarms_home_open_idx)
+    "EXISTS (SELECT 1 FROM alarms a WHERE a.home_id = $1 AND a.kind = 'gas' AND a.status IN ('latched', 'fault', 'silenced')) AS gas_alarm " +
     'FROM devices d ' +
     'LEFT JOIN endpoints e ON e.device_id = d.id ' +
     "AND ((e.type = 'light' AND e.actuator_type IS NULL AND e.current_state IS TRUE) OR (e.type = 'shutter' AND e.current_position >= $3)) " +
@@ -88,12 +90,14 @@ async function loadLiveSnapshot(db, homeId) {
   const res = await query(SQL.snapshot, [homeId, LIVE_WINDOW_SEC, OPEN_SHUTTER_MIN_POS]);
   const rows = (res && res.rows) || [];
 
+  let gasAlarm = false; // F2.A.4: evde acik gaz alarmi (kolon yoksa false: eski/sahte sorgu)
   const devices = new Map(); // device_id -> canlı mı
   const lights = [];
   const shutterPairs = new Map(); // `${device}:${pair}` -> { pair, deviceId, room, position }
 
   for (const row of rows) {
     const deviceId = String(row.device_id);
+    if (isTrue(row.gas_alarm)) gasAlarm = true;
     const live = isTrue(row.live);
     // Aynı cihaz birden çok satırla gelir; biri bile canlıysa canlı sayılır (hepsi aynı değeri taşır).
     devices.set(deviceId, devices.get(deviceId) === true || live);
@@ -131,6 +135,7 @@ async function loadLiveSnapshot(db, homeId) {
     live,
     lights: live ? lights : [],
     shutters: live ? shutters : [],
+    gasAlarm,
   };
 }
 

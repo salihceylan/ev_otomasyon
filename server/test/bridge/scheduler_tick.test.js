@@ -679,3 +679,30 @@ test('D4 SQL sozlesmesi: hedef sorgusu yalniz yer tutucu (cihaz + kanal dizisi),
   // WP-S2 [O6]: eylemci kanalini ayirt etmek icin actuator_type da okunur
   assert.match(SQL.target, /^SELECT channel_index, type, actuator_type FROM endpoints WHERE device_id = \$1::uuid AND channel_index = ANY\(\$2::int\[\]\)$/);
 });
+
+// ------------------------------------------------------------------------------
+// Faz 2 / WP-G1 (F2.A.4): gaz alarmi acik evde otomatik anahtarlama YOK
+// ------------------------------------------------------------------------------
+test('F2.A.4: evde acik gaz alarmi varken role/panjur kurali YAYINLANMAZ -> skipped_hazard (gas_alarm); yuva tuketilir', async () => {
+  for (const rule of [{ id: 7, channel: 3, action: 'on', hour: 8, minute: 30 }, { id: 8, channel: 1, channel_type: 'shutter', action: 'close', hour: 8, minute: 30 }]) {
+    const w = makeWorld({ rules: [rule], devices: [{ id: DEVICE_ID, home_id: HOME_ID, is_online: true, gas_alarm: true }] });
+    const s = w.makeScheduler();
+    const r1 = await s.runTick(AT_0830);
+    assert.equal(w.world.published.length, 0, 'gaz alarminda anahtarlama kivilcim kaynagi');
+    assert.equal(r1.skipped, 1);
+    assert.equal(r1.outcomes[0].status, 'skipped_hazard');
+    assert.equal(r1.outcomes[0].released, false);
+    assert.equal(w.world.runs[0].status, 'skipped_hazard');
+    assert.equal(w.world.runs[0].detail, 'gas_alarm');
+    await s.runTick(AT_0830 + MIN);
+    assert.equal(w.world.published.length, 0, 'ayni pencerede yeniden denenmez');
+  }
+});
+
+test('F2.A.4: gaz alarmi yokken davranis ve SORGU SAYISI aynen (gaz denetimi cihaz sorgusunun icinde)', async () => {
+  const w = makeWorld({ rules: [{ id: 7, channel: 3, action: 'on', hour: 8, minute: 30 }], devices: [{ id: DEVICE_ID, home_id: HOME_ID, is_online: true, gas_alarm: false }] });
+  const res = await w.makeScheduler().runTick(AT_0830);
+  assert.equal(res.sent, 1);
+  assert.equal(w.db.find(/alarms/).filter((c) => c.text !== SQL.devices).length, 0, 'ayri bir alarm sorgusu yok');
+  assert.match(SQL.devices, /EXISTS \(SELECT 1 FROM alarms a WHERE a\.home_id = devices\.home_id AND a\.kind = 'gas' AND a\.status IN \('latched', 'fault', 'silenced'\)\) AS gas_alarm/);
+});

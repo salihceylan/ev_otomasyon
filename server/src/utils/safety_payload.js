@@ -20,6 +20,9 @@
 //   - Bilinmeyen (ama bicimli) `type` -> { unknown: true }: kopru gunluk + ack yapar, islem yapmaz.
 //   - Alarm kimligi: `alarm_raised` icin olayin kendi eid'si; diger alarm olaylarinda istege bagli `aid` alani
 //     (yoksa null: alarm servisi bolgenin acik alarmini kullanir).
+//   - Faz 2 (F2.B.7) hirsiz alarmi turleri KATI alan listesiyle dogrulanir (bilinmeyen alan -> red): intrusion_alarm
+//     {zone (zorunlu), kind:'intrusion', srcs} (alarm kimligi = eid), intrusion_cleared {aid (zorunlu), via}, arm_changed {mode, via}.
+//     state ozetine safety.arm {mode, st, ok, aid, srcs} eklenir (until_up saklanmaz).
 //   - `cfg_dump` olay DEGILDIR [Y6]: eid tasimaz, onaylanmaz; ayri bicimde doner (cfgDump: true). Firmware v1.2.0 oge
 //     dizilerini KOKTE yazar (`policy`, `zones`, `lights` yalniz 1. parcada; `sensors`, `actuators` her parcada; CONTRACTS
 //     §2.6 "Gerceklesen ayrintilar"); eski taslak bicimi `body` nesnesi de kabul edilir. Parcalar mergeCfgDumpParts ile
@@ -52,9 +55,10 @@ const VALVE_POS = Object.freeze(['closed', 'closing', 'open', 'opening', 'cmd_cl
 const MEDIA = Object.freeze(['water', 'gas']);
 const SENSOR_SRCS = Object.freeze(['di', 'bridge']);
 /** Yerel kumanda rolleri (firmware sensors[] listesinde de yayinlar; `active` = ham basili seviye). Tehlike sensoru DEGIL. */
-const CONTROL_KINDS = Object.freeze(['alarm_ack', 'valve_close', 'gas_reset']);
-/** cfg_dump parcasinin firmware'deki kok anahtarlari. */
-const CFG_DUMP_KEYS = Object.freeze(['policy', 'zones', 'lights', 'sensors', 'actuators']);
+// arm_key (Faz 2 F2.B.3): hirsiz alarmi anahtarli kontagi (firmware 1.2.1, caps 'intrusion').
+const CONTROL_KINDS = Object.freeze(['alarm_ack', 'valve_close', 'gas_reset', 'arm_key']);
+/** cfg_dump parcasinin firmware'deki kok anahtarlari. `intrusion` {exit_s, entry_s} (Faz 2 F2.B.7) policy ile 1. parcada. */
+const CFG_DUMP_KEYS = Object.freeze(['policy', 'intrusion', 'zones', 'lights', 'sensors', 'actuators']);
 
 /** Ilk modulun olay turleri (tasarim §3.4). */
 const EVENT_TYPES = Object.freeze([
@@ -72,9 +76,27 @@ const EVENT_TYPES = Object.freeze([
   'policy_changed',
   'actuator_changed',
   'cfg_conflict',
+  // Faz 2 F2.B.7: hirsiz alarmi kipi (firmware 1.2.1, caps 'intrusion')
+  'intrusion_alarm',
+  'intrusion_cleared',
+  'arm_changed',
 ]);
 /** Bolge (zone) ZORUNLU olan turler. */
-const ZONE_EVENT_TYPES = Object.freeze(['alarm_raised', 'valve_fault', 'valve_fault_cleared', 'alarm_silenced', 'alarm_cleared', 'test_result']);
+const ZONE_EVENT_TYPES = Object.freeze([
+  'alarm_raised', 'valve_fault', 'valve_fault_cleared', 'alarm_silenced', 'alarm_cleared', 'test_result', 'intrusion_alarm',
+]);
+/** Hirsiz alarmi kipi (F2.B.1). */
+const ARM_MODES = Object.freeze(['off', 'home', 'away']);
+const ARM_STATES = Object.freeze(['idle', 'exit', 'entry', 'alarm']);
+/** Faz 2 olay turleri KATI alan listesiyle dogrulanir (bilinmeyen alan -> red); eski turler eskisi gibi esnek. */
+const EVENT_ENVELOPE_KEYS = Object.freeze(['v', 'uid', 'eid', 'bn', 'boot', 'n', 'type', 'at', 'at_up']);
+const STRICT_EVENT_KEYS = Object.freeze({
+  intrusion_alarm: Object.freeze(['zone', 'kind', 'srcs']),
+  intrusion_cleared: Object.freeze(['aid', 'via']),
+  arm_changed: Object.freeze(['mode', 'via']),
+});
+const INTRUSION_CLEARED_VIA = Object.freeze(['cloud', 'lan', 'cli', 'di']);
+const ARM_CHANGED_VIA = Object.freeze(['cloud', 'lan', 'cli', 'di', 'boot']);
 
 function isObj(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -174,6 +196,19 @@ function parseActuator(a) {
   };
 }
 
+/** safety.arm (F2.B.7): {mode, st, ok, aid?, srcs?}; until_up SAKLANMAZ (gorunum imzasi; istemci state'ten okur).
+ * Bilinmeyen mode/st 'unknown' olur (uzlastirma dokunmaz); ok yalniz true ise true. */
+function parseArm(a) {
+  if (!isObj(a)) return null;
+  return {
+    mode: tokenOr(a.mode, ARM_MODES, 'unknown'),
+    st: tokenOr(a.st, ARM_STATES, 'unknown'),
+    ok: a.ok === true,
+    aid: typeof a.aid === 'string' && EID_RE.test(a.aid) ? a.aid.toLowerCase() : null,
+    srcs: Array.isArray(a.srcs) ? a.srcs.filter((x) => typeof x === 'string' && SENSOR_ID_RE.test(x)).slice(0, MAX_SRCS) : [],
+  };
+}
+
 function parseSensor(s) {
   if (!isObj(s) || typeof s.id !== 'string' || !SENSOR_ID_RE.test(s.id)) return null;
   const src = s.id[0] === 'd' ? 'di' : 'bridge';
@@ -247,7 +282,10 @@ function parseStateSafety(obj) {
     zones_complete: safety !== null && zonesDropped === 0,
     actuators: parseList(obj.actuators, MAX_ACTUATORS, parseActuator, count),
     sensors: parseList(obj.sensors, MAX_SENSORS, parseSensor, count),
+    // Faz 2 F2.B.7: hirsiz alarmi kipi; anahtar yoksa null (hirsiz sensoru yok ya da eski firmware)
+    arm: safety && safety.arm !== undefined ? parseArm(safety.arm) : null,
   };
+  if (safety && safety.arm !== undefined && out.summary.arm === null) count();
   // Bozuk aid'li bolge yine gorunur (durum bilgisi degerli) ama sayilir
   if (safety && Array.isArray(safety.zones)) {
     for (const z of safety.zones.slice(0, SCAN_LIMIT)) {
@@ -285,6 +323,7 @@ function validateEventPayload(obj) {
       body = {};
       for (const k of CFG_DUMP_KEYS) if (obj[k] !== undefined) body[k] = obj[k];
       if (body.policy !== undefined && !isObj(body.policy)) return { ok: false, reason: 'body' };
+      if (body.intrusion !== undefined && !isObj(body.intrusion)) return { ok: false, reason: 'body' };
       for (const k of ['zones', 'lights']) if (body[k] !== undefined && !Array.isArray(body[k])) return { ok: false, reason: 'body' };
     }
     return {
@@ -296,6 +335,22 @@ function validateEventPayload(obj) {
   if (typeof obj.eid !== 'string' || !EID_RE.test(obj.eid)) return { ok: false, reason: 'eid' };
   const eid = obj.eid.toLowerCase();
   const known = EVENT_TYPES.includes(obj.type);
+  const strict = STRICT_EVENT_KEYS[obj.type];
+  if (strict) {
+    for (const k of Object.keys(obj)) {
+      if (!EVENT_ENVELOPE_KEYS.includes(k) && !strict.includes(k)) return { ok: false, reason: `alan:${k.slice(0, 16)}` };
+    }
+    if (obj.type === 'intrusion_alarm' && obj.kind !== 'intrusion') return { ok: false, reason: 'kind' };
+    if (obj.type === 'intrusion_alarm' && obj.srcs !== undefined && !Array.isArray(obj.srcs)) return { ok: false, reason: 'srcs' };
+    if (obj.type === 'intrusion_cleared') {
+      if (typeof obj.aid !== 'string') return { ok: false, reason: 'aid' };
+      if (!INTRUSION_CLEARED_VIA.includes(obj.via)) return { ok: false, reason: 'via' };
+    }
+    if (obj.type === 'arm_changed') {
+      if (!ARM_MODES.includes(obj.mode)) return { ok: false, reason: 'mode' };
+      if (!ARM_CHANGED_VIA.includes(obj.via)) return { ok: false, reason: 'via' };
+    }
+  }
   const needsZone = ZONE_EVENT_TYPES.includes(obj.type);
   if (obj.zone !== undefined && !isInt(obj.zone, 1, MAX_ZONES)) return { ok: false, reason: 'zone' };
   if (needsZone && obj.zone === undefined) return { ok: false, reason: 'zone' };
@@ -314,7 +369,7 @@ function validateEventPayload(obj) {
     : [];
 
   let aid = null;
-  if (obj.type === 'alarm_raised') aid = eid;
+  if (obj.type === 'alarm_raised' || obj.type === 'intrusion_alarm') aid = eid; // alarm kimligi olayin kendi eid'si
   else if (typeof obj.aid === 'string') aid = obj.aid.toLowerCase();
 
   const value = {
@@ -325,7 +380,7 @@ function validateEventPayload(obj) {
     type: obj.type,
     aid,
     zone: isInt(obj.zone, 1, MAX_ZONES) ? obj.zone : null,
-    kind: tokenOr(obj.kind, SENSOR_KINDS, obj.kind === undefined ? null : 'generic'),
+    kind: obj.type === 'intrusion_alarm' ? 'intrusion' : tokenOr(obj.kind, SENSOR_KINDS, obj.kind === undefined ? null : 'generic'),
     srcs,
     actions,
     bn: typeof obj.bn === 'string' && BN_RE.test(obj.bn) ? obj.bn.toLowerCase() : null,
@@ -333,6 +388,7 @@ function validateEventPayload(obj) {
     at: u32OrNull(obj.at),
     at_up: u32OrNull(obj.at_up),
     policy: tokenOr(obj.policy, ['on', 'off'], null),
+    mode: tokenOr(obj.mode, ARM_MODES, null),
     via: typeof obj.via === 'string' && TOKEN_RE.test(obj.via) ? obj.via : null,
     reason: typeof obj.reason === 'string' && TOKEN_RE.test(obj.reason) ? obj.reason : null,
     ok: boolOrNull(obj.ok),
@@ -351,6 +407,7 @@ function validateEventPayload(obj) {
  */
 function mergeCfgDumpParts(bodies) {
   const out = { policy: null, zones: [], lights: [], sensors: [], actuators: [] };
+  let intrusion = null;
   const list = [];
   for (const b of Array.isArray(bodies) ? bodies : []) {
     if (isObj(b) && Array.isArray(b.parts)) list.push(...b.parts);
@@ -359,6 +416,7 @@ function mergeCfgDumpParts(bodies) {
   for (const b of list) {
     if (!isObj(b)) continue;
     if (out.policy === null && isObj(b.policy)) out.policy = b.policy;
+    if (intrusion === null && isObj(b.intrusion)) intrusion = b.intrusion;
     if (out.zones.length === 0 && Array.isArray(b.zones)) out.zones = b.zones.filter(isObj).slice(0, MAX_ZONES);
     if (out.lights.length === 0 && Array.isArray(b.lights)) out.lights = b.lights.filter(isObj).slice(0, MAX_RELAY);
     if (Array.isArray(b.sensors)) out.sensors.push(...b.sensors.filter(isObj));
@@ -366,6 +424,8 @@ function mergeCfgDumpParts(bodies) {
   }
   out.sensors = out.sensors.slice(0, MAX_SENSORS);
   out.actuators = out.actuators.slice(0, MAX_ACTUATORS);
+  // Faz 2: hirsiz gecikmeleri yalniz firmware yazdiysa (1.2.1+); v1.2.0 kopyasinin bicimi DEGISMEZ.
+  if (intrusion !== null) out.intrusion = intrusion;
   return out;
 }
 
@@ -383,6 +443,8 @@ module.exports = {
   EVENT_TYPES,
   CONTROL_KINDS,
   ZONE_EVENT_TYPES,
+  ARM_MODES,
+  ARM_STATES,
   ZONE_STATES,
   SENSOR_KINDS,
   ACTUATOR_KINDS,

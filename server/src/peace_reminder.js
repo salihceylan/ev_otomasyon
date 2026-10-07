@@ -13,6 +13,8 @@
 // TEK bildirim kaydı (peace_notification_logs) açar ve owner/resident kullanıcıların push
 // token'larına TEK push yollar. Hiçbir şey açık değilse sessiz kalır (kayıt 'clear').
 // Cihaz canlı değilse bayat veriyle ASLA bildirmez ('skipped_offline', pencere bitene kadar yeniden dener).
+// Evde açık GAZ alarmı varsa "lambaları kapat" önerisi gönderilmez ('skipped_hazard', aynı yeniden deneme; Faz 2
+// F2.A.4; status değeri migration 034'le eklendi).
 // Yalnızca DB OKUR ve push yollar: MQTT komutu YAYINLAMAZ, `endpoints` tablosuna YAZMAZ.
 //
 // Tasarım
@@ -339,7 +341,7 @@ const SQL = Object.freeze({
     `AND ${HAS_DEVICE_SQL} ` +
     'AND ($8::uuid[] IS NULL OR h.id = ANY($8::uuid[])) ' +
     "AND (l.id IS NULL OR (l.attempts < $7 AND (l.status = 'claimed' " +
-    "OR (l.status IN ('skipped_offline', 'failed') " +
+    "OR (l.status IN ('skipped_offline', 'skipped_hazard', 'failed') " +
     `AND l.updated_at <= CURRENT_TIMESTAMP - ${retryDueSql('l.attempts')} * INTERVAL '1 second')))) ` +
     'ORDER BY COALESCE(l.attempts, 0), h.id LIMIT $3',
   // Atomik talep: tek kazanan. Yeniden talep edilebilenler: bekleyen (skipped_offline/failed; deneme hakkı varsa
@@ -352,7 +354,7 @@ const SQL = Object.freeze({
     'ON CONFLICT (home_id, local_date) DO UPDATE ' +
     "SET status = 'claimed', attempts = peace_notification_logs.attempts + 1, updated_at = CURRENT_TIMESTAMP " +
     'WHERE peace_notification_logs.attempts < $4 ' +
-    "AND ((peace_notification_logs.status IN ('skipped_offline', 'failed') " +
+    "AND ((peace_notification_logs.status IN ('skipped_offline', 'skipped_hazard', 'failed') " +
     `AND peace_notification_logs.updated_at <= CURRENT_TIMESTAMP - ${retryDueSql('peace_notification_logs.attempts')} * INTERVAL '1 second') ` +
     "OR (peace_notification_logs.status = 'claimed' " +
     `AND peace_notification_logs.updated_at < CURRENT_TIMESTAMP - INTERVAL '${CLAIM_LEASE_MIN} minutes')) ` +
@@ -458,6 +460,7 @@ function emptySummary() {
     sent: 0,
     noRecipients: 0,
     skippedOffline: 0,
+    skippedHazard: 0,
     failed: 0,
     lost: 0,
     dryRun: 0,
@@ -684,7 +687,7 @@ class PeaceReminder {
       if (summary.claimed + summary.failed + summary.dryRun > 0) {
         this.logger.log(
           `[PEACE] Tur: aday ${summary.candidates}, talep ${summary.claimed}, gonderilen ${summary.sent}, temiz ${summary.clear}, ` +
-            `alici yok ${summary.noRecipients}, cevrimdisi ${summary.skippedOffline}, hata ${summary.failed}`
+            `alici yok ${summary.noRecipients}, cevrimdisi ${summary.skippedOffline}, gaz alarmi ${summary.skippedHazard}, hata ${summary.failed}`
         );
       }
     } catch (err) {
@@ -705,6 +708,7 @@ class PeaceReminder {
       else if (status === 'sent') summary.sent++;
       else if (status === 'no_recipients') summary.noRecipients++;
       else if (status === 'skipped_offline') summary.skippedOffline++;
+      else if (status === 'skipped_hazard') summary.skippedHazard++;
       else summary.failed++;
     }
   }
@@ -811,6 +815,13 @@ class PeaceReminder {
       return { status: 'clear' };
     }
 
+    // Faz 2 F2.A.4: gaz alarmı açık evde "lambaları kapat" önerisi tehlikelidir (anahtarlama kıvılcımı): push YOK.
+    // 'skipped_hazard' pencere içinde yeniden denenir (alarm kapanırsa bildirim yine gider).
+    if (snap.gasAlarm === true) {
+      await this._finish(ticket, { status: 'skipped_hazard', details: buildDetails(snap, { reason: 'gas_alarm' }) });
+      return { status: 'skipped_hazard' };
+    }
+
     // Kayıt, push olmasa bile uygulama içi yedek (last_notice) için sayıları ve özeti taşır.
     const base = { lights: snap.lights.length, shutters: snap.shutters.length, summary: this._summary(snap), details: buildDetails(snap) };
 
@@ -837,6 +848,10 @@ class PeaceReminder {
       }
       await this._finish(ticket, { status: 'clear', details: buildDetails(null, { reason: 'closed_before_send' }) });
       return { status: 'clear' };
+    }
+    if (fresh.gasAlarm === true) {
+      await this._finish(ticket, { ...base, status: 'skipped_hazard', details: buildDetails(fresh, { reason: 'gas_alarm' }) });
+      return { status: 'skipped_hazard' };
     }
     const final = { lights: fresh.lights.length, shutters: fresh.shutters.length, summary: this._summary(fresh) };
 

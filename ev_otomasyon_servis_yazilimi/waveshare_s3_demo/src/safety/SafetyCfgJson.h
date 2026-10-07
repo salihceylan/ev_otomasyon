@@ -4,6 +4,7 @@
 //
 //  * Adlar yalnız burada (yapılandırmada) bulunur; state'e yazılmaz [B12]. Adlar JSON kaçışıyla yazılır (", \ ve kontrol karakterleri).
 //  * Öğe alanları yama (cfg_patch / POST /api/safety/config "set") alanlarıyla aynıdır: istemci okuduğu öğeyi değiştirip geri gönderebilir.
+//  * Faz 2 (F2.B.7): "intrusion":{"exit_s","entry_s"} policy'den hemen sonra (cfg_dump'ta 1. parça); saklanan ham değer (0 = varsayılan).
 //  * cfg_dump outbox DIŞINDADIR (onaysız, geçici arabellek): ev/{t}/event konusunda type:"cfg_dump" zarfıyla, her parça <= 3,5 KB
 //    (DUMP_PART_CAP) olacak biçimde part/parts ile bölünür [Y6][B11]. Kaybolan parça sunucunun cfg_get'i yinelemesiyle telafi edilir.
 // ============================================================================
@@ -67,6 +68,7 @@ inline const char* kindText(uint8_t k) {
     case (uint8_t)SensorKind::ALARM_ACK: return "alarm_ack";
     case (uint8_t)SensorKind::VALVE_CLOSE: return "valve_close";
     case (uint8_t)SensorKind::GAS_RESET: return "gas_reset";
+    case (uint8_t)SensorKind::ARM_KEY: return "arm_key";
     default: return "unknown";
   }
 }
@@ -121,11 +123,14 @@ inline void writeActuatorCfg(ev_detail::Writer& w, const ActuatorConfig& a, uint
   w.raw("}");
 }
 
-// "policy", "zones" ve "lights" anahtarları (virgülle başlar).
+// "policy", "intrusion", "zones" ve "lights" anahtarları (virgülle başlar).
 inline void writeCfgHead(ev_detail::Writer& w, const SafetyConfig& c) {
   w.raw(",\"policy\":{\"on\":");
   w.raw(c.pol.policy_on ? "true" : "false");
   w.num("dry_hold_ms", c.pol.dry_hold_ms);
+  w.raw("},\"intrusion\":{\"exit_s\":");
+  w.u32(c.pol.exit_s);
+  w.num("entry_s", c.pol.entry_s);
   w.raw("},\"zones\":[");
   for (uint8_t z = 0; z < MAX_ZONES; z++) {
     w.raw(z ? ",{\"id\":" : "{\"id\":");

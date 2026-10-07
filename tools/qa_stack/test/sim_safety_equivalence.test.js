@@ -10,6 +10,7 @@ import { DIMode, RelayType } from '../sim/fw/sysconfig.js';
 import { buildWriteCoil, hexString, COIL_ON, COIL_OFF, COIL_TOGGLE } from '../sim/fw/modbus.js';
 import { SafetyStore } from '../sim/fw/safety_manager.js';
 import { defaultSafetyConfig } from '../sim/fw/safety_config.js';
+import { writeStateExtras } from '../sim/fw/safety_view.js';
 
 const u32 = (x) => x >>> 0;
 
@@ -193,4 +194,42 @@ test('sim_safety_equivalence: yapilandirilmamis panoda guvenlik kancalari bosta 
   assert.ok(latch && latch.latch, 'kilit kaydi icin yer ayrildi (F0 onlemi)');
   assert.equal(latch.bootc, 1);
   assert.equal(nvs.get('safety'), null, 'guvenlik yapilandirmasi yazilmadi');
+});
+
+// Faz 2 (F2 degismez ilke 2, F2.B.11): hirsiz katmani (IntrusionCore, ContactBus, siren VEYA'si) kapi/pencere/hareket sensoru OLMAYAN
+// panoda hicbir sey degistirmez. Su sensoru (DI 8) + vana (role 7) + siren (role 8) yapilandirilmis iki pano: (A) hirsiz katmani KURULU,
+// (B) hirsiz katmani HIC YOK (v1.2.0). Ayni kayitli dizi + su alarmlari: want/hw/TCA/coil/anlik goruntu, olay kutusu ve state eki bit bit ayni.
+test('sim_safety_equivalence: hirsiz sensoru olmayan (su + vana + siren) panoda hirsiz katmani == katman yok; iz, olaylar ve state eki ayni', () => {
+  const hazard = () => {
+    const nvs = new NvsImage(null);
+    const c = defaultSafetyConfig();
+    c.sens = [{ src: 0, index: 8, kind: 1, zone: 1, active_open: 0, flags: 1, confirm_ms: 1000, name: 'Banyo' }];
+    c.nSens = 1;
+    c.act = [
+      { relay: 7, kind: 1, close_mode: 0, fb_di: 0, fb_closed_active: 1, zone_mask: 1, fb_timeout_s: 60, run_limit_s: 0, medium: 1, aflags: 0, name: 'Vana', relay2: 0 },
+      { relay: 8, kind: 2, close_mode: 0, fb_di: 0, fb_closed_active: 0, zone_mask: 1, fb_timeout_s: 0, run_limit_s: 20, medium: 0, aflags: 0, name: 'Siren', relay2: 0 },
+    ];
+    c.nAct = 2;
+    c.rev = 3;
+    SafetyStore.saveConfig(nvs, c);
+    return nvs;
+  };
+  const cfgHazard = (cm) => { configure(cm); cm.config.dis[7].target_relay = 0; cm.config.validate(); };   // DI 8 sensor (duvar butonu degil)
+  const opts = { configure: cfgHazard, skipBootHold: false };
+  const a = new Rig({ ...opts, ext: makeExt(8), nvs: hazard(), automation: { safetyNonce: 0x0badf00d } });
+  const b = new Rig({ ...opts, ext: makeExt(8), nvs: hazard(), automation: { safetyNonce: 0x0badf00d, intrusion: false } });
+  const plan = scenario(77001, 160);
+  plan.splice(40, 0, { gap: 50, kind: 'press', di: 8, hold: 1800 });   // su alarmi: vana kapanir, siren calar
+  plan.splice(90, 0, { gap: 50, kind: 'press', di: 8, hold: 600 });
+  plan.push({ gap: 100, kind: 'press', di: 8, hold: 2500 });
+  plan.push({ gap: 100, kind: 'run', ms: 21000 });                    // siren butcesi dolar
+  runLockstep(a, b, plan);
+  assert.ok(a.a.safety.latched(), 'senaryo kilit uretti');
+  const meta = { ...a.a.safety.stateMeta(), timeOk: false, epoch: 0 };
+  assert.equal(writeStateExtras(a.a.safety.copyView(), meta), writeStateExtras(b.a.safety.copyView(), { ...b.a.safety.stateMeta(), timeOk: false, epoch: 0 }));
+  assert.ok(!writeStateExtras(a.a.safety.copyView(), meta).includes('"arm"'));
+  assert.deepEqual(a.a.safety.outbox.list().map((x) => [x.eid, x.ev.type]), b.a.safety.outbox.list().map((x) => [x.eid, x.ev.type]));
+  assert.deepEqual(a.beeps, b.beeps);
+  assert.deepEqual(a.events, b.events);
+  assert.equal(a.a.safety.buzzerPattern(), 0);
 });

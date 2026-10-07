@@ -62,7 +62,7 @@ export const SOURCES = {
   'src/safety/SafetyStore.cpp': 'sim/fw/safety_manager.js (SafetyStore, NvsImage safety/latch)',
   'src/events/EventOutboxRtos.h': 'sim/fw/safety_manager.js (simulator tek is parcacigi: kilitsiz EventOutbox)',
   'src/WS_Relay.cpp': 'sim/fw/automation.js (TcaDriver.init: Relay_Init kilit maskesi)',
-  'src/WS_GPIO.cpp': 'sim/fw/automation.js (beep: Buzzer_SetAlarm alarm kipi)',
+  'src/WS_GPIO.cpp': 'sim/fw/automation.js (beep: Buzzer_SetAlarm alarm kipi) + safety_manager.js buzzerPattern (Buzzer_SetPattern)',
   // Guvenlik katmani (WP-F3): bagimsiz emniyet (ValveGuard) ve TCA guvenli bit yardimcilari
   'src/safety/ValveGuard.h': 'sim/fw/valve_guard.js',
   'src/WS_TCA9554PWR.h': 'sim/fw/automation.js (TcaDriver.readOutputHw/setSafeBits)',
@@ -76,6 +76,11 @@ export const SOURCES = {
   'test/test_safety_view/test_main.cpp': 'test/fw_safety_view.test.js',
   'test/test_safety_cfg_edit/test_main.cpp': 'test/fw_safety_cfg_edit.test.js',
   'test/test_event_log/test_main.cpp': 'test/fw_event_log.test.js',
+  // Faz 2 (F2.B): hirsiz alarmi cekirdegi ve kapi/pencere kenar halkasi
+  'src/safety/IntrusionFsm.h': 'sim/fw/intrusion_fsm.js',
+  'src/sensors/ContactBus.h': 'sim/fw/contact_bus.js',
+  'test/test_intrusion_fsm/test_main.cpp': 'test/fw_intrusion_fsm.test.js',
+  'test/test_contact_bus/test_main.cpp': 'test/fw_contact_bus.test.js',
 };
 
 /**

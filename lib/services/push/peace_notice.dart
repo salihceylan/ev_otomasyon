@@ -241,6 +241,9 @@ class PeaceNotice {
     return int.tryParse(raw);
   }
 
+  /// [_sanitize]'ın paylaşılan hali (güvenlik push'u aynı temizleyiciyi kullanır; F2.C.3).
+  static String? sanitizeText(String? text, int maxLength) => _sanitize(text, maxLength);
+
   /// Afişte gösterilecek metni temizler: tehlikeli karakterler boşluk olur, boşluklar sadeleşir,
   /// uzunluk kod noktası (rune) sınırında kırpılır (vekil çift ortasından bölünmez). Boşsa `null`.
   static String? _sanitize(String? text, int maxLength) {

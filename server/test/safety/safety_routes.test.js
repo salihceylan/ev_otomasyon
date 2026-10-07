@@ -32,7 +32,7 @@ const ACTORS = {
   guest: USER({ id: 'u-guest' }),
 };
 
-function build() {
+function build(over = {}) {
   const registry = { members: [
     { home_id: HOME_A, user_id: 'u-owner', role: 'owner' },
     { home_id: HOME_A, user_id: 'u-res', role: 'resident' },
@@ -40,12 +40,16 @@ function build() {
     { home_id: HOME_A, user_id: 'u-staff', role: 'service_user' },
   ] };
   const auth = createFakeAuth(registry);
-  const safetyService = createRecorder(['listAlarms', 'ackAlarm', 'controlActuator', 'testZone', 'getSafetyConfig'], {
+  const safetyService = createRecorder(['listAlarms', 'ackAlarm', 'controlActuator', 'testZone', 'getSafetyConfig', 'armDevice', 'patchSafetyConfig', 'cancelSafetyConfigPending'], {
     listAlarms: { items: [], next_before: null },
     ackAlarm: { delivered: true, applied: true },
     controlActuator: { delivered: true, applied: true },
     testZone: { delivered: true, applied: null },
     getSafetyConfig: { device_uuid: 'AHBU-S3-1A2B3C', rev: 3, crc: '0000000a', sensors: [], actuators: [] },
+    armDevice: { delivered: true, applied: true, command_id: 'arm1' },
+    patchSafetyConfig: { applied: true, rev: 4, crc: '0000000b', command_id: 'cp1' },
+    cancelSafetyConfigPending: { dropped: 0 },
+    ...over,
   });
   const router = createRouter({ auth, rateLimit: () => (_q, _r, next) => next(), safetyService });
   const app = express();
@@ -60,6 +64,11 @@ const CASES = [
   ['eylemci', 'post', `/api/v1/homes/${HOME_A}/devices/dev-1/actuators/a1`, { to: 'closed' }, ORDER, 'controlActuator'],
   ['bolge testi', 'post', `/api/v1/homes/${HOME_A}/devices/dev-1/alarm-test`, { zone: 1 }, ['super', 'staff', 'session', 'owner'], 'testZone'],
   ['yapilandirma kopyasi', 'get', `/api/v1/homes/${HOME_A}/devices/dev-1/safety-config`, null, ORDER, 'getSafetyConfig'],
+  // Faz 2 F2.B.6: kurma/cozme YALNIZ owner + resident (servis rolleri ve misafir YOK)
+  ['alarm kipi', 'post', `/api/v1/homes/${HOME_A}/devices/dev-1/arm`, { mode: 'away' }, ['owner', 'resident'], 'armDevice'],
+  // Faz 2 F2.D.4: buluttan yapilandirma yazimi safety_config (super/staff/session/owner)
+  ['yapilandirma yamasi', 'post', `/api/v1/homes/${HOME_A}/devices/dev-1/safety-config`, { base_rev: 3, set: { zone: { id: 1, name: 'Mutfak' } } }, ['super', 'staff', 'session', 'owner'], 'patchSafetyConfig'],
+  ['bekleyen kuyrugu iptal', 'delete', `/api/v1/homes/${HOME_A}/devices/dev-1/safety-config/pending`, null, ['super', 'staff', 'session', 'owner'], 'cancelSafetyConfigPending'],
 ];
 
 test('yapisal: her uc authenticateToken ile baslar, requireHomeAccess rol listesi yetki matrisiyle ayni', () => {
@@ -71,12 +80,20 @@ test('yapisal: her uc authenticateToken ile baslar, requireHomeAccess rol listes
     'POST /homes/:homeId/devices/:deviceId/actuators/:actuatorId',
     'POST /homes/:homeId/devices/:deviceId/alarm-test',
     'GET /homes/:homeId/devices/:deviceId/safety-config',
+    'POST /homes/:homeId/devices/:deviceId/arm',
+    'POST /homes/:homeId/devices/:deviceId/safety-config',
+    'DELETE /homes/:homeId/devices/:deviceId/safety-config/pending',
   ].sort());
   const roles = (p) => new Set(routes.find((r) => r.path === p).handlers.find((h) => h.__tag === 'homeAccess').__roles);
   for (const r of routes) assert.equal(r.handlers[0].__tag, 'authenticateToken');
   assert.deepEqual([...roles('/homes/:homeId/alarms/:alarmId/ack')].sort(), ['owner', 'resident', 'service_session', 'service_user', 'super_user']);
   assert.deepEqual([...roles('/homes/:homeId/devices/:deviceId/alarm-test')].sort(), ['owner', 'service_session', 'service_user', 'super_user']);
   assert.equal(roles('/homes/:homeId/devices/:deviceId/actuators/:actuatorId').size, 6, 'kapatma misafir dahil herkese (acma serviste denetlenir)');
+  const rolesOf = (m, p) => new Set(routes.find((r) => r.method === m && r.path === p).handlers.find((h) => h.__tag === 'homeAccess').__roles);
+  assert.deepEqual([...rolesOf('POST', '/homes/:homeId/devices/:deviceId/arm')].sort(), ['owner', 'resident']);
+  assert.deepEqual([...rolesOf('POST', '/homes/:homeId/devices/:deviceId/safety-config')].sort(), ['owner', 'service_session', 'service_user', 'super_user']);
+  assert.deepEqual([...rolesOf('DELETE', '/homes/:homeId/devices/:deviceId/safety-config/pending')].sort(), ['owner', 'service_session', 'service_user', 'super_user']);
+  assert.equal(rolesOf('GET', '/homes/:homeId/devices/:deviceId/safety-config').size, 6);
 });
 
 test('rol x uc matrisi: izinli rol servise ulasir, digerleri 403; servis home_id\'yi uyelikten alir', async () => {
@@ -223,4 +240,28 @@ test('istemci komut kimligi (id) panoya aynen gider; verilmezse komutta id yok (
   assert.deepEqual(s.sent[1].command, { cmd: 'alarm_ack', zone: 1, aid: '9f3a11c0-3', uid: 'AHBU-S3-1A2B3C', id: 'k1' });
   await s.svc.testZone({ actor: { access: 'owner' }, homeId: HOME_A, deviceRef: 'dev-1', zone: 2, commandId: 'z2' });
   assert.deepEqual(s.sent[2].command, { cmd: 'alarm_test', zone: 2, uid: 'AHBU-S3-1A2B3C', id: 'z2' });
+});
+
+test('Faz 2 rotalari: govde servis argumanlarina; yama 200 (applied) / 202 (kuyruk ya da sonuc bekleniyor); kurma id tasir', async () => {
+  const { app, safetyService } = build();
+  let res = await request(app).post(`/api/v1/homes/${HOME_A}/devices/dev-1/arm`).set('x-test-user', ACTORS.owner).send({ mode: 'off', id: 'a9' });
+  assert.equal(res.status, 200);
+  const arm = safetyService.calls.find((c) => c.name === 'armDevice');
+  assert.deepEqual([arm.args.deviceRef, arm.args.mode, arm.args.commandId], ['dev-1', 'off', 'a9']);
+  const body = { base_rev: 3, set: { zone: { id: 1, name: 'Mutfak' } }, id: 'p1' };
+  res = await request(app).post(`/api/v1/homes/${HOME_A}/devices/dev-1/safety-config`).set('x-test-user', ACTORS.staff).send(body);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers['cache-control'], 'no-store');
+  const p = safetyService.calls.find((c) => c.name === 'patchSafetyConfig');
+  assert.deepEqual(p.args.body, body);
+  assert.equal(p.args.deviceRef, 'dev-1');
+  for (const out of [{ queued: true, position: 1, expires_at: 'x', command_id: 'q' }, { applied: null, command_id: 'n' }]) {
+    const b2 = build({ patchSafetyConfig: out });
+    res = await request(b2.app).post(`/api/v1/homes/${HOME_A}/devices/dev-1/safety-config`).set('x-test-user', ACTORS.owner).send(body);
+    assert.equal(res.status, 202, JSON.stringify(out));
+    assert.deepEqual(res.body.data, out);
+  }
+  res = await request(app).delete(`/api/v1/homes/${HOME_A}/devices/dev-1/safety-config/pending`).set('x-test-user', ACTORS.owner);
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.data, { dropped: 0 });
 });

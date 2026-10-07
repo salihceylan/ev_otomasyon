@@ -571,6 +571,19 @@ class AutomationApiService {
     _throwIfRejected(res);
   }
 
+  /// Hırsız alarmı kipi (F2.B.7): `POST /api/arm {mode, id?}` (`off` = çözme). Yanıt `{ok, id, rej?}`; `rej`
+  /// (`not_ready` ...) [LocalApiException] olur.
+  Future<void> postArm(String mode, {String? id}) async {
+    if (!const <String>{'away', 'home', 'off'}.contains(mode)) throw LocalApiException.invalid('Geçersiz alarm kipi.');
+    final res = await _send(
+      'POST',
+      '/api/arm',
+      body: <String, dynamic>{'mode': mode, 'id': ?id},
+      timeout: const Duration(seconds: 5),
+    );
+    _throwIfRejected(res);
+  }
+
   /// Bölge testi: `POST /api/alarm/test {zone, id?}`.
   Future<void> testAlarm(int zone, {String? id}) async {
     if (zone < 1 || zone > 4) throw LocalApiException.invalid('Geçersiz bölge.');

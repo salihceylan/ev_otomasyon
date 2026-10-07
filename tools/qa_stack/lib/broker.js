@@ -213,6 +213,16 @@ export async function startBroker(opts) {
     maxClientsIdLength: 256,
     heartbeatInterval: 60000,
   });
+  // aedes 1.2.0 (EMQX'te yok): ayni istemcinin ayni okuma parcasindaki yayinlari es zamanli islenir. storeRetained'i bekleyen retained yayin
+  // (cihaz state'i) sonraki retained-siz yayindan (event) SONRA dagitilirsa abonenin kopya denetimi (brokerCounter) onu "eski" sayip
+  // DUSURUR (sayac paket olusturulurken, yani dagitim sirasindan once verilir). Duzeltme: sayac DAGITIM aninda yeniden verilir; kopya
+  // denetimi dagitim sirasiyla tutarli kalir (gercek kopyalar yine ayni sayaci tasimadigi icin tek dugumde kayip/kopya olusmaz).
+  // Bkz. test/broker.test.js "retained yayin ardindan ...".
+  const mqEmit = aedes.mq.emit.bind(aedes.mq);
+  aedes.mq.emit = (packet, cb) => {
+    if (packet && packet.brokerId === aedes.id) packet.brokerCounter = ++aedes.counter;
+    return mqEmit(packet, cb);
+  };
 
   aedes.on('clientReady', (client) => {
     stats.connects++;

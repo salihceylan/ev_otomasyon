@@ -7,7 +7,9 @@ import {
   encodeActuator, configCrc, latchClear, latchSeal, latchValid, latchAny, latchZoneMask, latchAssert64, latchLevel64, latchSetMasks,
   encodeLatch, crashClear, crashOnBoot, crashLoop, crashStableTick, CRASH_STABLE_MS, SafeReason, decideBootMode, safeReasonText,
   nvsBlobEntries, configNvsEntries, NVS_SAFETY_RESERVE_ENTRIES, NVS_GC_PAGE_ENTRIES, nvsRoomForConfig, bootMaskForSystem, validateSystemChange,
+  encodePolicy, DRY_HOLD_DEFAULT_MS,
 } from '../sim/fw/safety_config.js';
+import { SF_REACT, SF_ENTRY, SF_AWAY_ONLY } from '../sim/fw/sensor_hub.js';
 import { SensorKind, SensorSrc, defaultFlags, defaultConfirmMs, makeSensorConfig } from '../sim/fw/sensor_hub.js';
 import { ActKind, CloseMode, Medium, makeActuatorConfig } from '../sim/fw/actuator_map.js';
 import { SystemConfig, RelayType } from '../sim/fw/sysconfig.js';
@@ -309,4 +311,31 @@ test('fw_safety_config: acilis maskesi panjur/darbe ve olmayan roleye dokunmaz (
   s.relays[1].type = RelayType.SHUTTER_DOWN;
   s.relays[2].type = RelayType.IMPULSE;
   assert.equal(bootMaskForSystem(s, 0xFFn | (1n << 20n)), 0xF8n);
+});
+
+// Faz 2 (F2.B.1; Unity test_intrusion_policy_layout_and_roles): gecikmeler Policy bayt 8-9; fabrika blob'u v1.2.0 ile ayni; ARM_KEY yalniz DI.
+test('fw_safety_config: hirsiz gecikme baytlari ve ARM_KEY rolu', () => {
+  const c = defaultSafetyConfig();
+  assert.equal(c.pol.exit_s, 0);
+  assert.equal(c.pol.entry_s, 0);
+  const raw = Buffer.alloc(16);
+  raw[0] = 1;
+  raw.writeUInt32LE(DRY_HOLD_DEFAULT_MS, 4);
+  assert.deepEqual(encodePolicy(c.pol), raw);
+  const p = encodePolicy({ ...c.pol, exit_s: 255, entry_s: 1 });
+  assert.equal(p[8], 255);
+  assert.equal(p[9], 1);
+  const s = sys8();
+  const k = base();
+  k.sens.push(sensor(4, SensorKind.ARM_KEY, 0, 1), { ...sensor(7, SensorKind.DOOR, 2, 1), flags: SF_REACT | SF_ENTRY | SF_AWAY_ONLY });
+  k.nSens = 3;
+  k.pol.exit_s = 255;
+  k.pol.entry_s = 1;
+  assert.equal(validate(s, k), CfgErr.OK);
+  // Faz 2 incelemesi RV-E3: anahtarli kontak yalniz NC (kablo kesilince kurulu okunur, alarm cozulmez)
+  k.sens[1] = { ...k.sens[1], active_open: 0 };
+  assert.equal(validate(s, k), CfgErr.ARM_KEY_NOT_NC);
+  assert.equal(cfgErrText(CfgErr.ARM_KEY_NOT_NC), 'arm_key_not_nc');
+  k.sens[1] = { ...k.sens[1], active_open: 1, src: SensorSrc.BRIDGE, index: 2 };
+  assert.equal(validate(s, k), CfgErr.SENSOR_SRC);
 });

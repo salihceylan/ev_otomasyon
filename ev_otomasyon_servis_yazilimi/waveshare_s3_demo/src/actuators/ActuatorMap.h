@@ -139,6 +139,7 @@ public:
     for (uint8_t i = 0; i < n_; i++) {
       Rt& r = rt_[i];
       r.cmdAt = now_ms;
+      r.intrRunMs = 0xFFFFFFFFu;     // hırsız sireni bütçesi tükenmiş başlar: yalnız yeni alarm (restartIntrusion) çaldırır (F2-4)
       if (!isValve(cfg_[i])) continue;
       if (isGasValve(cfg_[i])) {
         r.known = true;
@@ -189,9 +190,24 @@ public:
   void commandSwitch(uint8_t i, bool on, uint32_t now_ms) {
     if (i >= n_ || isValve(cfg_[i])) return;
     Rt& r = rt_[i];
-    if (on && !r.on) r.lastTick = now_ms;
+    if (on && !r.on && !r.intrOn) r.lastTick = now_ms;
     r.on = on;
   }
+
+  // Hırsız alarmının siren isteği (F2.B.4): tehlike/elle isteğiyle VEYA'lanır; kendi run_limit_s bütçesini tutar (yalnız siren).
+  void commandIntrusion(uint8_t i, bool on, uint32_t now_ms) {
+    if (i >= n_ || cfg_[i].kind != (uint8_t)ActKind::SIREN) return;
+    Rt& r = rt_[i];
+    if (on && !r.intrOn && !r.on) r.lastTick = now_ms;
+    r.intrOn = on;
+  }
+  void restartIntrusion(uint8_t i) { if (i < n_) rt_[i].intrRunMs = 0; }
+  bool intrusionLimited(uint8_t i) const {
+    if (i >= n_ || cfg_[i].kind != (uint8_t)ActKind::SIREN) return false;
+    const uint32_t lim = (uint32_t)(cfg_[i].run_limit_s ? cfg_[i].run_limit_s : SIREN_RUN_DEFAULT_S) * 1000UL;
+    return rt_[i].intrRunMs >= lim;
+  }
+  bool intrusionOn(uint8_t i) const { return i < n_ && rt_[i].intrOn; }
 
   // Geri bildirim DI'sinin kararlı seviyesi (aktif = kontak kapalı). Her turda.
   void setFeedback(uint8_t i, bool diActive) {
@@ -215,9 +231,14 @@ public:
           if ((uint32_t)(now_ms - r.cmdAt) >= tmo) r.fbFault = true;
         }
       } else if (c.kind == (uint8_t)ActKind::SIREN) {
-        if (sirenOutput(i)) {
-          uint32_t v = r.sirenRunMs + (uint32_t)(now_ms - r.lastTick);
+        const uint32_t dt = (uint32_t)(now_ms - r.lastTick);
+        if (r.on && !sirenLimited(i)) {                 // tehlike/elle bütçesi (NVS "siren_s")
+          uint32_t v = r.sirenRunMs + dt;
           r.sirenRunMs = (v < r.sirenRunMs) ? 0xFFFFFFFFu : v;
+        }
+        if (r.intrOn && !intrusionLimited(i)) {         // hırsız bütçesi (kalıcı değil)
+          uint32_t v = r.intrRunMs + dt;
+          r.intrRunMs = (v < r.intrRunMs) ? 0xFFFFFFFFu : v;
         }
         r.lastTick = now_ms;
       }
@@ -307,6 +328,7 @@ private:
     uint32_t cmdAt;       // son yön değişimi (geri bildirim zaman aşımı buradan sayılır)
     uint32_t fbMs;        // kapat komutundan geri bildirimin "kapalı" görülmesine kadar geçen süre (0 = henüz yok)
     uint32_t sirenRunMs;
+    uint32_t intrRunMs;   // hırsız sireni bütçesi (F2.B.4)
     uint32_t lastTick;
     uint32_t psAt;        // darbe başlangıcı ya da ölü zaman başlangıcı
     uint32_t lastOffAt;   // son darbenin bittiği an
@@ -319,9 +341,10 @@ private:
     bool fbSeen;
     bool fbActive;
     bool fbFault;
+    bool intrOn;
   };
 
-  bool sirenOutput(uint8_t i) const { return rt_[i].on && !sirenLimited(i); }
+  bool sirenOutput(uint8_t i) const { return (rt_[i].on && !sirenLimited(i)) || (rt_[i].intrOn && !intrusionLimited(i)); }
 
   void pulseCommand(Rt& r, uint8_t dir, uint32_t now_ms) {
     if (r.ps == dir) return;                                   // aynı yön: darbe uzamaz

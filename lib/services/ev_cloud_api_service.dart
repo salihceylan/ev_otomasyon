@@ -243,11 +243,14 @@ class EvCloudApiService {
     // 5xx: sunucunun iç mesajı gösterilmez (sözleşme: genel mesaj); yalnızca bilerek açılan kodlar.
     final showServerMessage = serverMessage != null &&
         (status < 500 || (code != null && _exposedServerErrorCodes.contains(code)));
-    final message = !showServerMessage
-        ? ApiException.defaultMessageFor(status)
-        : (serverMessage.length > _maxServerMessageLength
-            ? serverMessage.substring(0, _maxServerMessageLength)
-            : serverMessage);
+    // Faz 2 kodları (gaz kısıtı, alarm kipi, yapılandırma kuyruğu): uygulamanın kendi metni [ApiException.clientMessages].
+    final clientMessage = (status >= 400 && status < 500 && code != null) ? ApiException.clientMessages[code] : null;
+    final message = clientMessage ??
+        (!showServerMessage
+            ? ApiException.defaultMessageFor(status)
+            : (serverMessage.length > _maxServerMessageLength
+                ? serverMessage.substring(0, _maxServerMessageLength)
+                : serverMessage));
     Duration? retryAfter;
     String? header;
     for (final entry in res.headers.entries) {
@@ -961,6 +964,26 @@ class EvCloudApiService {
     return CommandResult.fromJson(_data(body), deliveredDefault: false);
   }
 
+  /// Hırsız alarmı kipi (F2.B.7): `POST /homes/:homeId/devices/:deviceId/arm {mode, id}` (`off` = çözme). Yanıt
+  /// güvenlik komutlarıyla aynı (`{delivered, applied, command_id}`); ret `409 DEVICE_REJECTED reason:not_ready`,
+  /// `409 FIRMWARE_UNSUPPORTED`, `409 DEVICE_OFFLINE` (kuyruğa alınmaz).
+  Future<CommandResult> armCommand({
+    required String homeId,
+    required String deviceId,
+    required String mode,
+    required String commandId,
+  }) async {
+    final body = await _call(
+      'POST',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceId)}/arm',
+      body: <String, dynamic>{'mode': mode, 'id': commandId},
+      homeId: homeId,
+      timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
+    );
+    return CommandResult.fromJson(_data(body), deliveredDefault: false);
+  }
+
   /// Bölge testi: `POST /homes/:homeId/devices/:deviceId/alarm-test {zone, id}`.
   Future<CommandResult> alarmTest({
     required String homeId,
@@ -1007,6 +1030,42 @@ class EvCloudApiService {
       homeId: homeId,
     );
     return _data(body);
+  }
+
+  /// Buluttan yapılandırma yaması (Faz 2 F2.D.1, D.6): `POST /homes/:homeId/devices/:deviceId/safety-config`
+  /// gövde `{base_rev, set|del, id}` (TEK öğe; [patch] `{"set":{…}}` ya da `{"del":{…}}`). Yanıt `data`:
+  /// `200 {applied:true, rev, crc, command_id}`, `202 {applied:null, command_id}` (pano 10 sn'de yanıt vermedi),
+  /// `202 {queued:true, position, expires_at, command_id}` (pano çevrimdışı; 24 sa kuyruk). Ret: `409
+  /// CONFIG_CHANGED_ON_DEVICE` (`data:{rev, crc, copy_rev}`), `CONFIG_PENDING`, `CONFIG_QUEUE_FULL`,
+  /// `CONFIG_NOT_AVAILABLE`, `FIRMWARE_UNSUPPORTED`, `ZONE_ALARM_ACTIVE`; `400 CONFIG_INVALID|PAYLOAD_TOO_LARGE`;
+  /// `503 DEVICE_BUSY`; `507 DEVICE_STORAGE_FULL` -> [ApiException].
+  Future<Map<String, dynamic>> patchSafetyConfig({
+    required String homeId,
+    required String deviceId,
+    required int baseRev,
+    required Map<String, dynamic> patch,
+    required String commandId,
+  }) async {
+    final body = await _call(
+      'POST',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceId)}/safety-config',
+      body: <String, dynamic>{...patch, 'base_rev': baseRev, 'id': commandId},
+      homeId: homeId,
+      timeout: const Duration(seconds: 14),
+      totalBudget: const Duration(seconds: 18),
+    );
+    return _data(body);
+  }
+
+  /// Bekleyen (çevrimdışı panoya kuyruklanmış) yapılandırma yamalarını iptal eder: `DELETE …/safety-config/pending`
+  /// -> `{dropped: n}` (F2.D.2).
+  Future<int> clearSafetyConfigPending(String homeId, String deviceId) async {
+    final body = await _call(
+      'DELETE',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceId)}/safety-config/pending',
+      homeId: homeId,
+    );
+    return asInt(_data(body)['dropped']) ?? 0;
   }
 
   /// Evin cihazları: `[{ device_uuid, name, online, last_seen_at, firmware }]`.

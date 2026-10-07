@@ -8,11 +8,14 @@
 //    nesnesinin SONUNA eklenir (her anahtar virgülle başlar). Yapılandırılmamış panoda yalnız caps, boot, bn, time_ok, epoch yazılır
 //    [B14]; cfg/sensors/actuators/safety anahtarları yalnız güvenlik katmanı etkinse (sensör/eylemci/kilit/güvenli kip) yazılır.
 //  * viewSignature(): yayın tetiği (MqttManager StateSignature). Yalnız zamanla değişen alanlar (since_up) imzaya GİRMEZ.
+//  * Faz 2 (F2.B.7): caps'e "intrusion"; safety.arm {mode, st, ok, until_up?, aid?, srcs?} yalnız hırsız sensörü varsa (ya da kip kuruluysa).
+//    until_up sabit bir değerdir (gecikmenin bittiği uptime saniyesi): geri sayım imzayı değiştirmez.
 // ============================================================================
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 #include "safety/SafetyFsm.h"
+#include "safety/IntrusionFsm.h"
 #include "events/EventOutbox.h"
 
 namespace safety {
@@ -49,6 +52,17 @@ struct ZoneView {
   uint32_t sinceUp;  // imzaya girmez
 };
 
+struct ArmView {
+  uint8_t present;     // state.safety.arm yazılır
+  uint8_t mode;        // ArmMode
+  uint8_t st;          // ArmSt
+  uint8_t ok;          // 0: güvenli kipte sensör tablosu yok (hırsız katmanı etkisiz)
+  uint8_t nsrcs;
+  uint8_t srcs[8];
+  char aid[EID_LEN];
+  uint32_t untilUp;    // yalnız exit/entry (sabit; imzaya girer)
+};
+
 struct SafetyView {
   uint8_t configured;  // güvenlik katmanı etkin: modül dizileri yazılır
   uint8_t policyOn;
@@ -61,6 +75,7 @@ struct SafetyView {
   SensorView sens[MAX_SENSORS];
   ActuatorView act[MAX_ACTUATORS];
   ZoneView zones[MAX_ZONES];
+  ArmView arm;         // zones'tan SONRA (imza: zones'un since_up'ı hariç tutulur)
 };
 
 // MqttTask/WebTask'ın eklediği, güvenlik görünümünden bağımsız alanlar.
@@ -85,6 +100,7 @@ inline const char* sensorKindText(uint8_t kind) {
     case (uint8_t)SensorKind::ALARM_ACK: return "alarm_ack";
     case (uint8_t)SensorKind::VALVE_CLOSE: return "valve_close";
     case (uint8_t)SensorKind::GAS_RESET: return "gas_reset";
+    case (uint8_t)SensorKind::ARM_KEY: return "arm_key";
     default: return "unknown";
   }
 }
@@ -95,9 +111,9 @@ inline const char* mediumText(uint8_t m) {
   return "none";
 }
 
-// loopTask: çekirdeklerden görünüm. now_ms: since_up için.
+// loopTask: çekirdeklerden görünüm. now_ms: since_up için. intr: hırsız çekirdeği (yoksa nullptr: arm yazılmaz).
 inline void buildView(const SafetyConfig& cfg, const SensorHub& hub, const ActuatorCore& act, const SafetyCore& core, uint32_t now_ms,
-                      SafetyView& v) {
+                      SafetyView& v, const IntrusionCore* intr = nullptr) {
   memset(&v, 0, sizeof(v));
   v.configured = core.active() ? 1 : 0;
   v.policyOn = core.policyOn() ? 1 : 0;
@@ -146,12 +162,27 @@ inline void buildView(const SafetyConfig& cfg, const SensorHub& hub, const Actua
     o.sinceEpoch = r.sinceEpoch;
     o.sinceUp = core.sinceUpS(z, now_ms);
   }
+  if (intr && intr->present()) {
+    ArmView& a = v.arm;
+    a.present = 1;
+    a.mode = (uint8_t)intr->mode();
+    a.st = (uint8_t)intr->st();
+    a.ok = intr->usable() ? 1 : 0;
+    a.untilUp = intr->untilUp();
+    if (intr->st() == ArmSt::ALARM) {
+      a.nsrcs = intr->nsrcs() > 8 ? 8 : intr->nsrcs();
+      memcpy(a.srcs, intr->srcs(), a.nsrcs);
+      memcpy(a.aid, intr->aid(), EID_LEN);
+      a.aid[EID_LEN - 1] = '\0';
+    }
+  }
 }
 
 // Yayın imzası (CRC32): since_up hariç bütün görünüm.
 inline uint32_t viewSignature(const SafetyView& v) {
   uint32_t c = crc32Update(0, &v, offsetof(SafetyView, zones));
   for (uint8_t i = 0; i < v.nZones && i < MAX_ZONES; i++) c = crc32Update(c, &v.zones[i], offsetof(ZoneView, sinceUp));
+  if (v.arm.present) c = crc32Update(c, &v.arm, sizeof(v.arm));
   return c;
 }
 
@@ -185,7 +216,7 @@ inline void zonesArray(ev_detail::Writer& w, uint8_t mask) {
 // State v:3 eki (her anahtar virgülle başlar). w.ok false ise çağıran eki KULLANMAMALIDIR (kesik JSON yok).
 inline void writeStateExtras(const SafetyView& v, const StateMeta& m, ev_detail::Writer& w) {
   using namespace view_detail;
-  w.raw(",\"caps\":[\"safety\",\"actuator\",\"event\",\"cfg\"]");
+  w.raw(",\"caps\":[\"safety\",\"actuator\",\"event\",\"cfg\",\"intrusion\"]");
   w.num("boot", m.boot);
   w.raw(",\"bn\":\"");
   w.hex8(m.bn);
@@ -280,7 +311,31 @@ inline void writeStateExtras(const SafetyView& v, const StateMeta& m, ev_detail:
     }
     w.raw("]}");
   }
-  w.raw("]}");
+  w.raw("]");
+  if (v.arm.present) {
+    const ArmView& a = v.arm;
+    w.raw(",\"arm\":{\"mode\":\"");
+    w.raw(armModeText((ArmMode)a.mode));
+    w.raw("\",\"st\":\"");
+    w.raw(armStText((ArmSt)a.st));
+    w.raw("\"");
+    boolKey(w, "ok", a.ok != 0);
+    if (a.st == (uint8_t)ArmSt::EXIT || a.st == (uint8_t)ArmSt::ENTRY) w.num("until_up", a.untilUp);
+    if (a.st == (uint8_t)ArmSt::ALARM) {
+      if (a.aid[0]) w.str("aid", a.aid);
+      w.raw(",\"srcs\":[");
+      for (uint8_t k = 0; k < a.nsrcs && k < 8; k++) {
+        char id[5];
+        sensorIdText(a.srcs[k], id);
+        w.raw(k ? ",\"" : "\"");
+        w.raw(id);
+        w.raw("\"");
+      }
+      w.raw("]");
+    }
+    w.raw("}");
+  }
+  w.raw("}");
 }
 
 }  // namespace safety

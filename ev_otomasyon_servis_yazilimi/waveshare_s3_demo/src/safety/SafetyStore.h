@@ -7,7 +7,8 @@
 //    Fabrika sıfırlaması (ConfigManager::resetToDefaults) bu ad alanını siler.
 //  * "ahbu_latch" (NVS_NS_LATCH): latch (LatchRecord, 164 B, kendi CRC'si), act_pos (u32: düşük 16 bit açık, yüksek 16 bit
 //    bilinen), safe_msk (2 x u64: açılış güvenli maskesi, bootSafeMasks; inceleme turu EM-1/EM-5), di_hist (u64: kalıcı DI kullanım
-//    geçmişi, diUseMask; inceleme turu 2 FW2-2), bootc (u32), crash (CrashLog), siren_s (u16). Fabrika sıfırlaması bu ad alanını SİLMEZ.
+//    geçmişi, diUseMask; inceleme turu 2 FW2-2), bootc (u32), crash (CrashLog), siren_s (u16), arm (ArmRecord, 20 B: hırsız kipi ve alarm
+//    belleği; Faz 2 F2.B.1, F2-4). Fabrika sıfırlaması bu ad alanını SİLMEZ (kurulu ev sıfırlamayla çözülmez).
 //  * readBootLatchLocal(): Relay_Init'ten ÖNCE, ConfigManager'dan bağımsız çağrılır: latch blob'unun yerel güvenli seviyesi VE açılış
 //    güvenli maskesinin yerel seviyesi (KAPALI komutlu E2C vanalar, bütün E2C gaz vanaları) ilk yazımda korunur.
 //  * saveConfig(): önce "ver" geçersiz işaretlenir, blob'lar ve rev yazılır, "ver" en son geçerli yazılır: yarıda kalan yazım bir sonraki
@@ -19,6 +20,7 @@
 // ============================================================================
 #include <stdint.h>
 #include "safety/SafetyConfig.h"
+#include "safety/IntrusionFsm.h"
 
 namespace safety {
 
@@ -36,6 +38,9 @@ public:
   static bool loadLatch(LatchRecord& r);          // false: yok ya da bozuk (r boş kayıt olur)
   static bool saveLatch(const LatchRecord& r);
   static bool reserveLatch();                     // kayıt yoksa boş kayıt yazar
+  static bool loadArm(ArmRecord& r);              // false: yok ya da tanınmayan sürüm (r boş)
+  static bool saveArm(const ArmRecord& r);
+  static bool reserveArm();                       // kayıt yoksa "off" kaydı yazar (NVS payı: kilit kaydıyla birlikte ayrılır)
 
   static bool loadSafeMask(uint64_t& assertMask, uint64_t& levelMask);   // false: yok
   static bool saveSafeMask(uint64_t assertMask, uint64_t levelMask);

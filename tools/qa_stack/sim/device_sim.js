@@ -711,6 +711,9 @@ export class DeviceSimulator {
     return { changed: true };
   }
 
+  /** Kapi/pencere kontagi (Faz 2 F2.B.11): open=true kontak ACILIR (NC sensorde DI kontagi acik). setSensor'un hirsiz sensoru adi. */
+  setContact(id, open) { return this.setSensor(id, open); }
+
   #bridgeReport(slot) {
     const fw = this.fw;
     if (!fw || !this.bridgeFeed.has(slot)) return;

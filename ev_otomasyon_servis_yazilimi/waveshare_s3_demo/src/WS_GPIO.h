@@ -44,4 +44,7 @@ void Buzzer_Open_Time(uint16_t Time, uint16_t flicker_time);
 // Guvenlik alarmi (spec 4.3 [O-7][B10]): kalici alarm kipi (500 ms ac / 500 ms kapa), iptal edilebilir. FIFO'dan bagimsizdir
 // (en cok ~65 sn ve iptalsiz FIFO alarm icin uygun degil). Alarm kipi acikken komut bipleri (Buzzer_Open_Time) YUTULUR.
 void Buzzer_SetAlarm(bool on);
+// Hirsiz alarmi deseni (Faz 2 F2.B.4): 0 kapali, 1 cikis bip'i (1 sn'de bir), 2 giris bip'i (hizli), 3 alarm (500/500 ms). Tehlike alarm kipi
+// (Buzzer_SetAlarm) acikken desen yok sayilir. Desen surerken komut bipleri YUTULUR, desen baslarken FIFO bosaltilir (Faz 2 incelemesi RG-3).
+void Buzzer_SetPattern(uint8_t pattern);
 void BuzzerTask(void *parameter);

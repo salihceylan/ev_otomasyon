@@ -33,6 +33,8 @@ const MATRIX = {
   actuator_control: [true, true, true, true, true, false],
   safety_test: [true, true, true, true, false, false],
   safety_config: [true, true, true, true, false, false],
+  // Faz 2 F2.B.6 (karar F2-3): hirsiz alarmi kurma/cozme yalniz owner + resident
+  safety_arm: [false, false, false, true, true, false],
 };
 const ORDER = [S, F, P, O, R, G];
 

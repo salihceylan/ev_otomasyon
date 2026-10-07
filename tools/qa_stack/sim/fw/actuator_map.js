@@ -136,8 +136,8 @@ export class ActuatorCore {
 
   static #rt() {
     return {
-      cmdAt: 0, fbMs: 0, sirenRunMs: 0, lastTick: 0, psAt: 0, lastOffAt: 0, ps: PS.IDLE, psPending: 0, everRan: false,
-      known: false, closed: false, on: false, fbSeen: false, fbActive: false, fbFault: false,
+      cmdAt: 0, fbMs: 0, sirenRunMs: 0, intrRunMs: 0xFFFFFFFF, lastTick: 0, psAt: 0, lastOffAt: 0, ps: PS.IDLE, psPending: 0, everRan: false,
+      known: false, closed: false, on: false, fbSeen: false, fbActive: false, fbFault: false, intrOn: false,
     };
   }
 
@@ -187,9 +187,23 @@ export class ActuatorCore {
   commandSwitch(i, on, nowMs) {
     if (i >= this.n_ || isValve(this.cfg_[i])) return;
     const r = this.rt_[i];
-    if (on && !r.on) r.lastTick = u32(nowMs);
+    if (on && !r.on && !r.intrOn) r.lastTick = u32(nowMs);
     r.on = !!on;
   }
+
+  /** Hirsiz alarminin siren istegi (Faz 2 F2.B.4): tehlike/elle istegiyle VEYA; kendi run_limit_s butcesi (yalniz siren). */
+  commandIntrusion(i, on, nowMs) {
+    if (i >= this.n_ || this.cfg_[i].kind !== ActKind.SIREN) return;
+    const r = this.rt_[i];
+    if (on && !r.intrOn && !r.on) r.lastTick = u32(nowMs);
+    r.intrOn = !!on;
+  }
+  restartIntrusion(i) { if (i < this.n_) this.rt_[i].intrRunMs = 0; }
+  intrusionLimited(i) {
+    if (i >= this.n_ || this.cfg_[i].kind !== ActKind.SIREN) return false;
+    return this.rt_[i].intrRunMs >= (this.cfg_[i].run_limit_s || SIREN_RUN_DEFAULT_S) * 1000;
+  }
+  intrusionOn(i) { return i < this.n_ && this.rt_[i].intrOn; }
 
   setFeedback(i, diActive) {
     if (i >= this.n_ || this.cfg_[i].fb_di === 0) return;
@@ -209,7 +223,9 @@ export class ActuatorCore {
         if (!this.hasFb(i) || !r.closed || fbc) r.fbFault = false;
         else if (u32(nowMs - r.cmdAt) >= (c.fb_timeout_s || FB_TIMEOUT_DEFAULT_S) * 1000) r.fbFault = true;
       } else if (c.kind === ActKind.SIREN) {
-        if (this.#sirenOutput(i)) r.sirenRunMs = Math.min(0xFFFFFFFF, r.sirenRunMs + u32(nowMs - r.lastTick));
+        const dt = u32(nowMs - r.lastTick);
+        if (r.on && !this.sirenLimited(i)) r.sirenRunMs = Math.min(0xFFFFFFFF, r.sirenRunMs + dt);
+        if (r.intrOn && !this.intrusionLimited(i)) r.intrRunMs = Math.min(0xFFFFFFFF, r.intrRunMs + dt);
         r.lastTick = nowMs;
       }
     }
@@ -284,7 +300,7 @@ export class ActuatorCore {
     return this.rt_[i].sirenRunMs >= (this.cfg_[i].run_limit_s || SIREN_RUN_DEFAULT_S) * 1000;
   }
 
-  #sirenOutput(i) { return this.rt_[i].on && !this.sirenLimited(i); }
+  #sirenOutput(i) { return (this.rt_[i].on && !this.sirenLimited(i)) || (this.rt_[i].intrOn && !this.intrusionLimited(i)); }
 
   #pulseCommand(r, dir, nowMs) {
     if (r.ps === dir) return;

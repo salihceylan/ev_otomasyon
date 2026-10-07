@@ -16,6 +16,8 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Bildirim kanallari (safety_alarm / safety_info / peace_reminder; Faz 2 F2.C.5): idempotent.
+        NotificationChannels.ensure(this)
         // Android 12+ (API 31+) siyah SplashScreen beklemesini sonlandır,
         // zengin elektronik devre tasarımının hemen görünmesini sağla
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

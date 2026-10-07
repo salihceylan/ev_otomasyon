@@ -266,6 +266,10 @@ enum InputRole {
   alarmAck('alarm_ack', 'Alarm onay düğmesi'),
   valveClose('valve_close', 'Vana kapat düğmesi'),
   gasReset('gas_reset', 'Gaz vanası açma düğmesi'),
+
+  /// Anahtarlı alarm kontağı (F2.B.3): pasif->aktif kenarı `away` kurar, aktif->pasif çözer. Yalnız `caps` `intrusion`
+  /// ilan eden panoda seçilebilir.
+  armKey('arm_key', 'Alarm anahtarı (anahtarlı kontak)'),
   unused('unused', 'Kullanılmıyor');
 
   const InputRole(this.wire, this.label);
@@ -277,10 +281,15 @@ enum InputRole {
   bool get isSensor => const <InputRole>{water, gas, smoke, door, window, motion}.contains(this);
 
   /// Yerel güvenlik kumandası (sensör tablosuna `kind` olarak girer, bölgeye bağlıdır) [B15].
-  bool get isSafetyControl => this == alarmAck || this == valveClose || this == gasReset;
+  bool get isSafetyControl => this == alarmAck || this == valveClose || this == gasReset || this == armKey;
+
+  /// Hırsız alarmı sensörü (kapı / pencere / hareket; F2.B.1).
+  bool get isIntrusionSensor => this == door || this == window || this == motion;
 
   /// NC (kontak açılınca aktif) bağlantı ZORUNLU: dedektörün enerjisi kesilir ya da kablo koparsa alarm olur [O-2].
-  bool get requiresNc => this == gas || this == smoke;
+  /// Anahtarlı alarm kontağı da NC'dir: kablo kesilince "kurulu" okunur, alarm çözülmez (Faz 2 incelemesi RV-E3; firmware
+  /// `arm_key_not_nc`).
+  bool get requiresNc => this == gas || this == smoke || this == armKey;
 
   /// Köprü (kablosuz) kaynağı için anlamlı roller: yalnız algılayıcılar.
   static List<InputRole> get bridgeRoles => const <InputRole>[water, gas, smoke, door, window, motion];
@@ -311,6 +320,8 @@ class InputAssignment {
     this.role = InputRole.button,
     this.normallyClosed = false,
     this.zone = 1,
+    this.entry,
+    this.awayOnly,
   });
 
   /// `di` (panodaki giriş, 1..40) ya da `bridge` (Zigbee/Thread hub yuvası, 1..16) (K2).
@@ -322,6 +333,17 @@ class InputAssignment {
   final bool normallyClosed;
   final int zone;
 
+  /// Hırsız alarmı: giriş yolu (`SF_ENTRY`, gecikmeli) ve yalnız dışarıda kipte etkin (`SF_AWAY_ONLY`). `null` =
+  /// türün varsayılanı (F2.B.1: kapı giriş yolu; hareket yalnız dışarıda).
+  final bool? entry;
+  final bool? awayOnly;
+
+  bool get effectiveEntry => entry ?? role == InputRole.door;
+  bool get effectiveAwayOnly => awayOnly ?? role == InputRole.motion;
+
+  /// Firmware `flags` (yalnız hırsız sensöründe): `SF_REACT` + giriş yolu (0x08) + yalnız dışarıda (0x10).
+  int get intrusionFlags => 0x01 | (effectiveEntry ? 0x08 : 0) | (effectiveAwayOnly ? 0x10 : 0);
+
   bool get isBridge => src == 'bridge';
 
   /// Pano sensör kimliği (`d3`, `b1`).
@@ -331,14 +353,18 @@ class InputAssignment {
   InputAssignment normalized() =>
       role.requiresNc && !normallyClosed ? copyWith(normallyClosed: true) : this;
 
-  InputAssignment copyWith({InputRole? role, bool? normallyClosed, int? zone}) {
+  InputAssignment copyWith({InputRole? role, bool? normallyClosed, int? zone, bool? entry, bool? awayOnly}) {
     final nextRole = role ?? this.role;
+    final sameRole = nextRole == this.role;
     return InputAssignment(
       src: src,
       index: index,
       role: nextRole,
       normallyClosed: nextRole.requiresNc ? true : (normallyClosed ?? this.normallyClosed),
       zone: (zone ?? this.zone).clamp(1, kMaxSafetyZones),
+      // Rol değişince hırsız bayrakları yeni türün varsayılanına döner.
+      entry: entry ?? (sameRole ? this.entry : null),
+      awayOnly: awayOnly ?? (sameRole ? this.awayOnly : null),
     );
   }
 
@@ -348,6 +374,8 @@ class InputAssignment {
         'role': role.wire,
         if (normallyClosed) 'nc': true,
         if (zone != 1) 'zone': zone,
+        'en': ?entry,
+        'ao': ?awayOnly,
       };
 
   /// Panonun sensör satırı: yapılandırma kopyası (`{src, index, kind, zone, active_open}`) ya da `state.sensors[]`
@@ -358,12 +386,16 @@ class InputAssignment {
     final index = asInt(json['index']) ?? (id != null && id.length > 1 ? int.tryParse(id.substring(1)) : null);
     final role = InputRole.parse(json['kind']);
     if (index == null || (role == InputRole.button && asNonEmptyString(json['kind']) != 'button')) return null;
+    final flags = asInt(json['flags']);
+    final intrusionFlags = role.isIntrusionSensor && flags != null;
     return InputAssignment(
       src: src,
       index: index,
       role: role,
       normallyClosed: (asInt(json['active_open']) ?? 0) == 1,
       zone: (asInt(json['zone']) ?? 1).clamp(1, kMaxSafetyZones),
+      entry: intrusionFlags ? (flags & 0x08) != 0 : null,
+      awayOnly: intrusionFlags ? (flags & 0x10) != 0 : null,
     ).normalized();
   }
 
@@ -380,6 +412,8 @@ class InputAssignment {
       role: InputRole.parse(map['role']),
       normallyClosed: asBool(map['nc']) ?? false,
       zone: (asInt(map['zone']) ?? 1).clamp(1, kMaxSafetyZones),
+      entry: asBool(map['en']),
+      awayOnly: asBool(map['ao']),
     ).normalized();
   }
 
@@ -390,10 +424,12 @@ class InputAssignment {
       other.index == index &&
       other.role == role &&
       other.normallyClosed == normallyClosed &&
-      other.zone == zone;
+      other.zone == zone &&
+      other.entry == entry &&
+      other.awayOnly == awayOnly;
 
   @override
-  int get hashCode => Object.hash(src, index, role, normallyClosed, zone);
+  int get hashCode => Object.hash(src, index, role, normallyClosed, zone, entry, awayOnly);
 }
 
 /// Doğrulama bulgusu. [blocking] `true` ise kayıt yapılamaz; `false` uyarıdır (kayıt yapılabilir).
@@ -594,12 +630,19 @@ Map<String, dynamic> safetyActuatorItem(int relay, ChannelAssignment a) {
 }
 
 /// Planın bir girişi için firmware sensör öğesi (yalnız algılayıcı ve yerel kumanda rolleri).
-Map<String, dynamic> safetySensorItem(InputAssignment i) => <String, dynamic>{
+/// [intrusion]: pano `caps` `intrusion` ilan ediyor (v1.2.1+). Yalnız o zaman hırsız sensörüne `flags` yazılır: v1.2.0
+/// `0x07`'den büyük bayrağı `bad_value` ile reddeder (F2.B.7).
+Map<String, dynamic> safetySensorItem(InputAssignment i, {bool intrusion = false}) => <String, dynamic>{
       'id': i.id,
       'kind': i.role.wire,
       'zone': i.zone,
       'active_open': i.normallyClosed ? 1 : 0,
+      if (intrusion && i.role.isIntrusionSensor) 'flags': i.intrusionFlags,
     };
+
+/// Varsayılan çıkış / giriş gecikmesi (sn; F2.B.1).
+const int kDefaultExitDelaySec = 45;
+const int kDefaultEntryDelaySec = 30;
 
 List<Map<String, dynamic>> _items(Object? raw) => <Map<String, dynamic>>[
       for (final item in asList(raw) ?? const <dynamic>[])
@@ -644,6 +687,8 @@ List<Map<String, dynamic>> buildSafetyPatches({
   required List<InputAssignment> inputs,
   bool extEnabled = false,
   int? extAddress,
+  bool intrusion = false,
+  ({int exit, int entry})? intrusionDelays,
 }) {
   final patches = <Map<String, dynamic>>[];
   final owners = openRelayOwnersOf(channels);
@@ -655,7 +700,7 @@ List<Map<String, dynamic>> buildSafetyPatches({
   // 1) Sensör silme: planda algılayıcı/kumanda OLMAYAN role çevrilen girişler.
   final wantSensors = <String, Map<String, dynamic>>{
     for (final i in inputs)
-      if (i.role.isSensor || i.role.isSafetyControl) i.id: safetySensorItem(i),
+      if (i.role.isSensor || i.role.isSafetyControl) i.id: safetySensorItem(i, intrusion: intrusion),
   };
   final planInputIds = <String>{for (final i in inputs) i.id};
   for (final cur in curSens) {
@@ -736,6 +781,27 @@ List<Map<String, dynamic>> buildSafetyPatches({
         'sensor': <String, dynamic>{...keep, ...want},
       },
     });
+  }
+
+  // 3b) Hırsız alarmı gecikmeleri (F2.B.7; yalnız `caps` `intrusion`): değiştiyse tek `intrusion` öğesi.
+  if (intrusion && intrusionDelays != null) {
+    final cur = asMap(current['intrusion']);
+    int effective(Object? raw, int fallback) {
+      final v = asInt(raw);
+      return (v == null || v <= 0) ? fallback : v;
+    }
+
+    final want = <String, dynamic>{
+      'exit_s': intrusionDelays.exit.clamp(1, 255),
+      'entry_s': intrusionDelays.entry.clamp(1, 255),
+    };
+    final same = effective(cur?['exit_s'], kDefaultExitDelaySec) == want['exit_s'] &&
+        effective(cur?['entry_s'], kDefaultEntryDelaySec) == want['entry_s'];
+    if (!same) {
+      patches.add(<String, dynamic>{
+        'set': <String, dynamic>{'intrusion': want},
+      });
+    }
   }
 
   // 4) Işık (dimmer) seçenekleri (K4): `src` 1 = Modbus, 2 = köprü; dimmer'dan çıkan kanal sıfırlanır.
@@ -839,7 +905,10 @@ DimmerGuide dimmerGuideFor({
 /// Bölge testi sonucu (`test_result {ok, fb_ms}`; §4.4 madde 3).
 @immutable
 class SafetyTestResult {
-  const SafetyTestResult({required this.zone, this.ok, this.fbMs, this.hasValve = true});
+  const SafetyTestResult({required this.zone, this.ok, this.fbMs, this.hasValve = true, this.cloud = false});
+
+  /// Test bulut üzerinden gönderildi: sonuç yalnız yerel bağlantıda okunur (karar F2-10).
+  final bool cloud;
 
   final int zone;
 
@@ -853,6 +922,10 @@ class SafetyTestResult {
   final int? fbMs;
 
   String get message {
+    if (cloud) {
+      return 'Bölge $zone: test gönderildi. Geri bildirim sonucu yalnız yerel bağlantıda görünür; '
+          '${hasValve ? 'vananın kapandığını' : 'sirenin / cihazın çalıştığını'} gözle doğrulayın.';
+    }
     if (!hasValve) {
       return ok == false
           ? 'Bölge $zone: test tamamlanamadı; cihaz bağlantısını kontrol edin.'

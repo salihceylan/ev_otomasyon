@@ -43,6 +43,10 @@
 //     cevrimici donem). Firmware sys komutunu yankilamaz: kanit PUBACK'tir. Anahtar ve sifreli deger ASLA loglanmaz.
 //     Cok panolu evde atlanir (ev konusu tum panolara gider: diger panonun anahtari da degisirdi).
 //
+// Guvenlik yapilandirmasi kuyrugu (Faz 2 F2.D.2; device_configs.pending): kopru cfg yetenekli panonun HER canli state'inde
+//   onSafetyState cagirir; is cihaz basina sirali (`cfg:<deviceId>` anahtari, birlestirmeli) olarak services/safety_cfg_sync.js'e
+//   devredilir (kuyruk bosken sorgu yok). publishSys + expectOutcome verilmezse kapalidir.
+//
 // Sinirlar (bilincli):
 //   * Panjur uzlastirmasi YALNIZ tek panolu evde yapilir: ev konusu tum panolara gittiginden `set_runtime` ortak
 //     panjur numarali saglam panonun kalibrasyonunu ezerdi. Cok panolu evde atlanir ve loglanir (isaret kalir).
@@ -66,6 +70,10 @@ const ECHO_CHECK_MIN_INTERVAL_MS = 60 * 1000; // niyetle UYUSAN canli state'ler 
 const ECHO_BLOCKED_BACKOFF_MS = 10 * 60 * 1000; // uyum var ama baska (cevrimdisi) cihaz uyumsuz: bu kadar sure tekrar bakma
 const RUNTIME_MARKER_MAX_AGE_MS = 14 * 24 * 3600 * 1000;
 const MAX_CONCURRENT_HOMES = 2; // es zamanli uzlastirilan ev sayisi
+// Faz 2 incelemesi RG-2: guvenlik yapilandirmasi kuyrugu AYRI seritte (bir is panodan yanit icin <= 10 sn bekler; ev uzlastirmasini
+// tikamasin). Cihaz basina tek ucus ayrica SafetyCfgSync._busy ile.
+const MAX_CONCURRENT_CFG = 4;
+const MAX_PENDING_CFG = 5000;
 const MAX_PENDING_CHECKS = 20000; // toplu yeniden baglanmada (broker yeniden basladi) kontrol DUSMESIN: kayit hafif (kapanis)
 const NOT_CONNECTED_RETRY_MS = 15 * 1000; // koprunun brokere baglanti kopuklugunda kontrolu bu aralikla yeniden planla
 const MAX_NOT_CONNECTED_RETRIES = 8; // ... en cok bu kadar (yaklasik 2 dk); sonra sonraki cevrimici doneme birak
@@ -235,6 +243,9 @@ class DeviceReconciler {
    * @param {()=>string} [deps.newCommandId]
    * @param {Function} [deps.QueueClass]                       KeyedWorkQueue (varsayilan: mqtt_bridge'den tembel)
    * @param {(ms:number)=>Promise<void>} [deps.sleep]          set_runtime araligi (varsayilan: timers ile)
+   * @param {Function} [deps.expectOutcome]                    Faz 2: yapilandirma yamasi sonuc bekleyicisi (kopru)
+   * @param {Function} [deps.cancelAck] @param {Function} [deps.pushInfo] @param {Function} [deps.requestConfig]
+   * @param {{onLiveState:Function}} [deps.cfgSync]           hazir yapilandirma kuyrugu (test)
    */
   constructor(deps = {}) {
     if (!deps.db || typeof deps.db.query !== 'function') throw new TypeError('DeviceReconciler: db (query) zorunludur');
@@ -262,6 +273,24 @@ class DeviceReconciler {
 
     const QueueClass = deps.QueueClass || require('../mqtt_bridge').KeyedWorkQueue;
     this._queue = new QueueClass({ concurrency: MAX_CONCURRENT_HOMES, maxPending: MAX_PENDING_CHECKS });
+    this._cfgQueue = new QueueClass({ concurrency: MAX_CONCURRENT_CFG, maxPending: MAX_PENDING_CFG });
+
+    // Faz 2 F2.D.2: guvenlik yapilandirmasi kuyrugu (sys yayincisi + sonuc bekleyicisi varsa)
+    this._cfgSync = deps.cfgSync || null;
+    if (!this._cfgSync && this.publishSys && typeof deps.expectOutcome === 'function') {
+      const { SafetyCfgSync } = require('./safety_cfg_sync');
+      this._cfgSync = new SafetyCfgSync({
+        db: this.db,
+        publishSys: this.publishSys,
+        expectOutcome: deps.expectOutcome,
+        cancelAck: deps.cancelAck,
+        isConnected: () => this.isConnected(),
+        requestConfig: deps.requestConfig,
+        pushInfo: deps.pushInfo,
+        now: this.now,
+        logger: this.logger,
+      });
+    }
 
     this._homes = new Map(); // topicId -> { homeId, devices:Map<deviceId,lastLiveMs>, budgets:Map, timer, touched, logs:Map }
     this._stopped = false;
@@ -348,6 +377,17 @@ class DeviceReconciler {
     if (t - this._lastGcAt >= GC_INTERVAL_MS) this._gc(t);
   }
 
+  /**
+   * Faz 2 F2.D.2: cfg yetenekli panonun canli state'i -> guvenlik yapilandirmasi kuyrugu. Ucuz: kuyruk bosken (bellek ici
+   * onbellek) sorgu yok; is cihaz basina sirali ve birlestirmeli. ASLA firlatmaz.
+   */
+  onSafetyState(args = {}) {
+    if (this._stopped || !this._cfgSync || !args || !args.deviceId) return;
+    this._cfgQueue
+      .push(`cfg:${args.deviceId}`, 'cfg', () => this._cfgSync.onLiveState(args), { coalesce: true })
+      .catch(() => {});
+  }
+
   /** Canli `status: offline` (LWT): cevrimici donem biter; sonraki canli state yeni donemdir. */
   onOffline(topicId) {
     const home = this._homes.get(topicId);
@@ -372,11 +412,13 @@ class DeviceReconciler {
       home.timer = null;
     }
     this._queue.clear();
+    this._cfgQueue.clear();
   }
 
-  /** Testler / operatör: kuyruktaki isler bitene kadar bekler. */
-  whenIdle(timeoutMs = 5000) {
-    return this._queue.drain(timeoutMs);
+  /** Testler / operatör: kuyruktaki isler (ev uzlastirmasi + yapilandirma seridi) bitene kadar bekler. */
+  async whenIdle(timeoutMs = 5000) {
+    const [a, b] = await Promise.all([this._queue.drain(timeoutMs), this._cfgQueue.drain(timeoutMs)]);
+    return a && b;
   }
 
   /** Bir ev icin kontrolu hemen (kuyrukta, sirali) calistirir. */
@@ -386,7 +428,10 @@ class DeviceReconciler {
   }
 
   stats() {
-    return { homes: this._homes.size, ...this.counters, queue: { ...this._queue.stats, pending: this._queue.pending } };
+    const out = { homes: this._homes.size, ...this.counters, queue: { ...this._queue.stats, pending: this._queue.pending } };
+    out.safety_cfg_queue = { ...this._cfgQueue.stats, pending: this._cfgQueue.pending };
+    if (this._cfgSync && typeof this._cfgSync.stats === 'function') out.safety_cfg = this._cfgSync.stats();
+    return out;
   }
 
   // -- Planlama -------------------------------------------------------------------

@@ -5,12 +5,15 @@
 //  * 'safety' (NVS_NS_SAFETY "ahbu_safety"): { ver, cfg, crc } -- cfg = SafetyConfig nesnesi, crc = configCrc(cfg) (firmware'de her
 //    blob'un CRC32'si). crc tutmazsa ya da ver farkliysa "bozuk" sayilir (cfg_corrupt). Fabrika sifirlamasi bu alani SILER.
 //  * 'latch' (NVS_NS_LATCH "ahbu_latch"): { latch, act_pos: {open, known}, safe_msk: {assert, level} (BigInt; inceleme turu EM-1/EM-5),
-//    bootc, crash, siren_s } -- fabrika sifirlamasi SILMEZ.
+//    bootc, crash, siren_s, arm: ArmRecord (Faz 2: hirsiz kipi + alarm bellegi) } -- fabrika sifirlamasi SILMEZ.
+//  * Faz 2 (F2.B): IntrusionCore SafetyCore'dan SONRA ayni turda; siren istegi setIntrusionSiren (VEYA, ayri butce); buzzer deseni
+//    buzzerPattern() (firmware Buzzer_SetPattern); kapi/pencere kenarlari ContactBus'a.
 //  * saveConfig yarida kalirsa (QA: nvs.failKeys 'safety_mid', tek seferlik) "ver" gecersiz kalir: acilis cfg_corrupt (RV-4); yonetici eskiyi
 //    geri yazar.
 // Yapilandirilmamis panoda active() false: Automation kancalarinin hepsi tutmaz, maskeler 0'dir (spec 2.9).
 //
-// QA'ya ozgu: bootNonce (bn) ve resetReason disaridan verilebilir (deterministik testler).
+// QA'ya ozgu: bootNonce (bn) ve resetReason disaridan verilebilir (deterministik testler). intrusion=false hirsiz katmanini HIC kurmaz
+// (v1.2.0 davranisi; esdegerlik testi: hirsiz sensoru olmayan panoda katman varken iz bit bit ayni).
 import { DiSensor, BridgeSensor, SensorHub } from './sensor_hub.js';
 import { ActKind, ActuatorCore, applyLatchMask, bootLevelMask, bootSafeMasks, rawCommand, RawDecision, relayBit, isValve } from './actuator_map.js';
 import {
@@ -18,18 +21,23 @@ import {
   latchClear, latchValid, latchAny, latchAssert64, latchLevel64, latchZoneMask, crashClear, crashOnBoot, crashStableTick, cloneLatch,
   bootMaskForSystem,
 } from './safety_config.js';
-import { SafetyCore, Rej, Origin, rejText } from './safety_fsm.js';
-import { EventOutbox, EvType, makeEvent, NVSK_LATCH, NVSK_ACT_POS, NVSK_SIREN, NVSK_CRASH } from './event_outbox.js';
+import { SafetyCore, Rej, Origin, rejText, SirenKick } from './safety_fsm.js';
+import { EventOutbox, EvType, makeEvent, NVSK_LATCH, NVSK_ACT_POS, NVSK_SIREN, NVSK_CRASH, NVSK_ARM, VIA_CLI, VIA_DI } from './event_outbox.js';
+import { IntrusionCore, ArmMode, ARM_REC_VER, makeArmRecord } from './intrusion_fsm.js';
+import { ContactBus, feedContacts } from './contact_bus.js';
 import { safeHoldMasks } from './valve_guard.js';
 import { buildView, viewSignature } from './safety_view.js';
-import { applyEdit, isLoosening, remapActPos, actuatorIdentityMap, diUseMask } from './safety_cfg_edit.js';
+import { applyEdit, isLoosening, isGasRelease, isIntrusionLoosening, remapActPos, actuatorIdentityMap, diUseMask } from './safety_cfg_edit.js';
 import { touchesLockedZones } from './safety_config.js';
 import { VIA_LAN, VIA_LOCAL_WEB, VIA_CLOUD, NVSK_CFG } from './event_outbox.js';
 import { isValve as isValveCfg } from './actuator_map.js';
 
 /** ACTUATOR_SET value kodlamasi (firmware SafetyManager.h): 0 guvenli / 1 acma (yerel); MQTT/LAN "to": vana 0x10/0x11, anahtar 0x20/0x21. */
 export const ACT_TO = Object.freeze({ closed: 0x10, open: 0x11, off: 0x20, on: 0x21 });
-export const CfgResult = Object.freeze({ OK: 'ok', CONFLICT: 'conflict', INVALID: 'invalid', LATCHED: 'latched', LOOSEN: 'loosen', STORAGE: 'storage', BUSY: 'busy' });
+// GAS_LOCAL / ARMED: yalniz VIA_CLOUD (Faz 2 incelemesi G-1; firmware SafetyManager.h)
+export const CfgResult = Object.freeze({
+  OK: 'ok', CONFLICT: 'conflict', INVALID: 'invalid', LATCHED: 'latched', LOOSEN: 'loosen', STORAGE: 'storage', BUSY: 'busy', GAS_LOCAL: 'gas_local', ARMED: 'armed',
+});
 
 const u32 = (x) => x >>> 0;
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -89,6 +97,10 @@ export const SafetyStore = {
   },
   saveLatch(nvs, r) { if (nvs.failKeys?.has('latch')) return false; putLatchNs(nvs, { latch: cloneLatch(r) }); return true; },
   reserveLatch(nvs) { if (!latchNs(nvs).latch) putLatchNs(nvs, { latch: latchClear() }); },
+  /** Hirsiz kipi + alarm bellegi (NVS "ahbu_latch/arm"). @returns {object|null} */
+  loadArm(nvs) { const r = latchNs(nvs).arm; return r && r.ver === ARM_REC_VER ? { ...r } : null; },
+  saveArm(nvs, r) { if (nvs.failKeys?.has('arm')) return false; putLatchNs(nvs, { arm: { ...r } }); return true; },
+  reserveArm(nvs) { if (!latchNs(nvs).arm) putLatchNs(nvs, { arm: makeArmRecord() }); },
   loadActPos(nvs) { const p = latchNs(nvs).act_pos; return { open: p?.open ?? 0, known: p?.known ?? 0 }; },
   saveActPos(nvs, open, known) { if (nvs.failKeys?.has('act_pos')) return false; putLatchNs(nvs, { act_pos: { open, known } }); return true; },
   bumpBootCount(nvs) { const v = u32((latchNs(nvs).bootc || 0) + 1); putLatchNs(nvs, { bootc: v }); return v; },
@@ -99,6 +111,14 @@ export const SafetyStore = {
 };
 
 // ------------------------------------------------------------------------------------------------ SafetyManager
+/** Hirsiz olaylarinin "via" alani. */
+function viaOf(src) {
+  if (src === 'web') return VIA_LAN;
+  if (src === 'cli') return VIA_CLI;
+  if (src === 'di') return VIA_DI;
+  return VIA_CLOUD;
+}
+
 function originOf(src) {
   if (src === 'di' || src === 'cli') return Origin.LOCAL_DI;
   if (src === 'safety') return Origin.SAFETY;
@@ -106,14 +126,18 @@ function originOf(src) {
 }
 
 export class SafetyManager {
-  /** @param {{nvs: object, bootNonce?: number}} o */
-  constructor({ nvs, bootNonce } = {}) {
+  /** @param {{nvs: object, bootNonce?: number, intrusion?: boolean}} o */
+  constructor({ nvs, bootNonce, intrusion = true } = {}) {
     this.nvs = nvs;
+    this.intrusionOn = intrusion !== false;
     this.fixedNonce = bootNonce;
     this.cfg = defaultSafetyConfig();
     this.hub = new SensorHub();
     this.act = new ActuatorCore();
     this.core = new SafetyCore();
+    this.intr = new IntrusionCore();
+    this.contacts = new ContactBus();
+    this.buzzerPattern_ = 0;
     this.outbox = new EventOutbox();
     this.bridge = new BridgeSensor();
     this.di = new DiSensor(null);
@@ -159,6 +183,8 @@ export class SafetyManager {
     this.cfg = cfg;
     const latch = SafetyStore.loadLatch(this.nvs);
     SafetyStore.reserveLatch(this.nvs);
+    const armRec = this.intrusionOn ? SafetyStore.loadArm(this.nvs) : null;
+    if (this.intrusionOn) SafetyStore.reserveArm(this.nvs);
     const pos = SafetyStore.loadActPos(this.nvs);
     this.safeMask = SafetyStore.loadSafeMask(this.nvs) || { assert: 0n, level: 0n };
     this.diHist = SafetyStore.loadDiHist(this.nvs) ?? 0n;
@@ -180,6 +206,12 @@ export class SafetyManager {
     this.act.configure(this.cfg.act, this.cfg.nAct, pos.open, pos.known, nowMs);
     this.outbox.begin(this.bn);
     this.core.begin(this.cfg, this.hub, this.act, this.outbox, latch, mode, nowMs);
+    if (this.intrusionOn) {
+      this.intr.begin(this.cfg, this.hub, this.outbox, armRec, nowMs);   // F2-4: kip geri yuklenir; bellekteki alarm sirensiz
+      this.intr.setUsable(this.#intrusionUsable());
+      this.core.setIntrusionSiren(this.intr.sirenReq(), this.intr.takeSirenKick(), nowMs);
+    }
+    this.contacts = new ContactBus();
     if (present && crcOk && ve !== CfgErr.OK) this.outbox.push(makeEvent({ type: EvType.ACTUATOR_FAULT }));
     if (!usable) {   // EM-5: son gecerli yapilandirmanin acilis guvenli maskesi guvenli kipte dayatilir
       const a = bootMaskForSystem(sys, this.safeMask.assert);
@@ -206,6 +238,12 @@ export class SafetyManager {
     this.validateError = ve === CfgErr.OK ? '' : cfgErrText(ve);
     this.mode = mode === SafeReason.NONE ? 'normal' : safeReasonText(mode);
     this.#refreshView(nowMs, true);
+  }
+
+  /** Guvenli kipte sensor tablosu kullanilamiyorsa (cfg_corrupt / latch_orphan) hirsiz katmani etkisiz. */
+  #intrusionUsable() {
+    const r = this.core.safeReason();
+    return r !== SafeReason.CFG_CORRUPT && r !== SafeReason.LATCH_ORPHAN;
   }
 
   #recomputeMasks() {
@@ -252,7 +290,7 @@ export class SafetyManager {
 
   /** Durum gorunumu (firmware refreshView): icerik degistiyse ya da 1 sn gectiyse yayinlanir. */
   #refreshView(nowMs, force) {
-    const v = buildView(this.cfg, this.hub, this.act, this.core, nowMs);
+    const v = buildView(this.cfg, this.hub, this.act, this.core, nowMs, this.intrusionOn ? this.intr : null);
     const sig = viewSignature(v);
     if (!force && sig === this.viewSig_ && u32(nowMs - this.lastViewAt) < 1000) return;
     this.view = v;
@@ -278,6 +316,14 @@ export class SafetyManager {
     this.di.setLocalReady(this.localReady);
     this.di.setExtOk(this.extOk);
     this.core.tick(nowMs, epoch >>> 0, this.di, this.bridge);
+    if (this.intrusionOn) {
+      this.intr.setUsable(this.#intrusionUsable());
+      this.intr.tick(nowMs, epoch >>> 0);
+      this.core.setIntrusionSiren(this.intr.sirenReq(), this.intr.takeSirenKick(), nowMs);
+      feedContacts(this.hub, this.contacts, nowMs);
+      this.buzzerPattern_ = this.intr.buzzer();               // firmware Buzzer_SetPattern
+      if (this.intr.takeKeyError()) this.keyErrorBeeps = (this.keyErrorBeeps || 0) + 1;   // firmware Buzzer_Open_Time(450, 100)
+    }
     this.active_ = this.core.active();
     this.latchedMask = this.core.latchedZoneMask();
     this.scanBlocked_ = this.extActuator || this.latchedMask !== 0;
@@ -293,6 +339,8 @@ export class SafetyManager {
     return safeHoldMasks(this.cfg.act, this.act.count(), closed, l.assert, l.level);
   }
   buzzer() { return this.core.buzzer(); }
+  /** Hirsiz buzzer deseni (0 kapali, 1 cikis, 2 giris, 3 alarm; tehlike alarmi oncelikli -- firmware WS_GPIO). */
+  buzzerPattern() { return this.buzzerPattern_; }
 
   #nvsFail(key, nowMs) {
     this.outbox.push(makeEvent({ type: EvType.NVS_FAIL, sub: key, atUp: Math.floor(u32(u32(nowMs) - this.bootAt) / 1000) }));
@@ -301,6 +349,7 @@ export class SafetyManager {
   persist(nowMs) {
     if (!this.active_) return;
     nowMs = u32(nowMs);
+    if (this.intrusionOn && this.intr.takeDirty() && !SafetyStore.saveArm(this.nvs, this.intr.record())) this.#nvsFail(NVSK_ARM, nowMs);
     if (this.core.takeLatchDirty()) {
       const rec = this.core.buildLatch();
       if (!SafetyStore.saveLatch(this.nvs, rec)) this.#nvsFail(NVSK_LATCH, nowMs);
@@ -366,6 +415,13 @@ export class SafetyManager {
       }
       case SafetyCmdType.ALARM_ACK: r = this.core.ack(cmd.index, cmd.aid ? cmd.aid : null, o, cmd.value !== 0, nowMs); break;
       case SafetyCmdType.ALARM_TEST: r = this.core.test(cmd.index, nowMs); break;
+      case SafetyCmdType.SAFETY_ARM:   // value: 0 off, 1 away, 2 home
+        if (!this.intrusionOn) { r = Rej.UNSUPPORTED; break; }
+        if (!(cmd.value >= ArmMode.OFF && cmd.value <= ArmMode.HOME)) { r = Rej.BAD_CMD; break; }
+        this.intr.setUsable(this.#intrusionUsable());
+        r = this.intr.command(cmd.value, viaOf(cmd.source), nowMs);
+        this.core.setIntrusionSiren(this.intr.sirenReq(), this.intr.takeSirenKick(), nowMs);
+        break;
       default: r = Rej.UNSUPPORTED;
     }
     this.active_ = this.core.active();
@@ -405,6 +461,9 @@ export class SafetyManager {
     if (err !== CfgErr.OK) { o.r = CfgResult.INVALID; o.err = err; return o; }
     if (touchesLockedZones(cur, ed.out, this.latchedMask)) { o.r = CfgResult.LATCHED; return o; }
     if ((via === VIA_LAN || via === VIA_LOCAL_WEB) && isLoosening(cur, ed.out, this.diHist)) { o.r = CfgResult.LOOSEN; return o; }   // FW2-2
+    // Bulut gevsetebilir (D.4) ama gaz vanasini uzaktan acilabilir kilamaz (7.2b-8) ve kurulu kipte hirsiz alarmini zayiflatamaz (F2-3) [G-1]
+    if (via === VIA_CLOUD && isGasRelease(cur, ed.out, this.diHist)) { o.r = CfgResult.GAS_LOCAL; return o; }
+    if (via === VIA_CLOUD && this.intrusionOn && this.intr.mode() !== ArmMode.OFF && isIntrusionLoosening(cur, ed.out, this.diHist)) { o.r = CfgResult.ARMED; return o; }
     const next = ed.out;
     next.rev = (cur.rev + 1) >>> 0;
     const sr = {};
@@ -440,6 +499,11 @@ export class SafetyManager {
     this.hub.configure(this.cfg.sens, this.cfg.nSens, nowMs);
     this.act.reconfigure(this.cfg.act, this.cfg.nAct, pos.open, pos.known, fromOld, nowMs);
     this.core.reconfigured(via, nowMs, fromOld);
+    if (this.intrusionOn) {
+      this.intr.reconfigured(nowMs);
+      this.contacts.reset();
+      this.core.setIntrusionSiren(this.intr.sirenReq(), SirenKick.NONE, nowMs);
+    }
     if (this.core.safeMode()) {
       this.core.setConfigUsable(this.cfg.nAct > 0 && (this.core.latchRecordAssert() & ~this.act.relayMask()) === 0n);
     }
@@ -450,6 +514,7 @@ export class SafetyManager {
     this.#refreshKeep();
     this.#persistSafeMask(nowMs);
     this.#refreshView(nowMs, true);
+    if (!this.active_) this.buzzerPattern_ = 0;
     return true;
   }
 }

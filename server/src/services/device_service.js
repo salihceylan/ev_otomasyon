@@ -50,7 +50,7 @@ const REQUIRED_COMMISSIONING_CHECKS = Object.freeze(['relays', 'buttons', 'shutt
 // Toplu "isiklari kapat" komutlari (firmware'de esanlamli): evde priz varsa "Hepsini Kapat" kurali uygulanir (DAIRE-01).
 const LIGHTS_OFF_GROUP_COMMANDS = Object.freeze(['all_lights_off', 'all_off']);
 // Guvenlik komutlari (WP-S4, tasarim §5.2.4): uid ZORUNLU, hedef denetimi + hedef uid'nin onay/ret yankisi beklenir.
-const SAFETY_KINDS = Object.freeze(['actuator', 'alarm_ack', 'alarm_test']);
+const SAFETY_KINDS = Object.freeze(['actuator', 'alarm_ack', 'alarm_test', 'safety_arm']);
 const SAFETY_ACK_TIMEOUT_MS = 10 * 1000;
 // Firmware ret kodlari (state.last_rej.code, tasarim §3.2) -> kullaniciya gosterilecek metin (§5.3.3)
 const REJECTION_TEXT = Object.freeze({
@@ -67,6 +67,7 @@ const REJECTION_TEXT = Object.freeze({
   safe_mode: 'Pano güvenli kipte; vanalar açılamaz. Kurulumcunuza başvurun.',
   bad_cmd: 'Pano komutu geçersiz buldu.',
   busy: 'Pano meşgul; birkaç saniye sonra yeniden deneyin.',
+  not_ready: 'Alarm kurulamadı: açık kapı ya da pencere var.', // F2.B.7 kurma reddi
 });
 
 const DEVICE_UUID_PATTERN = /^AHBU-[A-Z0-9-]{3,32}$/;
@@ -1984,6 +1985,14 @@ class DeviceService {
     const caps = Array.isArray(row.caps) ? row.caps : null;
     if (!caps || !caps.includes('safety')) {
       throw httpError(409, 'Bu pano yazılımı güvenlik modülünü desteklemiyor; pano yazılımını güncelleyin.', 'FIRMWARE_UNSUPPORTED');
+    }
+    if (validated.kind === KINDS.SAFETY_ARM) {
+      // Faz 2 F2.B.7: hirsiz alarmi kipi yalniz caps 'intrusion' ilan eden firmware'de (v1.2.1+). Durum denetimi firmware'de
+      // (hazir degilse not_ready); sunucu ek on kosul uygulamaz (cozme her zaman denenebilir).
+      if (!caps.includes('intrusion')) {
+        throw httpError(409, "Bu pano yazılımı alarm kipini desteklemiyor; v1.2.1'e güncelleyin.", 'FIRMWARE_UNSUPPORTED');
+      }
+      return;
     }
     const st = row.safety_state && typeof row.safety_state === 'object' ? row.safety_state : {};
     const zones = Array.isArray(st.zones) ? st.zones : [];

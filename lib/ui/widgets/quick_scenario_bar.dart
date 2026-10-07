@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/automation_models.dart';
 import '../../services/automation_state.dart';
+import '../common/confirm_dialogs.dart';
 import '../dashboard/command_retry.dart';
 import '../dashboard/endpoint_sections.dart';
+import '../dashboard/gas_switch_guard.dart';
 import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
@@ -149,6 +152,7 @@ class _QuickScenarioBarState extends State<QuickScenarioBar> {
     final state = context.read<AutomationState>();
     if (!state.capabilities.canUseGroupCommands) return;
     HapticFeedback.mediumImpact();
+    if (!await confirmSwitchingDuringGasAlarm(context) || !mounted || _running != null) return; // F2.A.4
     setState(() => _running = scenario.id);
     var allDelivered = true;
     try {
@@ -163,6 +167,8 @@ class _QuickScenarioBarState extends State<QuickScenarioBar> {
       if (mounted) setState(() => _running = null);
     }
     if (!mounted || !allDelivered) return;
+    if (scenario.id == 'leaving') await _offerArmAway(state); // F2.B.9: hayır -> bugünkü davranış aynen
+    if (!mounted) return;
     setState(() {
       _doneId = scenario.id;
       _doneToken++;
@@ -177,6 +183,33 @@ class _QuickScenarioBarState extends State<QuickScenarioBar> {
           duration: const Duration(seconds: 3),
         ),
       );
+  }
+
+  /// "Evden Çıkıyorum" son adımı (F2.B.9): pano hırsız alarmı kipini destekliyor, kullanıcı kurabilir ve alarm dışarıda
+  /// kipte değilse "Alarmı dışarıda kip ile kurayım mı?" sorulur. Hayır: hiçbir şey gönderilmez.
+  Future<void> _offerArmAway(AutomationState state) async {
+    if (!state.capabilities.canArm) return;
+    final targets = <String>[
+      for (final e in state.safetyByDevice.entries)
+        if (e.value.supportsIntrusion && e.value.arm != null && e.value.arm!.mode != ArmMode.away) e.key,
+    ];
+    if (targets.isEmpty) return;
+    final ok = await showSimpleConfirm(
+      context,
+      title: 'Alarmı dışarıda kip ile kurayım mı?',
+      message: 'Çıkış gecikmesi başlar; süre dolunca açılan kapı, pencere ya da hareket alarmı tetikler.',
+      confirmLabel: 'Alarmı Kur',
+      cancelLabel: 'Hayır',
+      icon: Icons.shield_rounded,
+      family: AppFamilies.violet,
+      cancelKey: const Key('btn_leaving_arm_cancel'),
+      confirmKey: const Key('btn_leaving_arm_confirm'),
+    );
+    if (!ok || !mounted) return;
+    for (final uid in targets) {
+      await runCommand(context, 'arm:$uid', () => state.setArmMode(uid, ArmMode.away));
+      if (!mounted) return;
+    }
   }
 
   @override

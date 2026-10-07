@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'peace_notice.dart';
 import 'push_gateway.dart';
+import 'safety_notice.dart';
 
 /// Push belirteci uçlarını çağıran katman (uygulamada `EvCloudApiService` üzerinden sağlanır).
 ///
@@ -130,12 +131,19 @@ class PushCoordinator {
   /// Dinleyici yokken tamponlanan en çok bildirim sayısı (aşılırsa en eskisi atılır).
   static const int maxBufferedNotices = 8;
 
+  /// Güvenlik bildiriminin tamponda geçerli kaldığı süre (F2.C.4): uygulamayı açan alarm dokunuşu, arayüz dinlemeye
+  /// başlamadan önce gelse de kaybolmaz; yarım saatten eski alarm yönlendirmesi yapılmaz.
+  static const Duration safetyBufferMaxAge = Duration(minutes: 30);
+
   // Üstel büyüme taşmasın: 2^16 * 30 sn zaten her makul retryMax'ı aşar.
   static const int _maxBackoffExponent = 16;
 
   final StreamController<PushState> _states = StreamController<PushState>.broadcast();
   late final StreamController<PeaceNotice> _notices = StreamController<PeaceNotice>.broadcast(
     onListen: _flushBufferedNotices,
+  );
+  late final StreamController<SafetyPushNotice> _safetyNotices = StreamController<SafetyPushNotice>.broadcast(
+    onListen: _flushBufferedSafetyNotices,
   );
 
   PushState _state = PushState.idle;
@@ -179,6 +187,7 @@ class PushCoordinator {
   // noticeKey -> ilk iletilme zamanı (ekleme sırasına göre; en eskisi başta).
   final LinkedHashMap<String, DateTime> _seenNotices = LinkedHashMap<String, DateTime>();
   final List<PeaceNotice> _bufferedNotices = <PeaceNotice>[];
+  final List<SafetyPushNotice> _bufferedSafetyNotices = <SafetyPushNotice>[];
 
   Future<void> _tail = Future<void>.value();
 
@@ -193,6 +202,11 @@ class PushCoordinator {
   /// dinleyiciye iletilir; böylece uygulamayı açan bildirime dokunuş, arayüz dinlemeye başlamadan
   /// önce gelse de kaybolmaz. Akış [stop] ile KAPANMAZ, yalnızca [dispose] ile kapanır.
   Stream<PeaceNotice> get notices => _notices.stream;
+
+  /// Güvenlik bildirimleri (`safety_alarm` / `safety_info`; F2.C.4), broadcast. Gece hatırlatması akışından ayrıdır;
+  /// tekilleştirme penceresi ortaktır (anahtar önekleri çakışmaz). Dinleyici yokken gelenler (en çok 8, 30 dk) ilk
+  /// dinleyiciye iletilir. [stop] ile KAPANMAZ, yalnız [dispose] ile kapanır.
+  Stream<SafetyPushNotice> get safetyNotices => _safetyNotices.stream;
 
   /// Sunucu belirteç kaydını KALICI olarak reddetti ([PushRegistrationRejected]) ve otomatik yeniden
   /// deneme durdu: durum [PushState.failed] ve kendiliğinden düzelmez. Geçici başarısızlıkta (ağ, 5xx,
@@ -307,9 +321,11 @@ class PushCoordinator {
     await stop(unregister: false);
     _disposed = true;
     _bufferedNotices.clear();
+    _bufferedSafetyNotices.clear();
     _seenNotices.clear();
     await _states.close();
     await _notices.close();
+    await _safetyNotices.close();
   }
 
   // ---------------------------------------------------------------------------
@@ -588,8 +604,12 @@ class PushCoordinator {
       source: source,
       now: now,
     );
+    if (notice == null) {
+      _handleSafetyMessage(message, source, now);
+      return;
+    }
     // Tanınmayan/bozuk mesaj sessizce yok sayılır (içeriği loglamak kişisel veri sızdırabilir).
-    if (notice == null || !_markSeen(notice.dedupeKey, now)) return;
+    if (!_markSeen(notice.dedupeKey, now)) return;
 
     if (_notices.hasListener) {
       _notices.add(notice);
@@ -597,6 +617,37 @@ class PushCoordinator {
       _bufferedNotices.add(notice);
       if (_bufferedNotices.length > maxBufferedNotices) _bufferedNotices.removeAt(0);
     }
+  }
+
+  /// Gece hatırlatması değilse güvenlik bildirimi olarak denenir (F2.C.4); tanınmayan mesaj sessizce atılır.
+  void _handleSafetyMessage(PushMessage message, PeaceNoticeSource source, DateTime now) {
+    final notice = SafetyPushNotice.tryParse(
+      message.data,
+      title: message.title,
+      body: message.body,
+      source: source,
+      now: now,
+    );
+    if (notice == null || !_markSeen(notice.dedupeKey, now)) return;
+    if (_safetyNotices.hasListener) {
+      _safetyNotices.add(notice);
+    } else {
+      _bufferedSafetyNotices.add(notice);
+      if (_bufferedSafetyNotices.length > maxBufferedNotices) _bufferedSafetyNotices.removeAt(0);
+    }
+  }
+
+  void _flushBufferedSafetyNotices() {
+    if (_bufferedSafetyNotices.isEmpty) return;
+    scheduleMicrotask(() {
+      if (_disposed || _safetyNotices.isClosed || !_safetyNotices.hasListener) return;
+      final now = _now();
+      final pending = List<SafetyPushNotice>.of(_bufferedSafetyNotices);
+      _bufferedSafetyNotices.clear();
+      for (final notice in pending) {
+        if (now.difference(notice.receivedAt) < safetyBufferMaxAge) _safetyNotices.add(notice);
+      }
+    });
   }
 
   /// `true`: ilk kez görüldü (iletilmeli). Aynı anahtar pencere içinde ikinci kez gelirse `false`.

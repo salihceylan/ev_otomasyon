@@ -22,6 +22,11 @@
 //                  E2E-2) eski satiri `superseded` ile kapatir. Acik alarmi olmayan ve butun bolgeleri normal olan
 //                  panoda acik alarm sorgusu her state'te yinelenmez (cihaz basina onbellek, 60 sn; RV-7).
 //   handleCfgDump: cfg_dump parcalari (olay DEGIL; onaysiz) -> device_configs (eski rev yenisini ezmez).
+//   requestConfig: Faz 2 F2.D - yapilandirma kopyasini tazele (force: 5 sn taban). Kopya dogrulanana kadar canli state'ler
+//                  cfg_get'i dakikada en cok bir kez yeniler (eskiden dakika sinirina takilan istek bir daha yapilmiyordu).
+//   Faz 2 F2.B.8 hirsiz alarmi: intrusion_alarm -> alarms kind='intrusion' (+ tek push), intrusion_cleared -> cleared /
+//                  mezar tasi, arm_changed -> yalniz denetim. Bolge uzlastirmasi hirsiz satirina DOKUNMAZ; hirsiz satiri
+//                  state'teki safety.arm ile ayri kuralla uzlastirilir (intrusionVerdict).
 //
 // Push alicilari: alarm -> owner + resident (push_service.recipientsForHome varsayilani); bilgi -> yalniz owner.
 // Misafir ve servis rolleri HICBIR guvenlik push'u almaz (§7.2b-4).
@@ -37,6 +42,7 @@ const MAX_ACK_EIDS = 8;
 const CFG_DUMP_TTL_MS = 60 * 1000;
 const CFG_DUMP_MAX_PENDING = 64;
 const CFG_GET_MIN_INTERVAL_MS = 60 * 1000;
+const CFG_GET_FORCE_INTERVAL_MS = 5 * 1000; // requestConfig({force}) taban araligi (Faz 2 F2.D)
 const PUSH_RETRY_DELAY_MS = 5 * 1000; // basarisiz alarm push'u BIR kez yeniden denenir (gecici FCM/ag hatasi)
 const OPEN_STATUSES = Object.freeze(['latched', 'fault', 'silenced']);
 const LIST_DEFAULT_LIMIT = 50;
@@ -54,7 +60,7 @@ const SQL = Object.freeze({
     'ON CONFLICT (device_id, aid) DO NOTHING RETURNING id',
   findAlarm:
     'SELECT id, aid, status FROM alarms WHERE device_id = $1 AND ' +
-    "(($2::varchar IS NOT NULL AND aid = $2::varchar) OR ($2::varchar IS NULL AND zone = $3 AND status NOT IN ('cleared', 'lost'))) " +
+    "(($2::varchar IS NOT NULL AND aid = $2::varchar) OR ($2::varchar IS NULL AND zone = $3 AND kind <> 'intrusion' AND status NOT IN ('cleared', 'lost'))) " +
     'ORDER BY id DESC LIMIT 1 FOR UPDATE',
   setFault:
     "UPDATE alarms SET status = 'fault', fault_push_status = COALESCE(fault_push_status, 'pending'), updated_at = CURRENT_TIMESTAMP " +
@@ -90,11 +96,11 @@ const SQL = Object.freeze({
     'updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND ack_requested_at IS NOT NULL RETURNING id',
   claimPush:
     "UPDATE alarms SET push_status = 'claimed', push_attempts = push_attempts + 1, updated_at = CURRENT_TIMESTAMP " +
-    "WHERE id = $1 AND push_status = 'pending' RETURNING id, home_id, device_id, zone, kind, status",
+    "WHERE id = $1 AND push_status = 'pending' RETURNING id, home_id, device_id, zone, kind, status, (SELECT d.device_uuid FROM devices d WHERE d.id = alarms.device_id) AS device_uuid",
   setPush: 'UPDATE alarms SET push_status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
   claimFaultPush:
     "UPDATE alarms SET fault_push_status = 'claimed', updated_at = CURRENT_TIMESTAMP " +
-    "WHERE id = $1 AND fault_push_status = 'pending' RETURNING id, home_id, device_id, zone, kind, status",
+    "WHERE id = $1 AND fault_push_status = 'pending' RETURNING id, home_id, device_id, zone, kind, status, (SELECT d.device_uuid FROM devices d WHERE d.id = alarms.device_id) AS device_uuid",
   setFaultPush: 'UPDATE alarms SET fault_push_status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
   deviceUuid: 'SELECT device_uuid FROM devices WHERE id = $1',
   configOf: 'SELECT rev, crc FROM device_configs WHERE device_id = $1 AND module = $2',
@@ -103,7 +109,10 @@ const SQL = Object.freeze({
     'INSERT INTO device_configs (device_id, module, rev, crc, body, updated_at) ' +
     'VALUES ($1, $2, $3, $4, $5::jsonb, CURRENT_TIMESTAMP) ' +
     'ON CONFLICT (device_id, module) DO UPDATE SET rev = EXCLUDED.rev, crc = EXCLUDED.crc, body = EXCLUDED.body, ' +
-    'updated_at = CURRENT_TIMESTAMP WHERE device_configs.rev <= EXCLUDED.rev RETURNING rev',
+    // Eski (gecikmis) dokum yenisini ezmez; ANCAK pano rev'i geriledi ise (fabrika sifirlamasi) panonun SON BILDIRDIGI (rev, crc) ile
+    // ayni dokum yazilir, aksi halde kopya kalici bayat kalirdi (Faz 2 incelemesi RG-1).
+    'updated_at = CURRENT_TIMESTAMP WHERE device_configs.rev <= EXCLUDED.rev OR EXISTS (SELECT 1 FROM devices d WHERE d.id = EXCLUDED.device_id ' +
+    "AND d.safety_state -> 'cfg' ->> 'rev' = EXCLUDED.rev::text AND lower(d.safety_state -> 'cfg' ->> 'crc') = lower(EXCLUDED.crc)) RETURNING rev",
   list:
     'SELECT a.id, a.device_id, d.device_uuid, a.aid, a.zone, a.kind, a.status, a.origin, a.sources, a.raised_at, ' +
     'a.device_epoch, a.acked_by, a.acked_at, a.ack_requested_at, a.cleared_at, a.cleared_by ' +
@@ -127,21 +136,33 @@ const SQL = Object.freeze({
 // ------------------------------------------------------------------------------
 // Saf yardimcilar
 // ------------------------------------------------------------------------------
-const TITLES = Object.freeze({ water: 'Su baskını alarmı', gas: 'Gaz kaçağı alarmı', smoke: 'Duman alarmı' });
+const TITLES = Object.freeze({ water: 'Su baskını alarmı', gas: 'Gaz kaçağı alarmı', smoke: 'Duman alarmı', intrusion: 'Hırsız alarmı' });
 
 function alarmTitle(kind) {
   return TITLES[kind] || 'Güvenlik alarmı';
 }
 
+// Faz 2 F2.A.5: gaz ve duman metinleri davranis talimati tasir (187 dogalgaz acil, 112); su metni AYNEN.
 function alarmBody({ kind, zone }) {
   const z = Number.isInteger(zone) ? ` (bölge ${zone})` : '';
   if (kind === 'water') return `Evinizde su algılandı${z}. Vana pano tarafından kapatıldı; uygulamadan durumu kontrol edin.`;
-  if (kind === 'gas') return `Gaz kaçağı algılandı${z}. Gaz vanası kapatıldı; ortamı havalandırın, elektrik anahtarlarına dokunmayın.`;
-  if (kind === 'smoke') return `Duman algılandı${z}. Uygulamadan durumu kontrol edin.`;
+  if (kind === 'gas') {
+    return `Gaz kaçağı algılandı${z}. Gaz vanası kapatıldı. Ortamı havalandırın, elektrik anahtarlarına dokunmayın; gerekirse 187'yi arayın.`;
+  }
+  if (kind === 'smoke') return `Duman algılandı${z}. Evde biri varsa hemen dışarı çıkın ve 112'yi arayın. Pano su vanasını kapatmaz.`;
+  if (kind === 'intrusion') return `Ev alarmı tetiklendi${z}. Uygulamadan durumu kontrol edin; tehlikedeyseniz 112'yi arayın.`; // F2.B.7
   return `Güvenlik alarmı${z}. Uygulamadan durumu kontrol edin.`;
 }
 
-function faultBody() {
+/** Vana arizasi (valve_fault) push basligi: alarm turune gore (F2.A.5). */
+function faultTitle(kind) {
+  return kind === 'gas' ? 'Gaz vanası kapanmadı!' : 'Vana kapanmadı!';
+}
+
+/** Vana arizasi push govdesi: alarm turune gore; bilinmeyen tur bugunku genel metni alir (F2.A.5). */
+function faultBody(kind) {
+  if (kind === 'water') return 'Su vanası kapanmadı! Ana su vanasını elle kapatın ve panoyu kontrol edin.';
+  if (kind === 'gas') return "Gaz vanası kapanmadı! Sayaçtaki ana gaz vanasını elle kapatın, ortamı havalandırın ve 187'yi arayın.";
   return 'Vana kapanmadı! Ana vanayı elle kapatın ve panoyu kontrol edin.';
 }
 
@@ -150,6 +171,13 @@ function infoText(reason, extra = {}) {
     return { title: 'Güvenlik tepkileri kapatıldı', body: `Panodaki güvenlik tepkileri kapatıldı${extra.via ? ` (${extra.via})` : ''}. Bilginiz dışındaysa kurulumcunuza başvurun.` };
   }
   if (reason === 'policy_on') return { title: 'Güvenlik tepkileri açıldı', body: 'Panodaki güvenlik tepkileri yeniden açıldı.' };
+  if (reason === 'cfg_pending_dropped') {
+    // Faz 2 F2.D.2: cevrimdisi panoya siralanan yamalar uygulanamadi (pano kazanir: yerel degisiklik ezilmez)
+    return {
+      title: 'Bekleyen yapılandırma iptal edildi',
+      body: 'Pano çevrimdışıyken sıraya alınan yapılandırma değişiklikleri uygulanamadı ve iptal edildi; panodaki yapılandırma geçerli.',
+    };
+  }
   return { title: 'Alarm durumu doğrulanamadı', body: 'Alarm durumu doğrulanamadı, panoyu kontrol edin.' };
 }
 
@@ -164,6 +192,27 @@ function errKind(err) {
 
 function newCommandId() {
   return crypto.randomBytes(9).toString('base64url');
+}
+
+/**
+ * Hirsiz alarmi satirinin state'e gore karari (F2.B.8): arm yok (sensor kalmadi / eski firmware) ya da arm.ok=false -> lost;
+ * st=alarm ve ayni aid -> keep; bilinmeyen st -> keep (dokunma); aksi (st != alarm ya da baska aid) -> cleared.
+ */
+function intrusionVerdict(arm, aid) {
+  if (!arm || arm.ok !== true) return 'lost';
+  if (arm.st === 'unknown') return 'keep';
+  if (arm.st === 'alarm' && arm.aid === aid) return 'keep';
+  return 'cleared';
+}
+
+/** State'ten acilan hirsiz satirinin bolgesi: ilk kaynak sensorunun bolgesi (sensors[]), yoksa 1. */
+function intrusionZone(arm, summary) {
+  const sensors = summary && Array.isArray(summary.sensors) ? summary.sensors : [];
+  for (const id of arm.srcs || []) {
+    const s = sensors.find((x) => x && x.id === id);
+    if (s && Number.isInteger(s.zone) && s.zone >= 1 && s.zone <= 4) return s.zone;
+  }
+  return 1;
 }
 
 function revOf(summary) {
@@ -211,6 +260,7 @@ class AlarmService {
     this._inflight = new Set(); // COMMIT sonrasi push islerinin sozleri (idle() icin)
     this._dumps = new Map(); // cfg_dump parcalari
     this._cfgGetAt = new Map(); // deviceId -> son cfg_get zamani
+    this._cfgVerified = new Map(); // deviceId -> kopyanin esit oldugu dogrulanan `rev|crc`
     this._clean = new Map(); // deviceId -> acik alarmi olmadigi son dogrulama zamani (RV-7)
     this._warnedAt = new Map();
     this.counters = { events: 0, duplicates: 0, unknown: 0, opened: 0, cleared: 0, lost: 0, acks: 0, pushes: 0, pushRetries: 0, errors: 0 };
@@ -307,7 +357,7 @@ class AlarmService {
       return { status: 'error' }; // onay GONDERILMEZ: pano yeniden dener
     }
     this.queueAck(topicId, uid, event.eid);
-    if (event && event.type === 'alarm_raised') this._clean.delete(deviceId);
+    if (event && (event.type === 'alarm_raised' || event.type === 'intrusion_alarm')) this._clean.delete(deviceId);
     if (out.status === 'duplicate') this.counters.duplicates += 1;
     if (out.status === 'unknown') this.counters.unknown += 1;
     if (out.opened) {
@@ -315,7 +365,7 @@ class AlarmService {
       this._track(this.pushAlarm(out.alarmId));
     }
     if (out.faultPush) this._track(this.pushFault(out.alarmId));
-    if (out.info) this._track(this.pushInfo({ homeId, deviceId, alarmId: null, ...out.info }));
+    if (out.info) this._track(this.pushInfo({ homeId, deviceId, deviceUuid: uid, alarmId: null, ...out.info }));
     return { status: out.status, alarmId: out.alarmId, opened: out.opened === true };
   }
 
@@ -332,7 +382,8 @@ class AlarmService {
     const result = { status: 'applied', alarmId: null, opened: false, faultPush: false, info: null };
 
     switch (event.type) {
-      case 'alarm_raised': {
+      case 'alarm_raised':
+      case 'intrusion_alarm': { // F2.B.8: hirsiz alarmi da bir alarms satiridir (kind='intrusion', aid = eid)
         const r = await tx.query(SQL.insertRaised, [
           homeId, deviceId, aid, event.zone, kind, 'event', JSON.stringify(event.srcs || []), event.at,
         ]);
@@ -368,6 +419,19 @@ class AlarmService {
         }
         break;
       }
+      case 'intrusion_cleared': { // F2.B.8: cozme; bilinmeyen aid -> mezar tasi (sonraki intrusion_alarm push uretmez)
+        const found = aid ? await tx.query(SQL.findAlarm, [deviceId, aid, null]) : null;
+        const row = found && found.rows && found.rows[0];
+        if (!row) {
+          // Olay bolge tasimaz; zone NOT NULL (1..4) oldugu icin mezar tasina 1 yazilir (mezar tasi listelenmez).
+          if (aid) await tx.query(SQL.insertTomb, [homeId, deviceId, aid, event.zone || 1, 'intrusion']);
+          break;
+        }
+        result.alarmId = row.id;
+        await tx.query(SQL.setCleared, [row.id, 'device_event']);
+        this.counters.cleared += 1;
+        break;
+      }
       case 'policy_changed':
         if (event.policy) result.info = { reason: event.policy === 'off' ? 'policy_off' : 'policy_on', via: event.via };
         break;
@@ -380,6 +444,7 @@ class AlarmService {
     if (event.zone) details.zone = event.zone;
     if (event.kind) details.kind = event.kind;
     if (event.policy) details.policy = event.policy;
+    if (event.mode) details.mode = event.mode;
     if (event.via) details.via = event.via;
     if (event.reason) details.reason = event.reason;
     if (event.type === 'test_result') details.ok = event.ok;
@@ -405,7 +470,9 @@ class AlarmService {
       const zones = !noSafety && Array.isArray(summary.zones) ? summary.zones : [];
       // RV2-1: eksik/bozuk liste (zones_complete=false) listede olmayan bolge icin kanit degildir; alan yoksa (eski ozet) tam sayilir.
       const zonesComplete = noSafety || summary.zones_complete !== false;
-      const anyActive = zones.some((z) => z && (z.st === 'latched' || z.st === 'fault'));
+      const arm = !noSafety && summary.arm && typeof summary.arm === 'object' ? summary.arm : null;
+      const armAlarm = Boolean(arm && arm.st === 'alarm');
+      const anyActive = zones.some((z) => z && (z.st === 'latched' || z.st === 'fault')) || armAlarm;
       const cleanAt = this._clean.get(deviceId);
       if (!anyActive && zonesComplete && cleanAt !== undefined && this.now() - cleanAt < CLEAN_TTL_MS) {
         if (!noSafety && summary.cfg) this._track(this._maybeRequestConfig({ topicId, deviceId, uid, summary, prev }));
@@ -421,6 +488,17 @@ class AlarmService {
       for (const row of rows) {
         if (noSafety) {
           if (await this._markLost(row.id)) lostIds.push(row.id);
+          continue;
+        }
+        if (row.kind === 'intrusion') {
+          // F2.B.8 KRITIK: bolge uzlastirmasi hirsiz satirina DOKUNMAZ (hirsiz alarmi zones[]'ta yer almaz).
+          const verdict = intrusionVerdict(arm, row.aid);
+          if (verdict === 'cleared') {
+            await this.db.query(SQL.setCleared, [row.id, 'device_state']);
+            this.counters.cleared += 1;
+          } else if (verdict === 'lost' && (await this._markLost(row.id))) {
+            lostIds.push(row.id);
+          }
           continue;
         }
         const z = zoneOf(Number(row.zone));
@@ -446,6 +524,14 @@ class AlarmService {
       const opened = [];
       if (!noSafety) {
         const known = new Set(rows.map((r) => r.aid));
+        // F2.B.8: olayi kaybolmus hirsiz alarmi state'ten acilir; bolge ilk kaynak sensorunden (yoksa 1).
+        if (armAlarm && arm.ok === true && arm.aid && !known.has(arm.aid)) {
+          const r = await this.db.query(SQL.insertRaised, [
+            homeId, deviceId, arm.aid, intrusionZone(arm, summary), 'intrusion', 'state', JSON.stringify(arm.srcs || []), null,
+          ]);
+          const id = r && r.rows && r.rows[0] && r.rows[0].id;
+          if (id) opened.push(id);
+        }
         for (const z of zones) {
           if ((z.st !== 'latched' && z.st !== 'fault') || !z.aid || known.has(z.aid)) continue;
           const r = await this.db.query(SQL.insertRaised, [
@@ -472,7 +558,7 @@ class AlarmService {
       }
       for (const id of lostIds) {
         this.counters.lost += 1;
-        this._track(this.pushInfo({ homeId, deviceId, alarmId: id, reason: 'alarm_lost' }));
+        this._track(this.pushInfo({ homeId, deviceId, deviceUuid: uid, alarmId: id, reason: 'alarm_lost' }));
       }
       if (!noSafety && summary.cfg) this._track(this._maybeRequestConfig({ topicId, deviceId, uid, summary, prev }));
       return { status: 'applied', opened: opened.length, lost: lostIds.length };
@@ -502,11 +588,12 @@ class AlarmService {
   }
 
   /** Yapilandirma kopyasi panodan farkliysa sys cfg_get (cihaz basina dakikada en cok bir) [§4.2]. */
-  async _maybeRequestConfig({ topicId, deviceId, uid, summary, prev }) {
+  async _maybeRequestConfig({ topicId, deviceId, uid, summary }) {
     if (typeof this._deps.publishSys !== 'function') return;
     const cur = summary.cfg;
-    const old = prev && prev.cfg;
-    if (old && old.rev === cur.rev && old.crc === cur.crc && this._cfgGetAt.has(deviceId)) return;
+    // Kopyanin bu (rev, crc) icin dogrulandigi biliniyorsa sorgu yok. Faz 2 duzeltmesi: eskiden "onceki state ile ayni rev"
+    // erken donus sayiliyordu; dakika sinirina takilan cfg_get bir daha istenmez, kopya kalici bayat kalirdi.
+    if (this._cfgVerified.get(deviceId) === `${cur.rev}|${cur.crc}`) return;
     const t = this.now();
     const last = this._cfgGetAt.get(deviceId);
     if (last !== undefined && t - last < CFG_GET_MIN_INTERVAL_MS) return;
@@ -514,11 +601,42 @@ class AlarmService {
     const row = r && r.rows && r.rows[0];
     this._cfgGetAt.set(deviceId, t);
     if (this._cfgGetAt.size > 5000) this._cfgGetAt.clear();
-    if (row && Number(row.rev) === cur.rev && String(row.crc).toLowerCase() === cur.crc) return;
+    if (row && Number(row.rev) === cur.rev && String(row.crc).toLowerCase() === cur.crc) {
+      if (this._cfgVerified.size > 5000) this._cfgVerified.clear();
+      this._cfgVerified.set(deviceId, `${cur.rev}|${cur.crc}`);
+      return;
+    }
+    this._cfgVerified.delete(deviceId);
+    await this._publishCfgGet(topicId, uid);
+  }
+
+  async _publishCfgGet(topicId, uid) {
     try {
       await this._deps.publishSys(topicId, { cmd: 'cfg_get', module: 'safety', uid });
+      return true;
     } catch (err) {
       this._warn('cfg-get', `cfg_get yayinlanamadi (${errKind(err)})`);
+      return false;
+    }
+  }
+
+  /**
+   * Yapilandirma kopyasini tazele (Faz 2 F2.D: buluttan yama uygulandi / cakisma / kopya yok). `force` dakika sinirini
+   * CFG_GET_FORCE_INTERVAL_MS tabanina indirir (yanit beklenmez; kopya cfg_dump ile gelir). ASLA firlatmaz.
+   * @returns {Promise<boolean>} istek yayinlandi mi
+   */
+  async requestConfig({ topicId, deviceId, uid, force = false } = {}) {
+    try {
+      if (typeof this._deps.publishSys !== 'function' || !topicId || !deviceId || !uid) return false;
+      const t = this.now();
+      const last = this._cfgGetAt.get(deviceId);
+      const floor = force ? CFG_GET_FORCE_INTERVAL_MS : CFG_GET_MIN_INTERVAL_MS;
+      if (last !== undefined && t - last < floor) return false;
+      this._cfgGetAt.set(deviceId, t);
+      this._cfgVerified.delete(deviceId);
+      return await this._publishCfgGet(topicId, uid);
+    } catch (_) {
+      return false;
     }
   }
 
@@ -590,9 +708,17 @@ class AlarmService {
       await this.db.query(set, [alarmId, 'sending']);
       const notice = {
         kind: 'safety_alarm',
-        title: fault ? 'Vana kapanmadı!' : alarmTitle(row.kind),
-        body: fault ? faultBody() : alarmBody({ kind: row.kind, zone: Number(row.zone) }),
-        data: { home_id: row.home_id, device_id: row.device_id, alarm_id: row.id, zone: Number(row.zone), kind: row.kind, status: fault ? 'fault' : row.status },
+        title: fault ? faultTitle(row.kind) : alarmTitle(row.kind),
+        body: fault ? faultBody(row.kind) : alarmBody({ kind: row.kind, zone: Number(row.zone) }),
+        data: {
+          home_id: row.home_id,
+          device_id: row.device_id,
+          device_uuid: row.device_uuid || null,
+          alarm_id: row.id,
+          zone: Number(row.zone),
+          kind: row.kind,
+          status: fault ? 'fault' : row.status,
+        },
       };
       let result = await this._trySend(push, { ...notice, tokens });
       if (!(result && result.sent > 0)) {
@@ -629,7 +755,7 @@ class AlarmService {
   }
 
   /** Bilgi push'u (alarm dogrulanamadi / politika degisti): YALNIZ owner. */
-  async pushInfo({ homeId, deviceId, alarmId = null, reason, via = null }) {
+  async pushInfo({ homeId, deviceId, deviceUuid = null, alarmId = null, reason, via = null }) {
     try {
       const push = this._push();
       if (!push || typeof push.isConfigured !== 'function' || !push.isConfigured()) return 'skipped';
@@ -641,7 +767,7 @@ class AlarmService {
         kind: 'safety_info',
         title: text.title,
         body: text.body,
-        data: { home_id: homeId, device_id: deviceId, alarm_id: alarmId, reason },
+        data: { home_id: homeId, device_id: deviceId, device_uuid: deviceUuid, alarm_id: alarmId, reason },
       });
       this.counters.pushes += 1;
       return result && result.sent > 0 ? 'sent' : 'failed';
@@ -728,6 +854,6 @@ module.exports = {
   AlarmService,
   SQL,
   OPEN_STATUSES,
-  constants: Object.freeze({ ACK_WINDOW_MS, MAX_ACK_EIDS, CFG_DUMP_TTL_MS, CFG_GET_MIN_INTERVAL_MS, LIST_MAX_LIMIT, PUSH_RETRY_DELAY_MS }),
-  helpers: { alarmTitle, alarmBody, faultBody, infoText, revOf },
+  constants: Object.freeze({ ACK_WINDOW_MS, MAX_ACK_EIDS, CFG_DUMP_TTL_MS, CFG_GET_MIN_INTERVAL_MS, CFG_GET_FORCE_INTERVAL_MS, LIST_MAX_LIMIT, PUSH_RETRY_DELAY_MS }),
+  helpers: { alarmTitle, alarmBody, faultTitle, faultBody, infoText, revOf, intrusionVerdict, intrusionZone },
 };

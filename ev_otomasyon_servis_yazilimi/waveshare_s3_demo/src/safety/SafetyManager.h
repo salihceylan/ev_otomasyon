@@ -16,6 +16,9 @@
 //    değdiği anlaşılırsa NVS eski yapılandırmaya geri alınır.
 //  * Yapılandırılmamış panoda (sensör ve eylemci yok, kilit yok, güvenli kip yok) active() false: bütün kancalar O(1) çıkar,
 //    maskeler 0'dır ve lamba/panjur yolu bit bit bugünkü gibidir (§2.9).
+//  * Faz 2 (F2.B): hırsız alarmı çekirdeği (IntrusionCore) SafetyCore'dan SONRA aynı turda; siren isteği SafetyCore::setIntrusionSiren ile
+//    VEYA'lanır, buzzer deseni Buzzer_SetPattern ile (tehlike alarmı önceliklidir). Kip/alarm belleği NVS "ahbu_latch/arm". Kapı/pencere
+//    kenarları ContactBus'a (iklim/senaryo tüketicileri için; olay kutusuna yazılmaz).
 // Görevler arası: yapılandırma kopyası SafetyCfgLock (mutex) arkasındadır; yazıcı yalnız loopTask. shutdownKeep*(), scanBlocked() ve
 // latchedMask() herhangi bir bağlamdan okunabilir (volatile, 32 bit ve altı).
 // ============================================================================
@@ -27,6 +30,8 @@
 #include "DiGate.h"
 #include "safety/SafetyConfig.h"
 #include "safety/SafetyFsm.h"
+#include "safety/IntrusionFsm.h"
+#include "sensors/ContactBus.h"
 #include "safety/SafetyView.h"
 #include "safety/SafetyCfgEdit.h"
 #include "sensors/SensorHub.h"
@@ -41,7 +46,9 @@ namespace safety {
 // de taşır: vana closed/open = 0x10/0x11, anahtar off/on = 0x20/0x21 (tür uyuşmazsa bad_state).
 enum : int32_t { ACT_TO_CLOSED = 0x10, ACT_TO_OPEN = 0x11, ACT_TO_OFF = 0x20, ACT_TO_ON = 0x21 };
 
-enum class CfgResult : uint8_t { OK = 0, CONFLICT, INVALID, LATCHED, LOOSEN, STORAGE, BUSY };
+// GAS_LOCAL: bulut yaması gaz vanasını uzaktan açılabilir kılardı (isGasRelease); ARMED: kurulu kipte bulut yaması hırsız alarmını
+// zayıflatırdı (isIntrusionLoosening). İkisi yalnız VIA_CLOUD'da (Faz 2 incelemesi G-1).
+enum class CfgResult : uint8_t { OK = 0, CONFLICT, INVALID, LATCHED, LOOSEN, STORAGE, BUSY, GAS_LOCAL, ARMED };
 
 struct CfgOutcome {
   CfgResult r;
@@ -80,6 +87,7 @@ public:
   Rej handleCommand(const DeviceCommand& cmd, uint32_t now_ms);
   void noteReject(const char* id, Rej r);
   bool latched() const { return core_.latchedZoneMask() != 0; }
+  const ContactBus& contacts() const { return contacts_; }     // iklim/senaryo tüketicileri (loopTask)
 
   // ---- herhangi bir görev ----
   RawDecision rawRelayCheck(uint8_t relay1, bool level);       // durum değiştirmez (WebTask: ham RS485)
@@ -113,6 +121,8 @@ public:
 private:
   SafetyManager();
   static Origin originOf(CmdSource s);
+  static uint8_t viaOf(CmdSource s);
+  bool intrusionUsable() const;            // güvenli kipte sensör tablosu kullanılamıyorsa (cfg_corrupt / latch_orphan) false
   void emitNvsFail(uint8_t key, uint32_t now_ms);
   void emitCfgConflict(uint32_t rev, uint32_t crc);
   void recomputeMasks();
@@ -128,6 +138,8 @@ private:
   SensorHub hub_;
   ActuatorCore act_;
   SafetyCore core_;
+  IntrusionCore intr_;
+  ContactBus contacts_;
   EventOutboxRtos outbox_;
   BridgeSensor bridge_;
   DiSensor di_;

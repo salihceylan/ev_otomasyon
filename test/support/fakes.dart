@@ -577,6 +577,26 @@ class FakeCloudApi extends EvCloudApiService {
   final List<({String deviceId, int zone, String commandId})> alarmTestCalls =
       <({String deviceId, int zone, String commandId})>[];
 
+  /// `POST …/arm` çağrıları ve davranışı (Faz 2 F2.B.9).
+  final List<({String deviceId, String mode, String commandId})> armCalls =
+      <({String deviceId, String mode, String commandId})>[];
+  Future<CommandResult> Function(({String deviceId, String mode, String commandId}) call)? armHandler;
+
+  @override
+  Future<CommandResult> armCommand({
+    required String homeId,
+    required String deviceId,
+    required String mode,
+    required String commandId,
+  }) async {
+    final call = (deviceId: deviceId, mode: mode, commandId: commandId);
+    calls.add('arm:$mode');
+    armCalls.add(call);
+    final handler = armHandler;
+    if (handler != null) return handler(call);
+    return CommandResult(delivered: true, deviceOnline: true, commandId: commandId);
+  }
+
   /// `GET /homes/:id/alarms` yanıtı.
   List<AlarmRecord> alarmRecords = const <AlarmRecord>[];
   Object? alarmsError;
@@ -627,9 +647,44 @@ class FakeCloudApi extends EvCloudApiService {
   /// `GET /homes/:id/devices/:uid/safety-config` yanıtları (pano uid'i -> gövde). Yoksa `404 CONFIG_NOT_AVAILABLE`.
   final Map<String, Map<String, dynamic>> safetyConfigs = <String, Map<String, dynamic>>{};
 
+  /// Atanırsa `safetyConfig` bunu kullanır (Faz 2 bulut yapılandırma okuması; `state_rev`, `pending` …).
+  Future<Map<String, dynamic>> Function(String homeId, String deviceId)? safetyConfigHandler;
+
+  /// `POST …/safety-config` çağrıları ve davranışı (Faz 2 F2.D.1). Varsayılan: uygulandı, `rev = base_rev + 1`.
+  final List<({String deviceId, int baseRev, Map<String, dynamic> patch, String commandId})> patchCalls =
+      <({String deviceId, int baseRev, Map<String, dynamic> patch, String commandId})>[];
+  Future<Map<String, dynamic>> Function(({String deviceId, int baseRev, Map<String, dynamic> patch, String commandId}) call)?
+      patchHandler;
+  int pendingCleared = 0;
+
+  @override
+  Future<Map<String, dynamic>> patchSafetyConfig({
+    required String homeId,
+    required String deviceId,
+    required int baseRev,
+    required Map<String, dynamic> patch,
+    required String commandId,
+  }) async {
+    final call = (deviceId: deviceId, baseRev: baseRev, patch: patch, commandId: commandId);
+    calls.add('patchSafetyConfig:$baseRev');
+    patchCalls.add(call);
+    final handler = patchHandler;
+    if (handler != null) return handler(call);
+    return <String, dynamic>{'applied': true, 'rev': baseRev + 1, 'command_id': commandId};
+  }
+
+  @override
+  Future<int> clearSafetyConfigPending(String homeId, String deviceId) async {
+    calls.add('clearSafetyConfigPending:$deviceId');
+    pendingCleared++;
+    return 1;
+  }
+
   @override
   Future<Map<String, dynamic>> safetyConfig(String homeId, String deviceId) async {
     calls.add('safetyConfig:$deviceId');
+    final custom = safetyConfigHandler;
+    if (custom != null) return custom(homeId, deviceId);
     final body = safetyConfigs[deviceId.toUpperCase()];
     if (body == null) {
       throw const ApiException(statusCode: 404, code: 'CONFIG_NOT_AVAILABLE', message: 'Yapılandırma yok.');

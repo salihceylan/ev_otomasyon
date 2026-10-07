@@ -67,6 +67,12 @@
 //     servisi uzlastirma yapar. v:2 state (caps yok, onceden de yok) icin SQL ve sorgu sayisi DEGISMEZ.
 //     Ret yankisi [Y5]: `expectOutcome(topic, id, ms, {uid})` yalniz hedef uid'nin canli state'indeki `last_id`
 //     (onay) ya da `last_rej` (ret kodu) ile sonuclanir; eski `expectAck` (boolean) aynen calisir.
+//     Faz 2 (F2.D): `{uid, cfgRev}` ile kurulan bekleyici (buluttan yapilandirma yamasi) ayrica hedef uid'nin canli state'inde
+//     `cfg.safety.rev === cfgRev` olunca uygulandi sayilir (firmware v1.2.0 cfg_patch basarisinda last_id yazmaz) ve sonuc
+//     panonun yapilandirma ozetini ({rev, crc}) tasir; rev cikarimi yalniz last_id yankisi VERMEYEN firmware'de (caps 'intrusion'
+//     yok) yapilir ve cfgRev'li bekleyici state devices.safety_state'e yazildiktan SONRA cozulur (Faz 2 incelemesi R2, R3).
+//     cfg yetenekli panonun canli state'i uzlastiriciya `onSafetyState` ile
+//     bildirilir (bekleyen yapilandirma kuyrugu, services/safety_cfg_sync.js); `requestSafetyConfig` REST'in cfg_get yoludur.
 //     Uretim tekili `alarms: true` ile kurulur; push servisi start() sirasinda `setPushService` ile enjekte edilir.
 //
 // Ortam degiskenleri (CONTRACTS §6): MQTT_HOST, MQTT_PORT, MQTT_BACKEND_USER,
@@ -261,6 +267,12 @@ function validateStatePayload(obj) {
 
   out.skipped = skipped;
   return { ok: true, value: out };
+}
+
+/** v:3 state'in yapilandirma ozeti {rev, crc} (yoksa null). */
+function cfgOfState(v) {
+  const cfg = v && v.safety && v.safety.summary && v.safety.summary.cfg;
+  return cfg && Number.isInteger(cfg.rev) ? { rev: cfg.rev, crc: cfg.crc } : null;
 }
 
 /** Toplu role durumu guncellemesi. Degismeyen satira yazilmaz (IS DISTINCT FROM). */
@@ -611,6 +623,7 @@ class MqttBridge {
     this._sweepTimer = null;
     this._warned = new Map(); // anahtar -> son uyari zamani
     this._ackWaiters = new Map(); // ackKey(topicId, commandId) -> Set<{ finish(ok) }> (DAIRE-03)
+    this._cfgWaiters = new Set(); // Faz 2 F2.D: cfgRev'li bekleyiciler (state rev yankisi; firmware cfg_patch last_id yazmaz)
     this._ackCount = 0;
     this._queue = new KeyedWorkQueue({
       concurrency: DEFAULTS.queueConcurrency,
@@ -859,6 +872,11 @@ class MqttBridge {
         publishCommand: (topicId, cmd) => this.publishCommand(topicId, cmd),
         // Bekleyen yerel anahtar (SERVIS-01): `ev/{t}/sys` yonetim yayini (yuk loglanmaz).
         publishSys: (topicId, obj) => this.publishSys(topicId, obj),
+        // Faz 2 F2.D.2: bekleyen yapilandirma kuyrugu (sonuc bekleyici + bilgi push'u + cfg_get)
+        expectOutcome: (...a) => this.expectOutcome(...a),
+        cancelAck: (t, id) => this.cancelAck(t, id),
+        pushInfo: (args) => this._notifyAlarm('pushInfo', args),
+        requestConfig: (args) => this._notifyAlarm('requestConfig', args),
         isConnected: () => this.isConnected(),
         logger: this.logger,
         now: this.now,
@@ -922,6 +940,14 @@ class MqttBridge {
       return null;
     }
     return this._alarms;
+  }
+
+  /**
+   * Faz 2 F2.D: guvenlik yapilandirmasi kopyasini tazele (REST yama sonrasi / cakisma). Alarm servisinin cfg_get sinirini
+   * paylasir ({topicId, deviceId, uid, force}). ASLA firlatmaz.
+   */
+  requestSafetyConfig(args) {
+    return this._notifyAlarm('requestConfig', args);
   }
 
   /** Hata YALITIMI: alarm servisi kopruyu asla bozmaz. Sonuc beklenir (ev seridinde sira korunur). */
@@ -1182,19 +1208,37 @@ class MqttBridge {
       this.counters.state++;
       // Cihaz onayi (DAIRE-03): yalniz CANLI state; kuyruga/birlestirmeye girmeden (ara state'teki yanki kaybolmasin).
       // uid'li bekleyici (guvenlik komutlari) yalniz HEDEF panonun yankisini kabul eder [Y5].
+      const stateCfg = cfgOfState(check.value);
+      // Faz 2 incelemesi R3: yapilandirma yamasi (cfgRev'li) bekleyicisinin sonucu, bu state devices.safety_state'e (state_rev)
+      // yazildiktan SONRA verilir: istemci yanittan hemen sonra GET ile okudugunda state_rev yeni degerdir. Eslesme yine burada
+      // (birlestirmeden once) yapilir; yalniz cozum ertelenir. Diger bekleyiciler eskisi gibi hemen (DAIRE-03).
+      const deferred = [];
       if (!retain && check.value.lastId && this._ackCount > 0) {
-        this._settleAcks(ackKey(parsed.topicId, check.value.lastId), { ok: true }, { uid: check.value.uid });
+        this._settleAcks(ackKey(parsed.topicId, check.value.lastId), { ok: true }, { uid: check.value.uid, cfg: stateCfg, defer: deferred });
       }
       const rej = check.value.safety && check.value.safety.lastRej;
       if (!retain && rej && this._ackCount > 0) {
-        this._settleAcks(ackKey(parsed.topicId, rej.id), { ok: false, rejected: rej.code }, { uid: check.value.uid, rejection: true });
+        this._settleAcks(ackKey(parsed.topicId, rej.id), { ok: false, rejected: rej.code }, { uid: check.value.uid, rejection: true, cfg: stateCfg, defer: deferred });
+      }
+      // Faz 2 F2.D: buluttan yapilandirma yamasi (firmware v1.2.0 basarida last_id yazmaz): hedef uid'nin CANLI state'inde
+      // cfg.safety.rev beklenen degere (base_rev + 1) ulasinca uygulandi sayilir. Faz 2 incelemesi R2: last_id yankisi veren firmware'de
+      // (1.2.1; yanki ve caps 'intrusion' ayni surumde) bu cikarim YAPILMAZ: baska kaynakli (LAN/CLI) rev artisini uygulandi sayardi.
+      const caps = check.value.safety && Array.isArray(check.value.safety.caps) ? check.value.safety.caps : [];
+      if (!retain && stateCfg && !caps.includes('intrusion') && this._cfgWaiters.size > 0 && check.value.uid) {
+        for (const w of [...this._cfgWaiters]) {
+          if (w.topicId === parsed.topicId && w.uid === check.value.uid && w.cfgRev === stateCfg.rev) deferred.push(() => w.finish({ ok: true, cfg: stateCfg }));
+        }
       }
       // Yerlesim (WP-L): dogrulama BASARILI olduktan sonra HAM yukten cikarilir (esitleme kapaliysa cikarilmaz).
       // Kapanisa girer: kuyruk birlestirmesi en yeni mesajin degerini + yerlesimini birlikte kullanir.
-      const layout = this._layoutSyncEnabled ? this._extractLayout(obj) : null;
-      await this._queue.push(parsed.topicId, 'state', () => this._processState(parsed.topicId, check.value, retain, layout), {
-        coalesce: true,
-      });
+      try {
+        const layout = this._layoutSyncEnabled ? this._extractLayout(obj) : null;
+        await this._queue.push(parsed.topicId, 'state', () => this._processState(parsed.topicId, check.value, retain, layout), {
+          coalesce: true,
+        });
+      } finally {
+        for (const fn of deferred) fn();
+      }
     } catch (err) {
       this.counters.dbErrors++;
       this._warnOnce('handle-error', `Mesaj isleme hatasi: ${err && err.message ? err.message : 'bilinmiyor'}`);
@@ -1300,6 +1344,19 @@ class MqttBridge {
           summary: capsNow !== null ? v.safety.summary : null,
           prev: device.safety_state || null,
           hadCaps,
+        });
+      }
+      // Faz 2 F2.D.2: buluttan yapilandirma yamasi kuyrugu (device_configs.pending) yalniz cfg yetenekli panonun CANLI
+      // state'inde uzlastirilir (uzlastirici bellek ici 'kuyruk bos' onbellegiyle ek sorgu yapmaz).
+      if (!retain && this._reconcileEnabled && capsNow !== null && capsNow.includes('cfg') && v.safety.summary) {
+        this._notifyReconciler('onSafetyState', {
+          topicId,
+          homeId: device.home_id,
+          deviceId: device.device_id,
+          uid: String(device.device_uuid || '').toUpperCase(),
+          caps: capsNow,
+          summary: v.safety.summary,
+          lastId: v.lastId || null, // Faz 2 incelemesi R2: yankili firmware'de kuyruk cikarimi last_id ile
         });
       }
     } catch (err) {
@@ -1478,12 +1535,16 @@ class MqttBridge {
    * Yayindan ONCE kurulur (expectAck ile ayni kurallar ve ayni ust sinir). Asla reddetmez.
    * @param {{uid:string}} opts  hedef pano kimligi (buyuk/kucuk harf duyarsiz)
    */
-  expectOutcome(topicId, commandId, timeoutMs, { uid } = {}) {
+  expectOutcome(topicId, commandId, timeoutMs, { uid, cfgRev } = {}) {
     if (typeof uid !== 'string' || !UID_RE.test(uid.trim())) throw new TypeError('Gecersiz hedef pano kimligi (uid)');
-    return this._addWaiter(topicId, commandId, timeoutMs, { uid: uid.trim().toUpperCase(), legacy: false });
+    if (cfgRev !== undefined && cfgRev !== null && !(Number.isInteger(cfgRev) && cfgRev >= 0 && cfgRev <= 0xffffffff)) {
+      throw new TypeError('Gecersiz beklenen yapilandirma surumu (cfgRev)');
+    }
+    const rev = cfgRev === undefined || cfgRev === null ? null : cfgRev;
+    return this._addWaiter(topicId, commandId, timeoutMs, { uid: uid.trim().toUpperCase(), legacy: false, cfgRev: rev });
   }
 
-  _addWaiter(topicId, commandId, timeoutMs, { uid, legacy }) {
+  _addWaiter(topicId, commandId, timeoutMs, { uid, legacy, cfgRev = null }) {
     if (!isValidTopicId(topicId)) throw new TypeError('Gecersiz konu kimligi (topicId)');
     if (typeof commandId !== 'string' || !LAST_ID_RE.test(commandId)) throw new TypeError('Gecersiz komut kimligi (commandId)');
     if (this._ackCount >= ACK_MAX_WAITERS) {
@@ -1494,7 +1555,7 @@ class MqttBridge {
     const ms = Math.min(Math.max(requested, 1), ACK_MAX_TIMEOUT_MS);
     const key = ackKey(topicId, commandId);
     return new Promise((resolve) => {
-      const waiter = { done: false, timer: null, finish: null, uid, legacy };
+      const waiter = { done: false, timer: null, finish: null, uid, legacy, cfgRev, topicId };
       // outcome: { ok:true } | { ok:false, rejected|timeout|cancelled } ; eski bekleyici boolean cozer
       waiter.finish = (outcome) => {
         if (waiter.done) return;
@@ -1506,7 +1567,11 @@ class MqttBridge {
           if (set.size === 0) this._ackWaiters.delete(key);
         }
         this._ackCount -= 1;
-        const out = outcome && typeof outcome === 'object' ? outcome : { ok: outcome === true };
+        if (cfgRev !== null) this._cfgWaiters.delete(waiter);
+        const out = outcome && typeof outcome === 'object' ? { ...outcome } : { ok: outcome === true };
+        // cfgRev'li (yapilandirma yamasi) bekleyici sonucu panonun yapilandirma ozetini tasir (yanit rev/crc; ret: 409 verisi)
+        if (cfgRev !== null && (out.ok === true || out.rejected)) out.cfg = out.cfg || null;
+        else delete out.cfg;
         resolve(legacy ? out.ok === true : out);
       };
       let set = this._ackWaiters.get(key);
@@ -1516,6 +1581,7 @@ class MqttBridge {
       }
       set.add(waiter);
       this._ackCount += 1;
+      if (cfgRev !== null) this._cfgWaiters.add(waiter);
       waiter.timer = this.timers.setTimeout(() => waiter.finish({ ok: false, timeout: true }), ms);
       if (waiter.timer && typeof waiter.timer.unref === 'function') waiter.timer.unref();
     });
@@ -1544,7 +1610,10 @@ class MqttBridge {
         if (match.rejection && waiter.legacy) continue;
         if (waiter.uid && waiter.uid !== match.uid) continue;
       }
-      waiter.finish(outcome);
+      const out = match && match.cfg && waiter.cfgRev !== null ? { ...outcome, cfg: match.cfg } : outcome;
+      // R3: yapilandirma yamasi bekleyicisi state yazildiktan sonra cozulur (cagiran `defer` listesini isler)
+      if (match && Array.isArray(match.defer) && waiter.cfgRev !== null) match.defer.push(() => waiter.finish(out));
+      else waiter.finish(out);
     }
   }
 

@@ -7,6 +7,8 @@
 //   {"base_rev":12, "set":{"actuator":{"id":"a1","relay":5,"kind":"valve","close_mode":"deenergize","medium":"water","zones":[1], ...}}}
 //   {"base_rev":12, "set":{"policy":{"on":true,"dry_hold_ms":10000}}} | {"set":{"zone":{"id":2,"name":"Mutfak"}}}
 //   {"set":{"light":{"relay":3,"dimmable":1,"src":1,"addr":2,"ch":1}}} | {"del":{"sensor":"d3"}} | {"del":{"actuator":"a2"}}
+//   {"set":{"intrusion":{"exit_s":45,"entry_s":30}}} (Faz 2 F2.B.7: 0..255, 0 = varsayılan; en az biri). Sensör "flags" 0..0x1F (bit3 entry,
+//   bit4 away_only; v1.2.0 sınırı 0x07); "kind":"arm_key" yalnız panodaki DI'den (anahtarlı kontak).
 // "set" ve "del" içinde TEK öğe vardır. Bilinmeyen alan / tip uyuşmazlığı / aralık dışı değer: yama UYGULANMAZ (sessiz varsayılan yok).
 // İsteğe bağlı alanların varsayılanları: sensör flags/confirm_ms türün varsayılanı; eylemci close_mode "energize", fb_closed_active 1,
 // fb_timeout_s 60, run_limit_s siren 180 / iki röleli vana 15. "id" verilmeyen eylemci yeni satırdır (sona eklenir).

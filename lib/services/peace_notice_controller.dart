@@ -100,6 +100,9 @@ class PeaceNoticeController extends ChangeNotifier with WidgetsBindingObserver {
 
   final AutomationState state;
   final PushCoordinator _push;
+
+  /// Paylaşılan push koordinatörü (güvenlik bildirimleri aynı alıcıdan gelir: `safetyNotices`; Faz 2 F2.C.4).
+  PushCoordinator get push => _push;
   final bool _ownsPush;
   final PromptStore _promptStore;
   final DateTime Function() _now;

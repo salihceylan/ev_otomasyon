@@ -27,7 +27,10 @@ import '../widgets/surface_card.dart';
 /// Anahtarlar: `Key('page_alarm_history')`, `Key('alarm_history_error')`, hata kartının `Key('btn_retry')`'i,
 /// `Key('alarm_history_empty')`, `Key('row_alarm_<id>')`, `Key('row_event_<eid>')`.
 class AlarmHistoryPage extends StatefulWidget {
-  const AlarmHistoryPage({super.key});
+  const AlarmHistoryPage({super.key, this.note});
+
+  /// Sayfanın üstündeki alt bilgi (bildirimden gelinip alarm kapanmışsa "Bu alarm kapanmış."; F2.C.6).
+  final String? note;
 
   @override
   State<AlarmHistoryPage> createState() => _AlarmHistoryPageState();
@@ -131,7 +134,25 @@ class _AlarmHistoryPageState extends State<AlarmHistoryPage> {
           ),
         ],
       ),
-      body: body,
+      body: widget.note == null
+          ? body
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                  child: Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      widget.note!,
+                      key: const Key('alarm_history_note'),
+                      style: TextStyle(fontSize: AppText.body, fontWeight: FontWeight.w700, color: AppTheme.getTextPrimary(context)),
+                    ),
+                  ),
+                ),
+                Expanded(child: body),
+              ],
+            ),
     );
   }
 }

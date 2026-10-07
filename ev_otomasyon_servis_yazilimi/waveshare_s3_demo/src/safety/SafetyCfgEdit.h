@@ -11,6 +11,10 @@
 //    geri bildirim kaldırma ve fanı ex-proof işaretleme GEVŞETMEDİR (karar 7.2b-7). Gevşetme yalnız seri CLI (fiziksel erişim) ya da
 //    bulutta owner/servis rolüyle yapılır.
 //  * actuatorIdentityMap(): çalışırken yamada eylemcilerin çalışma durumu kimliğe göre taşınır (inceleme turu EM-2/EM-3).
+//  * Faz 2 (F2.B.3/B.7): SET_INTRUSION (hırsız çıkış/giriş gecikmeleri, Policy.exit_s/entry_s). Hırsız ayarları (kapı/pencere/hareket
+//    sensörleri, SF_ENTRY/SF_AWAY_ONLY, gecikmeler) LAN'dan SERBESTTİR; ARM_KEY için GAS_RESET'teki DI geçmişi kuralı uygulanır.
+//  * Faz 2 incelemesi (G-1): bulut yolu gevşetebilir ama iki sınıfı uygulayamaz: isGasRelease (gaz vanasını uzaktan açılabilir kılmak; her
+//    zaman) ve isIntrusionLoosening (hırsız alarmını zayıflatmak; yalnız kurulu kipte). Seri CLI ikisinde de serbesttir (fiziksel erişim).
 //  * remapActPos(): eylemci silinince sonraki eylemcilerin act_pos bitleri kayar; çalışırken EKLENEN vana için konum o anki röle
 //    seviyesinden benimsenir (yapılandırma vanayı kendiliğinden açıp kapatmaz). İki röleli ve gaz vanası benimsenmez.
 // ============================================================================
@@ -21,7 +25,8 @@
 namespace safety {
 
 enum class EditOp : uint8_t {
-  NONE = 0, SET_SENSOR = 1, SET_ACTUATOR = 2, SET_POLICY = 3, SET_ZONE = 4, SET_LIGHT = 5, DEL_SENSOR = 6, DEL_ACTUATOR = 7
+  NONE = 0, SET_SENSOR = 1, SET_ACTUATOR = 2, SET_POLICY = 3, SET_ZONE = 4, SET_LIGHT = 5, DEL_SENSOR = 6, DEL_ACTUATOR = 7,
+  SET_INTRUSION = 8
 };
 
 struct CfgEdit {
@@ -37,6 +42,10 @@ struct CfgEdit {
   char zoneName[ZONE_NAME_LEN];
   uint8_t lightRelay;         // SET_LIGHT: 1..40
   LightOpt light;
+  uint8_t hasExit;            // SET_INTRUSION: en az biri
+  uint8_t exitS;              // 0..255 (0 = varsayılan 45)
+  uint8_t hasEntry;
+  uint8_t entryS;             // 0..255 (0 = varsayılan 30)
 };
 
 inline void editInit(CfgEdit& e) {
@@ -109,6 +118,11 @@ inline CfgErr applyEdit(const SafetyConfig& cur, const CfgEdit& e, SafetyConfig&
       if (e.lightRelay < 1 || e.lightRelay > MAX_RELAYS) return CfgErr::BAD_EDIT;
       out.light[e.lightRelay - 1] = e.light;
       return CfgErr::OK;
+    case EditOp::SET_INTRUSION:
+      if (!e.hasExit && !e.hasEntry) return CfgErr::BAD_EDIT;
+      if (e.hasExit) out.pol.exit_s = e.exitS;
+      if (e.hasEntry) out.pol.entry_s = e.entryS;
+      return CfgErr::OK;
     default:
       return CfgErr::BAD_EDIT;
   }
@@ -137,21 +151,31 @@ inline uint64_t diUseMask(const SafetyConfig& c) {
 // İnceleme turu 2 FW2-2: silme ve ekleme ayrı yamalarda geldiğinde tek adımlık kural aşılmasın diye, a'da karşılığı olmayan YENİ GAS_RESET
 // satırı, DI'si kalıcı kullanım geçmişinde (diHist, diUseMask) ise gevşetmedir: kapı kontağını silip aynı girişe GAS_RESET eklemek ya da
 // GAS_RESET'i silip başka bölgeyle yeniden eklemek LAN'dan yapılamaz. Hiç kullanılmamış girişe yeni GAS_RESET (sihirbaz) serbesttir.
-inline bool isLoosening(const SafetyConfig& a, const SafetyConfig& b, uint64_t diHist = 0) {
-  if (a.pol.policy_on && !b.pol.policy_on) return true;
-  if (b.pol.dry_hold_ms < a.pol.dry_hold_ms) return true;
+// Faz 2 (F2.B.3): ARM_KEY (alarmı çözen anahtarlı kontak) aynı DI geçmişi kuralıyla korunur: kullanılmış bir girişe yeni arm_key eklemek ya da
+// mevcut satırı (ör. kapı kontağı) arm_key'e çevirmek gevşetmedir (aksi halde kapıyı kapatmak alarmı çözerdi). Bölge arm_key için anlamsızdır.
+// Kumanda rolü satırı kuralı (EM-6 / FW2-2 / F2.B.3): b'deki `role` (GAS_RESET ya da ARM_KEY) satırı a'da başka türdeyse (mevcut sensörü
+// role çevirmek), GAS_RESET'in bölgesi değiştiyse ya da a'da karşılığı yokken DI'si kalıcı kullanım geçmişindeyse gevşetmedir.
+inline bool roleRowLoosening(const SafetyConfig& a, const SafetyConfig& b, uint64_t diHist, SensorKind role) {
+  const bool armKey = role == SensorKind::ARM_KEY;
   for (uint8_t j = 0; j < b.nSens; j++) {
     const SensorConfig& t = b.sens[j];
-    if (t.kind != (uint8_t)SensorKind::GAS_RESET) continue;
+    if (t.kind != (uint8_t)role) continue;
     bool existed = false;
     for (uint8_t i = 0; i < a.nSens; i++) {
       const SensorConfig& s = a.sens[i];
       if (s.src != t.src || s.index != t.index) continue;
       existed = true;
-      if (s.kind != t.kind || s.zone != t.zone) return true;
+      if (s.kind != t.kind || (!armKey && s.zone != t.zone)) return true;
     }
     if (!existed && t.src == (uint8_t)SensorSrc::DI && t.index >= 1 && t.index <= MAX_DI && (diHist & (1ULL << (t.index - 1)))) return true;
   }
+  return false;
+}
+
+inline bool isLoosening(const SafetyConfig& a, const SafetyConfig& b, uint64_t diHist = 0) {
+  if (a.pol.policy_on && !b.pol.policy_on) return true;
+  if (b.pol.dry_hold_ms < a.pol.dry_hold_ms) return true;
+  if (roleRowLoosening(a, b, diHist, SensorKind::GAS_RESET) || roleRowLoosening(a, b, diHist, SensorKind::ARM_KEY)) return true;
   for (uint8_t i = 0; i < a.nSens; i++) {
     const SensorConfig& s = a.sens[i];
     if (hazardOf(s.kind) == 0) continue;                       // kapı/pencere/hareket ve yerel kumanda rolleri bu modülde emniyet sürmez
@@ -177,6 +201,49 @@ inline bool isLoosening(const SafetyConfig& a, const SafetyConfig& b, uint64_t d
   }
   for (uint8_t i = a.nAct; i < b.nAct; i++) {
     if (b.act[i].kind == (uint8_t)ActKind::FAN && (b.act[i].aflags & AF_FAN_EXPROOF)) return true;
+  }
+  return false;
+}
+
+// Faz 2 incelemesi G-1a (RV-E1; karar 7.2b-8 "gaz vanası buluttan açılmaz"): b, gaz vanasını uzaktan açılabilir kılıyor mu? Bulut yolu
+// (owner/servis) gevşetebilir (D.4), ama bu sınıfı UYGULAYAMAZ (SafetyManager::submitEdit VIA_CLOUD -> gas_local_only); yalnız seri CLI.
+// LAN'da isLoosening zaten kapsar. Kural: a'daki her gaz vanasının b'de aynı kimlikte (röle(ler), tür, kip, akışkan gaz) karşılığı olmalı
+// (silmek ya da su/generic yapmak vanayı sıradan röle yapar); GAS_RESET satır kuralı (kapı kontağını gaz açma düğmesine çevirmek, bölgesini
+// değiştirmek, kullanılmış girişe yeni GAS_RESET). Bölge daraltma, gaz sensörünü silme gibi gevşetmeler vanayı AÇMAZ: bu sınıfa girmez.
+inline bool isGasRelease(const SafetyConfig& a, const SafetyConfig& b, uint64_t diHist = 0) {
+  if (roleRowLoosening(a, b, diHist, SensorKind::GAS_RESET)) return true;
+  for (uint8_t i = 0; i < a.nAct && i < MAX_ACTUATORS; i++) {
+    const ActuatorConfig& x = a.act[i];
+    if (!isGasValve(x)) continue;
+    bool kept = false;
+    for (uint8_t j = 0; j < b.nAct && j < MAX_ACTUATORS && !kept; j++) {
+      const ActuatorConfig& y = b.act[j];
+      kept = isGasValve(y) && y.relay == x.relay && y.relay2 == x.relay2 && y.close_mode == x.close_mode;
+    }
+    if (!kept) return true;
+  }
+  return false;
+}
+
+// Faz 2 incelemesi G-1b (R1): b hırsız alarmını zayıflatıyor mu? Kurulu kipte (mode != off) bulut yolu bunu UYGULAYAMAZ (VIA_CLOUD -> armed;
+// F2-3: servis rolleri buluttan çözemez, sensörü susturarak da çözemez). LAN/CLI'da B.3 gereği serbesttir (yerel anahtar sahibi zaten çözebilir).
+// Zayıflatma: SF_REACT'li kapı/pencere/hareket sensörünü silmek ya da alarm dışı bırakmak (SF_REACT kaldırma, hırsız dışı tür), SF_ENTRY /
+// SF_AWAY_ONLY eklemek (anlık -> gecikmeli, evde kipinde devre dışı), NC -> NO, onay süresini uzatmak, etkin çıkış/giriş gecikmesini uzatmak
+// ve ARM_KEY satır kuralı (kullanılmış girişe ya da mevcut satıra anahtar: kapıyı kapatmak alarmı çözerdi).
+inline bool isIntrusionLoosening(const SafetyConfig& a, const SafetyConfig& b, uint64_t diHist = 0) {
+  if (roleRowLoosening(a, b, diHist, SensorKind::ARM_KEY)) return true;
+  if (exitDelayS(b.pol) > exitDelayS(a.pol) || entryDelayS(b.pol) > entryDelayS(a.pol)) return true;
+  for (uint8_t i = 0; i < a.nSens && i < MAX_SENSORS; i++) {
+    const SensorConfig& s = a.sens[i];
+    if (!isIntrusionKind(s.kind) || !(s.flags & SF_REACT)) continue;
+    const SensorConfig* t = nullptr;
+    for (uint8_t j = 0; j < b.nSens && j < MAX_SENSORS && !t; j++) {
+      if (b.sens[j].src == s.src && b.sens[j].index == s.index) t = &b.sens[j];
+    }
+    if (!t || !isIntrusionKind(t->kind) || !(t->flags & SF_REACT)) return true;
+    if ((t->flags & ~s.flags) & (SF_ENTRY | SF_AWAY_ONLY)) return true;
+    if (s.active_open && !t->active_open) return true;
+    if (t->confirm_ms > s.confirm_ms) return true;
   }
   return false;
 }

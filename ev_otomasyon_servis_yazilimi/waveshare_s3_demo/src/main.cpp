@@ -214,6 +214,8 @@ static const char* cfgResultText(safety::CfgResult r) {
     case safety::CfgResult::LATCHED: return "kilitli bolgeye dokunuyor (zone_latched)";
     case safety::CfgResult::LOOSEN: return "gevsetme yasak";
     case safety::CfgResult::STORAGE: return "NVS yazilamadi";
+    case safety::CfgResult::GAS_LOCAL: return "gaz vanasi yalniz yerinde (gas_local_only)";
+    case safety::CfgResult::ARMED: return "alarm kurulu (armed)";
     default: return "mesgul";
   }
 }
@@ -324,7 +326,48 @@ static void cliHelp() {
   Serial.printf("      EXTMOD <0|1> [kanal], SCAN, SCAN RESULT, CH <n> [ON|OFF|TOGGLE], SEND <hex>,\r\n");
   Serial.printf("      BAUD <baud>, CHILDLOCK [ON|OFF|STATUS], AP [ON|OFF|STATUS] (servis AP'si, 10 dk),\r\n");
   Serial.printf("      FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY (yerel anahtari siler), REBOOT [FORCE],\r\n");
-  Serial.printf("      SAFETY [STATUS], SAFETY TEST <bolge>, SAFETY ACK [bolge] [FORCE], SAFETY POLICY ON|OFF, SAFETY DEL <aN|dN|bN>\r\n");
+  Serial.printf("      SAFETY [STATUS], SAFETY TEST <bolge>, SAFETY ACK [bolge] [FORCE], SAFETY POLICY ON|OFF, SAFETY DEL <aN|dN|bN>,\r\n");
+  Serial.printf("      ARM [STATUS], ARM AWAY|HOME|OFF (hirsiz alarmi)\r\n");
+}
+
+// ARM [STATUS] | ARM AWAY|HOME|OFF (Faz 2 F2.B.3): hirsiz alarmi kurma/cozme (fiziksel erisim). Sonuc ayni kuyruktan; ret "[GUVENLIK] Komut
+// reddedildi: not_ready" olarak basilir.
+static void cliArm(const String& cmd) {
+  const String sub = cliWord(cmd, 1);
+  if (sub.isEmpty() || eq(sub, "STATUS")) {
+    safety::SafetyView* v = (safety::SafetyView*)malloc(sizeof(safety::SafetyView));
+    if (!v || !safety::SafetyManager::instance().copyView(*v)) {
+      free(v);
+      Serial.printf("[CLI-HATA] Guvenlik gorunumu alinamadi.\r\n");
+      return;
+    }
+    if (!v->arm.present) {
+      Serial.printf("[ALARM] Hirsiz alarmi yapilandirilmamis (kapi/pencere/hareket sensoru yok).\r\n");
+    } else {
+      const uint32_t up = (uint32_t)(millis() / 1000UL);
+      const uint32_t left = (v->arm.untilUp > up) ? v->arm.untilUp - up : 0;
+      Serial.printf("[ALARM] kip=%s durum=%s%s", safety::armModeText((safety::ArmMode)v->arm.mode),
+                    safety::armStText((safety::ArmSt)v->arm.st), v->arm.ok ? "" : " (GUVENLI KIP: etkisiz)");
+      if (v->arm.st == (uint8_t)safety::ArmSt::EXIT || v->arm.st == (uint8_t)safety::ArmSt::ENTRY) Serial.printf(" kalan=%lu sn", (unsigned long)left);
+      if (v->arm.st == (uint8_t)safety::ArmSt::ALARM) Serial.printf(" aid=%s", v->arm.aid);
+      Serial.printf("\r\n");
+    }
+    free(v);
+    return;
+  }
+  int32_t m;
+  if (eq(sub, "AWAY")) m = (int32_t)safety::ArmMode::AWAY;
+  else if (eq(sub, "HOME")) m = (int32_t)safety::ArmMode::HOME;
+  else if (eq(sub, "OFF")) m = (int32_t)safety::ArmMode::OFF;
+  else {
+    Serial.printf("[CLI-HATA] Kullanim: ARM [STATUS] | ARM AWAY|HOME|OFF\r\n");
+    return;
+  }
+  if (!postDeviceCommand(makeCommand(CmdType::SAFETY_ARM, CmdSource::CLI, 0, m))) {
+    Serial.printf("[CLI-HATA] Komut kuyrugu dolu.\r\n");
+    return;
+  }
+  Serial.printf("[CLI-SONUC] Alarm kipi istegi kuyruga yazildi (%s; sonuc: ARM).\r\n", sub.c_str());
 }
 
 // Gizli içerikli String'i bellekte sıfırla (yığın artığı kalmasın; Arduino String'i serbest bırakınca sıfırlamaz).
@@ -375,6 +418,8 @@ static void handleCliLine(String cmd) {
     cliPrintStatus();
   } else if (eq(first, "SAFETY")) {
     cliSafety(cmd);
+  } else if (eq(first, "ARM")) {
+    cliArm(cmd);
   } else if (eq(first, "MQTT")) {
     if (eq(cliWord(cmd, 1), "PUB")) {
       MqttManager::instance().triggerPublish();

@@ -75,6 +75,7 @@ test('v:3 ornegi (§3.2) birebir ozetlenir', () => {
       { id: 'd3', src: 'di', kind: 'water', zone: 1, active: true, ok: true },
       { id: 'b1', src: 'bridge', kind: 'water', zone: 1, active: false, ok: false },
     ],
+    arm: null, // Faz 2 F2.B.7: hirsiz alarmi kipi yok (safety.arm anahtari yok)
   });
 });
 

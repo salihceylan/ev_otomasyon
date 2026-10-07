@@ -14,8 +14,11 @@
 // gomulu web sayfasi metinleri (anahtar ipucu, provizyon formu uyarisi) duzeltildi. 1.2.0: guvenlik katmani (su baskini + vana;
 // SafetyManager, ValveGuard), state v:3 (v:2 ust kumesi), ev/{t}/event + event_ack, zorunlu uid, sys cfg_get/cfg_patch (1024 bayt),
 // yerel guvenlik uclari (/api/actuator, /api/alarm/*, /api/events, /api/safety/config), kilitliyken reboot/reset force ister.
+// 1.2.1 (Faz 2): kapi/pencere/hareket hirsiz alarmi (kip off/home/away, cikis/giris gecikmesi, ARM_KEY, caps "intrusion", state safety.arm,
+// intrusion_alarm/intrusion_cleared/arm_changed olaylari, POST /api/arm, CLI ARM), siren VEYA'si (ayri butce), ContactBus; sys cfg_patch
+// basarisinda last_id yankisi ve "cfg_storage" ret kodu.
 #ifndef FW_VERSION
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.2.1"
 #endif
 
 // ============================================================================

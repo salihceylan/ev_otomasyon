@@ -962,7 +962,7 @@ test('SQL sozlesmesi: atomik talep, NULL kurallari, UNIQUE anahtari, parametreli
   assert.match(SQL.claim, /ON CONFLICT \(home_id, local_date\) DO UPDATE/);
   assert.match(SQL.claim, /RETURNING id, attempts/);
   assert.match(SQL.claim, /attempts < \$4/);
-  assert.match(SQL.claim, /status IN \('skipped_offline', 'failed'\)/);
+  assert.match(SQL.claim, /status IN \('skipped_offline', 'skipped_hazard', 'failed'\)/);
   assert.match(SQL.claim, /updated_at <= CURRENT_TIMESTAMP - \(CASE/, 'yeniden deneme araligi');
   assert.match(SQL.claim, /INTERVAL '2 minutes'/);
   assert.match(SQL.candidates, /COALESCE\(h\.peace_notification_enabled, TRUE\)/);
@@ -1395,4 +1395,49 @@ test('push_error uctan uca: mesaj reddedildi (400) -> no_recipients/push_error, 
   assert.equal(w.world.logs[0].details.reason, 'push_error');
   keepLive(w, isoAt(2));
   assert.equal((await tick(w, reminder, isoAt(2))).candidates, 0);
+});
+
+// ------------------------------------------------------------------------------
+// Faz 2 / WP-G1 (F2.A.4): gaz alarmi acik evde "lambalari kapat" onerisi tehlikeli
+// ------------------------------------------------------------------------------
+test('F2.A.4: gaz alarmi acik evde push GONDERILMEZ; skipped_hazard (gas_alarm), alici sorgusu yok', async () => {
+  const w = standardWorld({ homeOverrides: { gas_alarm: true } });
+  const { reminder, push } = make(w);
+  const r = await tick(w, reminder, T_2330);
+  assert.equal(r.sent, 0);
+  assert.equal(r.skippedHazard, 1);
+  assert.equal(push.calls.send.length, 0);
+  assert.equal(push.calls.recipients.length, 0);
+  assert.equal(w.world.logs[0].status, 'skipped_hazard');
+  assert.equal(w.world.logs[0].details.reason, 'gas_alarm');
+});
+
+test('F2.A.4: skipped_hazard pencere icinde yeniden denenir; alarm kapaninca BIR bildirim gider', async () => {
+  const w = standardWorld({ homeOverrides: { gas_alarm: true } });
+  const { reminder, push } = make(w);
+  await tick(w, reminder, '2026-10-01T20:30:20Z');
+  w.world.homes[0].gas_alarm = false;
+  w.world.devices[0].last_seen_ms = at('2026-10-01T20:31:15Z');
+  const r = await tick(w, reminder, '2026-10-01T20:31:20Z');
+  assert.equal(r.sent, 1);
+  assert.equal(w.world.logs[0].status, 'sent');
+  assert.equal(w.world.logs[0].attempts, 2);
+  assert.equal(push.calls.send.length, 1);
+});
+
+test('F2.A.4: gonderim oncesi yeniden goruntude gaz alarmi belirdiyse push yok (skipped_hazard)', async () => {
+  const w = standardWorld();
+  w.world.onSnapshot = (n) => {
+    if (n === 2) w.world.homes[0].gas_alarm = true;
+  };
+  const { reminder, push } = make(w);
+  const r = await tick(w, reminder, T_2330);
+  assert.equal(r.sent, 0);
+  assert.equal(push.calls.send.length, 0);
+  assert.equal(w.world.logs[0].status, 'skipped_hazard');
+});
+
+test('F2.A.4: aday/talep SQL\'i skipped_hazard satirini yeniden denenebilir sayar', () => {
+  assert.match(SQL.candidates, /l\.status IN \('skipped_offline', 'skipped_hazard', 'failed'\)/);
+  assert.match(SQL.claim, /peace_notification_logs\.status IN \('skipped_offline', 'skipped_hazard', 'failed'\)/);
 });

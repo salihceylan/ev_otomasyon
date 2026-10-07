@@ -4,6 +4,7 @@
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include "events/EventOutbox.h"
 
 using namespace safety;
@@ -244,6 +245,60 @@ void test_json_worst_case_size(void) {
   TEST_ASSERT_TRUE(n <= 700);                                   // kopru 4 KB sinirinin cok altinda (bkz. uygulama notlari)
 }
 
+// Faz 2 (F2.B.7): hirsiz olaylari. intrusion_alarm alarm sinifi (tasmada atilmaz), intrusion_cleared *_cleared sinifi, arm_changed en dusuk
+// oncelik (actuator_changed sinifi). JSON: intrusion_alarm kind "intrusion" + srcs (aid YOK: alarm kimligi olayin eid'si), intrusion_cleared
+// aid + via, arm_changed mode + via (cloud|lan|cli|di|boot).
+void test_intrusion_events(void) {
+  EventOutbox o;
+  o.begin(0x0badf00du);
+  char eid[EID_LEN], buf[EVENT_JSON_MAX];
+  Event a = ev(EvType::INTRUSION_ALARM, 2);
+  a.nsrcs = 2;
+  a.srcs[0] = 4;
+  a.srcs[1] = 0x83;
+  a.atUp = 77;
+  o.push(a, eid);
+  TEST_ASSERT_TRUE(o.toJson(0, "U", 1, buf, sizeof(buf)) > 0);
+  TEST_ASSERT_TRUE(strstr(buf, "\"type\":\"intrusion_alarm\",\"zone\":2,\"kind\":\"intrusion\",\"srcs\":[\"d4\",\"b3\"],\"at_up\":77}") != nullptr);
+  Event c = ev(EvType::INTRUSION_CLEARED, 0);
+  memcpy(c.aid, "0badf00d-1", 11);
+  c.sub = VIA_DI;
+  o.push(c, eid);
+  o.toJson(1, "U", 1, buf, sizeof(buf));
+  TEST_ASSERT_TRUE(strstr(buf, "\"type\":\"intrusion_cleared\",\"aid\":\"0badf00d-1\",\"via\":\"di\",\"at_up\":0}") != nullptr);
+  const char* const MODES[3] = {"off", "away", "home"};
+  const uint8_t VIAS[6] = {VIA_CLI, VIA_LAN, VIA_CLOUD, VIA_LOCAL_WEB, VIA_DI, VIA_BOOT};
+  const char* const VTX[6] = {"cli", "lan", "cloud", "local_web", "di", "boot"};
+  for (uint8_t i = 0; i < 6; i++) {
+    EventOutbox q;
+    q.begin(1);
+    Event m = ev(EvType::ARM_CHANGED, 0);
+    m.flag = (uint8_t)(i % 3);
+    m.sub = VIAS[i];
+    q.push(m, eid);
+    q.toJson(0, "U", 1, buf, sizeof(buf));
+    char want[96];
+    snprintf(want, sizeof(want), "\"type\":\"arm_changed\",\"mode\":\"%s\",\"via\":\"%s\",\"at_up\":0}", MODES[i % 3], VTX[i]);
+    TEST_ASSERT_TRUE(strstr(buf, want) != nullptr);
+  }
+  // tasma onceligi
+  EventOutbox f;
+  f.begin(1);
+  f.push(ev(EvType::ALARM_RAISED, 1), eid);
+  f.push(ev(EvType::INTRUSION_ALARM, 1), eid);
+  f.push(ev(EvType::ARM_CHANGED), eid);
+  f.push(ev(EvType::INTRUSION_CLEARED), eid);
+  for (int i = 0; i < 12; i++) f.push(ev(EvType::ALARM_RAISED, 1), eid);
+  TEST_ASSERT_EQUAL_UINT8(16, f.count());
+  f.push(ev(EvType::VALVE_FAULT, 1), eid);
+  TEST_ASSERT_EQUAL_UINT8(0, f.countOf(EvType::ARM_CHANGED));       // once arm_changed
+  f.push(ev(EvType::VALVE_FAULT, 1), eid);
+  TEST_ASSERT_EQUAL_UINT8(0, f.countOf(EvType::INTRUSION_CLEARED)); // sonra *_cleared
+  f.push(ev(EvType::VALVE_FAULT, 1), eid);
+  TEST_ASSERT_EQUAL_UINT8(1, f.countOf(EvType::INTRUSION_ALARM));   // alarm sinifi: atilmadi (en eski alarm ustune yazildi)
+  TEST_ASSERT_EQUAL_UINT32(1, f.overwrites());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_eid_format_and_counter);
@@ -257,5 +312,6 @@ int main(int, char**) {
   RUN_TEST(test_json_variants);
   RUN_TEST(test_json_aid_and_test_without_feedback);
   RUN_TEST(test_json_worst_case_size);
+  RUN_TEST(test_intrusion_events);
   return UNITY_END();
 }

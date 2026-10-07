@@ -9,6 +9,8 @@
 #include <freertos/semphr.h>
 #include "NetTime.h"
 
+struct AutomationSnapshot;
+
 // ============================================================================
 // MqttManager - Bulut (EMQX) MQTTS istemcisi (docs/CONTRACTS.md Bolum 2).
 //
@@ -68,6 +70,8 @@ private:
   void publishEventsIfDue(uint32_t now);   // ev/{t}/event: EventOutbox'tan zamani gelen en eski olay (spec 3.4)
   void publishCfgDump();                    // sys cfg_get -> cfg_dump parcalari (outbox disi, onaysiz) [Y6]
   void rejectCmd(const char* id, uint8_t rej);
+  void acceptCmd(const char* id);          // sys cfg_patch basarisi: state.last_id = id (WP-C1)
+  void overlayAcceptedId(AutomationSnapshot& snap);
   bool leafCertificateValid();
   void watchStateChanges(uint32_t now);
   bool rememberId(const char* id);
@@ -137,4 +141,8 @@ private:
   // ---- Komut kimligi (id) tekilleştirme: son 8 ----
   char _recentIds[8][25];
   uint8_t _recentHead;
+
+  // ---- sys cfg_patch kabul yankisi (WP-C1; yalniz MQTT gorevi): last_id, otomasyonun son kimligi degismedikce bu kimliktir ----
+  char _acceptId[25];
+  char _acceptBase[25];
 };

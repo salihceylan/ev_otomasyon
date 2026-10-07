@@ -5,8 +5,10 @@
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include "safety/SafetyFsm.h"
 #include "safety/SafetyView.h"
+#include "safety/IntrusionFsm.h"
 
 using namespace safety;
 
@@ -101,7 +103,7 @@ static void test_unconfigured_board_only_meta_keys(void) {
   buildView(b.cfg, b.hub, b.act, b.core, b.t, v);
   TEST_ASSERT_EQUAL_UINT8(0, v.configured);
   char buf[512];
-  TEST_ASSERT_EQUAL_STRING(",\"caps\":[\"safety\",\"actuator\",\"event\",\"cfg\"],\"boot\":57,\"bn\":\"9f3a11c0\",\"time_ok\":false,\"epoch\":0",
+  TEST_ASSERT_EQUAL_STRING(",\"caps\":[\"safety\",\"actuator\",\"event\",\"cfg\",\"intrusion\"],\"boot\":57,\"bn\":\"9f3a11c0\",\"time_ok\":false,\"epoch\":0",
                            render(v, meta(false), buf, sizeof(buf)));
   TEST_ASSERT_TRUE(relayActText(v, 5) == nullptr);
 }
@@ -217,6 +219,65 @@ static void test_control_role_rows(void) {
   TEST_ASSERT_NOT_NULL(strstr(s, "{\"id\":\"d4\",\"src\":\"di\",\"kind\":\"alarm_ack\",\"zone\":0,\"active\":true,\"ok\":true}"));
 }
 
+// Faz 2 (F2.B.7): caps "intrusion"; safety.arm yalniz SF_REACT'li kapi/pencere/hareket sensoru varsa (ya da kip kuruluysa) yazilir;
+// until_up yalniz exit/entry'de, aid/srcs yalniz alarmda. Hirsiz sensoru olmayan panoda ek bugunku ile ayni (arm yok).
+static void test_arm_object(void) {
+  Bench b;
+  b.water();
+  static SafetyView v;
+  char buf[3072];
+  b.start();
+  static IntrusionCore in0;
+  in0.begin(&b.cfg, &b.hub, &b.out, nullptr, b.t);
+  buildView(b.cfg, b.hub, b.act, b.core, b.t, v, &in0);
+  TEST_ASSERT_NULL(strstr(render(v, meta(), buf, sizeof(buf)), "\"arm\""));   // hirsiz sensoru yok
+  Bench c;
+  c.water();
+  SensorConfig& d = c.cfg.sens[1];
+  memset(&d, 0, sizeof(d));
+  d.src = (uint8_t)SensorSrc::DI;
+  d.index = 7;
+  d.kind = (uint8_t)SensorKind::DOOR;
+  d.zone = 1;
+  d.active_open = 1;
+  d.flags = defaultFlags(d.kind);
+  c.cfg.nSens = 2;
+  c.cfg.pol.exit_s = 20;
+  c.di.level[7] = true;                    // NC kapali
+  c.start();
+  static IntrusionCore in;
+  in.begin(&c.cfg, &c.hub, &c.out, nullptr, c.t);
+  c.run(100);
+  in.tick(c.t, 0);
+  buildView(c.cfg, c.hub, c.act, c.core, c.t, v, &in);
+  const char* s = render(v, meta(), buf, sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(s, ",\"arm\":{\"mode\":\"off\",\"st\":\"idle\",\"ok\":true}}"));
+  const uint32_t sig0 = viewSignature(v);
+  TEST_ASSERT_EQUAL(Rej::OK, in.command(ArmMode::AWAY, VIA_LAN, c.t));
+  buildView(c.cfg, c.hub, c.act, c.core, c.t, v, &in);
+  s = render(v, meta(), buf, sizeof(buf));
+  char want[96];
+  snprintf(want, sizeof(want), ",\"arm\":{\"mode\":\"away\",\"st\":\"exit\",\"ok\":true,\"until_up\":%lu}}", (unsigned long)((c.t + 20000 + 999) / 1000));
+  TEST_ASSERT_NOT_NULL(strstr(s, want));
+  const uint32_t sig1 = viewSignature(v);
+  TEST_ASSERT_TRUE(sig0 != sig1);
+  c.run(3000);
+  in.tick(c.t, 0);
+  buildView(c.cfg, c.hub, c.act, c.core, c.t, v, &in);
+  TEST_ASSERT_EQUAL_HEX32(sig1, viewSignature(v));   // geri sayim imzayi degistirmez
+  c.di.level[7] = false;                   // kapi acik: cikis suresinde yok sayilir; sure dolunca giris -> alarm
+  for (int k = 0; k < 600; k++) { c.step(100); in.tick(c.t, 0); }
+  TEST_ASSERT_EQUAL(ArmSt::ALARM, in.st());
+  buildView(c.cfg, c.hub, c.act, c.core, c.t, v, &in);
+  s = render(v, meta(), buf, sizeof(buf));
+  snprintf(want, sizeof(want), ",\"arm\":{\"mode\":\"away\",\"st\":\"alarm\",\"ok\":true,\"aid\":\"%s\",\"srcs\":[\"d7\"]}}", in.aid());
+  TEST_ASSERT_NOT_NULL(strstr(s, want));
+  in.setUsable(false);
+  buildView(c.cfg, c.hub, c.act, c.core, c.t, v, &in);
+  s = render(v, meta(), buf, sizeof(buf));
+  TEST_ASSERT_NOT_NULL(strstr(s, "\"st\":\"alarm\",\"ok\":false,"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unconfigured_board_only_meta_keys);
@@ -225,5 +286,6 @@ int main(int, char**) {
   RUN_TEST(test_safe_mode_reason_and_last_rej);
   RUN_TEST(test_overflow_never_emits_partial_json);
   RUN_TEST(test_control_role_rows);
+  RUN_TEST(test_arm_object);
   return UNITY_END();
 }

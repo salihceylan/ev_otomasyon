@@ -134,6 +134,23 @@ class ApiException implements Exception {
   @override
   String toString() => message;
 
+  /// Uygulamanın kendi Türkçe metnini kullandığı sunucu kodları (Faz 2: gaz alarmı kısıtı, alarm kipi, buluttan
+  /// yapılandırma yazımı; tasarım F2.A.7, F2.B.9, F2.D.6). 4xx yanıtında bu kodlar gelirse sunucu mesajı yerine bu
+  /// metin gösterilir (sunucu sürümünden bağımsız, tutarlı dil).
+  static const Map<String, String> clientMessages = <String, String>{
+    'HAZARD_ACTIVE': 'Gaz alarmı sürüyor: elektrik anahtarlamak kıvılcım oluşturabileceği için lambalar toplu kapatılmadı. '
+        'Gerekirse tek tek, bilerek kapatın.',
+    'ALARM_USE_DISARM': 'Hırsız alarmı onaylanmaz, çözülür.',
+    'CONFIG_CHANGED_ON_DEVICE': 'Pano yapılandırması bu arada değişti; güncel hali okundu, yeniden deneyin.',
+    'CONFIG_PENDING': 'Bu pano için bekleyen değişiklikler var.',
+    'CONFIG_QUEUE_FULL': 'Bekleyen değişiklik sınırı doldu.',
+    'DEVICE_STORAGE_FULL': 'Panonun yapılandırma belleği dolu; kurulumcunuza başvurun.',
+    'CONFIG_NOT_AVAILABLE': 'Pano yapılandırması henüz okunmadı; biraz sonra yeniden deneyin.',
+    // Faz 2 incelemesi G-1: bulut yolunun yetki sınırı (gaz vanası uzaktan açılabilir kılınamaz; kurulu kipte alarm zayıflatılamaz)
+    'GAS_VALVE_LOCAL_ONLY': 'Bu değişiklik gaz vanasını uzaktan açılabilir kılar; yalnız panonun başında (seri bağlantıyla) yapılabilir.',
+    'INTRUSION_ARMED': 'Alarm kurulu: alarmı zayıflatan değişiklik için önce alarmı kapatın.',
+  };
+
   /// HTTP durum koduna göre varsayılan Türkçe mesaj (sunucu mesaj vermediyse).
   static String defaultMessageFor(int statusCode) {
     if (statusCode == 0) return 'Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edin.';

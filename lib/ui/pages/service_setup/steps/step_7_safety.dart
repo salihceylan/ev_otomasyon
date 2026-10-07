@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../../common/confirm_dialogs.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/app_pill.dart';
 import '../../../widgets/settings/accent_button.dart';
 import '../logic/relay_logic.dart';
+import '../setup_fields.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
 
@@ -16,8 +20,39 @@ import '../setup_widgets.dart';
 // `dd_fb_<röle>`, `chip_zone_<röle>_<1..4>`, `switch_atex_<röle>`, `chip_dim_<röle>_<yes|no>`, `panel_dimmer_<röle>`,
 // `chip_dimsrc_<röle>_<modbus|bridge>`, `note_open_relay_<röle>`, `card_inputs`, `input_<d3|b1>`, `dd_role_<id>`,
 // `chip_contact_<id>_<nc|no>`, `chip_inzone_<id>_<1..4>`, `btn_add_bridge`, `btn_remove_bridge_<n>`,
-// `card_safety_save`, `btn_save_safety`, `safety_test_result_<bölge>`.
+// `card_safety_save`, `btn_save_safety`, `safety_test_result_<bölge>`; Faz 2 (F2.A.3): `note_detector_<id>`,
+// `note_gas_valve_reset_<röle>`, gaz testi onayı `btn_gas_test_confirm` / `btn_gas_test_cancel`.
 // =============================================================================
+
+/// Gaz/duman dedektörü bağlantı yönergesi (F2.A.3; K3: pano gazı ölçmez, dedektörün kuru kontağına bakar).
+const String kDetectorWiringTitle = 'Dedektör bağlantısı.';
+const String kDetectorWiringIntro =
+    'Pano gaz ya da dumanı kendisi ölçmez; yalnız sertifikalı dedektörün röle çıkışına tepki verir.';
+const List<String> kDetectorWiringSteps = <String>[
+  'Dedektörün alarm rölesini NC (normalde kapalı) uçtan bağlayın. Kablo koparsa ya da dedektörün enerjisi kesilirse '
+      'pano bunu alarm sayar.',
+  'Dedektörde ayrı bir arıza rölesi varsa onu da alarm kontağıyla seri bağlayın; dedektör arızası da alarm olarak görünür.',
+  'Dedektörü panodan değil, kendi besleme kaynağından (tercihen yedekli) besleyin; dedektör panodan bağımsız da ses '
+      'vermelidir.',
+  'Dedektörün montaj yeri ve bakım süresi için üreticinin kılavuzuna uyun.',
+];
+
+/// Plan gaz vanası içeren bir bölgeyi test edecekse önce onay ister (test sonunda gaz vanası KAPALI kalır; F2.A.3).
+/// Gaz vanası yoksa diyalogsuz `true`.
+Future<bool> confirmGasValveTest(BuildContext context, {required bool hasGasValve}) async {
+  if (!hasGasValve) return true;
+  return showSimpleConfirm(
+    context,
+    title: 'Test gaz vanasını kapatır.',
+    message: 'Test bittiğinde gaz vanası kapalı kalır; yeniden açmak için vananın yanındaki düğmeyi ya da vananın kendi '
+        'kurma kolunu kullanmanız gerekir. Devam edilsin mi?',
+    confirmLabel: 'Devam Et',
+    icon: Icons.local_fire_department_outlined,
+    family: AppFamilies.amber,
+    cancelKey: const Key('btn_gas_test_cancel'),
+    confirmKey: const Key('btn_gas_test_confirm'),
+  );
+}
 
 /// Seçim çipleri satırı (tek seçim). Renk tek ipucu değildir: seçili çip onay işareti taşır ([AppChip]).
 class _Choices<T> extends StatelessWidget {
@@ -220,6 +255,16 @@ class _ValvePanel extends StatelessWidget {
                   'Açma düğmesini "Girişler ve Sensörler" bölümünde "Gaz vanası açma düğmesi" olarak seçin.',
             ),
           ),
+        if (a.isGasValve)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: SetupInfoRow(
+              key: Key('note_gas_valve_reset_$id'),
+              icon: Icons.back_hand_outlined,
+              color: SetupColors.info,
+              text: "Önerilen: elle kurmalı (manuel reset) gaz vanası. Panodaki 'Gaz vanası açma düğmesi' isteğe bağlıdır.",
+            ),
+          ),
         const _Question('Vana kaç röleyle sürülüyor?'),
         _Choices<ValveDrive>(
           keyPrefix: 'chip_drive_$id',
@@ -365,6 +410,7 @@ class SafetyInputsCard extends StatelessWidget {
             style: TextStyle(fontSize: 12.5, color: SetupColors.muted(context)),
           ),
           for (final input in logic.inputs) _InputRow(logic: logic, input: input),
+          if (logic.intrusionSupported) _IntrusionDelays(logic: logic),
           const SizedBox(height: 12),
           Align(
             alignment: Alignment.centerLeft,
@@ -392,7 +438,9 @@ class _InputRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final id = input.id;
     final busy = logic.busy;
-    final roles = input.isBridge ? InputRole.bridgeRoles : InputRole.values;
+    final roles = input.isBridge
+        ? InputRole.bridgeRoles
+        : <InputRole>[for (final r in InputRole.values) if (r != InputRole.armKey || logic.intrusionSupported) r];
     final hasZone = input.role.isSensor || input.role.isSafetyControl;
     final issues = <SafetyIssue>[for (final i in logic.safetyIssues) if (i.target == 'input:$id') i];
     return Padding(
@@ -427,6 +475,7 @@ class _InputRow extends StatelessWidget {
             ],
             onChanged: busy ? null : (r) => r == null ? null : logic.setInput(input.copyWith(role: r)),
           ),
+          if (input.role.requiresNc && input.role.isSensor) _DetectorWiringNote(key: Key('note_detector_$id')),
           if (input.role.isSensor) ...[
             const SizedBox(height: 6),
             if (input.role.requiresNc)
@@ -444,6 +493,32 @@ class _InputRow extends StatelessWidget {
                 onSelected: (nc) => logic.setInput(input.copyWith(normallyClosed: nc)),
               ),
           ],
+          if (logic.intrusionSupported && input.role.isIntrusionSensor) ...[
+            const SizedBox(height: 6),
+            SetupCheckTile(
+              key: Key('switch_entry_$id'),
+              value: input.effectiveEntry,
+              onChanged: busy ? null : (v) => logic.setInput(input.copyWith(entry: v)),
+              label: 'Giriş yolu (gecikmeli): tetiklenince önce giriş gecikmesi başlar.',
+            ),
+            SetupCheckTile(
+              key: Key('switch_awayonly_$id'),
+              value: input.effectiveAwayOnly,
+              onChanged: busy ? null : (v) => logic.setInput(input.copyWith(awayOnly: v)),
+              label: 'Yalnız dışarıda kipte: evde kipinde bu sensör izlenmez.',
+            ),
+          ],
+          if (input.role == InputRole.armKey)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: SetupInfoRow(
+                key: Key('note_arm_key_$id'),
+                icon: Icons.vpn_key_outlined,
+                color: SetupColors.warn,
+                text: 'Bu giriş alarmı çözer. Yalnız anahtarlı ya da korumalı bir kontak bağlayın. '
+                    'NC bağlantı zorunlu: anahtar kurulu konumda kontağı açmalı; kablo kesilirse alarm kurulu kalır.',
+              ),
+            ),
           if (hasZone) ...[
             const SizedBox(height: 8),
             _zoneChips('chip_inzone_$id', input.zone, (z) => logic.setInput(input.copyWith(zone: z)), enabled: !busy),
@@ -458,6 +533,100 @@ class _InputRow extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Hırsız alarmı gecikmeleri (F2.B.1; yalnız `caps` `intrusion`): "Çıkış gecikmesi" / "Giriş gecikmesi" (sn, 1..255).
+class _IntrusionDelays extends StatefulWidget {
+  const _IntrusionDelays({required this.logic});
+
+  final RelayLogic logic;
+
+  @override
+  State<_IntrusionDelays> createState() => _IntrusionDelaysState();
+}
+
+class _IntrusionDelaysState extends State<_IntrusionDelays> {
+  late final TextEditingController _exit = TextEditingController(text: '${widget.logic.exitDelay}');
+  late final TextEditingController _entry = TextEditingController(text: '${widget.logic.entryDelay}');
+
+  @override
+  void dispose() {
+    _exit.dispose();
+    _entry.dispose();
+    super.dispose();
+  }
+
+  void _apply() {
+    final exit = int.tryParse(_exit.text.trim());
+    final entry = int.tryParse(_entry.text.trim());
+    widget.logic.setIntrusionDelays(
+      exit: (exit != null && exit >= 1 && exit <= 255) ? exit : null,
+      entry: (entry != null && entry >= 1 && entry <= 255) ? entry : null,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = widget.logic.busy;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _Question('Hırsız alarmı gecikmeleri'),
+        SetupTextField(
+          key: const Key('field_exit_delay'),
+          controller: _exit,
+          label: 'Çıkış gecikmesi (sn)',
+          helperText: '1-255 sn; kurduktan sonra evden çıkmak için süre.',
+          keyboardType: TextInputType.number,
+          maxLength: 3,
+          enabled: !busy,
+          onChanged: (_) => _apply(),
+        ),
+        SetupTextField(
+          key: const Key('field_entry_delay'),
+          controller: _entry,
+          label: 'Giriş gecikmesi (sn)',
+          helperText: '1-255 sn; giriş yolundan girince alarmı çözmek için süre.',
+          keyboardType: TextInputType.number,
+          maxLength: 3,
+          enabled: !busy,
+          onChanged: (_) => _apply(),
+        ),
+      ],
+    );
+  }
+}
+
+/// Gaz/duman dedektörü seçilince açılan bağlantı yönergesi kutusu (F2.A.3).
+class _DetectorWiringNote extends StatelessWidget {
+  const _DetectorWiringNote({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = SetupColors.text(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: SetupCard(
+        accent: SetupColors.warn,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(kDetectorWiringTitle, style: TextStyle(fontWeight: FontWeight.w800, color: text)),
+            const SizedBox(height: 4),
+            Text(kDetectorWiringIntro, style: TextStyle(fontSize: 13, height: 1.35, color: text)),
+            for (var i = 0; i < kDetectorWiringSteps.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${i + 1}. ${kDetectorWiringSteps[i]}',
+                  style: TextStyle(fontSize: 13, height: 1.35, color: text),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -518,11 +687,45 @@ class SafetySaveCard extends StatelessWidget {
             child: ElevatedButton.icon(
               key: const Key('btn_save_safety'),
               style: accentButtonStyle(AppFamilies.emerald, minimumSize: const Size(48, 52)),
-              onPressed: enabled ? () => logic.saveSafety() : null,
+              onPressed: enabled ? () => unawaited(_save(context)) : null,
               icon: const Icon(Icons.save_alt_rounded, size: 18),
               label: const Text('Güvenlik Ayarlarını Panoya Yaz ve Test Et'),
             ),
           ),
+          if (logic.queued != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SetupInfoRow(
+                    key: Key('safety_queue_note'),
+                    icon: Icons.cloud_queue_rounded,
+                    color: SetupColors.warn,
+                    text: 'Pano çevrimdışı. Değişiklikler pano bağlanınca (24 saat içinde) uygulanacak.',
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const Key('btn_cancel_safety_queue'),
+                      style: setupInlineActionStyle(),
+                      onPressed: logic.busy ? null : () => logic.cancelQueuedSafety(),
+                      child: const Text('Kuyruğu iptal et'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (logic.unconfirmed)
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: SetupInfoRow(
+                key: Key('safety_unconfirmed_note'),
+                icon: Icons.hourglass_bottom_rounded,
+                color: SetupColors.info,
+                text: 'Pano yanıtı gecikti; sonuç birazdan pano durumunda görünecek. Gerekirse yeniden kaydedin.',
+              ),
+            ),
           for (final r in logic.testResults)
             Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -536,5 +739,31 @@ class SafetySaveCard extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  /// Kayıt + bölge testi; plan gaz vanası içeriyorsa önce onay (test gaz vanasını kapalı bırakır; F2.A.3).
+  Future<void> _save(BuildContext context) async {
+    final gas = logic.assignments.values.any((a) => a.isGasValve);
+    if (!await confirmGasValveTest(context, hasGasValve: gas)) return;
+    await logic.saveSafety();
+    if (!logic.cloudOffer || !context.mounted) return;
+    // LAN gevşetme reddi: yetkili hesapla bulut önerisi (F2.D.5).
+    final ok = await showSimpleConfirm(
+      context,
+      title: 'Yerel ağdan yapılamaz',
+      message: 'Bu değişiklik güvenliği azaltır ve yerel ağdan yapılamaz. İnternet üzerinden yetkili hesabınızla '
+          'uygulansın mı?',
+      confirmLabel: 'İnternetten Uygula',
+      icon: Icons.cloud_upload_outlined,
+      family: AppFamilies.amber,
+      cancelKey: const Key('btn_cloud_offer_cancel'),
+      confirmKey: const Key('btn_cloud_offer_confirm'),
+    );
+    if (!ok) {
+      logic.dismissCloudOffer();
+      return;
+    }
+    logic.useCloudTransport();
+    await logic.saveSafety();
   }
 }

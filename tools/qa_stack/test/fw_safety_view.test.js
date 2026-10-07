@@ -8,6 +8,8 @@ import { ActuatorCore, ActKind, CloseMode, Medium, makeActuatorConfig } from '..
 import { EventOutbox } from '../sim/fw/event_outbox.js';
 import { defaultSafetyConfig, configCrc, SafeReason } from '../sim/fw/safety_config.js';
 import { buildView, writeStateExtras, viewSignature, relayActText } from '../sim/fw/safety_view.js';
+import { IntrusionCore, ArmMode, ArmSt } from '../sim/fw/intrusion_fsm.js';
+import { VIA_LAN } from '../sim/fw/event_outbox.js';
 
 const u32 = (x) => x >>> 0;
 const hex8 = (v) => (v >>> 0).toString(16).padStart(8, '0');
@@ -52,7 +54,7 @@ test('fw_safety_view: yapilandirilmamis panoda yalniz caps/boot/bn/time_ok/epoch
   b.start();
   const v = b.view();
   assert.equal(v.configured, 0);
-  assert.equal(writeStateExtras(v, meta(false)), ',"caps":["safety","actuator","event","cfg"],"boot":57,"bn":"9f3a11c0","time_ok":false,"epoch":0');
+  assert.equal(writeStateExtras(v, meta(false)), ',"caps":["safety","actuator","event","cfg","intrusion"],"boot":57,"bn":"9f3a11c0","time_ok":false,"epoch":0');
   assert.equal(relayActText(v, 5), null);
 });
 
@@ -122,4 +124,43 @@ test('fw_safety_view: kontrol rolu satiri (ham basili seviye)', () => {
   b.run(100);
   const s = writeStateExtras(b.view(), meta());
   assert.ok(s.includes('{"id":"d4","src":"di","kind":"alarm_ack","zone":0,"active":true,"ok":true}'));
+});
+
+// Faz 2 (F2.B.7; Unity test_arm_object): arm yalniz hirsiz sensoru varsa; until_up sabit (imza degismez); alarmda aid + srcs; guvenli kipte ok=false.
+test('fw_safety_view: safety.arm nesnesi', () => {
+  const b = new Bench();
+  b.water();
+  b.start();
+  const i0 = new IntrusionCore();
+  i0.begin(b.cfg, b.hub, b.out, null, b.t);
+  assert.ok(!writeStateExtras(buildView(b.cfg, b.hub, b.act, b.core, b.t, i0), meta()).includes('"arm"'));
+  const c = new Bench();
+  c.water();
+  c.cfg.sens.push(makeSensorConfig({ src: SensorSrc.DI, index: 7, kind: SensorKind.DOOR, zone: 1, active_open: 1, flags: defaultFlags(SensorKind.DOOR) }));
+  c.cfg.nSens = 2;
+  c.cfg.pol.exit_s = 20;
+  c.di.level[7] = true;
+  c.start();
+  const intr = new IntrusionCore();
+  intr.begin(c.cfg, c.hub, c.out, null, c.t);
+  c.run(100);
+  intr.tick(c.t, 0);
+  let v = buildView(c.cfg, c.hub, c.act, c.core, c.t, intr);
+  assert.ok(writeStateExtras(v, meta()).includes(',"arm":{"mode":"off","st":"idle","ok":true}}'));
+  const sig0 = viewSignature(v);
+  assert.equal(intr.command(ArmMode.AWAY, VIA_LAN, c.t), Rej.OK);
+  v = buildView(c.cfg, c.hub, c.act, c.core, c.t, intr);
+  assert.ok(writeStateExtras(v, meta()).includes(`,"arm":{"mode":"away","st":"exit","ok":true,"until_up":${Math.floor((c.t + 20000 + 999) / 1000)}}}`));
+  const sig1 = viewSignature(v);
+  assert.notEqual(sig0, sig1);
+  c.run(3000);
+  intr.tick(c.t, 0);
+  assert.equal(viewSignature(buildView(c.cfg, c.hub, c.act, c.core, c.t, intr)), sig1);
+  c.di.level[7] = false;
+  for (let k = 0; k < 600; k++) { c.step(100); intr.tick(c.t, 0); }
+  assert.equal(intr.st(), ArmSt.ALARM);
+  v = buildView(c.cfg, c.hub, c.act, c.core, c.t, intr);
+  assert.ok(writeStateExtras(v, meta()).includes(`,"arm":{"mode":"away","st":"alarm","ok":true,"aid":"${intr.aid()}","srcs":["d7"]}}`));
+  intr.setUsable(false);
+  assert.ok(writeStateExtras(buildView(c.cfg, c.hub, c.act, c.core, c.t, intr), meta()).includes('"st":"alarm","ok":false,'));
 });

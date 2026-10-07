@@ -34,9 +34,17 @@ struct Policy {             // 16 B ("ahbu_safety/pol")
   uint8_t flags;
   uint16_t rsv;
   uint32_t dry_hold_ms;     // kuruluk bekleme süresi (vars. 10 sn)
-  uint8_t rsv2[8];
+  uint8_t exit_s;           // hırsız çıkış gecikmesi, sn (0 = varsayılan 45; F2.B.1; v1.2.0'da ayrılmış bayt, yeni NVS girdisi yok)
+  uint8_t entry_s;          // hırsız giriş gecikmesi, sn (0 = varsayılan 30)
+  uint8_t rsv2[6];
 };
 static_assert(sizeof(Policy) == 16, "Policy 16 bayt olmali");
+static_assert(offsetof(Policy, exit_s) == 8 && offsetof(Policy, entry_s) == 9, "Policy gecikme baytlari v1.2.0 rsv2[0..1]");
+
+// Hırsız gecikmelerinin etkin değeri (0 = varsayılan; F2.B.1). IntrusionCore ve gevşetme sınıflandırması (SafetyCfgEdit.h) ortak kullanır.
+enum : uint8_t { EXIT_DEFAULT_S = 45, ENTRY_DEFAULT_S = 30 };
+inline uint8_t exitDelayS(const Policy& p) { return p.exit_s ? p.exit_s : (uint8_t)EXIT_DEFAULT_S; }
+inline uint8_t entryDelayS(const Policy& p) { return p.entry_s ? p.entry_s : (uint8_t)ENTRY_DEFAULT_S; }
 
 struct ZoneConfig {         // 16 B; ad 15 bayt + NUL
   char name[ZONE_NAME_LEN];
@@ -78,7 +86,8 @@ enum class CfgErr : uint8_t {
   ACT_KIND, ACT_RELAY_RANGE, ACT_RELAY_DUP, ACT_RELAY_SHUTTER, ACT_RELAY_IMPULSE, ACT_ZONE,
   VALVE_MEDIUM, VALVE_MODE, PULSE_RELAY2, PULSE_TIME, SIREN_RUN_LIMIT,
   FB_DI_RANGE, FB_DI_CONFLICT, FB_TIMEOUT_RANGE,
-  NOT_FOUND, FULL, BAD_EDIT          // tek öğeli yama (SafetyCfgEdit.h): öğe yok / tablo dolu / geçersiz yama
+  NOT_FOUND, FULL, BAD_EDIT,         // tek öğeli yama (SafetyCfgEdit.h): öğe yok / tablo dolu / geçersiz yama
+  ARM_KEY_NOT_NC                     // anahtarlı kontak NC olmalı (Faz 2 incelemesi RV-E3)
 };
 
 inline const char* cfgErrText(CfgErr e) {
@@ -113,6 +122,7 @@ inline const char* cfgErrText(CfgErr e) {
     case CfgErr::NOT_FOUND: return "not_found";
     case CfgErr::FULL: return "full";
     case CfgErr::BAD_EDIT: return "bad_edit";
+    case CfgErr::ARM_KEY_NOT_NC: return "arm_key_not_nc";
   }
   return "?";
 }
@@ -176,6 +186,9 @@ inline CfgErr validate(const SystemConfig& sys, const SafetyConfig& c) {
     if (control ? (s.zone > MAX_ZONES) : (s.zone < 1 || s.zone > MAX_ZONES)) return CfgErr::SENSOR_ZONE;
     const uint8_t hz = hazardOf(s.kind);
     if ((hz == HZ_GAS || hz == HZ_SMOKE) && !s.active_open) return CfgErr::GAS_SMOKE_NOT_NC;   // [O-2]
+    // Anahtarlı kontak yalnız NC (kurulu konumda kontak açık): kablo kesilince "aktif" okunur, kurma yönüne düşer; NO bağlantıda kablo
+    // kesmek alarmı çözerdi (Faz 2 incelemesi RV-E3).
+    if (s.kind == (uint8_t)SensorKind::ARM_KEY && !s.active_open) return CfgErr::ARM_KEY_NOT_NC;
     if (hz != 0 && (s.confirm_ms < CONFIRM_MIN_MS || s.confirm_ms > CONFIRM_MAX_MS)) return CfgErr::CONFIRM_RANGE;
     if (hz == 0 && s.confirm_ms > CONFIRM_MAX_MS) return CfgErr::CONFIRM_RANGE;
   }

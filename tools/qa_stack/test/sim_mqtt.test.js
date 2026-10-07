@@ -83,7 +83,7 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
 
     const s = h.states()[0].json;
     assert.equal(s.v, 3);   // v1.2.0: v:3 = v:2'nin kati ust kumesi (spec 3.1); yapilandirilmamis panoda ek anahtarlar yalniz caps/boot/bn/time_ok/epoch
-    assert.deepEqual(s.caps, ['safety', 'actuator', 'event', 'cfg']);
+    assert.deepEqual(s.caps, ['safety', 'actuator', 'event', 'cfg', 'intrusion']);
     assert.match(s.bn, /^[0-9a-f]{8}$/);
     for (const k of ['sensors', 'actuators', 'safety', 'cfg', 'last_rej']) assert.ok(!(k in s), `${k} yapilandirilmamis panoda yazilmaz`);
     assert.equal(s.uid, UID);

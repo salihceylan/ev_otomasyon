@@ -226,6 +226,13 @@ class _Step10HandoverState extends State<Step10Handover> {
                 bold: true,
                 text: 'Kurulum tamamlandı: sunucu tüm testleri doğruladı ve cihazı devreye aldı.',
               ),
+              // Faz 2 F2.C.2: gerçek push ağ geçidi (WP-N4) gelene kadar kalan risk müşteriye söylenir.
+              const SetupInfoRow(
+                key: Key('handover_push_note'),
+                icon: Icons.notifications_off_outlined,
+                color: SetupColors.warn,
+                text: 'Uygulama kapalıyken alarm bildirimi bu sürümde gelmez; siren takmanız önerilir.',
+              ),
             ],
           ),
         ),

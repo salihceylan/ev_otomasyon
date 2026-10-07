@@ -513,8 +513,8 @@ function createPeaceService(deps = {}) {
   }
 
   /**
-   * POST close-all v2. Hata sözleşmesi: 400 VALIDATION, 404 NOT_FOUND, 409 DEVICE_OFFLINE, 502 BROKER_UNAVAILABLE
-   * (yayıncıdan olduğu gibi yukarı çıkar).
+   * POST close-all v2. Hata sözleşmesi: 400 VALIDATION, 404 NOT_FOUND, 409 DEVICE_OFFLINE, 409 HAZARD_ACTIVE (evde açık
+   * gaz alarmı: toplu anahtarlama kıvılcım kaynağı; Faz 2 F2.A.4), 502 BROKER_UNAVAILABLE (yayıncıdan olduğu gibi yukarı çıkar).
    */
   async function closeAll({ actor, homeId, noticeId, includeShutters } = {}) {
     const input = parseCloseInput({ noticeId, includeShutters }, httpError);
@@ -526,6 +526,14 @@ function createPeaceService(deps = {}) {
     const topicId = topicRow.mqtt_username;
 
     const snap = await loadLive(homeId);
+    if (snap.gasAlarm === true) {
+      // Gece bildiriminden gelen toplu "Hepsini kapat" gaz kaçağında yapılmaz (YAYINDAN ÖNCE; hiçbir şey yazılmaz).
+      throw httpError(
+        409,
+        'Gaz alarmı sürüyor; elektrik anahtarlamak kıvılcım oluşturabileceği için toplu kapatma yapılmadı.',
+        'HAZARD_ACTIVE'
+      );
+    }
     const hasPlug = snap.lights.length > 0 ? await homeHasPlug(homeId) : false;
 
     // Çok panolu ev: ev konusu tüm panolara gider, numara çakışmaları komuttan ÖNCE ayıklanır (bkz. başlık).

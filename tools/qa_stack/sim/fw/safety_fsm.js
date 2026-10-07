@@ -8,6 +8,7 @@
 // Inceleme turu (entegrasyon): yeni tur = yeni alarm olayi [E2E-2]; FAULT kilit kaydindan FAULT olarak doner, geri bildirim KAPALI
 // gorulmeden FAULT/kilit kalkmaz [EM-2]; acilista kapali komutlu iki roleli vanaya KAPAT darbesi [EM-3]; test sonu geri acma kullanici
 // kapatmasina ve acma iznine uyar [EM-4]; guvenli kipte acilis guvenli maskesi (imposeBootMask) [EM-5]; reconfigured eslemeyle tasir.
+// Faz 2 (F2.B.4): siren rolesi tehlike ve hirsiz isteginin VEYA'si (setIntrusionSiren, ayri butce); ARM_KEY vana surmez.
 import {
   MAX_ZONES, MAX_ACTUATORS, MAX_SENSORS, SensorSrc, SensorKind, HZ_ALL, HZ_GAS, HZ_SMOKE, hazardOf, isControlRole, sensorIdCode,
   makeSensorConfig,
@@ -26,12 +27,14 @@ export const zoneStText = (s) => ['normal', 'latched', 'fault', 'test'][s] ?? 'n
 
 export const Rej = Object.freeze({
   OK: 0, ZONE_LATCHED: 1, ZONE_TEST: 2, ACTUATOR_RELAY: 3, UNKNOWN_ACTUATOR: 4, BAD_STATE: 5, UNSUPPORTED: 6, CFG_CONFLICT: 7,
-  CFG_INVALID: 8, GAS_LOCAL_ONLY: 9, STALE_ACK: 10, SAFE_MODE: 11, BAD_CMD: 12, BUSY: 13,
+  CFG_INVALID: 8, GAS_LOCAL_ONLY: 9, STALE_ACK: 10, SAFE_MODE: 11, BAD_CMD: 12, BUSY: 13, NOT_READY: 14, CFG_STORAGE: 15, ARMED: 16,
 });
 const REJ_TEXT = [
   '', 'zone_latched', 'zone_test', 'actuator_relay', 'unknown_actuator', 'bad_state', 'unsupported', 'cfg_conflict', 'cfg_invalid',
-  'gas_local_only', 'stale_ack', 'safe_mode', 'bad_cmd', 'busy',
+  'gas_local_only', 'stale_ack', 'safe_mode', 'bad_cmd', 'busy', 'not_ready', 'cfg_storage', 'armed',
 ];
+/** Hirsiz siren tetigi (IntrusionCore -> setIntrusionSiren): FRESH butceyi her durumda sifirlar; RETRIGGER yalniz durmus sireni. */
+export const SirenKick = Object.freeze({ NONE: 0, FRESH: 1, RETRIGGER: 2 });
 export const rejText = (r) => REJ_TEXT[r] ?? '';
 
 export const Origin = Object.freeze({ REMOTE: 0, LOCAL_DI: 1, GAS_RESET: 2, SAFETY: 3 });
@@ -55,6 +58,8 @@ export class SafetyCore {
     this.zone_ = Array.from({ length: MAX_ZONES + 1 }, emptyZone);
     this.manualOn_ = new Array(MAX_ACTUATORS).fill(false);
     this.userSuppress_ = new Array(MAX_ACTUATORS).fill(false);
+    this.intrSuppress_ = new Array(MAX_ACTUATORS).fill(false);
+    this.intrReq_ = false;
     this.holdFired_ = new Array(MAX_SENSORS).fill(false);
   }
 
@@ -66,6 +71,8 @@ export class SafetyCore {
     this.cfgUsable_ = false; this.latchDirty_ = false; this.latchAssert_ = 0n; this.latchLevel_ = 0n; this.latchRecAssert_ = 0n;
     this.zone_ = Array.from({ length: MAX_ZONES + 1 }, emptyZone);
     this.manualOn_.fill(false); this.userSuppress_.fill(false); this.holdFired_.fill(false);
+    this.intrSuppress_ = new Array(MAX_ACTUATORS).fill(false);
+    this.intrReq_ = false;
     if (latch && latchValid(latch) && latchAny(latch)) {
       for (let z = 1; z <= MAX_ZONES; z++) {
         const lz = latch.z[z - 1];
@@ -93,6 +100,19 @@ export class SafetyCore {
 
   setConfigUsable(v) { this.cfgUsable_ = !!v; }
 
+  /** Hirsiz alarminin siren istegi (F2.B.4). req kalkinca kullanici bastirmasi da kalkar; cikis ayni turda surulur. */
+  setIntrusionSiren(req, kick, nowMs) {
+    if (!this.act_) return;
+    if (!req) this.intrSuppress_ = new Array(MAX_ACTUATORS).fill(false);
+    for (let i = 0; i < this.act_.count(); i++) {
+      if (this.act_.config(i).kind !== ActKind.SIREN) continue;
+      if (kick === SirenKick.FRESH || (kick === SirenKick.RETRIGGER && this.act_.intrusionLimited(i))) this.act_.restartIntrusion(i);
+    }
+    this.intrReq_ = !!req;
+    this.#driveSwitches(u32(nowMs));
+  }
+  intrusionSirenRequested() { return this.intrReq_; }
+
   /**
    * Calisirken yapilandirma degisti: elle acik / kullanici susturmasi / test vana bitleri fromOld eslemesiyle (actuatorIdentityMap; null =
    * hicbiri) tasinir, eslenmeyenler sifirlanir; politika yeni yapilandirmadan (policy_changed, via). Bolgeler korunur.
@@ -100,8 +120,10 @@ export class SafetyCore {
   reconfigured(via, nowMs, fromOld = null) {
     const man = this.manualOn_;
     const sup = this.userSuppress_;
+    const isup = this.intrSuppress_;
     this.manualOn_ = new Array(MAX_ACTUATORS).fill(false);
     this.userSuppress_ = new Array(MAX_ACTUATORS).fill(false);
+    this.intrSuppress_ = new Array(MAX_ACTUATORS).fill(false);
     for (let z = 1; z <= MAX_ZONES; z++) {
       const Z = this.zone_[z];
       const tv = Z.testValves;
@@ -120,6 +142,7 @@ export class SafetyCore {
       if (i < 0 || i >= MAX_ACTUATORS) continue;
       this.manualOn_[j] = man[i];
       this.userSuppress_[j] = sup[i];
+      this.intrSuppress_[j] = isup[i];
     }
     this.holdFired_ = new Array(MAX_SENSORS).fill(false);
     if (this.cfg_) this.setPolicy(this.cfg_.pol.policy_on !== 0, via, nowMs);
@@ -226,9 +249,10 @@ export class SafetyCore {
       return Rej.OK;
     }
     if (safe) {
-      const was = this.manualOn_[i] || this.act_.on(i);
+      const was = this.manualOn_[i] || this.act_.on(i) || this.act_.intrusionOn(i);
       this.manualOn_[i] = false;
       if (this.#autoOn(i, nowMs)) this.userSuppress_[i] = true;
+      if (this.intrReq_ && a.kind === ActKind.SIREN) this.intrSuppress_[i] = true;   // hirsiz istegi de bu alarm donemi icin bastirilir
       if (was) this.#emit({ ...e, actOff: bit });
       return Rej.OK;
     }
@@ -514,7 +538,7 @@ export class SafetyCore {
     const presses = this.hub_.takeControlPresses();
     for (let i = 0; i < this.hub_.count(); i++) {
       const s = this.hub_.config(i);
-      if (!isControlRole(s.kind)) continue;
+      if (!isControlRole(s.kind) || s.kind === SensorKind.ARM_KEY) continue;   // ARM_KEY: IntrusionCore
       const zmask = s.zone === 0 ? 0x0F : zbit(s.zone);
       if (presses & (1n << BigInt(i))) {
         if (s.kind === SensorKind.ALARM_ACK) {
@@ -570,6 +594,7 @@ export class SafetyCore {
       const fo = this.#forceOff(i);
       if (fo) this.manualOn_[i] = false;
       this.act_.commandSwitch(i, !fo && ((au && !this.userSuppress_[i]) || this.manualOn_[i]), nowMs);
+      if (this.act_.config(i).kind === ActKind.SIREN) this.act_.commandIntrusion(i, this.intrReq_ && !this.intrSuppress_[i], nowMs);
     }
   }
 

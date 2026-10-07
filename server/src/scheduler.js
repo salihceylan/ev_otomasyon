@@ -28,6 +28,9 @@
 //     `scheduled_rule_runs` tablosuna yazilir.
 //   - Ayrica kanalin GUNCEL uc nokta tipi denetlenir (WP-L D4): role kurali panjur kanalinda,
 //     panjur kurali panjur olmayan ciftte calismaz ('skipped_invalid', yuva tuketilir).
+//   - Evde acik GAZ alarmi varsa (alarms kind='gas', status latched|fault|silenced) role/panjur kurali
+//     yayinlanmaz ('skipped_hazard', detail 'gas_alarm', yuva tuketilir; Faz 2 F2.A.4). Denetim cihaz
+//     sorgusunun icindedir (ek sorgu yok).
 //   - Kurallar `Promise.allSettled` ile sinirli es zamanlilikta ve kural basina zaman
 //     asimiyla calistirilir; bir kural digerini bloklamaz.
 //
@@ -296,8 +299,11 @@ const SQL = Object.freeze({
     'hu.role AS home_role, hu.installer_expires_at ' +
     'FROM users u LEFT JOIN home_users hu ON hu.user_id = u.id AND hu.home_id = $1 ' +
     'WHERE u.id = $2',
+  // Faz 2 F2.A.4: evde acik gaz alarmi (gas_alarm) AYNI sorguda okunur (ek sorgu yok; alarms_home_open_idx).
   devices:
-    'SELECT id, home_id, is_online FROM devices ' +
+    'SELECT id, home_id, is_online, ' +
+    "EXISTS (SELECT 1 FROM alarms a WHERE a.home_id = devices.home_id AND a.kind = 'gas' AND a.status IN ('latched', 'fault', 'silenced')) AS gas_alarm " +
+    'FROM devices ' +
     'WHERE home_id = $1 AND ($2::uuid IS NULL OR id = $2::uuid)',
   // WP-L D4: atesleme aninda kuralin kanal(lar)inin guncel uc nokta tipi (cozulen cihaz).
   target: 'SELECT channel_index, type, actuator_type FROM endpoints WHERE device_id = $1::uuid AND channel_index = ANY($2::int[])',
@@ -575,6 +581,12 @@ class Scheduler {
     // Hedef hala kuralla uyumlu mu? (pano yerlesimi degismis olabilir; kalici durum)
     const mismatch = await this._checkTarget(device, command);
     if (mismatch) return { status: 'skipped_invalid', detail: mismatch };
+
+    // Faz 2 F2.A.4: gaz kacaginda OTOMATIK anahtarlama tutusma kaynagidir; kural yayinlanmaz, yuva tuketilir
+    // (alarm pencere icinde kapansa bile gecikmis anahtarlama yapilmaz). Kullanicinin bilincli komutu engellenmez.
+    if (device.gas_alarm === true || device.gas_alarm === 't') {
+      return { status: 'skipped_hazard', detail: 'gas_alarm' };
+    }
 
     if (!device.is_online) {
       return { status: 'skipped_offline', detail: 'cihaz cevrimdisi', release: true };

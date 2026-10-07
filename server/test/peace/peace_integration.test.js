@@ -231,7 +231,7 @@ test('vadesi gelen ev: acik lamba + panjur -> TEK push, dogru Turkce govde, yaln
   const summary = await h.reminder.runTick();
 
   assert.deepEqual({ ...summary, errors: undefined }, {
-    zones: 1, candidates: 1, claimed: 1, clear: 0, sent: 1, noRecipients: 0, skippedOffline: 0, failed: 0, lost: 0, dryRun: 0, errors: undefined,
+    zones: 1, candidates: 1, claimed: 1, clear: 0, sent: 1, noRecipients: 0, skippedOffline: 0, skippedHazard: 0, failed: 0, lost: 0, dryRun: 0, errors: undefined,
   });
 
   // Alicilar: yalniz owner + resident (guest/service_user/pasif/askida/devre disi/baska ev HARIC)
@@ -614,7 +614,9 @@ test('PUT /me/push-tokens ile kaydolan cihaz gece push alir; DELETE sonrasi alma
 // ==============================================================================
 // 9. Statik sozlesme: durumlar / kolonlar / indeks <-> migration 030
 // ==============================================================================
+// Gecerli CHECK kumesi en son tanimdir: 030 (ilk) -> 034 (Faz 2: skipped_hazard). Sutun/indeks sozlesmesi 030'dan okunur.
 const migration = fs.readFileSync(path.join(ROOT, 'migrations', '030_peace_reminder.sql'), 'utf8');
+const statusMigration = fs.readFileSync(path.join(ROOT, 'migrations', '034_peace_skipped_hazard.sql'), 'utf8');
 const migration010 = fs.readFileSync(path.join(ROOT, 'migrations', '010_night_peace_and_child_lock.sql'), 'utf8');
 
 function logTableColumns() {
@@ -653,7 +655,7 @@ test('sozlesme: reminder claim/finish SQL kolonlari ve ON CONFLICT hedefi migrat
 });
 
 test('sozlesme: reminder\'in yazdigi TUM durumlar migration CHECK kumesinde', () => {
-  const allowed = migration.match(/CHECK \(status IN \(([^)]*)\)\)/)[1].split(',').map((s) => s.trim().replace(/'/g, ''));
+  const allowed = statusMigration.match(/CHECK \(status IN \(([^)]*)\)\)/)[1].split(',').map((s) => s.trim().replace(/'/g, ''));
   assert.ok(seenStatuses.size >= 5, `onceki testler yeterli durum uretmeli (gorulen: ${[...seenStatuses].join(',')})`);
   for (const s of seenStatuses) assert.ok(allowed.includes(s), `durum CHECK disinda: ${s}`);
   // Kaynakta DB'ye yazilan her durum sabiti de kume icinde olmali (henuz calismamis yollar dahil):

@@ -6,6 +6,9 @@
     <!-- Pano kurulum agina (internetsiz Wi-Fi) surec baglama (BoardNetworkPlugin): normal izinler, calisma zamani istegi yok. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <!-- Android 13+ bildirim izni (Faz 2 F2.C.5). Izin penceresi kendiliginden ACILMAZ; yalniz kullanici bildirimleri
+         acmak isteyince (PushCoordinator kurali). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <!-- allowBackup=false: oturum belirteclerinin/yerel verilerin bulut yedegine veya adb backup'a

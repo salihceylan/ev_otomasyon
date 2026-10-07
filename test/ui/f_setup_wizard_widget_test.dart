@@ -147,6 +147,8 @@ void main() {
       await tester.pump();
       await tapKey(tester, 'btn_commission');
       await pumpUntil(tester, env, () => present('handover_success_card'));
+      // Faz 2 F2.C.2: push ağ geçidi yokken kalan risk teslimde yazılır.
+      expect(find.byKey(const Key('handover_push_note')), findsOneWidget);
       expect(env.cloud.commissionChecks, hasLength(1));
       expect(find.byKey(const Key('handover_report')), findsOneWidget);
       final reportText = (tester.widget<SelectableText>(find.byKey(const Key('handover_report')))).data!;

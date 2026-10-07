@@ -2,12 +2,14 @@
 // testlerinin (ev_otomasyon_servis_yazilimi/waveshare_s3_demo/test/test_safety_cfg_edit/test_main.cpp) BIREBIR portu.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SensorKind, SensorSrc, defaultFlags, defaultConfirmMs, makeSensorConfig, MAX_SENSORS, MAX_ACTUATORS, MAX_RELAYS, NAME_LEN } from '../sim/fw/sensor_hub.js';
+import {
+  SensorKind, SensorSrc, defaultFlags, defaultConfirmMs, makeSensorConfig, MAX_SENSORS, MAX_ACTUATORS, MAX_RELAYS, NAME_LEN, SF_REACT, SF_ENTRY, SF_AWAY_ONLY,
+} from '../sim/fw/sensor_hub.js';
 import { ActKind, CloseMode, Medium, AF_FAN_EXPROOF, makeActuatorConfig } from '../sim/fw/actuator_map.js';
 import { defaultSafetyConfig, CfgErr, configCrc, DRY_HOLD_DEFAULT_MS } from '../sim/fw/safety_config.js';
 import {
   EditOp, editInit, applyEdit, isLoosening, removeBit16, remapActPos, writeConfigJson, planDump, writeDumpPart, DUMP_PART_CAP, actuatorIdentityMap,
-  diUseMask,
+  diUseMask, isGasRelease, isIntrusionLoosening,
 } from '../sim/fw/safety_cfg_edit.js';
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -217,4 +219,113 @@ test('fw_safety_cfg_edit: eylemci kimlik eslemesi', () => {
   map = actuatorIdentityMap(oldC, m2);
   assert.equal(map[0], -1);
   assert.equal(map[1], 1);
+});
+
+// Faz 2 (F2.B.3/B.7; Unity test_intrusion_edit_and_loosening + test_intrusion_json_fields).
+test('fw_safety_cfg_edit: hirsiz ayarlari (SET_INTRUSION, LAN serbestligi, ARM_KEY DI gecmisi kurali)', () => {
+  const c = base();
+  let ed = applyEdit(c, edit(EditOp.SET_INTRUSION));
+  assert.equal(ed.err, CfgErr.BAD_EDIT);
+  ed = applyEdit(c, edit(EditOp.SET_INTRUSION, { hasExit: 1, exitS: 60 }));
+  assert.equal(ed.err, CfgErr.OK);
+  assert.equal(ed.out.pol.exit_s, 60);
+  assert.equal(ed.out.pol.entry_s || 0, 0);
+  assert.equal(isLoosening(c, ed.out), false);
+  ed = applyEdit(c, edit(EditOp.SET_INTRUSION, { hasExit: 1, exitS: 60, hasEntry: 1, entryS: 1 }));
+  assert.equal(ed.out.pol.entry_s, 1);
+  assert.equal(isLoosening(c, ed.out), false);
+  assert.notEqual(configCrc(c), configCrc(ed.out));
+  const a = clone(c);
+  a.sens.push(sensor(9, SensorKind.DOOR, 1, 1));
+  a.nSens = 2;
+  const b = clone(a);
+  b.sens[1].flags = 0x01;
+  assert.equal(isLoosening(a, b), false);
+  b.nSens = 1; b.sens.pop();
+  assert.equal(isLoosening(a, b), false);
+  const k = clone(c);
+  k.sens.push(sensor(12, SensorKind.ARM_KEY, 0));
+  k.nSens = 2;
+  assert.equal(isLoosening(c, k, 0n), false);
+  assert.equal(isLoosening(c, k, 1n << 11n), true);
+  const d2 = clone(a);
+  d2.sens[1] = sensor(9, SensorKind.ARM_KEY, 0);
+  assert.equal(isLoosening(a, d2, 0n), true);
+  assert.equal(isLoosening(k, k, 1n << 11n), false);
+  assert.equal(isLoosening(k, c, 1n << 11n), false);
+  assert.ok((diUseMask(k) & (1n << 11n)) !== 0n);
+});
+
+test('fw_safety_cfg_edit: hirsiz JSON alanlari (intrusion policy ardinda, door flags 9, arm_key; cfg_dump 1. parca)', () => {
+  const c = base();
+  c.pol.exit_s = 60;
+  c.sens.push(sensor(9, SensorKind.DOOR, 1, 1), sensor(10, SensorKind.ARM_KEY, 0));
+  c.nSens = 3;
+  const s = writeConfigJson(c);
+  assert.ok(s.includes('"policy":{"on":true,"dry_hold_ms":10000},"intrusion":{"exit_s":60,"entry_s":0},"zones":['));
+  assert.ok(s.includes('{"id":"d9","kind":"door","zone":1,"active_open":1,"flags":9,'));
+  assert.ok(s.includes('{"id":"d10","kind":"arm_key","zone":0,'));
+  const parts = planDump(c, DUMP_PART_CAP);
+  assert.equal(parts.length, 1);
+  assert.ok(writeDumpPart(c, parts[0], 1, 1, 'U').includes('"intrusion":{"exit_s":60,"entry_s":0}'));
+});
+
+// Faz 2 incelemesi G-1a (Unity test_gas_release_rules): bulut yolu gaz vanasini uzaktan acilabilir kilamaz (karar 7.2b-8).
+test('fw_safety_cfg_edit: gaz vanasini acilabilir kilan degisiklik (isGasRelease; G-1a)', () => {
+  const a = base();
+  a.act.push(valve(9, Medium.GAS, CloseMode.ENERGIZE_TO_CLOSE, 0x02));
+  a.nAct = 4;
+  a.sens.push(sensor(4, SensorKind.GAS, 2, 1), sensor(8, SensorKind.GAS_RESET, 2), sensor(10, SensorKind.DOOR, 1, 1));
+  a.nSens = 4;
+  const mut = (fn) => { const b = clone(a); fn(b); return b; };
+  assert.equal(isGasRelease(a, clone(a)), false);
+  assert.equal(isGasRelease(a, mut((b) => { b.act[3].medium = Medium.WATER; })), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.act.pop(); b.nAct = 3; })), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.act[3].relay = 11; })), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.act[3].close_mode = CloseMode.DEENERGIZE_TO_CLOSE; })), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.act[3].kind = ActKind.GENERIC; })), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.act.shift(); b.nAct = 3; })), false);
+  const zone = mut((b) => { b.act[3].zone_mask = 0x01; });
+  assert.equal(isGasRelease(a, zone), false);
+  assert.equal(isLoosening(a, zone), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.act[0].medium = Medium.GAS; })), false);
+  assert.equal(isGasRelease(a, mut((b) => { b.sens[3].kind = SensorKind.GAS_RESET; b.sens[3].zone = 2; })), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.sens[2].zone = 1; })), true);
+  const fresh = mut((b) => { b.sens.push(sensor(20, SensorKind.GAS_RESET, 2)); b.nSens = 5; });
+  assert.equal(isGasRelease(a, fresh, 0n), false);
+  assert.equal(isGasRelease(a, fresh, 1n << 19n), true);
+  assert.equal(isGasRelease(a, mut((b) => { b.sens.splice(1, 1); b.nSens = 3; })), false);
+});
+
+// Faz 2 incelemesi G-1b (Unity test_intrusion_loosening_rules): kurulu kipte buluttan uygulanamayan hirsiz zayiflatmasi.
+test('fw_safety_cfg_edit: hirsiz alarmini zayiflatan degisiklik (isIntrusionLoosening; G-1b)', () => {
+  const a = base();
+  a.sens.push(sensor(9, SensorKind.DOOR, 1, 1), sensor(10, SensorKind.WINDOW, 1, 1), sensor(11, SensorKind.MOTION, 2, 0));
+  a.nSens = 4;
+  a.pol.exit_s = 30;
+  a.pol.entry_s = 20;
+  const mut = (fn, from = a) => { const b = clone(from); fn(b); return b; };
+  assert.equal(isIntrusionLoosening(a, clone(a)), false);
+  const noReact = mut((b) => { b.sens[2].flags = 0; });
+  assert.equal(isIntrusionLoosening(a, noReact), true);
+  assert.equal(isLoosening(a, noReact), false);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens.splice(2, 1); b.nSens = 3; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[2].flags |= SF_AWAY_ONLY; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[2].flags |= SF_ENTRY; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[2].active_open = 0; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[2].confirm_ms = 2000; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[2].kind = SensorKind.WATER; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.pol.entry_s = 60; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.pol.entry_s = 0; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.pol.exit_s = 60; })), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.pol.entry_s = 10; b.pol.exit_s = 5; })), false);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[1].flags = SF_REACT; b.sens[3].flags = SF_REACT; b.sens[2].confirm_ms = 0; })), false);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens.push(sensor(12, SensorKind.DOOR, 2, 1)); b.nSens = 5; })), false);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[2].kind = SensorKind.DOOR; })), false);
+  const c = mut((b) => { b.sens[2].flags = 0; });
+  assert.equal(isIntrusionLoosening(c, mut((b) => { b.sens.splice(2, 1); b.nSens = 3; }, c)), false);
+  const key = mut((b) => { b.sens.push(sensor(13, SensorKind.ARM_KEY, 0, 1)); b.nSens = 5; });
+  assert.equal(isIntrusionLoosening(a, key, 0n), false);
+  assert.equal(isIntrusionLoosening(a, key, 1n << 12n), true);
+  assert.equal(isIntrusionLoosening(a, mut((b) => { b.sens[0] = sensor(3, SensorKind.ARM_KEY, 0, 1); })), true);
 });

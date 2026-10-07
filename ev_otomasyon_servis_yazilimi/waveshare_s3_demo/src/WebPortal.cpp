@@ -629,6 +629,7 @@ void WebPortal::setupRoutes() {
   route("/api/actuator", HTTP_POST, &WebPortal::handleApiActuator, Access::KEYED);
   route("/api/alarm/ack", HTTP_POST, &WebPortal::handleApiAlarmAck, Access::KEYED);
   route("/api/alarm/test", HTTP_POST, &WebPortal::handleApiAlarmTest, Access::KEYED);
+  route("/api/arm", HTTP_POST, &WebPortal::handleApiArm, Access::KEYED);
   route("/api/events", HTTP_GET, &WebPortal::handleApiEvents, Access::KEYED);
   route("/api/safety/config", HTTP_GET, &WebPortal::handleApiSafetyConfigGet, Access::KEYED);
   route("/api/safety/config", HTTP_POST, &WebPortal::handleApiSafetyConfigPost, Access::KEYED);
@@ -1983,6 +1984,32 @@ void WebPortal::handleApiAlarmTest() {
   postAndWait(c);
 }
 
+// POST /api/arm {mode:"away"|"home"|"off", uid?, id?} (Faz 2 F2.B.3/B.7): hirsiz alarmi kurma/cozme. Yerel anahtar resident duzeyindedir;
+// yanit {ok, id, rej?} (rej: not_ready | bad_state | safe_mode). Bilinmeyen alan 400 unknown_field, gecersiz kip 400 invalid_value.
+void WebPortal::handleApiArm() {
+  String body;
+  if (!readJsonBody(body)) return;
+  DynamicJsonDocument doc(jsonCapacityFor(body.length()));
+  if (!parseJsonObject(body, doc)) return;
+  JsonObject root = doc.as<JsonObject>();
+  for (JsonPair kv : root) {
+    const char* k = kv.key().c_str();
+    if (strcmp(k, "mode") && strcmp(k, "uid") && strcmp(k, "id")) { sendError(400, "unknown_field"); return; }
+  }
+  if (!lanUidMatches(root)) { sendError(400, "uid_mismatch"); return; }
+  if (!root["mode"].is<const char*>()) { sendError(400, "invalid_value"); return; }
+  const char* m = root["mode"].as<const char*>();
+  int32_t v;
+  if (!strcmp(m, "away")) v = (int32_t)safety::ArmMode::AWAY;
+  else if (!strcmp(m, "home")) v = (int32_t)safety::ArmMode::HOME;
+  else if (!strcmp(m, "off")) v = (int32_t)safety::ArmMode::OFF;
+  else { sendError(400, "invalid_value"); return; }
+  DeviceCommand c = makeCommand(CmdType::SAFETY_ARM, CmdSource::WEB, 0, v);
+  const char* err = nullptr;
+  if (!takeLanId(root, c, err)) { sendError(400, err); return; }
+  postAndWait(c);
+}
+
 // GET /api/events?after=<eid>: LAN olay halkasinin (son 32, onaylanmislar dahil) after'dan sonraki kayitlari, en cok 16; fazlasi "more".
 // Internetsiz uygulama alarm gecmisini buradan okur (K5).
 void WebPortal::handleApiEvents() {
@@ -2091,6 +2118,8 @@ void WebPortal::handleApiSafetyConfigPost() {
     case safety::CfgResult::LATCHED: sendError(409, "zone_latched"); break;
     case safety::CfgResult::LOOSEN: sendError(403, "local_loosen_forbidden"); break;
     case safety::CfgResult::STORAGE: sendError(500, "storage_error"); break;
+    case safety::CfgResult::GAS_LOCAL: sendError(403, "gas_local_only"); break;     // yalniz bulut yolunda uretilir (savunma)
+    case safety::CfgResult::ARMED: sendError(409, "armed"); break;
     default: sendError(503, "busy"); break;
   }
 }
