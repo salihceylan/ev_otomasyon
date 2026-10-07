@@ -103,6 +103,7 @@ test('baglanti: clean=false + sabit clientId + kimlik ortamdan; ev/+/status ve e
     assert.deepEqual(broker.subscribes[0].filters, [
       { topic: 'ev/+/status', qos: 1 },
       { topic: 'ev/+/state', qos: 1 },
+      { topic: 'ev/+/event', qos: 1 }, // WP-S2: guvenlik olaylari
     ]);
   });
 });
@@ -246,7 +247,7 @@ test('broker hic yokken bekleme suresi USTEL artar (+jitter, tavan 1 sn); broker
     // oturum yoktu (sessionPresent=false): kopru ACIKCA yeniden abone olmali; yoksa hic mesaj almazdi
     assert.equal(broker.connects[broker.connects.length - 1].sessionPresent, false);
     await waitFor(
-      () => broker.subscribes.some((s) => s.connectSeq >= connectsBefore && s.filters.length === 2 && String(s.clientId).startsWith('ev_backend_bridge_')),
+      () => broker.subscribes.some((s) => s.connectSeq >= connectsBefore && s.filters.length === 3 && String(s.clientId).startsWith('ev_backend_bridge_')),
       { label: 'yeniden abonelik' }
     );
     const device = await connectClient(port, { clientId: 'dev-after-restart' });

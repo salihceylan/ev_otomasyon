@@ -10,6 +10,7 @@
 //  * Ham komut API'leri panjur kanallarını ve channel=0 toplu AÇMAYI reddeder; tarama BLOKLAMAZ (ayrı görev).
 // ============================================================================
 #include "SmartAutomation.h"
+#include "safety/SafetyManager.h"
 #include "ModbusRtu.h"
 #include "WS_GPIO.h"
 #include <HardwareSerial.h>
@@ -374,6 +375,7 @@ static bool extChannelIsShutter(uint8_t channel1) {
 }
 
 bool SmartAutomation::rs485Send(const String& data, bool isHex) {
+  _rawSafetyRej = false;
   if (data.isEmpty()) return false;
 
   uint8_t frame[64];
@@ -418,6 +420,18 @@ bool SmartAutomation::rs485Send(const String& data, bool isHex) {
       if (addr != 0x00FF && energize && addr < 32 && extChannelIsShutter((uint8_t)(addr + 1))) {
         addRs485Log("[RED] Panjur kanalina ham ACMA yasak (interlock/olu zaman ShutterFsm'dedir).");
         return false;
+      }
+      // Güvenlik eylemcisi kanalı (spec §2.3 madde 4 [B2][Y-6]): yalnız güvenli yöne giden yazım; toplu yazım ve TOGGLE
+      // ek modülde eylemci varken reddedilir. Eylemci yoksa hiç tutmaz.
+      auto& sm = safety::SafetyManager::instance();
+      if (sm.hasExtActuator()) {
+        const bool toggle = (val == modbus::COIL_TOGGLE);
+        if (addr == 0x00FF || toggle ||
+            (addr < 32 && sm.rawRelayCheck((uint8_t)(8 + addr + 1), energize) == safety::RawDecision::REJECT)) {
+          addRs485Log("[RED] Guvenlik eylemcisi kanalina acma/toplu/TOGGLE ham yazim yasak (actuator_relay).");
+          _rawSafetyRej = true;
+          return false;
+        }
       }
     } else {
       addRs485Log("[RED] Bu Modbus islevi ham gonderimde yasak (yalniz 0x01-0x04 okuma ve tek coil 0x05).");
@@ -536,6 +550,20 @@ bool SmartAutomation::rs485ControlExtRelay(uint8_t slaveId, uint8_t channel, uin
     addRs485Log("[RED] Panjur kanalina ham ACMA/TOGGLE yasak (ShutterFsm uzerinden kullanin).");
     return false;
   }
+  // Güvenlik eylemcisi kanalı (spec §2.3 madde 4 [B2]): toplu yazım ve TOGGLE reddedilir; tek kanalda yalnız güvenli yön
+  // (çekirdeğe "kullanıcı kapattı" bildirilir). Ek modülde eylemci yoksa hiç tutmaz.
+  {
+    auto& sm = safety::SafetyManager::instance();
+    if (sm.hasExtActuator() && slaveId == ConfigManager::instance().config.ext_module_address) {
+      const uint8_t relay1 = (uint8_t)(8 + channel);
+      const bool isAct = channel != 0 && sm.actuatorOfRelay(relay1) >= 0;
+      if (channel == 0 || (isAct && action == 2) ||
+          (isAct && sm.rawRelay(relay1, action == 1, CmdSource::CLI, millis()) == safety::RawDecision::REJECT)) {
+        addRs485Log("[RED] Guvenlik eylemcisi kanalina acma/toplu/TOGGLE ham komut yasak (actuator_relay).");
+        return false;
+      }
+    }
+  }
   if (_scanState == ScanState::RUNNING) {
     addRs485Log("[RED] RS485 taramasi suruyor.");
     return false;
@@ -596,7 +624,11 @@ bool SmartAutomation::tryEnterScan() {
   if (_scanMutex == nullptr || xSemaphoreTake(_scanMutex, pdMS_TO_TICKS(200)) != pdTRUE) return false;
   bool entered = false;
   if (_scanState != ScanState::RUNNING) {
-    if (extShutterBusy()) {
+    if (safety::SafetyManager::instance().scanBlocked()) {
+      // Tarama sürerken ek modül yazımı/yoklaması durur: kilitli bölge ya da ek modülde eylemci/güvenlik sensörü varken
+      // güvenlik kör kalırdı [O-5][B6] (409 safety_active).
+      addRs485Log("[RED] Tarama baslatilamadi: guvenlik katmani etkin (kilit ya da ek modulde eylemci/sensor).");
+    } else if (extShutterBusy()) {
       addRs485Log("[RED] Tarama baslatilamadi: ek modul panjuru hareket halinde (once durdurun).");
     } else {
       _scanState = ScanState::RUNNING;

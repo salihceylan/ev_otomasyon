@@ -64,6 +64,10 @@ private:
   void onMessage(char* topic, byte* payload, unsigned int length);
   void handleCommand(const uint8_t* payload, unsigned int length);
   void handleSys(uint8_t* payload, unsigned int length);
+  void handleSetLocalKey(JsonObject root);
+  void publishEventsIfDue(uint32_t now);   // ev/{t}/event: EventOutbox'tan zamani gelen en eski olay (spec 3.4)
+  void publishCfgDump();                    // sys cfg_get -> cfg_dump parcalari (outbox disi, onaysiz) [Y6]
+  void rejectCmd(const char* id, uint8_t rej);
   bool leafCertificateValid();
   void watchStateChanges(uint32_t now);
   bool rememberId(const char* id);
@@ -91,6 +95,7 @@ private:
   NetUtil::Wait _sigCheck;               // durum gozcusu: 100 ms'de bir
 
   uint32_t _seq;
+  uint32_t _connectedAt;                 // aboneligin tamamlandigi an (olay tamponu penceresi)
   bool _noCredLogged;
 
   // ---- Yapilandirma kopyasi (gorev baglami; getter'lar _mutex ile okur) ----
@@ -105,6 +110,7 @@ private:
   char _topicState[72];
   char _topicCmd[72];
   char _topicSys[72];
+  char _topicEvent[72];
   char _clientId[32];
   char _uid[24];
 
@@ -121,6 +127,9 @@ private:
     uint8_t shutter[20];      // moving | dir<<1 | waiting<<3 | configured<<4
     uint8_t shutterTarget[20];
     char lastId[25];
+    uint32_t safetySig;       // guvenlik gorunumu imzasi (since_up haric)
+    uint32_t rejSeq;          // last_rej sayaci
+    bool timeOk;
   };
   StateSignature _publishedSig;
   bool _publishedSigValid;

@@ -146,6 +146,8 @@ public:
   // (komut kuyruğundan; bu çağrı başka görevden gelebilir), toplu KAPAT (0x00FF) -> bayrak. Panjur kanalına KAPAT panjuru DURDURUR.
   // Başka slave'e / modül kapalıyken / yankısız (susmuş modül) yapılan ham yazım uygulama durumunu ETKİLEMEZ.
   bool rs485Send(const String& data, bool isHex);
+  // Son rs485Send() guvenlik eylemcisi kurali (actuator_relay) yuzunden mi reddedildi? (cagiran gorev; WebPortal 409 icin)
+  bool rawSendSafetyRejected() const { return _rawSafetyRej; }
   String rs485GetLogs();
   void rs485ClearLogs();
 
@@ -165,6 +167,13 @@ public:
   bool rs485ControlExtRelay(uint8_t slaveId, uint8_t channel, uint8_t action, String* responseHex = nullptr);
 
   bool isExtModuleResponding() const { return _extModuleResponding; }
+
+  // ====== GÜVENLİK KATMANI (spec §2.3 madde 2) ======
+  // SafetyManager kararını KUYRUKSUZ uygular: _want[relayIdx] = level (0 tabanlı). executeCommand'ı KULLANMAZ: restart ve
+  // açılış-bekleme kapılarından muaftır, bip üretmez. Fiziksel yazımı yine stepOutputs yapar (tek yazıcı). Yalnız loop görevi.
+  void applySafetyOutput(uint8_t relayIdx, bool level);
+  // İstenen röle seviyeleri (bit = röle-1). Yalnız loop görevi (CLI'nin satır içi yapılandırma yaması yeni vananın konumunu benimser).
+  uint64_t wantMask() const;
   // Tanılama (seri CLI "STATUS"): bağımsız emniyet görevinin yığınında hiç kullanılmayan en az bayt sayısı (0 = görev yok).
   // Cihazda ilk yazımdan sonra kontrol edilmeli: < 1024 bayt ise yığın büyütülmelidir.
   uint32_t guardStackFreeBytes() const;
@@ -192,6 +201,7 @@ private:
   void armGuard(uint8_t pairIndex, uint32_t startMs, uint32_t maxRunMs);
   void disarmGuard(uint8_t pairIndex);
   static void guardTask(void* arg);
+  void guardSafeOutputs(uint32_t now);   // ValveGuard adımı (guard görevi, spec §5.1.5)
   static void shutdownHandler();
   void persistPositions(uint32_t now, bool force);
   void loadShutterPositions();
@@ -216,6 +226,9 @@ private:
   void handleLocalDrops(uint32_t now);
   void markChanged();
   void emergencyAllOff();
+  void safetyTick(uint32_t now);           // SafetyManager::tick + çıktıların her turda yeniden dayatılması (O(1) boşta)
+  void safetyServiceConfig(uint32_t now);  // çalışırken güvenlik yapılandırması değişimi + maske kopyaları (O(1) boşta)
+  void extOffExcept(uint32_t keepExt);     // ek modül: korunacak güvenli bitler dışındakileri KAPAT (en iyi çaba)
   void performRestart();
 
   // ---- RS485 (SmartAutomation_Rs485.cpp) ----
@@ -269,6 +282,11 @@ private:
   uint8_t _lastLocalPairMask;
   volatile bool _childLockEnabled;       // canlı bayrak (yalnız Core 1 yazar, her çekirdek okuyabilir)
   uint32_t _seenResetCount;               // ConfigManager::resetCount() ile fabrika sıfırlamayı fark etmek için
+  // Güvenlik katmanı maskeleri (SafetyManager::begin'den). Yapılandırılmamış panoda 0: bütün kancalar tutmaz (spec §2.9).
+  uint64_t _actuatorMask;                 // bit i = röle i+1 eylemci (yön kuralı, toplu kapatmadan muafiyet)
+  uint64_t _sensorDiMask;                 // bit i = DI i+1 sensör/kontrol rolü/geri bildirim (duvar butonu kararına girmez)
+  bool _localDiRead;                      // yerel DI'ler en az bir tur okundu (DiSensor "ok")
+  uint32_t _safetyMasksGen;               // SafetyManager::masksGen() kopyası (maskeler yenilendi mi)
 
   // ZAMAN KURALI (millis() 24,86 günde 2^31'i, 49,7 günde 2^32'yi aşar): "gelecekteki hedef" biçimindeki
   // (int32_t)(now - hedef) < 0 karşılaştırması, hedef 24,86 günden eskiyse YANLIŞ sonuç verir (ana döngü / röle yazımı
@@ -314,6 +332,7 @@ private:
   uint8_t _extFails;
   volatile bool _extModuleResponding;
   volatile bool _rawExtAllOff;           // ham toplu KAPAT (0x00FF) yansıtma isteği (herhangi bir görev yazar, loop() tüketir)
+  bool _rawSafetyRej;                     // son rs485Send guvenlik reddi (cagiran gorev yazar/okur)
   volatile ScanState _scanState;
   uint32_t _scanArg;
   uint32_t _scanDoneAt;

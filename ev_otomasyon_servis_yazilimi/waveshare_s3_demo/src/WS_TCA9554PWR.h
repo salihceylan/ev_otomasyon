@@ -56,6 +56,14 @@ TcaWriteResult TCA_WriteOutputsEx(uint8_t mask);           // "writeMask" (sonu�
 bool TCA_WriteOutputs(uint8_t mask);                       // TCA_WriteOutputsEx(mask) == TCA_WRITE_OK; bit i = röle i+1 AÇIK
 uint8_t TCA_OutputShadow(void);                            // son başarılı yazılan çıkış maskesi
 bool TCA_ClearBits(uint8_t clearMask);                     // acil kapatma: gölge & ~clearMask (kapatma her zaman serbest)
+// Bağımsız emniyet (ValveGuard, spec §5.1.5 [Y-8], WP-F3): çıkış yazmacının DONANIM değeri (gölge değil). I2C kilidi 80 ms içinde
+// alınamazsa ya da okunamazsa false (guard o turu atlar).
+bool TCA_ReadOutputHw(uint8_t* out);
+// Bağımsız emniyet: güvenli (enerjili) seviyesi 1 olan vana bitlerini KURAR. Panjur çifti bitleri (TCA_SetShutterPairs) REDDEDİLİR, böylece
+// interlock bozulamaz. Önce donanım okunup gölge eşitlenir (çip sıfırlanmasında düşen güvenli bit yeniden kurulur); diğer bitler fiziksel
+// durumlarında kalır. Kilit alınamazsa / okuma ya da yazım başarısızsa false.
+bool TCA_SetSafeBits(uint8_t mask);
+uint8_t TCA_ShutterPairMask(void);                         // bit p = (röle 2p, 2p+1) panjur çifti
 uint32_t TCA_WriteFailureCount(void);
 
 enum TcaVerifyResult : uint8_t {

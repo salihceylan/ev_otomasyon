@@ -268,6 +268,9 @@ class MqttClientTransport implements MqttTransport {
 ///   bayat kimlik atılır ve beklemeden **bir kez** taze kimlik alınır; sağlayıcı 401/403/404 verirse döngü durur.
 /// * İstemci kimliği: sunucunun verdiği `client_id`; yoksa `app_<kalıcı kurulum kimliği>_<oturum eki>`.
 /// * Canlı [linkStates]; abonelik grubundaki **tüm** iletiler işlenir; bozuk yük atılır ve sayılır.
+/// * `state v:3` (güvenlik modülü: `caps`, `sensors`, `actuators`, `safety`, `last_rej`) aynı [DeviceStatus]'a çözülür
+///   ([DeviceStatus.safety]); `v:2` yükü aynen çalışır. `ev/{t}/event` konusuna **abone olunmaz** (uygulama ACL'si
+///   değişmez, tasarım §3.4): güvenlik "kenarları" ardışık `state`'lerden türetilip [safetyEvents] ile yayınlanır.
 class EvMqttService {
   EvMqttService({
     MqttTransportFactory? transportFactory,
@@ -301,6 +304,10 @@ class EvMqttService {
   final _linkController = StreamController<MqttLinkState>.broadcast();
   final _stateController = StreamController<DeviceStateMessage>.broadcast();
   final _statusController = StreamController<DevicePresenceMessage>.broadcast();
+  final _safetyController = StreamController<SafetyEvent>.broadcast();
+
+  /// Pano (`uid`) başına son görülen güvenlik durumu: olay türetmenin tabanı. Oturum (start/stop) başına sıfırlanır.
+  final Map<String, SafetyState> _lastSafety = <String, SafetyState>{};
 
   MqttLinkState _link = MqttLinkState.disconnected;
   int _generation = 0;
@@ -324,6 +331,11 @@ class EvMqttService {
 
   /// Cihaz `status` iletileri (`online`/`offline`).
   Stream<DevicePresenceMessage> get statusMessages => _statusController.stream;
+
+  /// Güvenlik geçişleri (alarm başladı / susturuldu / kalktı, vana arızası, sensör arızası, güvenli kip, komut reddi):
+  /// pano başına ardışık `state v:3` görüntülerinin farkı ([SafetyEvent.between]). Bildirim/animasyon içindir; teslim
+  /// garantisi yoktur, gerçek durum [stateMessages]'taki [DeviceStatus.safety]'dir.
+  Stream<SafetyEvent> get safetyEvents => _safetyController.stream;
 
   /// Çözülemeyen / sınır dışı / yanlış konulu ileti sayısı (tanılama).
   int get droppedMessageCount => _dropped;
@@ -372,6 +384,7 @@ class EvMqttService {
     if (ended != null && !ended.isCompleted) ended.complete();
     _closeTransport();
     _topicId = null;
+    _lastSafety.clear();
     _setLink(MqttLinkState.disconnected);
   }
 
@@ -389,6 +402,7 @@ class EvMqttService {
     _linkController.close();
     _stateController.close();
     _statusController.close();
+    _safetyController.close();
   }
 
   void _setLink(MqttLinkState value) {
@@ -646,16 +660,18 @@ class EvMqttService {
           _dropped++;
           return;
         }
+        final status = DeviceStatus.fromJson(map, filterPhantomShutters: false);
         if (!_stateController.isClosed) {
           _stateController.add(
             DeviceStateMessage(
               topicId: expected,
-              status: DeviceStatus.fromJson(map, filterPhantomShutters: false),
+              status: status,
               retained: message.retained,
               receivedAt: now,
             ),
           );
         }
+        _emitSafetyEvents(status, retained: message.retained);
       case 'status':
         final online = _parsePresence(message.payload);
         if (online == null) {
@@ -674,6 +690,19 @@ class EvMqttService {
         }
       default:
         _dropped++;
+    }
+  }
+
+  void _emitSafetyEvents(DeviceStatus status, {required bool retained}) {
+    final next = status.safety;
+    final uid = status.uid ?? '';
+    final previous = _lastSafety[uid];
+    if (!next.supported && previous == null) return; // v:2 pano: iz tutulmaz
+    _lastSafety[uid] = next;
+    if (previous == next) return; // özdeş kalp atışı
+    if (_safetyController.isClosed) return;
+    for (final event in SafetyEvent.between(previous, next, retained: retained)) {
+      _safetyController.add(event);
     }
   }
 

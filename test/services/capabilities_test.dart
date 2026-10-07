@@ -22,6 +22,9 @@ void main() {
 
   const homeBase = <String>{'hasHomeAccess', 'canViewState', 'canControlDevices'};
   const groupAndLock = <String>{'canUseGroupCommands', 'canChangeChildLock'};
+  // Güvenlik (tasarım §5.2.4): kapatma herkes; onay + eylemci açma misafir hariç üyeler; test yönetici rolleri.
+  const safetyMember = <String>{'canCloseActuators', 'canAckAlarm', 'canControlActuators'};
+  const safetyManager = <String>{...safetyMember, 'canTestSafety'};
 
   test('süper kullanıcı (ev bağlamında, üye olmadan açık istisna)', () {
     final caps = Capabilities(globalRole: 'super_user', homeRole: null, hasActiveHome: true, now: now);
@@ -48,6 +51,7 @@ void main() {
       'canManageInventory',
       'canOpenServiceManagement',
       'canManageAdminAccounts',
+      ...safetyManager,
     });
   });
 
@@ -81,6 +85,7 @@ void main() {
       'canReissueDeviceCredential',
       'canViewInventory',
       'canOpenServiceManagement',
+      ...safetyManager,
     });
   });
 
@@ -112,6 +117,7 @@ void main() {
       'canSwitchMode',
       'canFetchLocalKey',
       'canReissueDeviceCredential',
+      ...safetyManager,
     });
   });
 
@@ -137,6 +143,7 @@ void main() {
       'canSwitchMode',
       'canFetchLocalKey',
       'canReissueDeviceCredential',
+      ...safetyManager,
     });
   });
 
@@ -156,6 +163,7 @@ void main() {
         'canEditDeviceHost',
         'canSwitchMode',
         'canFetchLocalKey', // cihaz kimliği yenileme ✖
+        ...safetyMember, // bölge testi ✖
       });
     }
   });
@@ -172,6 +180,7 @@ void main() {
       'isAuthenticated',
       'isGuest',
       ...homeBase,
+      'canCloseActuators', // vanayı kapatabilir; onay/açma/test ✖ (7.2b karar 4)
       // toplu ✖, çocuk kilidi ✖, kalibrasyon ✖, kural ✖, davet ✖, claim ✖, Wi-Fi/IP ✖
     });
   });

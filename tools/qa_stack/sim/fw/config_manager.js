@@ -29,7 +29,8 @@ export class NvsImage {
   constructor(file = null, { log = () => {} } = {}) {
     this.file = file;
     this.log = log;
-    this.data = { v: 2, cfg: null, auto: null, pos: null };
+    // safety (NVS_NS_SAFETY) fabrika sifirlamasinda silinir; latch (NVS_NS_LATCH) SILINMEZ (guvenlik katmani, spec 2.7 [Y-5]).
+    this.data = { v: 2, cfg: null, auto: null, pos: null, safety: null, latch: null };
     this.writes = 0;
     /** QA: yazmasi/silmesi BASARISIZ olacak NVS anahtarlari (ornek 'lk', 'ap_pw'); donanim durumu: yeniden acilista korunur. */
     this.failKeys = new Set();
@@ -39,7 +40,11 @@ export class NvsImage {
   #read() {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (raw && typeof raw === 'object') this.data = { v: 2, cfg: raw.cfg ?? null, auto: raw.auto ?? null, pos: raw.pos ?? null };
+      if (raw && typeof raw === 'object') {
+        this.data = {
+          v: 2, cfg: raw.cfg ?? null, auto: raw.auto ?? null, pos: raw.pos ?? null, safety: raw.safety ?? null, latch: raw.latch ?? null,
+        };
+      }
     } catch (_) {
       /* dosya yok/bozuk: bos flash */
     }
@@ -250,6 +255,7 @@ export class ConfigManager {
     this.nvs.put('cfg', kept);
     this.nvs.clear('auto');
     this.nvs.clear('pos');
+    if (this.nvs.get('safety')) this.nvs.clear('safety');   // guvenlik yapilandirmasi; kilit kaydi ('latch') bilincli olarak KALIR [Y-5]
     this.save();
     this.resetCount++;
     return true;

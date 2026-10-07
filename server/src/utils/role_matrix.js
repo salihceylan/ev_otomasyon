@@ -49,6 +49,16 @@ const CAPABILITIES = Object.freeze({
   device_credential: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER]),
   // Uygulama (salt-okunur) MQTT kimligi: her gecerli uye
   mqtt_credentials: ALL_ROLES,
+  // --- Guvenlik modulu (WP-S4, tasarim §5.2.4; misafir karari §7.2b-4) ---
+  // Guvenli yon: vanayi KAPATMAK, sireni/fani SUSTURMAK. Mevcut `control` ile ayni kume (misafir dahil).
+  actuator_close: ALL_ROLES,
+  // Alarm onayi / susturma: misafir YOK
+  safety_ack: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER, ROLES.RESIDENT]),
+  // Su vanasi acma, siren/fan/generic acma: misafir YOK. GAZ VANASI ACMA HICBIR ROLDE YOK (yalniz yerinde, [K-4]).
+  actuator_control: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER, ROLES.RESIDENT]),
+  // Bolge testi ve guvenlik yapilandirmasi: aile sakini ve misafir YOK
+  safety_test: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER]),
+  safety_config: Object.freeze([ROLES.SUPER, ROLES.STAFF, ROLES.SESSION, ROLES.OWNER]),
 });
 
 /**

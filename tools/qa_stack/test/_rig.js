@@ -20,8 +20,10 @@ export class Rig {
    * @param {object} [o.ext]
    * @param {(cm:ConfigManager)=>void} [o.configure]
    * @param {boolean} [o.skipBootHold] baslangicta 500 ms bekleme penceresini gec
+   * @param {object} [o.automation] Automation'a ek secenekler (ornek {safety:false} = guvenlik katmani HIC yok; esdegerlik testi)
    */
-  constructor({ t0 = 0, timeScale = 1, nvs = new NvsImage(null), ext = makeExt(0), configure = null, skipBootHold = true } = {}) {
+  constructor({ t0 = 0, timeScale = 1, nvs = new NvsImage(null), ext = makeExt(0), configure = null, skipBootHold = true, automation = {} } = {}) {
+    this.automationOpts = automation;
     this.t = u32(t0);
     this.nvs = nvs;
     this.ext = ext;
@@ -47,6 +49,7 @@ export class Rig {
       nvs: this.nvs,
       ext: this.ext,
       timeScale: this.timeScale,
+      ...this.automationOpts,
       hooks: {
         event: (type, f) => this.events.push({ t: this.t, type, ...f }),
         beep: (ms, reason) => this.beeps.push({ t: this.t, ms, reason }),

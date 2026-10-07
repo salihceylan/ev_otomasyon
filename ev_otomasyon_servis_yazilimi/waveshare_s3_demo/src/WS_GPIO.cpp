@@ -115,8 +115,14 @@ void Buzzer_Closs(void)
 }
 Buzzer_Indicate Buzzer_indicate[Buzzer_Indicate_Number];
 static uint8_t Buzzer_indicate_Num = 0;
+static volatile bool s_buzzerAlarm = false;     // guvenlik alarmi kipi (SafetyManager -> SmartAutomation, loopTask yazar)
+void Buzzer_SetAlarm(bool on)
+{
+  s_buzzerAlarm = on;
+}
 void Buzzer_Open_Time(uint16_t Time, uint16_t flicker_time) 
 {
+  if(s_buzzerAlarm) return;                     // alarm kipinde komut bipleri yutulur
   if(Buzzer_indicate_Num + 1 >= Buzzer_Indicate_Number)
   {
     printf("Note : The buzzer indicates that the cache is full and has been ignored\r\n");
@@ -131,7 +137,21 @@ void Buzzer_Open_Time(uint16_t Time, uint16_t flicker_time)
 }
 void BuzzerTask(void *parameter) {
   bool Buzzer_Flag = 0;
+  bool alarmWas = false;
+  uint16_t alarmTick = 0;
   while(1){
+    if(s_buzzerAlarm){                          // alarm kipi: 500 ms ac / 500 ms kapa (50 ms adim), FIFO beklemede
+      if((alarmTick / 10) % 2 == 0) Buzzer_Open(); else Buzzer_Closs();
+      alarmTick++;
+      alarmWas = true;
+      vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+    if(alarmWas){                               // alarm iptal edildi (ACK): sus
+      alarmWas = false;
+      alarmTick = 0;
+      Buzzer_Closs();
+    }
     if(Buzzer_indicate[0].Buzzer_Time)
     {
       Buzzer_Flag = 1;

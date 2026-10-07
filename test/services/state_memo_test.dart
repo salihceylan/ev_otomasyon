@@ -457,7 +457,7 @@ void main() {
               Capabilities(globalRole: g, homeRole: r, guestValidFrom: window.$1, guestValidUntil: window.$2, now: now),
       ];
       expect(all.length, greaterThan(100));
-      expect(all.first.toMap().length, 32);
+      expect(all.first.toMap().length, 36, reason: '32 temel + 4 güvenlik bayrağı');
 
       final mismatches = <String>[];
       var equalPairs = 0;

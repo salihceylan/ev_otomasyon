@@ -384,6 +384,7 @@ bool ConfigManager::resetToDefaults() {
   bool ok = eraseAppKeys();
   if (!clearNamespace(NVS_NS_AUTO)) ok = false;   // çocuk kilidi
   if (!clearNamespace(NVS_NS_POS)) ok = false;    // panjur konumları
+  if (!clearNamespace(NVS_NS_SAFETY)) ok = false; // güvenlik yapılandırması (NVS_NS_LATCH bilinçli olarak SİLİNMEZ [Y-5])
   if (!save()) ok = false;
   _resetCount = _resetCount + 1;                  // SmartAutomation RAM'deki çocuk kilidini de sıfırlar
   return ok;

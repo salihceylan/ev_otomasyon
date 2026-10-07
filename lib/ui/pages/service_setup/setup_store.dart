@@ -75,7 +75,9 @@ class SetupProgressRecord {
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
-        'v': 1,
+        // v:2 (WP-A4): Adım 7 verisine güvenlik ataması (`assign`, `inputs`) eklendi; v:1 kayıtları aynı ayrıştırıcıyla
+        // okunur (eksik alanlar varsayılan: lamba, duvar butonu).
+        'v': 2,
         'owner': ownerKey,
         'device_uuid': deviceUuid,
         'home_id': homeId,

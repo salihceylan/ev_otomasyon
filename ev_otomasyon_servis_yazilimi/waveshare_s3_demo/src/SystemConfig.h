@@ -44,6 +44,10 @@ struct DIConfig {
 #define NVS_NS_CFG   "ahbu_cfg"    // yapılandırma + kimlik/provizyon alanları
 #define NVS_NS_AUTO  "ahbu_auto"   // çocuk kilidi
 #define NVS_NS_POS   "ahbu_pos"    // panjur konumları
+// Güvenlik katmanı (spec §2.7) [Y-5]: "ahbu_safety" yapılandırmadır ve fabrika sıfırlamasında SİLİNİR;
+// "ahbu_latch" (kilit kaydı, act_pos, açılış sayacı, çökme kaydı, siren birikimi) fabrika sıfırlamasında SİLİNMEZ.
+#define NVS_NS_SAFETY "ahbu_safety"
+#define NVS_NS_LATCH  "ahbu_latch"
 
 // Yerel erişim anahtarı / AP parolası sınırları (docs/CONTRACTS.md §3)
 #define LOCAL_KEY_MIN_LEN   8

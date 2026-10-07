@@ -1,5 +1,8 @@
 import 'cloud_models.dart' show shutterBaseName;
 import 'json_utils.dart';
+import 'safety_models.dart';
+
+export 'safety_models.dart';
 
 /// Röle (cihaz durum JSON'unda `relays[]`). **Numaralar 1 tabanlıdır** (CONTRACTS §0).
 class RelayItem {
@@ -10,6 +13,7 @@ class RelayItem {
     required this.state,
     this.runtimeSec = 0,
     this.typeKnown = true,
+    this.actuator,
   });
 
   /// 1 tabanlı röle numarası.
@@ -23,6 +27,12 @@ class RelayItem {
 
   /// Cihaz `type` alanını bildirdi mi (bildirmediyse 0 varsayıldı).
   final bool typeKnown;
+
+  /// `state v:3` röle satırındaki `act` (K1): bu röle bir güvenlik eylemcisini (vana, siren, fan, genel) sürer.
+  /// `type` aynı kalır (eski istemci uyumu); eylemci rölesi lamba kartı DEĞİLDİR. `null` = eylemci değil.
+  final ActuatorKind? actuator;
+
+  bool get isActuator => actuator != null;
 
   bool get isLight => type == 0;
   bool get isShutterUp => type == 1;
@@ -77,6 +87,7 @@ class RelayItem {
       typeKnown: type != null,
       state: asBool(json['state']) ?? false,
       runtimeSec: clampInt(asInt(json['runtime_sec']) ?? 0, 0, 300),
+      actuator: ActuatorKind.tryParse(json['act']),
     );
   }
 
@@ -87,6 +98,7 @@ class RelayItem {
         state: state ?? this.state,
         runtimeSec: runtimeSec,
         typeKnown: typeKnown,
+        actuator: actuator,
       );
 }
 
@@ -290,6 +302,9 @@ class DeviceStatus {
     this.totalDis,
     this.extModuleEnabled,
     this.extModuleResponding,
+    this.stateVersion,
+    this.safety = SafetyState.unsupported,
+    this.lastRej,
   });
 
   final String deviceName;
@@ -357,6 +372,15 @@ class DeviceStatus {
   final bool? extModuleEnabled;
   final bool? extModuleResponding;
 
+  /// `state.v` (MQTT; LAN yanıtında yok). Sözleşme: tüketiciler `v >= 2` denetler, `v == 2` değil [O8].
+  final int? stateVersion;
+
+  /// Güvenlik modülü durumu (`v:3`: `caps`, `sensors`, `actuators`, `safety`). Eski panoda [SafetyState.unsupported].
+  final SafetyState safety;
+
+  /// Son reddedilen komut (`last_rej`). Komut hattı bunu görünce bekleyen komutu BEKLEMEDEN geri alır.
+  final SafetyRejection? lastRej;
+
   RelayItem? relayById(int id) {
     for (final r in relays) {
       if (r.id == id) return r;
@@ -376,11 +400,12 @@ class DeviceStatus {
         for (final s in shutters) ...[s.upRelay, s.downRelay],
       };
 
-  /// Aydınlatma / priz / darbe röleleri (panjur röleleri hariç).
+  /// Aydınlatma / priz / darbe röleleri (panjur röleleri ve güvenlik eylemcisi röleleri hariç: vana lamba kartına
+  /// düşmez, "tüm lambalar" sayaçları onu saymaz [Y3]).
   List<RelayItem> get controllableRelays {
     final skip = shutterRelayIds;
     return relays
-        .where((r) => (r.isLight || r.isImpulse) && !skip.contains(r.id))
+        .where((r) => (r.isLight || r.isImpulse) && !r.isActuator && !skip.contains(r.id))
         .toList(growable: false);
   }
 
@@ -436,6 +461,12 @@ class DeviceStatus {
       totalDis: asInt(json['total_dis']),
       extModuleEnabled: asBool(json['ext_module_enabled']),
       extModuleResponding: asBool(json['ext_module_responding']),
+      stateVersion: asInt(json['v']),
+      safety: SafetyState.fromStateJson(
+        json,
+        uid: asNonEmptyString(json['uid'])?.toUpperCase() ?? (deviceIsUid ? deviceField.toUpperCase() : null),
+      ),
+      lastRej: SafetyRejection.fromJson(json['last_rej']),
     );
   }
 
@@ -518,6 +549,9 @@ class DeviceStatus {
         timeSynced != other.timeSynced ||
         mqttConfigured != other.mqttConfigured ||
         mqttConnected != other.mqttConnected ||
+        stateVersion != other.stateVersion ||
+        lastRej != other.lastRej ||
+        safety != other.safety ||
         relays.length != other.relays.length ||
         dis.length != other.dis.length ||
         shutters.length != other.shutters.length) {
@@ -526,7 +560,9 @@ class DeviceStatus {
     for (var i = 0; i < relays.length; i++) {
       final a = relays[i];
       final b = other.relays[i];
-      if (a.id != b.id || a.name != b.name || a.type != b.type || a.state != b.state) return false;
+      if (a.id != b.id || a.name != b.name || a.type != b.type || a.state != b.state || a.actuator != b.actuator) {
+        return false;
+      }
     }
     for (var i = 0; i < dis.length; i++) {
       final a = dis[i];
@@ -588,6 +624,9 @@ class DeviceStatus {
       totalDis: totalDis,
       extModuleEnabled: extModuleEnabled,
       extModuleResponding: extModuleResponding,
+      stateVersion: stateVersion,
+      safety: safety,
+      lastRej: lastRej,
     );
   }
 }

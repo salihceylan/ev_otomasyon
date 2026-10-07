@@ -18,6 +18,11 @@ import {
   MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, RelayType, SHUTTER_RUNTIME_MIN_SEC, SHUTTER_RUNTIME_MAX_SEC, IMPULSE_MS_DEFAULT,
 } from './sysconfig.js';
 import { CmdType } from '../command_schema.js';
+import { SafetyManager, SafetyStore, SAFETY_CMD_TYPES, SafetyCmdType } from './safety_manager.js';
+import { planLocalGuard, extGuardBits, ExtGuardPacer } from './valve_guard.js';
+import { RawDecision } from './actuator_map.js';
+import { DiSensor } from './sensor_hub.js';
+import { Rej, rejText } from './safety_fsm.js';
 import {
   FC_READ_COILS, FC_READ_DISCRETE_INPUTS, FC_READ_HOLDING, FC_WRITE_SINGLE_COIL, COIL_ON, COIL_OFF, COIL_TOGGLE, Status,
   buildReadBits, buildWriteCoil, checkReadBits, checkWriteCoilEcho, frameCrcOk, getBit, hexString, moduleRespond, statusText,
@@ -49,7 +54,8 @@ const p2 = (n) => String(n).padStart(2, '0');
 /** SmartAutomation::ExtReadback */
 const Readback = Object.freeze({ PEER_OFF: 0, PEER_ON: 1, ALREADY_ON: 2, READ_FAILED: 3 });
 
-export const CmdSource = Object.freeze({ MQTT: 'mqtt', WEB: 'web', CLI: 'cli', DI: 'di', RULE: 'rule', QA: 'qa' });
+export const CmdSource = Object.freeze({ MQTT: 'mqtt', WEB: 'web', CLI: 'cli', DI: 'di', RULE: 'rule', SAFETY: 'safety', QA: 'qa' });
+export { SafetyCmdType };
 
 export function makeCommand(type, source, index = 0, value = 0) {
   return { type, source, index, value, id: '' };
@@ -79,15 +85,18 @@ export class TcaDriver {
     this.failWrites = 0;
   }
 
-  /** TCA9554PWR_Init: acilista hepsi KAPALI; onceki durum "her cift enerjiliydi" sayilir (ilk enerjileme olu zamana tabi). */
-  init(now) {
+  /**
+   * TCA9554PWR_Init: acilista hepsi KAPALI; onceki durum "her cift enerjiliydi" sayilir (ilk enerjileme olu zamana tabi).
+   * state: ilk cikis degeri (WS_Relay.cpp Relay_Init: guvenlik kilit kaydindaki yerel guvenli seviye; kilit yoksa 0).
+   */
+  init(now, state = 0) {
     if (this.i2cFail) return;               // 3 yazim denemesi basarisiz: guard/golge guncellenmez
-    this.latch = 0;
+    this.latch = state & 0xFF;
     this.cfgHw = 0;
     this.cfgShadow = 0;
     this.guard.forceHw(~0n & M64);
-    this.guard.commit(0, now);
-    this.shadow = 0;
+    this.guard.commit(BigInt(state & 0xFF), now);
+    this.shadow = state & 0xFF;
   }
 
   setShutterPairs(pairMask) { this.guard.setShutterPairs(pairMask & 0x0F); }
@@ -222,6 +231,35 @@ export class TcaDriver {
 
   writeOutputs(mask, now) { return this.writeEx(mask, now) === 'ok'; }
 
+  /** TCA_ReadOutputHw(): cikis yazmacinin DONANIM degeri (golge degil); okunamazsa null. */
+  readOutputHw() { return this.#readOk() ? this.latch : null; }
+
+  /** TCA_ShutterPairMask() */
+  shutterPairMask() { return this.guard.shutterPairs() & 0x0F; }
+
+  /**
+   * TCA_SetSafeBits(): guvenli seviyesi 1 olan vana bitlerini KURAR; panjur cifti bitleri suzulur (interlock bozulamaz). Once donanim okunup
+   * golge esitlenir (dusen bitler geri CEKILMEZ, yalniz istenen guvenli bitler eklenir); okunamazsa hicbir sey yazilmaz.
+   */
+  setSafeBits(mask, now) {
+    let deny = 0;
+    const pairs = this.shutterPairMask();
+    for (let p = 0; p < 4; p++) if (pairs & (1 << p)) deny |= 0x03 << (2 * p);
+    mask &= ~deny & 0xFF;
+    if (mask === 0) return true;
+    const rs = this.#resync(now);
+    if (rs.readFailed) return false;
+    const next = (this.shadow | mask) & 0xFF;
+    if (next === this.shadow) return true;
+    if (this.guard.check(next, now) !== Result.OK) return false;
+    if (!this.#writeRetry()) { this.writeFailures++; return false; }
+    this.guard.commit(next, now);
+    this.shadow = next;
+    this.latch = next;
+    this.event('tca_safe_bits_set', { mask });
+    return true;
+  }
+
   /** Acil kapatma: golgeden clearMask'i dusur (yalniz KAPATMA: interlock'a takilmaz). */
   clearBits(clearMask, now) { return this.writeOutputs(this.shadow & ~clearMask & 0xFF, now); }
 
@@ -255,8 +293,19 @@ export class Automation {
    * @param {number} [o.bootHoldMs]  acilis sonrasi komut/DI islenmeyen pencere (firmware: 500 ms)
    * @param {{event?:Function, beep?:Function, changed?:Function, preRestart?:Function, restart?:Function}} [o.hooks]
    */
-  constructor({ config, nvs, ext, timeScale = 1, hooks = {}, bootHoldMs = BOOT_HOLD_MS }) {
+  constructor({ config, nvs, ext, timeScale = 1, hooks = {}, bootHoldMs = BOOT_HOLD_MS, safety = true, safetyNonce, resetReason = 'poweron', epoch = null }) {
+    // firmware: NetUtil::isTimeSynced() ? time(nullptr) : 0 (alarm "since"); QA saat kaynagi (DeviceSimulator: SNTP modeli)
+    this.epochFn = typeof epoch === 'function' ? epoch : () => 0;
+    this.safetyMasksGen = 0;
     this.cm = config;
+    // Guvenlik katmani (safety/SafetyManager). QA: safety=false katmani HIC kurmaz (esdegerlik testi: "katman yokken" izi).
+    this.safetyOn = safety !== false;
+    this.safety = new SafetyManager({ nvs, bootNonce: safetyNonce });
+    this.resetReason = resetReason;
+    this.actuatorMask = 0n;      // bit i = role i+1 eylemci
+    this.sensorDiMask = 0n;      // bit i = DI i+1 sensor/kontrol rolu/geri bildirim
+    this.localDiRead = false;
+    this.buzzerAlarm = false;    // Buzzer_SetAlarm (WS_GPIO): alarm kipinde komut bipleri yutulur
     this.bootHoldMs = bootHoldMs;
     this.nvs = nvs;
     this.ext = ext;
@@ -318,6 +367,13 @@ export class Automation {
     this.emergencyStopAll = false;
     this.cmdDropped = 0;
     this.guards = Array.from({ length: MAX_PAIRS }, () => ({ start: 0, maxRun: 0, armed: false, tripped: false }));
+    // ValveGuard (WP-F3): loop'un yayinladigi guvenli tutma maskeleri (firmware s_safeMasks, spinlock) + tur sayaci; guard 50 ms'de bir.
+    this.safeMasks = { assert: 0n, level: 0n, gen: 0 };
+    this.loopBeat = 0;
+    this.guardHold = false;
+    this.extPacer = new ExtGuardPacer();
+    this.vgLast = null;
+    this.qaLoopStalled = false;   // QA: loopTask takildi (yalniz bagimsiz gorevler calisir)
     this.lastTcaVerify = 0;
     this.nowMs = 0;
 
@@ -342,7 +398,7 @@ export class Automation {
 
   markChanged() { this.stateChanged = true; }
 
-  beep(ms, reason = '') { this.hooks.beep?.(ms, reason); }
+  beep(ms, reason = '') { if (this.buzzerAlarm) return; this.hooks.beep?.(ms, reason); }
 
   /** Relay_SignalFailure(): surucu/emniyet hatasi sinyali. */
   signalFailure(reason) { this.event('failure_signal', { reason }); this.beep(400, 'failure'); }
@@ -440,18 +496,32 @@ export class Automation {
     // Acilis bekleme penceresi (500 ms) surucu olu zamanini da karsilar; pencere kisaltilmissa (QA/test) eksik kismi baslangic damgasindan dusulur
     const initAt = u32(now + this.bootHoldMs - BOOT_HOLD_MS);
     this.nowMs = now;
-    this.tca.init(initAt);
+    this.tca.init(initAt, this.safetyOn ? SafetyStore.readBootLatchLocal(this.nvs) : 0);   // Relay_Init: kilit kaydi + acilis guvenli maskesi (EM-1)
     this.syncConfig(now);
     this.rs485Begin(cfg.rs485_baud, now);
 
-    // POWER-ON STATE: lambalar KESINLIKLE KAPALI; panjurlar hareket etmez
+    // Guvenlik katmani (spec 5.1.6 madde 3): yapilandirma + kilit kaydi + act_pos, acilis kapatma blogundan ONCE.
+    let bootLevel = 0n;
+    if (this.safetyOn) {
+      this.safety.begin(this.diGate, now, cfg, this.resetReason);
+      this.actuatorMask = this.safety.actuatorMask();
+      this.sensorDiMask = this.safety.sensorDiMask();
+      if (this.sensorDiMask) DiSensor.releaseMomentary(this.diGate, this.sensorDiMask, now);
+      bootLevel = this.safety.bootLevelMask();
+      this.safetyMasksGen = this.safety.masksGen;
+    }
+
+    // POWER-ON STATE: lambalar KESINLIKLE KAPALI; panjurlar hareket etmez (ISTISNA: guvenlik eylemcilerinin acilis seviyesi)
     const totalR = cfg.totalRelays();
-    this.want.fill(false);
-    if (this.tca.writeOutputs(0x00, now)) this.syncLocalHw(0x00);
+    for (let i = 0; i < MAX_TOTAL_RELAYS; i++) this.want[i] = ((bootLevel >> BigInt(i)) & 1n) === 1n;
+    const bootLocal = Number(bootLevel & 0xFFn);
+    if (this.tca.writeOutputs(bootLocal, now)) this.syncLocalHw(bootLocal);
     if (cfg.ext_module_enabled && totalR > 8) {
       for (let i = 8; i < totalR; i++) { this.hw[i] = true; this.hwKnown[i] = false; }
       this.extGuard.forceHw((~0n & M64) << 8n & M64);
-      if (this.extAllOff()) {
+      if ((bootLevel >> 8n) !== 0n) {
+        // ek modulde enerjili kalmasi gereken guvenlik rolesi var: toplu KAPAT yazilmaz; digerleri stepExtOutputs ile tek tek KAPATILIR
+      } else if (this.extAllOff()) {
         for (let i = 8; i < totalR; i++) { this.hw[i] = false; this.hwKnown[i] = true; }
         this.extGuard.commit(0n, initAt);
       }
@@ -577,6 +647,15 @@ export class Automation {
       case CmdType.RELAY_SET:
       case CmdType.RELAY_TOGGLE: {
         if (idx >= totalR) { ok = false; reason = 'invalid_relay'; break; }
+        // Guvenlik eylemcisi rolesi (spec 2.3 madde 4): yalniz GUVENLI yone giden ham komut; acma yonu actuator_relay. Maske 0 ise tutmaz.
+        if (this.actuatorMask & (1n << BigInt(idx))) {
+          const level = cmd.type === CmdType.RELAY_SET ? cmd.value !== 0 : !this.want[idx];
+          if (this.safety.rawRelay(idx + 1, level, cmd.source, now) === RawDecision.REJECT) {
+            this.safety.noteReject(cmd.id, Rej.ACTUATOR_RELAY);
+            ok = false; reason = 'actuator_relay';
+          }
+          break;
+        }
         const rtype = cfg.relays[idx].type;
         // Acik komut, ham TOGGLE sonrasi bekleyen "fiziksel durumu benimse" istegini GECERSIZ kilar: kullanicinin son istegi kazanir
         // (aksi halde modul susup geri geldiginde coil yoklamasi fiziksel ACIK durumu istenen durum diye benimser, KAPAT komutu kaybolurdu).
@@ -619,7 +698,7 @@ export class Automation {
         break;
       }
       case CmdType.ALL_LIGHTS_OFF: {
-        for (let i = 0; i < totalR; i++) if (cfg.relays[i].type === RelayType.LIGHT) { this.want[i] = false; this.adoptNextPoll[i] = false; }   // acik komut bekleyen benimsemeyi gecersiz kilar
+        for (let i = 0; i < totalR; i++) if (cfg.relays[i].type === RelayType.LIGHT && !(this.actuatorMask & (1n << BigInt(i)))) { this.want[i] = false; this.adoptNextPoll[i] = false; }   // acik komut bekleyen benimsemeyi gecersiz kilar; eylemci roleleri haric
         this.beep(300, 'all_lights_off');
         break;
       }
@@ -654,7 +733,13 @@ export class Automation {
         break;
       }
       default:
-        ok = false; reason = 'unknown_type';
+        if (this.safetyOn && SAFETY_CMD_TYPES.has(cmd.type)) {
+          // Guvenlik katmani komutlari (spec 2.3 madde 1): karar SafetyCore'da; ret kodu last_rej olarak saklanir.
+          const r = this.safety.handleCommand(cmd, now);
+          if (r !== Rej.OK) { ok = false; reason = rejText(r); }
+        } else {
+          ok = false; reason = 'unknown_type';
+        }
         break;
     }
 
@@ -710,6 +795,44 @@ export class Automation {
 
   #disarmGuard(p) { if (p < MAX_PAIRS) this.guards[p].armed = false; }
 
+  #publishSafeMasks(assert, level) {
+    if (this.safeMasks.assert !== assert || this.safeMasks.level !== level) {
+      this.safeMasks = { assert, level, gen: (this.safeMasks.gen + 1) >>> 0 };
+    }
+    this.loopBeat = (this.loopBeat + 1) >>> 0;
+  }
+
+  /**
+   * ValveGuard adimi (guard gorevi, 50 ms): onceden kurulmus guvenli vana konumunu loop takilsa da korur. Yerel roleler DONANIMDAN okunur;
+   * okumadan sonra maske uretimi (gen) degistiyse tur atlanir. Ek modulde yalniz loop acliginda, en cok 1 sn'de bir korlemesine yazim.
+   */
+  #guardSafeOutputs(now) {
+    const m = this.safeMasks;
+    if (m.assert === 0n || this.guardHold) return;
+    this.extPacer.beat(this.loopBeat, now);
+    if ((m.assert & 0xFFn) !== 0n) {
+      const hw = this.tca.readOutputHw();
+      if (hw !== null && this.safeMasks.gen === m.gen) {
+        const plan = planLocalGuard(m.assert, m.level, hw, this.tca.shutterPairMask());
+        if (plan.clearBits) { this.event('valve_guard', { action: 'clear', bits: plan.clearBits, hw }); this.tca.clearBits(plan.clearBits, now); }
+        if (plan.setBits) { this.event('valve_guard', { action: 'set', bits: plan.setBits, hw }); this.tca.setSafeBits(plan.setBits, now); }
+      }
+    }
+    if ((m.assert >> 8n) !== 0n && this.extPacer.due(now)) {
+      const cfg = this.#cfg();
+      if (cfg.ext_module_enabled) {
+        const { on, off } = extGuardBits(m.assert, m.level);
+        this.event('valve_guard', { action: 'ext', on, off });
+        for (let b = 0; b < 32; b++) {
+          const bit = (1 << b) >>> 0;
+          if (!((on | off) & bit) || 8 + b >= cfg.totalRelays()) continue;
+          this.extWriteCoil(cfg.ext_module_address, b + 1, (on & bit) !== 0);
+        }
+      }
+      this.extPacer.wrote(now);
+    }
+  }
+
   /** Bagimsiz motor sure asimi emniyeti (guardTask): ana dongu kilitlense bile panjur rolesini keser. */
   #guardTask(now) {
     for (let p = 0; p < MAX_PAIRS; p++) {
@@ -728,6 +851,10 @@ export class Automation {
       }
       g.armed = false;
       g.tripped = true;
+    }
+    if (this.vgLast === null || u32(now - this.vgLast) >= 50) {
+      this.vgLast = now;
+      this.#guardSafeOutputs(now);
     }
   }
 
@@ -769,6 +896,7 @@ export class Automation {
   // --------------------------------------------------------------------------- girisler (DI)
   #checkDigitalInputs(now) {
     for (let i = 0; i < 8; i++) this.#handleDiEdge(i, this.rawDi[i], now);
+    this.localDiRead = true;
   }
 
   /** TEK KAPI: yerel ve ek modul girisleri HAM ornek olarak gelir; DiGate suzgec + cocuk kilidi + acted kararini verir. */
@@ -779,6 +907,8 @@ export class Automation {
     const cfg = this.#cfg();
     const d = cfg.dis[idx];
     this.markChanged();
+    // Sensor / kontrol rolu / geri bildirim DI'si duvar butonu kararina HIC girmez (spec 2.5). Maske 0 ise tutmaz.
+    if (this.sensorDiMask & (1n << BigInt(idx))) return;
     let shutterActive = false;
     if (d.target_relay >= 1 && d.target_relay <= cfg.totalRelays()) {
       const p = Math.floor((d.target_relay - 1) / 2);
@@ -805,6 +935,16 @@ export class Automation {
     }
     const pair1 = Math.floor((target - 1) / 2) + 1;
     const src = CmdSource.DI;
+    // Duvar butonu eylemci rolesine esliyse RELAY_SET yerine ACTUATOR_SET (acma izni denetiminden gecer). Maske 0 ise tutmaz.
+    if ((this.actuatorMask & (1n << BigInt(target - 1)))
+      && (dec.action === Action.RELAY_TOGGLE || dec.action === Action.RELAY_ON || dec.action === Action.RELAY_OFF)) {
+      const a = this.safety.actuatorOfRelay(target);
+      if (a < 0) return;
+      const engage = dec.action === Action.RELAY_TOGGLE ? !this.safety.actuatorEngaged(a) : dec.action === Action.RELAY_ON;
+      this.executeCommand(makeCommand(SafetyCmdType.ACTUATOR_SET, src, a + 1, engage ? 1 : 0), now);
+      this.event(pressed ? 'di_press' : 'di_release', { di: idx + 1, target_relay: target, actuator: a + 1, engage });
+      return;
+    }
     switch (dec.action) {
       case Action.RELAY_TOGGLE: this.executeCommand(makeCommand(CmdType.RELAY_TOGGLE, src, target), now); break;
       case Action.RELAY_ON: this.executeCommand(makeCommand(CmdType.RELAY_SET, src, target, 1), now); break;
@@ -1151,9 +1291,76 @@ export class Automation {
       this.#disarmGuard(p);
     }
     for (let i = 0; i < MAX_TOTAL_RELAYS; i++) { this.want[i] = false; this.impulseActive[i] = false; }
-    if (this.tca.writeOutputs(0x00, now)) this.syncLocalHw(0x00);
+    // KAPALI komutlu E2C vanalarin (ve guvenli kipte kilit/acilis maskesinin) guvenli seviyesi korunur [B1][EM-1]; eylemci yoksa keep = 0.
+    const keepL = this.safetyOn ? this.safety.shutdownKeepLocal() : 0;
+    const keepE = this.safetyOn ? this.safety.shutdownKeepExt() : 0;
+    for (let i = 0; i < 8; i++) if ((keepL >> i) & 1) this.want[i] = true;
+    for (let i = 8; i < MAX_TOTAL_RELAYS; i++) if ((keepE >>> (i - 8)) & 1) this.want[i] = true;
+    const outL = keepL ? (this.tca.outputShadow() & keepL) : 0x00;
+    if (this.tca.writeOutputs(outL, now)) this.syncLocalHw(outL);
     const cfg = this.#cfg();
-    if (cfg.ext_module_enabled && cfg.totalRelays() > 8) this.extAllOff();
+    if (cfg.ext_module_enabled && cfg.totalRelays() > 8) {
+      if (keepE === 0) this.extAllOff();
+      else this.#extOffExcept(keepE);
+    }
+  }
+
+  /** Ek modul: korunacak guvenli bitler (keepExt) DISINDAKI butun coil'leri KAPAT (tek tek). */
+  #extOffExcept(keepExt) {
+    const cfg = this.#cfg();
+    for (let i = 8; i < cfg.totalRelays(); i++) {
+      if ((keepExt >>> (i - 8)) & 1) continue;
+      if (this.extWriteCoil(cfg.ext_module_address, i - 8 + 1, false)) { this.hw[i] = false; this.hwKnown[i] = true; } else this.hwKnown[i] = false;
+    }
+  }
+
+  /** SmartAutomation::wantMask(): istenen role seviyeleri (bit = role-1). */
+  wantMask() {
+    let m = 0n;
+    for (let i = 0; i < MAX_TOTAL_RELAYS; i++) if (this.want[i]) m |= 1n << BigInt(i);
+    return m;
+  }
+
+  /** SmartAutomation::safetyServiceConfig: bekleyen yapilandirma isi + maske kopyalarinin yenilenmesi (yeni sensor DI'lerinde MOMENTARY artigi temizlenir). */
+  #safetyServiceConfig(now) {
+    if (!this.safetyOn) return;
+    if (this.safety.configPending()) this.safety.serviceConfig(now, this.wantMask());
+    if (this.safety.masksGen !== this.safetyMasksGen) {
+      this.safetyMasksGen = this.safety.masksGen;
+      const added = this.safety.sensorDiMask() & ~this.sensorDiMask;
+      this.actuatorMask = this.safety.actuatorMask();
+      this.sensorDiMask = this.safety.sensorDiMask();
+      if (added) DiSensor.releaseMomentary(this.diGate, added, now);
+      this.markChanged();
+    }
+  }
+
+  /** SmartAutomation::applySafetyOutput: want[relayIdx] = level (kuyruksuz; restart/acilis kapilarindan muaf, bip yok). */
+  applySafetyOutput(relayIdx, level) {
+    if (relayIdx >= MAX_TOTAL_RELAYS) return;
+    this.want[relayIdx] = !!level;
+    this.impulseActive[relayIdx] = false;
+    this.adoptNextPoll[relayIdx] = false;
+  }
+
+  /** SmartAutomation::safetyTick: sensorler -> cekirdek -> ciktilar her turda want'a yeniden dayatilir; kalicilik ciktilardan SONRA. */
+  #safetyTick(now) {
+    if (!this.safetyOn || !this.safety.active()) {
+      if (this.safeMasks.assert !== 0n) this.#publishSafeMasks(0n, 0n);   // katman bosa dustu: guard'in elinde eski maske kalmasin
+      return;
+    }
+    const cfg = this.#cfg();
+    this.safety.setDiHealth(this.localDiRead, cfg.ext_module_enabled && this.extDiInit && this.extModuleResponding && this.scan.state !== 'running');
+    this.safety.tick(now, this.epochFn());
+    const { assert, level } = this.safety.outputs();
+    for (let i = 0; i < MAX_TOTAL_RELAYS; i++) {
+      if ((assert >> BigInt(i)) & 1n) this.applySafetyOutput(i, ((level >> BigInt(i)) & 1n) === 1n);
+    }
+    const hold = this.safety.holdMasks();
+    this.#publishSafeMasks(hold.assert, hold.level);   // ValveGuard: guvenli vana konumu + tur sayaci
+    const alarm = this.safety.buzzer();
+    if (alarm !== this.buzzerAlarm) { this.buzzerAlarm = alarm; this.event('buzzer_alarm', { on: alarm }); }
+    this.safety.persist(now);
   }
 
   // --------------------------------------------------------------------------- RS485 servis katmani (SmartAutomation_Rs485.cpp)
@@ -1189,6 +1396,7 @@ export class Automation {
    * @returns {boolean}
    */
   rs485Send(data, isHex, now = this.nowMs) {
+    this.rawSendSafetyRejected = false;   // firmware _rawSafetyRej (WebPortal 409 actuator_relay)
     const text = String(data ?? '');
     if (text.length === 0) return false;
     let frame;
@@ -1210,6 +1418,14 @@ export class Automation {
         if (addr !== 0x00FF && energize && addr < 32 && this.#extChannelIsShutter(addr + 1)) {
           this.addRs485Log("[RED] Panjur kanalina ham ACMA yasak (interlock/olu zaman ShutterFsm'dedir).", now);
           return false;
+        }
+        // Guvenlik eylemcisi kanali: yalniz guvenli yon; toplu yazim ve TOGGLE ek modulde eylemci varken reddedilir.
+        if (this.safetyOn && this.safety.hasExtActuator()) {
+          if (addr === 0x00FF || val === COIL_TOGGLE || (addr < 32 && this.safety.rawRelayCheck(8 + addr + 1, energize) === RawDecision.REJECT)) {
+            this.addRs485Log('[RED] Guvenlik eylemcisi kanalina acma/toplu/TOGGLE ham yazim yasak (actuator_relay).', now);
+            this.rawSendSafetyRejected = true;
+            return false;
+          }
         }
       } else {
         this.addRs485Log('[RED] Bu Modbus islevi ham gonderimde yasak (yalniz 0x01-0x04 okuma ve tek coil 0x05).', now);
@@ -1293,6 +1509,15 @@ export class Automation {
     const energizes = action !== 0;
     if (channel === 0 && energizes) { this.addRs485Log("[RED] Toplu ACMA (channel=0) yasak: panjur interlock'u atlanir.", now); return out; }
     if (energizes && this.#extChannelIsShutter(channel)) { this.addRs485Log('[RED] Panjur kanalina ham ACMA/TOGGLE yasak (ShutterFsm uzerinden kullanin).', now); return out; }
+    // Guvenlik eylemcisi kanali: toplu yazim ve TOGGLE reddedilir; tek kanalda yalniz guvenli yon (cekirdege "kullanici kapatti").
+    if (this.safetyOn && this.safety.hasExtActuator() && slaveId === this.#cfg().ext_module_address) {
+      const relay1 = 8 + channel;
+      const isAct = channel !== 0 && this.safety.actuatorOfRelay(relay1) >= 0;
+      if (channel === 0 || (isAct && action === 2) || (isAct && this.safety.rawRelay(relay1, action === 1, CmdSource.CLI, now) === RawDecision.REJECT)) {
+        this.addRs485Log('[RED] Guvenlik eylemcisi kanalina acma/toplu/TOGGLE ham komut yasak (actuator_relay).', now);
+        return out;
+      }
+    }
     if (this.scan.state === 'running') { this.addRs485Log('[RED] RS485 taramasi suruyor.', now); return out; }
 
     const ok = this.extWriteCoil(slaveId, channel, action === 1 ? true : (action === 0 ? false : 'toggle'));
@@ -1347,6 +1572,10 @@ export class Automation {
   rs485StartScan(now = this.nowMs, specificBaud = 0) {
     if (specificBaud !== 0 && !RS485_BAUDS.includes(specificBaud)) return false;
     if (this.scan.state === 'running') return false;
+    if (this.safetyOn && this.safety.scanBlocked()) {
+      this.addRs485Log('[RED] Tarama baslatilamadi: guvenlik katmani etkin (kilit ya da ek modulde eylemci/sensor).', now);
+      return false;
+    }
     if (this.extShutterBusy()) {
       this.addRs485Log('[RED] Tarama baslatilamadi: ek modul panjuru hareket halinde (once durdurun).', now);
       return false;
@@ -1434,6 +1663,7 @@ export class Automation {
   }
 
   #performRestart(now) {
+    this.guardHold = true;   // kapatma yazimi ile yeniden baslatma arasinda guard mudahale etmez
     this.#emergencyAllOff(now);
     this.persistPositions(now, true);
     this.hooks.preRestart?.();
@@ -1445,6 +1675,7 @@ export class Automation {
     this.nowMs = now;
     this.#serviceScan(now);       // tarama gorevi (firmware: ayri gorev; ana donguden bagimsiz ilerler)
     this.#guardTask(now);         // bagimsiz emniyet gorevi (firmware: Core 0 gorevi) bekleme/yeniden baslatma sirasinda da calisir
+    if (this.qaLoopStalled) return;   // QA: loopTask takildi (TWDT'den once); yalniz bagimsiz gorevler calisir
 
     if (this.bootHoldActive) {
       if (u32(now - this.bootAt) < this.bootHoldMs) { this.#publishSnapshot(now); return; }
@@ -1455,6 +1686,11 @@ export class Automation {
       if (this.emergencyStopAll) {
         this.emergencyStopAll = false;
         for (let p = 0; p < MAX_PAIRS; p++) if (this.pairValid[p]) this.fsm[p].cmdStop(now);
+      }
+      // guvenlik katmani yeniden baslatma beklerken de calisir [O-4][B1]; bosta tutmaz
+      if (this.safetyOn && this.safety.active()) {
+        this.#checkDigitalInputs(now);
+        this.#safetyTick(now);
       }
       this.#stepOutputs(now);
       this.#processShutterEvents(now);
@@ -1467,9 +1703,11 @@ export class Automation {
     this.syncConfig(now);
     this.#tickShutters(now);
     this.#drainCommands(now);
+    this.#safetyServiceConfig(now);   // guvenlik yapilandirmasi degisimi (bekleyen is + maske kopyalari; bosta O(1))
     this.#applyRawExtAllOff(now);   // ham toplu KAPAT (0x00FF) yansitma istegi
     this.#tickImpulses(now);
     this.#checkDigitalInputs(now);
+    this.#safetyTick(now);          // guvenlik katmani: karar ayni turda surucuye ulasir (bosta O(1))
     this.#stepOutputs(now);
     this.#processShutterEvents(now);
     this.#pollExtModule(now);

@@ -4,6 +4,9 @@
 #include "WS_GPIO.h"
 #include "MqttManager.h"
 #include "ModbusRtu.h"
+#include "safety/SafetyManager.h"
+#include "safety/ValveGuard.h"
+#include "NetUtil.h"
 #include <HardwareSerial.h>
 #include <Preferences.h>
 #include <esp_task_wdt.h>
@@ -42,6 +45,7 @@ bool postDeviceCommand(const DeviceCommand& cmd) {
 
   DeviceCommand c = cmd;
   c.id[sizeof(c.id) - 1] = '\0';    // dışarıdan gelen kimlik her zaman sonlandırılmış olsun
+  c.aid[sizeof(c.aid) - 1] = '\0';
 
   const bool isStop = (c.type == CmdType::SHUTTER_STOP || c.type == CmdType::ALL_SHUTTERS_STOP);
   if (xQueueSend(q, &c, 0) == pdTRUE) return true;
@@ -69,6 +73,26 @@ struct GuardSlot {
 };
 static GuardSlot s_guard[MAX_TOTAL_RELAYS / 2];
 static portMUX_TYPE s_guardMux = portMUX_INITIALIZER_UNLOCKED;
+
+// ValveGuard (spec §5.1.5 [Y-8][B7], WP-F3): güvenlik katmanının "güvenli tutma" maskeleri. loopTask (safetyTick) her turda TEK yapı
+// olarak yazar, guard görevi aynı spinlock altında kopyalar (u64 32 bit Xtensa'da atomik değildir; iki ayrı değişken tutarsız okunurdu).
+// s_loopBeat her güvenlik turunda artar: guard ek modülde yalnız bu sayaç 1000 ms ilerlemezse (loop açlığı) yazar. Yapılandırılmamış
+// panoda maskeler 0'dır ve guard adımı ilk satırında döner (spec §2.9).
+static safety::SafeMasks s_safeMasks = {0, 0, 0};
+static uint32_t s_loopBeat = 0;
+static bool s_guardHold = false;               // planlı yeniden başlatma: kapatma yazımına guard karışmaz
+static safety::ExtGuardPacer s_extPacer;       // yalnız guard görevi
+
+static void publishSafeMasks(uint64_t assertMask, uint64_t levelMask) {
+  portENTER_CRITICAL(&s_guardMux);
+  if (s_safeMasks.assertMask != assertMask || s_safeMasks.levelMask != levelMask) {
+    s_safeMasks.assertMask = assertMask;
+    s_safeMasks.levelMask = levelMask;
+    s_safeMasks.gen++;
+  }
+  s_loopBeat++;
+  portEXIT_CRITICAL(&s_guardMux);
+}
 
 void SmartAutomation::armGuard(uint8_t p, uint32_t startMs, uint32_t maxRunMs) {
   if (p >= MAX_PAIRS) return;
@@ -121,7 +145,60 @@ void SmartAutomation::guardTask(void* arg) {
       s_guard[p].tripped = true;
       portEXIT_CRITICAL(&s_guardMux);
     }
+    self->guardSafeOutputs(millis());
     vTaskDelay(pdMS_TO_TICKS(50));
+  }
+}
+
+// ValveGuard adımı (guard görevi, Core 0, 50 ms): önceden kurulmuş güvenli vana konumunu loop takılsa da korur. Yerel röleler
+// DONANIMDAN okunur (TCA_ReadOutputHw; kilit 80 ms'de alınamazsa tur atlanır); okumadan sonra maskeler yeniden okunur ve arada loop yeni
+// bir karar yayınladıysa (gen değişti) bu tur hiçbir şey yazılmaz. Ek modülde yalnız loop açlığında, en çok 1 sn'de bir körlemesine yazım.
+void SmartAutomation::guardSafeOutputs(uint32_t now) {
+  safety::SafeMasks m;
+  uint32_t beat;
+  bool hold;
+  portENTER_CRITICAL(&s_guardMux);
+  m = s_safeMasks;
+  beat = s_loopBeat;
+  hold = s_guardHold;
+  portEXIT_CRITICAL(&s_guardMux);
+  if (m.assertMask == 0 || hold) return;
+  s_extPacer.beat(beat, now);
+
+  if ((m.assertMask & 0xFFULL) != 0) {
+    uint8_t hw = 0;
+    if (TCA_ReadOutputHw(&hw)) {
+      uint32_t gen2;
+      portENTER_CRITICAL(&s_guardMux);
+      gen2 = s_safeMasks.gen;
+      portEXIT_CRITICAL(&s_guardMux);
+      if (gen2 == m.gen) {
+        const safety::LocalGuardPlan plan = safety::planLocalGuard(m.assertMask, m.levelMask, hw, TCA_ShutterPairMask());
+        if (plan.clearBits) {
+          printf("[EMNIYET] Vana guvenli konumda degil (donanim 0x%02X): role(ler) 0x%02X KAPATILIYOR.\r\n", (unsigned)hw, (unsigned)plan.clearBits);
+          TCA_ClearBits(plan.clearBits);
+        }
+        if (plan.setBits) {
+          printf("[EMNIYET] Vana guvenli konumda degil (donanim 0x%02X): role(ler) 0x%02X yeniden KURULUYOR.\r\n", (unsigned)hw, (unsigned)plan.setBits);
+          TCA_SetSafeBits(plan.setBits);
+        }
+      }
+    }
+  }
+
+  if ((m.assertMask >> 8) != 0 && s_extPacer.due(now)) {
+    const SystemConfig& cfg = ConfigManager::instance().config;
+    if (cfg.ext_module_enabled) {
+      uint32_t onBits = 0, offBits = 0;
+      safety::extGuardBits(m.assertMask, m.levelMask, onBits, offBits);
+      printf("[EMNIYET] Ana dongu beslemiyor: ek modul vana role(ler)i guvenli seviyeye yaziliyor.\r\n");
+      for (uint8_t b = 0; b < 32; b++) {
+        const uint32_t bit = 1UL << b;
+        if (!((onBits | offBits) & bit) || (uint8_t)(8 + b) >= cfg.totalRelays()) continue;
+        extWriteCoil(cfg.ext_module_address, (uint8_t)(b + 1), (onBits & bit) ? modbus::COIL_ON : modbus::COIL_OFF, 150, nullptr, 1, 120);
+      }
+    }
+    s_extPacer.wrote(now);
   }
 }
 
@@ -141,8 +218,12 @@ SmartAutomation::SmartAutomation()
       _restartAt(0), _loopTask(nullptr), _guardHandle(nullptr),
       _started(false), _snapMutex(nullptr), _rs485Mutex(nullptr), _logMutex(nullptr), _scanMutex(nullptr),
       _rs485LogCount(0), _rs485Baud(9600), _lastExtCoilPoll(0), _extPollLast(0), _extPollGap(0), _extFails(0),
-      _extModuleResponding(false), _rawExtAllOff(false), _scanState(ScanState::IDLE), _scanArg(0), _scanDoneAt(0) {
+      _extModuleResponding(false), _rawExtAllOff(false), _rawSafetyRej(false), _scanState(ScanState::IDLE), _scanArg(0), _scanDoneAt(0) {
   memset(&_snap, 0, sizeof(_snap));
+  _actuatorMask = 0;
+  _sensorDiMask = 0;
+  _localDiRead = false;
+  _safetyMasksGen = 0;
   // _scanResult String içerir: memset YOK, alanlar tek tek (String'ler varsayılan boş)
   _scanResult.found = false;
   _scanResult.slaveId = 0;
@@ -319,19 +400,34 @@ void SmartAutomation::begin() {
   // RS485 Seri Portunu Başlat (ek modül olmasa da CLI/servis tarama için hazır)
   rs485Begin(cfg.rs485_baud);
 
+  // Güvenlik katmanı (spec §5.1.6 madde 3): yapılandırma + kilit kaydı + act_pos, açılış kapatma bloğundan ÖNCE.
+  // Yapılandırılmamış panoda maskeler ve açılış seviyesi 0'dır: aşağıdaki blok bugünküyle bit bit aynıdır.
+  auto& safetyMgr = safety::SafetyManager::instance();
+  safetyMgr.begin(&_diGate, now);
+  _actuatorMask = safetyMgr.actuatorMask();
+  _sensorDiMask = safetyMgr.sensorDiMask();
+  _safetyMasksGen = safetyMgr.masksGen();
+  if (_sensorDiMask) safety::DiSensor::releaseMomentary(_diGate, _sensorDiMask, now);   // MOMENTARY artığı [B17]
+  const uint64_t bootLevel = safetyMgr.bootLevelMask();     // yalnız eylemci bitleri (kilitli vana kapalı, gaz vanası kapalı, ...)
+
   // ADIM 15: Power-On State (Elektrik Kesintisi Güvenliği):
   // Gece elektrik kesilip geri geldiğinde lambaların varsayılan durumu KESİNLİKLE KAPALI (OFF) kalır.
   // Panjurlar hareket etmez. Yerel çıkışlar Relay_Init() ile zaten kapatıldı; burada tekrar doğrulanır.
+  // İSTİSNA: güvenlik eylemcilerinin açılış seviyesi (bootLevel; eylemci yoksa 0).
   const uint8_t totalR = cfg.totalRelays();
-  for (int i = 0; i < MAX_TOTAL_RELAYS; i++) _want[i] = false;
-  if (TCA_WriteOutputs(0x00)) syncLocalHw(0x00);
+  for (int i = 0; i < MAX_TOTAL_RELAYS; i++) _want[i] = ((bootLevel >> i) & 1ULL) != 0;
+  const uint8_t bootLocal = (uint8_t)(bootLevel & 0xFF);
+  if (TCA_WriteOutputs(bootLocal)) syncLocalHw(bootLocal);
   else printf("[HATA] Yerel rolelerin kapatilmasi dogrulanamadi!\r\n");
 
   if (cfg.ext_module_enabled && totalR > 8) {
     // Ek modül rölelerinin durumu BİLİNMİYOR: "açık olabilir" kabul edilir, KAPAT yazımı + coil okuması ile teyit edilir.
     for (int i = 8; i < totalR; i++) { _hw[i] = true; _hwKnown[i] = false; }
     _extGuard.forceHw(~0ULL << 8);
-    if (extAllOff()) {
+    if ((bootLevel >> 8) != 0) {
+      // Ek modülde enerjili kalması gereken güvenlik rölesi var: toplu KAPAT yazılmaz (modülün latch'i korunur);
+      // diğer röleler açılış beklemesinden sonra stepExtOutputs ile tek tek KAPATILIR, güvenlik röleleri _want ile tutulur.
+    } else if (extAllOff()) {
       for (int i = 8; i < totalR; i++) { _hw[i] = false; _hwKnown[i] = true; }
       _extGuard.commit(0, now);
     }
@@ -360,7 +456,10 @@ uint32_t SmartAutomation::guardStackFreeBytes() const {
 
 // esp_restart()/ESP.restart() ÇAĞRISI NEREDEN GELİRSE GELSİN (Web, MQTT, CLI, OTA) röleleri önce kapatır.
 void SmartAutomation::shutdownHandler() {
-  TCA_WriteOutputs(0x00);   // yalnızca KAPATMA: interlock'a takılmaz
+  // Yalnızca KAPATMA: interlock'a takılmaz. KAPALI komutlu enerjiyle-kapanan vananın (kilitli ya da kullanıcının kapattığı, gaz) ve güvenli
+  // kipte kilit/açılış maskesinin güvenli (enerjili) biti korunur [K-2][B1][EM-1]; güvenlik eylemcisi yoksa keep = 0 ve çağrı bugünküyle aynıdır.
+  const uint8_t keep = safety::SafetyManager::shutdownKeepLocal();
+  TCA_WriteOutputs(keep ? (uint8_t)(TCA_OutputShadow() & keep) : 0x00);
 }
 
 // ===============================================================================================
@@ -508,6 +607,18 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
         ok = false;
         break;
       }
+      // Güvenlik eylemcisi rölesi (spec §2.3 madde 4 [O4][B15]): yalnız GÜVENLİ yöne giden ham komut kabul edilir ve
+      // çekirdeğe "kullanıcı kapattı" olarak bildirilir; açma yönü actuator_relay ile reddedilir. Maske 0 ise hiç tutmaz.
+      if (_actuatorMask & (1ULL << idx)) {
+        const bool level = (cmd.type == CmdType::RELAY_SET) ? (cmd.value != 0) : !_want[idx];
+        auto& sm = safety::SafetyManager::instance();
+        if (sm.rawRelay((uint8_t)(idx + 1), level, cmd.source, now) == safety::RawDecision::REJECT) {
+          printf("[GUVENLIK] Role %u eylemci: acma yonundeki ham komut reddedildi (actuator_relay).\r\n", (unsigned)cmd.index);
+          sm.noteReject(cmd.id, safety::Rej::ACTUATOR_RELAY);
+          ok = false;
+        }
+        break;
+      }
       const uint8_t rtype = cfg.relays[idx].type;
       // Açık komut, ham TOGGLE sonrası bekleyen "fiziksel durumu benimse" isteğini GEÇERSİZ kılar: kullanıcının son isteği kazanır
       // (aksi halde modül susup geri geldiğinde coil yoklaması fiziksel AÇIK durumu istenen durum diye benimser, KAPAT komutu kaybolurdu).
@@ -581,7 +692,7 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
 
     case CmdType::ALL_LIGHTS_OFF: {
       for (uint8_t i = 0; i < totalR; i++) {
-        if (cfg.relays[i].type == RELAY_TYPE_LIGHT) { _want[i] = false; _adoptNextPoll[i] = false; }   // açık komut bekleyen benimsemeyi geçersiz kılar
+        if (cfg.relays[i].type == RELAY_TYPE_LIGHT && !(_actuatorMask & (1ULL << i))) { _want[i] = false; _adoptNextPoll[i] = false; }   // açık komut bekleyen benimsemeyi geçersiz kılar; eylemci röleleri hariç (vana lamba değildir)
       }
       Buzzer_Open_Time(300, 0);
       printf("Tum lambalar kapatildi.\r\n");
@@ -626,6 +737,21 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
       ConfigManager::instance().saveRelayRuntime(rDown);
       _fsm[idx].setTiming((uint32_t)cmd.value * 1000UL, (uint32_t)cmd.value * 1000UL, SHUTTER_DEAD_TIME_MS, SHUTTER_OVERRUN_MS);
       printf("[PANJUR %u] Calisma suresi %ld sn olarak kaydedildi.\r\n", (unsigned)cmd.index, (long)cmd.value);
+      break;
+    }
+
+    case CmdType::ACTUATOR_SET:
+    case CmdType::ALARM_ACK:
+    case CmdType::ALARM_TEST:
+    case CmdType::SAFETY_ARM:
+    case CmdType::CLIMATE_TARGET:
+    case CmdType::SCENE_RUN: {
+      // Güvenlik katmanı komutları (spec §2.3 madde 1): karar SafetyCore'da; ret kodu last_rej olarak saklanır.
+      const safety::Rej r = safety::SafetyManager::instance().handleCommand(cmd, now);
+      if (r != safety::Rej::OK) {
+        printf("[GUVENLIK] Komut reddedildi: %s\r\n", safety::rejText(r));
+        ok = false;
+      }
       break;
     }
 
@@ -792,6 +918,7 @@ void SmartAutomation::checkDigitalInputs(uint32_t now) {
   for (uint8_t i = 0; i < 8; i++) {
     handleDiEdge(i, digitalRead(diPins[i]) == LOW, now);   // LOW = kuru kontak DGND ile birleşti
   }
+  _localDiRead = true;
 }
 
 static_assert((int)digate::MODE_TOGGLE == (int)DI_MODE_TOGGLE && (int)digate::MODE_MOMENTARY == (int)DI_MODE_MOMENTARY &&
@@ -808,6 +935,9 @@ void SmartAutomation::handleDiEdge(uint8_t idx, bool closed, uint32_t now) {
   auto& cfg = ConfigManager::instance().config;
   const DIConfig& d = cfg.dis[idx];
   markChanged();                                         // DI durumu değişti: state.dis[] hemen yayınlansın
+  // Sensör / güvenlik kontrol rolü / vana geri bildirimi DI'si duvar butonu kararına HİÇ girmez (spec §2.5); seviyesini
+  // SafetyManager DiSensor üzerinden okur. Çocuk kilidinin "dropped" yutmasından da etkilenmez. Maske 0 ise tutmaz.
+  if (_sensorDiMask & (1ULL << idx)) return;
 
   // Hedef panjur hareket ediyor/bekliyor mu? (kilitliyken duvardan DURDURMA kararı için)
   bool shutterActive = false;
@@ -837,6 +967,19 @@ void SmartAutomation::runDiDecision(uint8_t idx, const digate::Decision& dec, ui
   else target = _diActTarget[idx];
   if (target < 1 || target > cfg.totalRelays()) return;
   const uint8_t pair1 = (uint8_t)((target - 1) / 2 + 1); // 1 tabanlı panjur çifti
+
+  // Duvar butonu bir eylemci rölesine eşliyse RELAY_SET yerine ACTUATOR_SET üretilir (spec §2.3 madde 4): açma isteği
+  // açma izni denetiminden geçer (kilitli bölgede vana açılmaz, gaz vanası butondan açılmaz). Maske 0 ise tutmaz.
+  if ((_actuatorMask & (1ULL << (target - 1))) &&
+      (dec.action == digate::RELAY_TOGGLE || dec.action == digate::RELAY_ON || dec.action == digate::RELAY_OFF)) {
+    auto& sm = safety::SafetyManager::instance();
+    const int8_t a = sm.actuatorOfRelay(target);
+    if (a < 0) return;
+    const bool engage = (dec.action == digate::RELAY_TOGGLE) ? !sm.actuatorEngaged((uint8_t)a) : (dec.action == digate::RELAY_ON);
+    executeCommand(makeCommand(CmdType::ACTUATOR_SET, CmdSource::DI, (uint8_t)(a + 1), engage ? 1 : 0), now);
+    printf("[DI-%u] Eylemci a%d -> %s\r\n", (unsigned)(idx + 1), (int)a + 1, engage ? "AC" : "KAPAT");
+    return;
+  }
 
   switch (dec.action) {
     case digate::RELAY_TOGGLE:  executeCommand(makeCommand(CmdType::RELAY_TOGGLE, CmdSource::DI, target), now); break;
@@ -1078,9 +1221,86 @@ void SmartAutomation::emergencyAllOff() {
     disarmGuard(p);
   }
   for (int i = 0; i < MAX_TOTAL_RELAYS; i++) { _want[i] = false; _impulseActive[i] = false; }
-  if (TCA_WriteOutputs(0x00)) syncLocalHw(0x00);
+  // KAPALI komutlu enerjiyle-kapanan vanaların (ve güvenli kipte kilit/açılış maskesinin) güvenli seviyesi korunur [B1][EM-1] (yalnız
+  // kapatma yönü: gölgede açık olan güvenli bit açık kalır). Güvenlik eylemcisi yoksa keep = 0 ve davranış bugünküyle aynıdır.
+  const uint8_t keepL = safety::SafetyManager::shutdownKeepLocal();
+  const uint32_t keepE = safety::SafetyManager::shutdownKeepExt();
+  for (int i = 0; i < 8; i++) if ((keepL >> i) & 1u) _want[i] = true;
+  for (int i = 8; i < MAX_TOTAL_RELAYS; i++) if ((keepE >> (i - 8)) & 1u) _want[i] = true;
+  const uint8_t outL = keepL ? (uint8_t)(TCA_OutputShadow() & keepL) : 0x00;
+  if (TCA_WriteOutputs(outL)) syncLocalHw(outL);
   auto& cfg = ConfigManager::instance().config;
-  if (cfg.ext_module_enabled && cfg.totalRelays() > 8) extAllOff();
+  if (cfg.ext_module_enabled && cfg.totalRelays() > 8) {
+    if (keepE == 0) extAllOff();
+    else extOffExcept(keepE);
+  }
+}
+
+// Ek modül: korunacak güvenli bitler (keepExt, röle 9.. -> bit 0..) DIŞINDAKİ bütün coil'leri KAPAT (tek tek, kısa zaman aşımı).
+void SmartAutomation::extOffExcept(uint32_t keepExt) {
+  auto& cfg = ConfigManager::instance().config;
+  const uint8_t totalR = cfg.totalRelays();
+  for (uint8_t i = 8; i < totalR; i++) {
+    if ((keepExt >> (i - 8)) & 1u) continue;
+    if (extWriteCoil(cfg.ext_module_address, (uint8_t)(i - 8 + 1), modbus::COIL_OFF, 20, nullptr, 1, 50)) {
+      _hw[i] = false;
+      _hwKnown[i] = true;
+    } else {
+      _hwKnown[i] = false;
+    }
+  }
+}
+
+void SmartAutomation::applySafetyOutput(uint8_t relayIdx, bool level) {
+  if (relayIdx >= MAX_TOTAL_RELAYS) return;
+  _want[relayIdx] = level;
+  _impulseActive[relayIdx] = false;
+  _adoptNextPoll[relayIdx] = false;
+}
+
+// SafetyManager turu: sensörler -> çekirdek -> çıktılar her turda _want'a yeniden dayatılır (spec §2.3 madde 2). Kilit kaydı
+// ve act_pos yazımı çıktılardan SONRA (vana komutu NVS'i beklemez, §5.1.6 madde 9). Boşta (yapılandırma/kilit yok) O(1).
+void SmartAutomation::safetyTick(uint32_t now) {
+  auto& sm = safety::SafetyManager::instance();
+  if (!sm.active()) {
+    if (s_safeMasks.assertMask != 0) publishSafeMasks(0, 0);   // katman boşa düştü: guard'ın elinde eski maske kalmasın (yazıcı yalnız bu görev)
+    return;
+  }
+  auto& cfg = ConfigManager::instance().config;
+  sm.setDiHealth(_localDiRead,
+                 cfg.ext_module_enabled && _extDiInit && _extModuleResponding && _scanState != ScanState::RUNNING);
+  sm.tick(now, NetUtil::isTimeSynced() ? (uint32_t)time(nullptr) : 0);   // epoch: alarm "since" (saat yoksa yalnız since_up)
+  uint64_t assertMask = 0, levelMask = 0;
+  sm.outputs(assertMask, levelMask);
+  for (uint8_t i = 0; i < MAX_TOTAL_RELAYS; i++) {
+    if ((assertMask >> i) & 1ULL) applySafetyOutput(i, ((levelMask >> i) & 1ULL) != 0);
+  }
+  uint64_t holdAssert = 0, holdLevel = 0;
+  sm.holdMasks(holdAssert, holdLevel);
+  publishSafeMasks(holdAssert, holdLevel);   // ValveGuard: güvenli vana konumu + tur sayacı
+  Buzzer_SetAlarm(sm.buzzer());
+  sm.persist(now);
+}
+
+// Çalışırken güvenlik yapılandırması (LAN/bulut/CLI yaması, WP-F5): bekleyen iş loopTask'ta uygulanır; eylemci/sensör maskeleri değiştiyse
+// kopyaları yenilenir (yeni sensör DI'lerinin MOMENTARY artığı temizlenir [B17]). Boşta iki karşılaştırma (O(1)).
+void SmartAutomation::safetyServiceConfig(uint32_t now) {
+  auto& sm = safety::SafetyManager::instance();
+  if (sm.configPending()) sm.serviceConfig(now, wantMask());
+  if (sm.masksGen() != _safetyMasksGen) {
+    _safetyMasksGen = sm.masksGen();
+    const uint64_t added = sm.sensorDiMask() & ~_sensorDiMask;
+    _actuatorMask = sm.actuatorMask();
+    _sensorDiMask = sm.sensorDiMask();
+    if (added) safety::DiSensor::releaseMomentary(_diGate, added, now);
+    markChanged();
+  }
+}
+
+uint64_t SmartAutomation::wantMask() const {
+  uint64_t m = 0;
+  for (uint8_t i = 0; i < MAX_TOTAL_RELAYS; i++) if (_want[i]) m |= 1ULL << i;
+  return m;
 }
 
 // ===============================================================================================
@@ -1110,6 +1330,9 @@ void SmartAutomation::requestRestart(uint32_t delayMs) {
 }
 
 void SmartAutomation::performRestart() {
+  portENTER_CRITICAL(&s_guardMux);
+  s_guardHold = true;                // kapatma yazımı ile yeniden başlatma arasında guard müdahale etmez (korunan bitler shutdown maskesindedir)
+  portEXIT_CRITICAL(&s_guardMux);
   emergencyAllOff();
   persistPositions(millis(), true);
   for (int i = 0; i < 4; i++) if (s_preRestartHooks[i]) s_preRestartHooks[i]();
@@ -1138,6 +1361,11 @@ void SmartAutomation::loop() {
       s_emergencyStopAll = false;
       for (uint8_t p = 0; p < MAX_PAIRS; p++) if (_pairValid[p]) _fsm[p].cmdStop(now);
     }
+    // Güvenlik katmanı yeniden başlatma beklerken de çalışır (sensör + kilit + yeniden dayatma) [O-4][B1]. Boşta tutmaz.
+    if (safety::SafetyManager::instance().active()) {
+      checkDigitalInputs(now);
+      safetyTick(now);
+    }
     stepOutputs(now);
     processShutterEvents(now);
     if ((int32_t)(now - _restartAt) >= 0) performRestart();
@@ -1149,9 +1377,11 @@ void SmartAutomation::loop() {
   syncConfig(now);                        // yapılandırma değişimi (geçerlilik/süre/interlock maskeleri)
   tickShutters(now);                      // FSM: süre dolumu, ölü zaman, bekleyen yön (sürücü teyidiyle)
   drainCommands(now);                     // kuyruk (MQTT/Web/CLI)
+  safetyServiceConfig(now);               // güvenlik yapılandırması değişimi (bekleyen iş + maske kopyaları; boşta O(1))
   applyRawExtAllOff(now);                 // ham toplu KAPAT (0x00FF) yansıtma isteği
   tickImpulses(now);
   checkDigitalInputs(now);                // yerel DI (ek modül DI'ları pollExtModule içinde örneklenir)
+  safetyTick(now);                        // güvenlik katmanı: karar aynı turda sürücüye ulaşır (boşta O(1))
   stepOutputs(now);                       // FSM çıkışını + istenen durumu sürücüye uygula (tek yer)
   processShutterEvents(now);              // loglar, buzzer, emniyet görevi kurma/bozma, konum kirli bayrağı
   pollExtModule(now);                     // RS485 ek modül girişleri/coil okuması (sınırlı sürede)

@@ -8,6 +8,7 @@ import '../config/app_config.dart';
 import '../models/api_models.dart';
 import '../models/cloud_models.dart';
 import '../models/json_utils.dart';
+import '../models/safety_models.dart';
 import '../models/scheduled_rule_model.dart';
 import 'api_exception.dart';
 import 'clock.dart';
@@ -913,6 +914,99 @@ class EvCloudApiService {
       totalBudget: _commandBudget,
     );
     return CommandResult.fromJson(_data(body));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Güvenlik modülü (tasarım §5.2.4; sunucu WP-S4). Yanıt `delivered` alanı taşımazsa iletildi SAYILMAZ (fail-closed):
+  // güvenlik komutunun "uygulandı" iddiası kanıtsız kabul edilmez. Onay panonun `state`'inden (`last_id` / `last_rej`).
+  // ---------------------------------------------------------------------------
+
+  /// Eylemci komutu: `POST /homes/:homeId/devices/:deviceId/actuators/:actuatorId {to, id}` (CONTRACTS §1.5d). [to]:
+  /// vana için `closed|open`, siren/fan/genel için `on|off` (panoya `{"actuator":…, "to":…, "uid":…, "id":…}` olarak
+  /// gider; §2.6). [commandId] panoya aynen iletilir ve `last_id` / `last_rej.id`'de geri yankılanır.
+  /// Sunucu ret kodları (409): `ZONE_ALARM_ACTIVE`, `GAS_LOCAL_ONLY`, `FIRMWARE_UNSUPPORTED`, `DEVICE_OFFLINE`.
+  Future<CommandResult> actuatorCommand({
+    required String homeId,
+    required String deviceId,
+    required String actuatorId,
+    required String to,
+    required String commandId,
+  }) async {
+    final body = await _call(
+      'POST',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceId)}/actuators/${_seg(actuatorId)}',
+      body: <String, dynamic>{'to': to, 'id': commandId},
+      homeId: homeId,
+      timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
+    );
+    return CommandResult.fromJson(_data(body), deliveredDefault: false);
+  }
+
+  /// Alarm onayı / susturma: `POST /homes/:homeId/alarms/:alarmId/ack {id}`. Panoya giden `alarm_ack`'in `aid`'si
+  /// sunucudaki kayıttan gelir; bayatsa pano `stale_ack` ile reddeder [Y-9]. Pano çevrimdışıysa sunucu isteği kaydeder.
+  Future<CommandResult> ackAlarm({
+    required String homeId,
+    required String alarmId,
+    required String commandId,
+  }) async {
+    final body = await _call(
+      'POST',
+      '/v1/homes/${_seg(homeId)}/alarms/${_seg(alarmId)}/ack',
+      body: <String, dynamic>{'id': commandId},
+      homeId: homeId,
+      timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
+    );
+    return CommandResult.fromJson(_data(body), deliveredDefault: false);
+  }
+
+  /// Bölge testi: `POST /homes/:homeId/devices/:deviceId/alarm-test {zone, id}`.
+  Future<CommandResult> alarmTest({
+    required String homeId,
+    required String deviceId,
+    required int zone,
+    required String commandId,
+  }) async {
+    final body = await _call(
+      'POST',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceId)}/alarm-test',
+      body: <String, dynamic>{'zone': zone, 'id': commandId},
+      homeId: homeId,
+      timeout: const Duration(seconds: 8),
+      totalBudget: _commandBudget,
+    );
+    return CommandResult.fromJson(_data(body), deliveredDefault: false);
+  }
+
+  /// Alarm listesi: `GET /homes/:homeId/alarms?state=open|all&before=<alarm id>` -> `data: {items:[…], next_before}`
+  /// (CONTRACTS §1.5d; yeniden eskiye). [before] bir önceki sayfanın `next_before`'u (alarm kimliği). Bozuk kayıt
+  /// listeyi düşürmez.
+  Future<List<AlarmRecord>> alarms(String homeId, {bool openOnly = true, String? before}) async {
+    final body = await _call(
+      'GET',
+      '/v1/homes/${_seg(homeId)}/alarms',
+      query: <String, String>{
+        'state': openOnly ? 'open' : 'all',
+        if (before != null && before.isNotEmpty) 'before': before,
+      },
+      homeId: homeId,
+    );
+    final items = _list(body, 'items');
+    return parseList(items.isNotEmpty ? items : _list(body, 'alarms'), AlarmRecord.fromJson, label: 'Alarm');
+  }
+
+  /// Panonun güvenlik yapılandırma kopyası (sensör/eylemci/bölge ADLARI; state'te ad yoktur [B12]):
+  /// `GET /homes/:homeId/devices/:deviceId/safety-config` -> `{device_uuid, rev, crc, updated_at, policy, zones,
+  /// lights, sensors, actuators}` (panonun `GET /api/safety/config` biçimi). Kopya henüz yoksa `404
+  /// CONFIG_NOT_AVAILABLE` ([ApiException]).
+  Future<Map<String, dynamic>> safetyConfig(String homeId, String deviceId) async {
+    final body = await _call(
+      'GET',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceId)}/safety-config',
+      homeId: homeId,
+    );
+    return _data(body);
   }
 
   /// Evin cihazları: `[{ device_uuid, name, online, last_seen_at, firmware }]`.

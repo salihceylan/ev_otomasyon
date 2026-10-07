@@ -171,7 +171,11 @@ class Capabilities {
         canViewInventory = false,
         canManageInventory = false,
         canOpenServiceManagement = false,
-        canManageAdminAccounts = false;
+        canManageAdminAccounts = false,
+        canCloseActuators = false,
+        canAckAlarm = false,
+        canControlActuators = false,
+        canTestSafety = false;
 
   /// Oturumsuz **yerel mod** + elle girilmiş/saklı cihaz anahtarı: yalnızca durum görme ve
   /// cihaz komutu (anahtar sahibi yerel ağda cihazı kullanabilir). Başka hiçbir yetki yoktur.
@@ -207,7 +211,12 @@ class Capabilities {
         canViewInventory = false,
         canManageInventory = false,
         canOpenServiceManagement = false,
-        canManageAdminAccounts = false;
+        canManageAdminAccounts = false,
+        // Yerel anahtar resident düzeyidir (role_matrix: local_key): kapat/onay/eylemci kontrolü var, bölge testi yok.
+        canCloseActuators = true,
+        canAckAlarm = true,
+        canControlActuators = true,
+        canTestSafety = false;
 
   const Capabilities._raw({
     required this.isAuthenticated,
@@ -242,6 +251,10 @@ class Capabilities {
     required this.canManageInventory,
     required this.canOpenServiceManagement,
     required this.canManageAdminAccounts,
+    required this.canCloseActuators,
+    required this.canAckAlarm,
+    required this.canControlActuators,
+    required this.canTestSafety,
   });
 
   factory Capabilities._compute({
@@ -303,6 +316,9 @@ class Capabilities {
     final localKey = homeAccess && (isStaffHome || isSession || isOwner || isResident);
     // Sunucu matrisi (device_credential): süper, staff, servis oturumu, owner.
     final deviceCredential = homeAccess && (isSuper || isStaffHome || isSession || isOwner);
+    // Güvenlik (tasarım §5.2.4; sunucu role_matrix: actuator_close / safety_ack / actuator_control / safety_test).
+    // Güvenli yön (vanayı kapat, sireni sustur) misafir dahil herkes; onay ve açma misafirde yok (7.2b karar 4).
+    final safetyMember = homeAccess && (isSuper || isStaffHome || isSession || isOwner || isResident);
 
     // Cihaz sahiplenme: oturum PIN'i ✖, misafir ✖; ev rolü olmayan sade kullanıcı ✔
     // (yeni müşteri ilk cihazını eşler); bilinmeyen ev rolü ✖.
@@ -346,6 +362,10 @@ class Capabilities {
       canManageInventory: isSuper,
       canOpenServiceManagement: isSuper || isStaffGlobal,
       canManageAdminAccounts: isSuper,
+      canCloseActuators: control,
+      canAckAlarm: safetyMember,
+      canControlActuators: safetyMember,
+      canTestSafety: homeAccess && isManagerLike,
     );
   }
 
@@ -450,6 +470,19 @@ class Capabilities {
   /// Yönetici hesapları (süper kullanıcı/servis sorumlusu oluşturma-düzenleme).
   final bool canManageAdminAccounts;
 
+  /// Güvenlik eylemcisini güvenli yöne götürme: vanayı kapatma, sireni/fanı kapatma. Misafir DAHİL.
+  final bool canCloseActuators;
+
+  /// Alarmı onaylama / susturma. Misafir ✖.
+  final bool canAckAlarm;
+
+  /// Eylemciyi güvenli olmayan yöne sürme: su vanasını açma, siren/fan/genel cihazı açma. Misafir ✖.
+  /// **Gaz vanası hiçbir rolde uygulamadan açılmaz** (yalnız yerinde) [K-4].
+  final bool canControlActuators;
+
+  /// Bölge testi (`alarm_test`): owner, kalıcı servis personeli, servis oturumu, süper kullanıcı.
+  final bool canTestSafety;
+
   /// Test/hata ayıklama için tüm bayrakların adlı görünümü.
   Map<String, bool> toMap() => <String, bool>{
         'isAuthenticated': isAuthenticated,
@@ -484,9 +517,14 @@ class Capabilities {
         'canManageInventory': canManageInventory,
         'canOpenServiceManagement': canOpenServiceManagement,
         'canManageAdminAccounts': canManageAdminAccounts,
+        'canCloseActuators': canCloseActuators,
+        'canAckAlarm': canAckAlarm,
+        'canControlActuators': canControlActuators,
+        'canTestSafety': canTestSafety,
       };
 
-  /// 32 bayrağın tek bir tamsayıdaki bit maskesi ([toMap] sırasıyla; bit 0 = [isAuthenticated]). `==`/`hashCode`
+  /// İlk 32 bayrağın tek bir tamsayıdaki bit maskesi ([toMap] sırasıyla; bit 0 = [isAuthenticated]); sonraki
+  /// bayraklar [_mask2]'dedir (web'de bit işlemleri 32 bitliktir: `1 << 32` kullanılmaz). `==`/`hashCode`
   /// bununla karşılaştırır: `context.select<AutomationState, Capabilities>` her bildirimde `==` çağırır ve eski
   /// uygulama her çağrıda iki 32'lik `Map` kuruyordu (PF-20). Sınıf `const` kurucular içerdiğinden `late final`
   /// alan kullanılamaz; maske her çağrıda 32 koşullu `OR` ile (ayırma olmadan) hesaplanır. Yeni bir bayrak
@@ -525,11 +563,18 @@ class Capabilities {
       (canOpenServiceManagement ? 1 << 30 : 0) |
       (canManageAdminAccounts ? 1 << 31 : 0);
 
-  @override
-  bool operator ==(Object other) => other is Capabilities && _mask == other._mask;
+  /// Güvenlik bayrakları ([toMap] sırasıyla, 33. bayraktan itibaren).
+  int get _mask2 =>
+      (canCloseActuators ? 1 << 0 : 0) |
+      (canAckAlarm ? 1 << 1 : 0) |
+      (canControlActuators ? 1 << 2 : 0) |
+      (canTestSafety ? 1 << 3 : 0);
 
   @override
-  int get hashCode => _mask.hashCode;
+  bool operator ==(Object other) => other is Capabilities && _mask == other._mask && _mask2 == other._mask2;
+
+  @override
+  int get hashCode => Object.hash(_mask, _mask2);
 
   @override
   String toString() {

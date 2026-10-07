@@ -177,6 +177,36 @@ class FakeDevice {
   /// MQTT kimliği yazılınca çağrılır (sahte bulut cihazı çevrimiçi yapar).
   void Function(String server, int port, String user, String pass)? onMqttConfigured;
 
+  // --- Güvenlik modülü (firmware v1.2.0, tasarım §3.2, §3.5; WP-A4) ---
+
+  /// Pano güvenlik yeteneği ilan ediyor mu (`caps`); `false`: v1.1 yazılımı (uçlar 404).
+  bool safetyCaps = false;
+
+  /// Ek röle modülü (`/api/config`, `/api/status`).
+  bool extEnabled = false;
+  int extAddress = 1;
+
+  /// Röle -> eylemci türü (`relays[].act`).
+  final Map<int, String> relayAct = <int, String>{};
+
+  /// Panonun bildirdiği eylemciler / sensörler (`state.actuators[]`, `state.sensors[]`).
+  final List<Map<String, dynamic>> boardActuators = <Map<String, dynamic>>[];
+  final List<Map<String, dynamic>> boardSensors = <Map<String, dynamic>>[];
+
+  /// Güvenlik yapılandırmasının sürümü ve panodaki yapılandırma (firmware biçimi: `{policy?, zones?, lights, sensors,
+  /// actuators}`; `null` = hiç yazılmadı). Yazım firmware F5 gibi TEK öğelik yamalarla olur ([safetyPatches]).
+  int safetyRev = 3;
+  Map<String, dynamic>? savedSafetyConfig;
+  final List<Map<String, dynamic>> safetyPatches = <Map<String, dynamic>>[];
+
+  /// `POST /api/alarm/test` ile test edilen bölgeler ve olay halkası (`GET /api/events`).
+  final List<int> alarmTests = <int>[];
+  final List<Map<String, dynamic>> events = <Map<String, dynamic>>[];
+
+  /// Bölge testinin sonucu: geri bildirimle ölçülen süre (`null` = geri bildirim yok).
+  int? testResultFbMs;
+  bool testResultOk = true;
+
   void _install() {
     _route('GET', '/api/status', _status);
     _route('GET', '/api/auth/check', _authCheck);
@@ -190,6 +220,10 @@ class FakeDevice {
     _route('GET', '/api/config', _config);
     _route('GET', '/api/child-lock', _childLockGet);
     _route('POST', '/api/child-lock', _childLockPost);
+    _route('GET', '/api/safety/config', _safetyConfigGet);
+    _route('POST', '/api/safety/config', _safetyConfigPost);
+    _route('POST', '/api/alarm/test', _alarmTest);
+    _route('GET', '/api/events', _events);
   }
 
   /// Ucu kaydeder. [unreachableDelay] > 0 iken erişilemeyen adrese giden istek önce o süre (sanal saat) bekler;
@@ -346,9 +380,23 @@ class FakeDevice {
       'total_dis': dis.length,
       'child_lock': childLock,
       'last_id': '',
+      if (extEnabled) 'ext_module_enabled': true,
+      if (safetyCaps) 'caps': <String>['safety', 'actuator', 'event', 'cfg'],
       'relays': <Map<String, dynamic>>[
-        for (final r in relays) <String, dynamic>{'id': r.id, 'name': r.name, 'type': r.type, 'state': r.state},
+        for (final r in relays)
+          <String, dynamic>{'id': r.id, 'name': r.name, 'type': r.type, 'state': r.state, 'act': ?relayAct[r.id]},
       ],
+      if (safetyCaps && (boardActuators.isNotEmpty || boardSensors.isNotEmpty)) ...<String, dynamic>{
+        'actuators': boardActuators,
+        'sensors': boardSensors,
+        'safety': <String, dynamic>{
+          'policy': 'on',
+          'mode': 'normal',
+          'zones': <Map<String, dynamic>>[
+            <String, dynamic>{'id': 1, 'st': 'normal'},
+          ],
+        },
+      },
       'shutters': <Map<String, dynamic>>[
         for (final s in shutters)
           <String, dynamic>{
@@ -524,6 +572,7 @@ class FakeDevice {
     if (denied != null) return denied;
     return _json(<String, dynamic>{
       'device_name': 'Pano',
+      if (extEnabled) ...<String, dynamic>{'ext_module_enabled': true, 'ext_module_address': extAddress},
       'total_relays': relays.length,
       'total_dis': dis.length,
       'relays': <Map<String, dynamic>>[
@@ -553,6 +602,110 @@ class FakeDevice {
     if (denied != null) return denied;
     childLock = (r.json?['enabled'] as bool?) ?? childLock;
     return _json(<String, dynamic>{'status': 'queued'});
+  }
+
+  http.Response _safetyConfigGet(RecordedRequest r) {
+    _reach(r);
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    if (!safetyCaps) return _err(404, 'not_found');
+    return _json(<String, dynamic>{'rev': safetyRev, 'crc': '00000000', ...?savedSafetyConfig});
+  }
+
+  http.Response _safetyConfigPost(RecordedRequest r) {
+    _reach(r);
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    if (!safetyCaps) return _err(404, 'not_found');
+    // Firmware F5 sözleşmesi (CONTRACTS §2.6): {base_rev?, set:{sensor|actuator|light:{…}}} ya da {base_rev?, del:{…}}.
+    final body = r.json ?? const <String, dynamic>{};
+    if (body.containsKey('base_rev') && body['base_rev'] != safetyRev) {
+      return _json(<String, dynamic>{'error': 'cfg_conflict', 'rev': safetyRev, 'crc': '00000000'}, status: 409);
+    }
+    final set = body['set'] is Map ? Map<String, dynamic>.from(body['set'] as Map) : null;
+    final del = body['del'] is Map ? Map<String, dynamic>.from(body['del'] as Map) : null;
+    final unknown = body.keys.where((k) => k != 'base_rev' && k != 'set' && k != 'del');
+    if ((set == null) == (del == null) || unknown.isNotEmpty || (set ?? del)!.length != 1) {
+      return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_field'}, status: 400);
+    }
+    final cfg = <String, dynamic>{
+      'lights': <Map<String, dynamic>>[],
+      'sensors': <Map<String, dynamic>>[],
+      'actuators': <Map<String, dynamic>>[],
+      ...?savedSafetyConfig,
+    };
+    List<Map<String, dynamic>> list(String k) =>
+        (cfg[k] as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    final sensors = list('sensors');
+    final actuators = list('actuators');
+    final lights = list('lights');
+    final what = (set ?? del)!.keys.single;
+    final value = (set ?? del)![what];
+    if (del != null) {
+      if (what == 'sensor') sensors.removeWhere((s) => s['id'] == value);
+      if (what == 'actuator') {
+        final idx = int.parse((value as String).substring(1)) - 1;
+        if (idx < 0 || idx >= actuators.length) return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_id'}, status: 400);
+        actuators.removeAt(idx);
+        for (var i = 0; i < actuators.length; i++) {
+          actuators[i]['id'] = 'a${i + 1}'; // silme sonraki kimlikleri kaydırır
+        }
+      }
+    } else {
+      final item = Map<String, dynamic>.from(value as Map);
+      if (what == 'sensor') {
+        final i = sensors.indexWhere((s) => s['id'] == item['id']);
+        if (i >= 0) {
+          sensors[i] = item;
+        } else {
+          sensors.add(item);
+        }
+      } else if (what == 'actuator') {
+        final id = item['id'] as String?;
+        if (id == null) {
+          actuators.add(<String, dynamic>{...item, 'id': 'a${actuators.length + 1}'});
+        } else {
+          final idx = int.parse(id.substring(1)) - 1;
+          if (idx < 0 || idx >= actuators.length) return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_id'}, status: 400);
+          actuators[idx] = item;
+        }
+      } else if (what == 'light') {
+        lights
+          ..removeWhere((l) => l['relay'] == item['relay'])
+          ..add(item);
+      } else {
+        return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_field'}, status: 400);
+      }
+    }
+    savedSafetyConfig = <String, dynamic>{...cfg, 'sensors': sensors, 'actuators': actuators, 'lights': lights};
+    safetyPatches.add(Map<String, dynamic>.of(body));
+    safetyRev++;
+    return _json(<String, dynamic>{'status': 'ok', 'rev': safetyRev, 'crc': '00000000'});
+  }
+
+  http.Response _alarmTest(RecordedRequest r) {
+    _reach(r);
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    if (!safetyCaps) return _err(404, 'not_found');
+    final zone = (r.json?['zone'] as int?) ?? 0;
+    alarmTests.add(zone);
+    events.add(<String, dynamic>{
+      'eid': 'a1b2c3d4-${events.length + 1}',
+      'type': 'test_result',
+      'zone': zone,
+      'ok': testResultOk,
+      'fb_ms': ?testResultFbMs,
+    });
+    return _json(<String, dynamic>{'ok': true, 'id': r.json?['id']});
+  }
+
+  http.Response _events(RecordedRequest r) {
+    _reach(r);
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    if (!safetyCaps) return _err(404, 'not_found');
+    return _json(<String, dynamic>{'events': events});
   }
 
   // --- test kancaları ---

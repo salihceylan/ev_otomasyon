@@ -891,8 +891,8 @@ const statusOf = async (j, o) => (await j('GET', '/api/wifi/status', o)).status;
 test('WP-W1 yol tablosu: 26 rota, 3\'u AP_OR_KEYED; SoftAP istemcisi anahtarsiz YALNIZ o 3 uca erisir, diger 20 uc 401 ve ISLEYICI CALISMAZ', async () => {
   const counts = {};
   for (const r of ROUTES) counts[r[3]] = (counts[r[3]] || 0) + 1;
-  assert.equal(ROUTES.length, 26);
-  assert.deepEqual(counts, { PUBLIC: 2, FACTORY: 1, KEYED: 20, AP_OR_KEYED: 3 });
+  assert.equal(ROUTES.length, 32);
+  assert.deepEqual(counts, { PUBLIC: 2, FACTORY: 1, KEYED: 26, AP_OR_KEYED: 3 });
   assert.deepEqual(ROUTES.filter((r) => r[3] === 'AP_OR_KEYED').map((r) => `${r[1]} ${r[0]}`).sort(), ['GET /api/wifi/scan', 'GET /api/wifi/status', 'POST /api/wifi/connect']);
 
   const { sim, j } = await startApSim();
@@ -917,6 +917,11 @@ test('WP-W1 yol tablosu: 26 rota, 3\'u AP_OR_KEYED; SoftAP istemcisi anahtarsiz 
       '/api/rs485/relay': { body: { slaveId: 1, channel: 1, action: 1 } },
       '/api/system/reboot': {},
       '/api/system/reset': {},
+      '/api/actuator': { body: { actuator: 'a1', to: 'closed' } },
+      '/api/alarm/ack': { body: { zone: 0 } },
+      '/api/alarm/test': { body: { zone: 1 } },
+      '/api/events': {},
+      '/api/safety/config': { body: { set: { zone: { id: 2, name: 'Yetkisiz' } } } },
     };
     const eventsBefore = sim.events.length;
     const cmdBefore = sim.counters.http_cmd;
@@ -939,7 +944,7 @@ test('WP-W1 yol tablosu: 26 rota, 3\'u AP_OR_KEYED; SoftAP istemcisi anahtarsiz 
         assert.deepEqual([r.status, r.json], [403, { error: 'already_provisioned' }], `${method} ${path}: FACTORY`);
       }
     }
-    assert.deepEqual([keyed, apOrKeyed], [20, 3]);
+    assert.deepEqual([keyed, apOrKeyed], [26, 3]);
 
     // KEYED isleyicilerin HICBIRI calismadi: ne durum ne olay ne yan etki
     const newEvents = sim.events.slice(eventsBefore).map((e) => e.type);

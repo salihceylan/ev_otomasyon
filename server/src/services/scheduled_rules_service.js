@@ -197,6 +197,11 @@ function checkChannelAgainstEndpoints(channelType, channel, endpoints) {
     if (t === 'shutter') {
       return { field: 'channel', message: `Kanal ${channel} bir panjura ayrılmış; röle kuralı yerine panjur kuralı oluşturun` };
     }
+    // WP-S2 [O6]: eylemci (vana/siren/fan) kanalina zamanli role kurali yazilmaz (lamba gibi acilamaz)
+    const ep = rows.find((e) => Number(e.channel_index) === channel);
+    if (ep && ep.actuator_type !== undefined && ep.actuator_type !== null) {
+      return { field: 'channel', message: `Kanal ${channel} bir güvenlik cihazına (vana/siren/fan) bağlı; zamanlı kural kurulamaz` };
+    }
     return null;
   }
 
@@ -270,7 +275,7 @@ function createService(deps = {}) {
 
   async function loadEndpoints(tx, homeId, deviceId) {
     const res = await tx.query(
-      'SELECT channel_index, type FROM endpoints WHERE home_id = $1 AND ($2::uuid IS NULL OR device_id = $2::uuid)',
+      'SELECT channel_index, type, actuator_type FROM endpoints WHERE home_id = $1 AND ($2::uuid IS NULL OR device_id = $2::uuid)',
       [homeId, deviceId || null]
     );
     return res.rows;

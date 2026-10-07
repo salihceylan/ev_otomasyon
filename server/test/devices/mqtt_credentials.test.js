@@ -177,6 +177,7 @@ test('cihaz kimligi: d_{t}, ACL pub state/status + sub cmd/sys; yeniden uretim e
   const acl = ctx.world.state.mqtt_acl.filter((x) => x.username === a.username).map((x) => `${x.action}:${x.topic}`).sort();
   assert.deepStrictEqual(acl, [
     `publish:ev/${t}/state`, `publish:ev/${t}/status`, `subscribe:ev/${t}/cmd`, `subscribe:ev/${t}/sys`,
+    `publish:ev/${t}/event`, // WP-S1: guvenlik olaylari (migration 033 mevcut kimliklere ayni satiri ekler)
   ].sort());
   const row1 = ctx.world.state.mqtt_credentials[0];
   assert.match(row1.password_hash, /^\$2[aby]\$10\$/);
@@ -192,7 +193,7 @@ test('cihaz kimligi: d_{t}, ACL pub state/status + sub cmd/sys; yeniden uretim e
   assert.ok(bcrypt.compareSync(b.password, ctx.world.state.mqtt_credentials[0].password_hash));
   assert.deepStrictEqual(b.previous_usernames, [`d_${t}`]);
   assert.ok(ctx.timeline.includes(`kick:d_${t}`), 'eski cihaz baglantisi atilmali');
-  assert.strictEqual(ctx.world.state.mqtt_acl.filter((x) => x.username === a.username).length, 4, 'ACL yinelenmemeli');
+  assert.strictEqual(ctx.world.state.mqtt_acl.filter((x) => x.username === a.username).length, 5, 'ACL yinelenmemeli');
 });
 
 test('tx verilirse DB islemleri cagiranin transaction\'inda yapilir ve KICK YAPILMAZ (commit sonrasi cagiranin isi)', async () => {
@@ -223,7 +224,7 @@ test('transaction geri alinirsa kimlikler de geri alinir', async () => {
   );
   assert.strictEqual(ctx.world.state.mqtt_credentials.length, 1);
   assert.strictEqual(ctx.world.state.mqtt_credentials[0].password_hash, hashBefore);
-  assert.strictEqual(ctx.world.state.mqtt_acl.length, 4);
+  assert.strictEqual(ctx.world.state.mqtt_acl.length, 5);
   assert.ok(bcrypt.compareSync(before.password, ctx.world.state.mqtt_credentials[0].password_hash));
 });
 

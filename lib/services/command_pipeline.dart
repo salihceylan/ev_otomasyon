@@ -45,6 +45,7 @@ class CommandFailure {
     required this.reason,
     required this.message,
     this.error,
+    this.code,
   });
 
   /// Uç nokta anahtarı (`relay:3`, `shutter:2`, `childLock`, `group:all_lights_off` ...).
@@ -55,15 +56,34 @@ class CommandFailure {
   final String message;
   final Object? error;
 
+  /// Panonun ret kodu (`state.last_rej.code`, LAN `rej`/hata kodu; ör. `zone_latched`, `gas_local_only`) ya da
+  /// sunucunun güvenlik hata kodu (`ZONE_ALARM_ACTIVE` ...). Arayüz koda göre yönlendirme yapabilir.
+  final String? code;
+
   /// Bir istisnadan sınıflandırılmış hata üretir (bulut [ApiException] / yerel [LocalApiException]).
   factory CommandFailure.fromError(String key, Object error) {
     if (error is ApiException) {
       if (error.isDeviceOffline) {
+        // Alarm onayı çevrimdışı panoya kuyruğa alındı (sunucu `ack_queued:true`; CONTRACTS §1.5d).
+        final queued = error.details?['ack_queued'] == true;
         return CommandFailure(
           key: key,
           reason: CommandFailureReason.offline,
-          message: 'Cihaz çevrimdışı. Komut iletilemedi.',
+          message: queued
+              ? 'Pano çevrimdışı. Onay, pano bağlanınca (aynı alarm sürüyorsa) iletilecek.'
+              : 'Cihaz çevrimdışı. Komut iletilemedi.',
           error: error,
+        );
+      }
+      if (error.statusCode == 409 && error.code == 'DEVICE_REJECTED') {
+        // Pano komutu reddetti; `reason` firmware ret kodudur (`zone_latched`, `stale_ack` ...; CONTRACTS §1.5d).
+        final reason = error.reason?.toLowerCase();
+        return CommandFailure(
+          key: key,
+          reason: CommandFailureReason.rejected,
+          message: safetyRejectMessage(reason),
+          error: error,
+          code: reason ?? error.code,
         );
       }
       if (error.isNetwork) {
@@ -106,11 +126,13 @@ class CommandFailure {
           error: error,
         );
       }
+      final safetyMessage = error.statusCode == 409 ? _serverSafetyMessages[error.code] : null;
       return CommandFailure(
         key: key,
         reason: CommandFailureReason.rejected,
-        message: error.isServerError ? 'Komut gönderilemedi. Lütfen tekrar deneyin.' : error.message,
+        message: safetyMessage ?? (error.isServerError ? 'Komut gönderilemedi. Lütfen tekrar deneyin.' : error.message),
         error: error,
+        code: error.code,
       );
     }
     if (error is LocalApiException) {
@@ -143,6 +165,7 @@ class CommandFailure {
         reason: CommandFailureReason.rejected,
         message: error.message,
         error: error,
+        code: error.code,
       );
     }
     return CommandFailure(
@@ -153,6 +176,15 @@ class CommandFailure {
     );
   }
 }
+
+/// Sunucunun güvenlik komutu ret kodları (tasarım §5.2.4) -> Türkçe metin (409).
+const Map<String, String> _serverSafetyMessages = <String, String>{
+  'ZONE_ALARM_ACTIVE': 'Alarm sürerken vana açılamaz. Önce sensörün kuruduğundan emin olup alarmı onaylayın.',
+  'GAS_LOCAL_ONLY': 'Gaz vanası güvenlik gereği yalnız yerinde, panodaki düğmeyle açılır.',
+  'ACTUATOR_USE_SAFETY_COMMAND': 'Bu kanal bir güvenlik cihazına bağlı; lamba gibi açılamaz.',
+  'FIRMWARE_UNSUPPORTED': 'Pano yazılımı güvenlik modülünü desteklemiyor. Pano yazılımını güncelleyin.',
+  'ALARM_NOT_OPEN': 'Bu alarm zaten kapanmış.',
+};
 
 /// `submit` çağrısının REST/LAN gönderim sonucu.
 enum CommandDispatchStatus {
@@ -207,6 +239,7 @@ class PendingCommand {
     required this.target,
     required this.commandId,
     required this.startedAt,
+    this.targetUid,
   }) : submittedAt = startedAt;
 
   /// Uç nokta anahtarı.
@@ -223,6 +256,11 @@ class PendingCommand {
 
   /// İlk dokunuş zamanı.
   final DateTime startedAt;
+
+  /// Komutun hedef panosu (`AHBU-...`, büyük harf); bilinmiyorsa `null` (LAN: tek pano). Panonun ret yankısı
+  /// (`last_rej`) yalnız bu panonun `state`'inden kabul edilir: ev konusu bütün panolara gider ve düz `relay`
+  /// komutunu başka bir pano kendi eylemcisi yüzünden reddedebilir [Y5].
+  String? targetUid;
 
   /// Son komut sunucuya/cihaza iletildi mi. İletildi ama henüz doğrulanmadı = **"uygulanıyor"**.
   bool delivered = false;
@@ -246,6 +284,7 @@ typedef CommandSender = Future<CommandResult> Function(String commandId);
 ///   en çok bir uçuşta + bir bekleyen istek).
 /// * REST yanıtı `delivered=false` veya hata ise **anında** geri alınır + [failures] olayı.
 /// * Cihazdan hedefi doğrulayan `state` gelirse ([observe]) zamanlayıcı iptal olur.
+/// * Cihaz `state.last_rej` ile komutumuzu reddettiyse ([observe]) komut BEKLEMEDEN geri alınır (ret metniyle).
 /// * [confirmTimeout] (varsayılan 2.5 sn) içinde onay yoksa geri alınır + [failures] olayı.
 /// * [cancelAll]: `dispose` / çıkış / ev değişiminde tüm kayıtları (geri alma olayı üretmeden) iptal eder.
 ///
@@ -313,6 +352,7 @@ class CommandPipeline {
     required CommandSender send,
     ConfirmPredicate? confirms,
     CommandConfirmMode mode = CommandConfirmMode.state,
+    String? targetUid,
   }) {
     if (_disposed) return Future.value(const CommandDispatch.cancelled());
 
@@ -322,6 +362,7 @@ class CommandPipeline {
         ..target = target
         ..delivered = false
         ..submittedAt = clock.now()
+        ..targetUid = targetUid?.toUpperCase()
         .._generation += 1;
       existing
         ..send = send
@@ -346,6 +387,7 @@ class CommandPipeline {
       target: target,
       commandId: _newId(),
       startedAt: clock.now(),
+      targetUid: targetUid?.toUpperCase(),
     );
     final entry = _Entry(command: command, send: send, confirms: confirms, mode: mode);
     _entries[key] = entry;
@@ -494,8 +536,32 @@ class CommandPipeline {
 
   /// Cihazdan gelen her `state` anlık görüntüsünü (MQTT veya yoklama) bekleyen komutlara uygular:
   /// hedefi doğrulayan (veya `last_id` komut kimliğimizi yankılayan) kayıtların zamanlayıcısı iptal olur.
+  /// `last_rej.id` komut kimliğimizse (ve yankı hedef panodansa) komut ANINDA geri alınır.
   void observe(DeviceStatus snapshot) {
     if (_entries.isEmpty) return;
+    final rejection = snapshot.lastRej;
+    if (rejection != null) {
+      final snapshotUid = snapshot.uid?.toUpperCase();
+      final rejected = <_Entry>[
+        for (final entry in _entries.values)
+          if (entry.command.commandId == rejection.id &&
+              (entry.command.targetUid == null || snapshotUid == null || entry.command.targetUid == snapshotUid))
+            entry,
+      ];
+      for (final entry in rejected) {
+        _fail(
+          entry,
+          CommandFailure(
+            key: entry.command.key,
+            reason: CommandFailureReason.rejected,
+            message: rejection.message,
+            error: rejection,
+            code: rejection.code,
+          ),
+        );
+      }
+      if (_entries.isEmpty) return;
+    }
     final confirmed = <_Entry>[];
     for (final entry in _entries.values) {
       final echoed = snapshot.lastId != null && snapshot.lastId == entry.command.commandId;
@@ -612,4 +678,38 @@ class CommandConfirm {
   /// `child_lock` yoksa (ör. REST'ten türetilmiş anlık görüntü) `false` varsayılan değeri hedefle
   /// karışmasın diye `childLockKnown` şarttır.
   static ConfirmPredicate childLock(bool enabled) => (s) => s.childLockKnown && s.childLock == enabled;
+
+  /// Eylemci [id] bu panonun mu ([uid] verilmişse)? Güvenlik alanı olmayan (v:2 / REST türevi) görüntü onay sayılmaz.
+  static ActuatorItem? _actuator(DeviceStatus s, String id, String? uid) {
+    final safety = s.safety;
+    if (!safety.supported) return null;
+    if (uid != null && safety.deviceUid != null && safety.deviceUid != uid.toUpperCase()) return null;
+    return safety.actuatorById(id);
+  }
+
+  /// Vana [id] hedef yönde: kapalı için `closed`/`cmd_closed`/`closing`, açık için `open`/`cmd_open`/`opening`.
+  static ConfirmPredicate valvePos(String id, {required bool closed, String? uid}) => (s) {
+        final pos = _actuator(s, id, uid)?.pos;
+        if (pos == null) return false;
+        return closed
+            ? (pos == ValvePos.closed || pos == ValvePos.cmdClosed || pos == ValvePos.closing)
+            : (pos == ValvePos.open || pos == ValvePos.cmdOpen || pos == ValvePos.opening);
+      };
+
+  /// Siren / fan / genel eylemci [id] hedef durumda.
+  static ConfirmPredicate actuatorOn(String id, bool on, {String? uid}) => (s) {
+        final value = _actuator(s, id, uid)?.on;
+        return value != null && value == on;
+      };
+
+  /// Bölge [zone] alarmı susturuldu ya da kilit kalktı (bölge `normal`).
+  static ConfirmPredicate alarmSilencedOrCleared(int zone, {String? uid}) => (s) {
+        final safety = s.safety;
+        if (!safety.supported) return false;
+        if (uid != null && safety.deviceUid != null && safety.deviceUid != uid.toUpperCase()) return false;
+        // Firmware normal bölgeyi yazmaz (CONTRACTS §2.6): listeden düşen bölge = kilit kalktı.
+        final status = safety.zoneStatus(zone);
+        if (status == ZoneStatus.normal) return true;
+        return safety.alarmForZone(zone)?.silenced ?? false;
+      };
 }

@@ -78,7 +78,7 @@ const SQL = Object.freeze({
   // Yalnızca ÇOK PANOLU evlerde: ev konusu tüm panolara gittiği için numara çakışmasını bulmak üzere evin TÜM uçları
   // (çevrimdışı panolar dahil: geri geldiğinde komutu alabilirler). Ev başına <= panolar x 40 satır.
   layout:
-    'SELECT device_id, type, channel_index, shutter_pair_index, current_position ' +
+    'SELECT device_id, type, channel_index, shutter_pair_index, current_position, actuator_type ' +
     'FROM endpoints WHERE home_id = $1',
   // local_date metne çevrilir: pg DATE'i yerel gece yarısı Date'ine çevirir ve gün kayabilir.
   lastNotice:
@@ -167,7 +167,8 @@ function findSharedConflicts(rows, minOpenPos = OPEN_SHUTTER_MIN_POS_DEFAULT) {
   for (const row of Array.isArray(rows) ? rows : []) {
     const channel = Number(row.channel_index);
     if (!isIntInRange(channel, 1, MAX_RELAY)) continue;
-    if (row.type !== 'light') relays.add(channel);
+    // Eylemci kanali (WP-S2 [Y3]) isik degildir: relay:N baska panonun vanasini/sirenini surerdi.
+    if (row.type !== 'light' || (row.actuator_type !== undefined && row.actuator_type !== null)) relays.add(channel);
     if (row.type === 'shutter') {
       const rawPair = row.shutter_pair_index === null || row.shutter_pair_index === undefined ? null : Number(row.shutter_pair_index);
       const pair = rawPair !== null && isIntInRange(rawPair, 1, MAX_SHUTTER_PAIR) ? rawPair : Math.floor((channel + 1) / 2);

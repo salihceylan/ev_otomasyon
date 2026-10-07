@@ -7,6 +7,9 @@
 #include "WiFiManager.h"
 #include "NetUtil.h"
 #include "ApAccess.h"
+#include "safety/SafetyManager.h"
+#include "safety/SafetyCfgApi.h"
+#include "safety/SafetyCfgJson.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <esp_timer.h>
@@ -56,6 +59,24 @@ FieldState fieldBool(JsonObject o, const char* key, bool& out) {
   out = v.as<bool>();
   return FIELD_OK;
 }
+// LAN komut kimligi: 1..24 karakter [A-Za-z0-9._:-] (MQTT ile ayni)
+bool validLanId(const char* id) {
+  if (!id) return false;
+  const size_t n = strlen(id);
+  if (n < 1 || n > 24) return false;
+  for (size_t i = 0; i < n; i++) {
+    const char c = id[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '.' || c == '_' || c == ':' || c == '-')) return false;
+  }
+  return true;
+}
+
+// LAN'da uid istege baglidir (tek pano); verildiyse bu panonunki olmali.
+bool lanUidMatches(JsonObject root) {
+  if (!root.containsKey("uid")) return true;
+  return root["uid"].is<const char*>() && WiFiManager::instance().getDeviceUid() == root["uid"].as<const char*>();
+}
+
 FieldState fieldInt(JsonObject o, const char* key, int& out) {
   if (!o.containsKey(key)) return FIELD_MISSING;
   JsonVariant v = o[key];
@@ -604,6 +625,14 @@ void WebPortal::setupRoutes() {
   route("/api/rs485/scan", HTTP_GET, &WebPortal::handleApiRs485ScanResult, Access::KEYED);
   route("/api/rs485/relay", HTTP_POST, &WebPortal::handleApiRs485Relay, Access::KEYED);
 
+  // Guvenlik katmani (spec 3.5, WP-F5): hepsi KEYED
+  route("/api/actuator", HTTP_POST, &WebPortal::handleApiActuator, Access::KEYED);
+  route("/api/alarm/ack", HTTP_POST, &WebPortal::handleApiAlarmAck, Access::KEYED);
+  route("/api/alarm/test", HTTP_POST, &WebPortal::handleApiAlarmTest, Access::KEYED);
+  route("/api/events", HTTP_GET, &WebPortal::handleApiEvents, Access::KEYED);
+  route("/api/safety/config", HTTP_GET, &WebPortal::handleApiSafetyConfigGet, Access::KEYED);
+  route("/api/safety/config", HTTP_POST, &WebPortal::handleApiSafetyConfigPost, Access::KEYED);
+
   route("/api/system/reboot", HTTP_POST, &WebPortal::handleApiReboot, Access::KEYED);
   route("/api/system/reset", HTTP_POST, &WebPortal::handleApiReset, Access::KEYED);
 
@@ -902,16 +931,45 @@ void WebPortal::sendFullStatus() {
   const String apSsid = wm.getRecoveryApSSID();
   const WiFiManager::ConnectStatus cs = wm.getConnectStatus();
 
+  // Guvenlik gorunumu ve ek (spec 3.5 [D3]): MQTT state ile ayni alanlar; JSON kilit DISINDA uretilir [B13].
+  auto& sm = safety::SafetyManager::instance();
+  safety::SafetyView* sv = (safety::SafetyView*)malloc(sizeof(safety::SafetyView));
+  const size_t extraCap = 8192;
+  char* extra = (char*)malloc(extraCap);
+  if (!sv || !extra || !sm.copyView(*sv)) {
+    free(sv);
+    free(extra);
+    free(v);
+    sendError(503, "busy");
+    return;
+  }
+  safety::StateMeta meta;
+  sm.stateMeta(meta);
+  meta.timeOk = NetUtil::isTimeSynced() ? 1 : 0;
+  meta.epoch = meta.timeOk ? (uint32_t)time(nullptr) : 0;
+  safety::ev_detail::Writer xw(extra, extraCap);
+  safety::writeStateExtras(*sv, meta, xw);
+  const char* acts[MAX_TOTAL_RELAYS];
+  for (uint8_t i = 0; i < MAX_TOTAL_RELAYS; i++) acts[i] = safety::relayActText(*sv, (uint8_t)(i + 1));
+  free(sv);
+  if (!xw.ok) {
+    free(extra);
+    free(v);
+    sendError(500, "internal");
+    return;
+  }
+
   const uint8_t nR = (snap.totalRelays > MAX_TOTAL_RELAYS) ? (uint8_t)MAX_TOTAL_RELAYS : snap.totalRelays;
   const uint8_t nP = nR / 2;
   const uint8_t nD = (snap.totalDIs > MAX_TOTAL_DIS) ? (uint8_t)MAX_TOTAL_DIS : snap.totalDIs;
 
-  const size_t cap = JSON_OBJECT_SIZE(40) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(4) +
+  const size_t cap = JSON_OBJECT_SIZE(40) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
                      JSON_ARRAY_SIZE(nP) + (size_t)nP * JSON_OBJECT_SIZE(8) + JSON_ARRAY_SIZE(nD) +
                      (size_t)nD * JSON_OBJECT_SIZE(3) + 512;
   DynamicJsonDocument doc(cap);
   if (doc.capacity() == 0) {
     free(v);
+    free(extra);
     sendError(503, "busy");
     return;
   }
@@ -953,6 +1011,7 @@ void WebPortal::sendFullStatus() {
     r["name"] = (const char*)v->relayName[i];
     r["type"] = v->relayType[i];
     r["state"] = snap.relay(i);
+    if (acts[i]) r["act"] = acts[i];
   }
 
   JsonArray sArr = doc.createNestedArray("shutters");
@@ -978,15 +1037,21 @@ void WebPortal::sendFullStatus() {
 
   if (doc.overflowed()) {
     free(v);
+    free(extra);
     printf("[WEB] HATA: durum JSON havuzu tasti (kapasite %u).\r\n", (unsigned)cap);
     sendError(500, "internal");
     return;
   }
   const size_t len = measureJson(doc);
   String out;
-  out.reserve(len + 1);
+  out.reserve(len + xw.len + 1);
   serializeJson(doc, out);
   free(v);   // adlara isaret eden dizgeler serilestirildi
+  // ek, kapanis '}' oncesine (MQTT state ile ayni bicim)
+  out.remove(out.length() - 1);
+  out += extra;
+  out += '}';
+  free(extra);
   sendJson(200, out);
 }
 
@@ -1197,6 +1262,29 @@ void WebPortal::handleApiConfigSave() {
     free(tmp);
     sendError(err && strcmp(err, "too_large") == 0 ? 413 : 400, err ? err : "invalid_value");
     return;
+  }
+
+  // Guvenlik yapilandirmasiyla capraz dogrulama (spec 2.3 madde 5 [B3][O-10]): eylemci rolesi panjura/darbeye cevrilemez, kanal sayisi
+  // dususu eylemci/sensor DI'sini disarida birakamaz, sensor DI'si duvar butonu yapilamaz. Kilitli bolge varken 409 zone_latched, yoksa
+  // 409 cfg_invalid. Bos guvenlik yapilandirmasinda her zaman gecer (lamba/panjur yolu degismez).
+  {
+    safety::SafetyConfig* sc = (safety::SafetyConfig*)malloc(sizeof(safety::SafetyConfig));
+    uint64_t guard = 0;
+    if (!sc || !safety::SafetyManager::instance().copyConfig(*sc, &guard)) {
+      free(sc);
+      free(tmp);
+      sendError(503, "busy");
+      return;
+    }
+    // guard: acilis guvenli maskesi + kilit maskesi; guvenli kipte (bos tablo) bile o roleler panjur/darbe yapilamaz (inceleme turu 2 FW2-1)
+    const safety::CfgErr ve = safety::validateSystemChange(*tmp, *sc, guard);
+    free(sc);
+    if (ve != safety::CfgErr::OK) {
+      free(tmp);
+      if (safety::SafetyManager::instance().latchedMask()) sendError(409, "zone_latched");
+      else sendJson(409, String("{\"error\":\"cfg_invalid\",\"detail\":\"") + safety::cfgErrText(ve) + "\"}");
+      return;
+    }
   }
 
   // Canli yapilandirmaya yazma adimi loopTask'ta yapilir (SmartAutomation config'i kilitsiz okur; tek baglam kurali).
@@ -1447,7 +1535,9 @@ void WebPortal::handleApiRs485Send() {
   }
   const bool ok = SmartAutomation::instance().rs485Send(String(data), isHex);
   if (!ok) {
-    sendError(502, "send_failed");
+    // Guvenlik eylemcisi kanalina acma/toplu/TOGGLE ham yazim (spec 2.3 madde 4 [B2][Y-6])
+    if (SmartAutomation::instance().rawSendSafetyRejected()) sendError(409, "actuator_relay");
+    else sendError(502, "send_failed");
     return;
   }
   sendOk();
@@ -1499,6 +1589,11 @@ void WebPortal::handleApiRs485ScanStart() {
   SmartAutomation& sa = SmartAutomation::instance();
   if (sa.rs485ScanState() == SmartAutomation::ScanState::RUNNING) {
     sendJson(202, "{\"status\":\"scanning\"}");
+    return;
+  }
+  if (safety::SafetyManager::instance().scanBlocked()) {
+    // Tarama surerken ek modul yazimi/yoklamasi durur: kilitli bolge ya da ek modulde eylemci/guvenlik sensoru varken guvenlik kor kalirdi [O-5][B6]
+    sendError(409, "safety_active");
     return;
   }
   if (!sa.rs485StartScan()) {
@@ -1568,6 +1663,25 @@ void WebPortal::handleApiRs485Relay() {
     }
   }
 
+  // Guvenlik eylemcisi kanali (spec 2.3 madde 4 [B2]): toplu yazim ve TOGGLE reddedilir; tek kanalda yalniz guvenli yon. Kesin karar
+  // loopTask'ta (rs485ControlExtRelay) verilir; burada 409 icin on denetim.
+  {
+    auto& sm = safety::SafetyManager::instance();
+    uint8_t ext = 0;
+    {
+      ConfigManager::ConfigLock lk(ConfigManager::instance());
+      ext = ConfigManager::instance().config.ext_module_address;
+    }
+    if (sm.hasExtActuator() && sid == ext) {
+      const uint8_t relay1 = (uint8_t)(8 + ch);
+      const bool isAct = ch != 0 && sm.actuatorOfRelay(relay1) >= 0;
+      if (ch == 0 || (isAct && action == 2) || (isAct && sm.rawRelayCheck(relay1, action == 1) == safety::RawDecision::REJECT)) {
+        sendError(409, "actuator_relay");
+        return;
+      }
+    }
+  }
+
   // rs485ControlExtRelay yalniz loopTask'tan cagrilabilir: istek loopTask'a postalanir (WebPortal::loop)
   uint8_t jr = JR_FAILED;
   String resp;
@@ -1588,13 +1702,24 @@ void WebPortal::handleApiRs485Relay() {
 // ============================================================================
 // Sistem
 // ============================================================================
+// Kilitli alarm varken yazilimsal yeniden baslatma/sifirlama 409 zone_latched; ?force=1 ile gecilir (kilit ahbu_latch'ten geri gelir;
+// guvenli bitler yeniden baslatma boyunca korunur) [K-2][Y-5].
+bool WebPortal::latchBlocksRestart() {
+  if (safety::SafetyManager::instance().latchedMask() == 0) return false;
+  if (_server.arg("force") == "1") return false;
+  sendError(409, "zone_latched");
+  return true;
+}
+
 void WebPortal::handleApiReboot() {
+  if (latchBlocksRestart()) return;
   // Yanit once gider; panjurlar durdurulur, MQTT "offline" yayinlanir ve ESP.restart() sonraki turlarda yapilir
   sendJson(200, "{\"status\":\"rebooting\"}");
   SmartAutomation::instance().requestRestart(RESTART_DELAY_MS);
 }
 
 void WebPortal::handleApiReset() {
+  if (latchBlocksRestart()) return;
   // Uygulama ayarlari + Wi-Fi sifirlanir; yerel anahtar, AP parolasi ve bulut kimligi KORUNUR
   // (uzaktan "sifirla" cihazi sahipsiz birakmaz; fiziksel RESETKEY ayrica vardir).
   // Yapilandirma silinmeden once hareket eden panjurlar durdurulur (kuyruk doluysa FW-core acil durdurma bayragini
@@ -1730,4 +1855,242 @@ void WebPortal::handleApiMqttConfig() {
   printf("[WEB] MQTT kimligi guncellendi (sunucu: %s:%d); bulut baglantisi yenileniyor.\r\n", server, port);
   MqttManager::instance().reconfigure();
   sendOk();
+}
+
+// ============================================================================
+// Guvenlik katmani (spec 3.5, WP-F5). Butun rotalar KEYED. Govde bicimi MQTT cmd ile ayni (LAN'da uid istege baglidir: tek pano).
+// Komut yanitlari {ok, id, rej?}: komut ayni kuyruga gider (postDeviceCommand); web gorevi en cok 1 sn boyunca anlik goruntudeki last_id
+// ya da guvenlik katmaninin last_rej eslesmesini yoklar. g_job KULLANILMAZ (tek yuvali; yapilandirma/RS485 isleriyle cakisirdi) [D3].
+// ============================================================================
+namespace {
+uint32_t g_lanCmdSeq = 0;
+}
+
+void WebPortal::postAndWait(DeviceCommand& c) {
+  if (c.id[0] == '\0') {
+    g_lanCmdSeq++;
+    snprintf(c.id, sizeof(c.id), "lan-%lu-%lu", (unsigned long)(millis() & 0xFFFFFUL), (unsigned long)g_lanCmdSeq);
+  }
+  if (!postOrFail(c)) return;   // 503 queue_full gonderildi
+  auto& sm = safety::SafetyManager::instance();
+  const uint32_t t0 = millis();
+  char rid[25];
+  while ((uint32_t)(millis() - t0) < 1000UL) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+    safety::Rej r = safety::Rej::OK;
+    sm.lastReject(rid, sizeof(rid), r);
+    if (r != safety::Rej::OK && strcmp(rid, c.id) == 0) {
+      String b = String("{\"ok\":false,\"id\":\"") + c.id + "\",\"rej\":\"" + safety::rejText(r) + "\"}";
+      sendJson(200, b);
+      return;
+    }
+    AutomationSnapshot snap;
+    if (SmartAutomation::instance().getSnapshot(snap) && strcmp(snap.lastId, c.id) == 0) {
+      sendJson(200, String("{\"ok\":true,\"id\":\"") + c.id + "\"}");
+      return;
+    }
+  }
+  sendJson(504, String("{\"error\":\"timeout\",\"id\":\"") + c.id + "\"}");
+}
+
+// Govdedeki istege bagli "id" (gecersizse 400). Bos ise postAndWait uretir.
+static bool takeLanId(JsonObject root, DeviceCommand& c, const char*& err) {
+  if (!root.containsKey("id")) return true;
+  if (!root["id"].is<const char*>() || !validLanId(root["id"].as<const char*>())) {
+    err = "invalid_id";
+    return false;
+  }
+  strncpy(c.id, root["id"].as<const char*>(), sizeof(c.id) - 1);
+  c.id[sizeof(c.id) - 1] = '\0';
+  return true;
+}
+
+// POST /api/actuator {actuator:"a1", to:"closed"|"open"|"on"|"off", uid?, id?}
+void WebPortal::handleApiActuator() {
+  String body;
+  if (!readJsonBody(body)) return;
+  DynamicJsonDocument doc(jsonCapacityFor(body.length()));
+  if (!parseJsonObject(body, doc)) return;
+  JsonObject root = doc.as<JsonObject>();
+  for (JsonPair kv : root) {
+    const char* k = kv.key().c_str();
+    if (strcmp(k, "actuator") && strcmp(k, "to") && strcmp(k, "uid") && strcmp(k, "id")) { sendError(400, "unknown_field"); return; }
+  }
+  if (!lanUidMatches(root)) { sendError(400, "uid_mismatch"); return; }
+  uint8_t a0 = 0;
+  if (!root["actuator"].is<const char*>() || !safety::parseActuatorId(root["actuator"].as<const char*>(), a0)) { sendError(400, "invalid_actuator"); return; }
+  if (!root["to"].is<const char*>()) { sendError(400, "invalid_value"); return; }
+  const char* to = root["to"].as<const char*>();
+  int32_t v;
+  if (!strcmp(to, "closed")) v = safety::ACT_TO_CLOSED;
+  else if (!strcmp(to, "open")) v = safety::ACT_TO_OPEN;
+  else if (!strcmp(to, "off")) v = safety::ACT_TO_OFF;
+  else if (!strcmp(to, "on")) v = safety::ACT_TO_ON;
+  else { sendError(400, "invalid_value"); return; }
+  DeviceCommand c = makeCommand(CmdType::ACTUATOR_SET, CmdSource::WEB, (uint8_t)(a0 + 1), v);
+  const char* err = nullptr;
+  if (!takeLanId(root, c, err)) { sendError(400, err); return; }
+  postAndWait(c);
+}
+
+// POST /api/alarm/ack {zone, aid?, force?, id?}. force LAN'dan guvenli kipten CIKARMAZ (yalniz fiziksel erisim: CLI / ALARM_ACK DI'si 5 sn,
+// karar 7.2b-10): istek safe_mode ile reddedilir.
+void WebPortal::handleApiAlarmAck() {
+  String body;
+  if (!readJsonBody(body)) return;
+  DynamicJsonDocument doc(jsonCapacityFor(body.length()));
+  if (!parseJsonObject(body, doc)) return;
+  JsonObject root = doc.as<JsonObject>();
+  for (JsonPair kv : root) {
+    const char* k = kv.key().c_str();
+    if (strcmp(k, "zone") && strcmp(k, "aid") && strcmp(k, "force") && strcmp(k, "uid") && strcmp(k, "id")) { sendError(400, "unknown_field"); return; }
+  }
+  if (!lanUidMatches(root)) { sendError(400, "uid_mismatch"); return; }
+  int zone = 0;
+  if (fieldInt(root, "zone", zone) != FIELD_OK || zone < 0 || zone > safety::MAX_ZONES) { sendError(400, "invalid_zone"); return; }
+  bool force = false;
+  if (fieldBool(root, "force", force) == FIELD_BAD) { sendError(400, "invalid_value"); return; }
+  DeviceCommand c = makeCommand(CmdType::ALARM_ACK, CmdSource::WEB, (uint8_t)zone, force ? 1 : 0);
+  const char* aid = nullptr;
+  const FieldState fa = fieldString(root, "aid", aid);
+  if (fa == FIELD_BAD || (fa == FIELD_OK && (strlen(aid) < 3 || strlen(aid) >= sizeof(c.aid)))) { sendError(400, "invalid_aid"); return; }
+  if (fa == FIELD_OK) {
+    strncpy(c.aid, aid, sizeof(c.aid) - 1);
+    c.aid[sizeof(c.aid) - 1] = '\0';
+  }
+  const char* err = nullptr;
+  if (!takeLanId(root, c, err)) { sendError(400, err); return; }
+  postAndWait(c);
+}
+
+// POST /api/alarm/test {zone, id?}
+void WebPortal::handleApiAlarmTest() {
+  String body;
+  if (!readJsonBody(body)) return;
+  DynamicJsonDocument doc(jsonCapacityFor(body.length()));
+  if (!parseJsonObject(body, doc)) return;
+  JsonObject root = doc.as<JsonObject>();
+  for (JsonPair kv : root) {
+    const char* k = kv.key().c_str();
+    if (strcmp(k, "zone") && strcmp(k, "uid") && strcmp(k, "id")) { sendError(400, "unknown_field"); return; }
+  }
+  if (!lanUidMatches(root)) { sendError(400, "uid_mismatch"); return; }
+  int zone = 0;
+  if (fieldInt(root, "zone", zone) != FIELD_OK || zone < 1 || zone > safety::MAX_ZONES) { sendError(400, "invalid_zone"); return; }
+  DeviceCommand c = makeCommand(CmdType::ALARM_TEST, CmdSource::WEB, (uint8_t)zone, 0);
+  const char* err = nullptr;
+  if (!takeLanId(root, c, err)) { sendError(400, err); return; }
+  postAndWait(c);
+}
+
+// GET /api/events?after=<eid>: LAN olay halkasinin (son 32, onaylanmislar dahil) after'dan sonraki kayitlari, en cok 16; fazlasi "more".
+// Internetsiz uygulama alarm gecmisini buradan okur (K5).
+void WebPortal::handleApiEvents() {
+  const String after = _server.arg("after");
+  if (after.length() > 14) { sendError(400, "invalid_after"); return; }
+  auto& sm = safety::SafetyManager::instance();
+  auto& ob = sm.outbox();
+  const char* uid = nullptr;
+  const String uidS = WiFiManager::instance().getDeviceUid();
+  uid = uidS.c_str();
+  const size_t cap = 16 * safety::EVENT_JSON_MAX + 64;
+  char* buf = (char*)malloc(cap);
+  char* one = (char*)malloc(safety::EVENT_JSON_MAX);
+  if (!buf || !one) {
+    free(buf);
+    free(one);
+    sendError(503, "busy");
+    return;
+  }
+  size_t len = 0;
+  bool more = false;
+  {
+    safety::EventOutboxRtos::Guard g(ob, pdMS_TO_TICKS(100));
+    if (!g.ok()) {
+      free(buf);
+      free(one);
+      sendError(503, "busy");
+      return;
+    }
+    const uint8_t n = ob.box().logCount();
+    uint8_t i = ob.box().logAfter(after.c_str());
+    len = (size_t)snprintf(buf, cap, "{\"bn\":\"%08lx\",\"events\":[", (unsigned long)sm.bootNonce());
+    uint8_t k = 0;
+    for (; i < n && k < 16; i++, k++) {
+      const size_t l = ob.box().logJson(i, uid, sm.bootCount(), one, safety::EVENT_JSON_MAX);
+      if (l == 0 || len + l + 32 > cap) break;
+      if (k) buf[len++] = ',';
+      memcpy(buf + len, one, l);
+      len += l;
+    }
+    more = i < n;
+  }
+  len += (size_t)snprintf(buf + len, cap - len, "],\"more\":%s}", more ? "true" : "false");
+  free(one);
+  sendSecurityHeaders();
+  _server.send_P(200, "application/json", buf, len);
+  free(buf);
+}
+
+// GET /api/safety/config: yapilandirmanin tamami (adlar dahil; state'te ad yoktur [B12]).
+void WebPortal::handleApiSafetyConfigGet() {
+  safety::SafetyConfig* c = (safety::SafetyConfig*)malloc(sizeof(safety::SafetyConfig));
+  const size_t cap = 14000;
+  char* buf = (char*)malloc(cap);
+  if (!c || !buf || !safety::SafetyManager::instance().copyConfig(*c)) {
+    free(c);
+    free(buf);
+    sendError(503, "busy");
+    return;
+  }
+  safety::ev_detail::Writer w(buf, cap);
+  safety::writeConfigJson(*c, w);
+  free(c);
+  if (!w.ok) {
+    free(buf);
+    sendError(500, "internal");
+    return;
+  }
+  sendSecurityHeaders();
+  _server.send_P(200, "application/json", buf, w.len);
+  free(buf);
+}
+
+// POST /api/safety/config {base_rev?, set|del} (tek oge). LAN (yerel anahtar) yalniz ekleme/sikilastirma yapar: politika kapatma, eylemci
+// ya da tehlike sensoru silme ve diger gevsetmeler 403 local_loosen_forbidden (karar 7.2b-7; gevsetme seri CLI ya da bulut owner/servis).
+void WebPortal::handleApiSafetyConfigPost() {
+  String body;
+  if (!readJsonBody(body)) return;
+  DynamicJsonDocument doc(jsonCapacityFor(body.length()));
+  if (!parseJsonObject(body, doc)) return;
+  safety::CfgEdit* e = (safety::CfgEdit*)malloc(sizeof(safety::CfgEdit));
+  if (!e) { sendError(503, "busy"); return; }
+  bool hasBase = false;
+  uint32_t baseRev = 0;
+  const char* why = safety::parseCfgEdit(doc.as<JsonObject>(), *e, hasBase, baseRev, false);
+  if (why) {
+    free(e);
+    sendJson(400, String("{\"error\":\"cfg_invalid\",\"detail\":\"") + why + "\"}");
+    return;
+  }
+  const safety::CfgOutcome o = safety::SafetyManager::instance().submitEdit(*e, hasBase, baseRev, safety::VIA_LAN);
+  free(e);
+  char crc[9];
+  snprintf(crc, sizeof(crc), "%08lx", (unsigned long)o.crc);
+  switch (o.r) {
+    case safety::CfgResult::OK:
+      MqttManager::instance().triggerPublish();
+      sendJson(200, String("{\"status\":\"ok\",\"rev\":") + o.rev + ",\"crc\":\"" + crc + "\"}");
+      break;
+    case safety::CfgResult::CONFLICT:
+      sendJson(409, String("{\"error\":\"cfg_conflict\",\"rev\":") + o.rev + ",\"crc\":\"" + crc + "\"}");
+      break;
+    case safety::CfgResult::INVALID:
+      sendJson(400, String("{\"error\":\"cfg_invalid\",\"detail\":\"") + safety::cfgErrText(o.err) + "\"}");
+      break;
+    case safety::CfgResult::LATCHED: sendError(409, "zone_latched"); break;
+    case safety::CfgResult::LOOSEN: sendError(403, "local_loosen_forbidden"); break;
+    case safety::CfgResult::STORAGE: sendError(500, "storage_error"); break;
+    default: sendError(503, "busy"); break;
+  }
 }

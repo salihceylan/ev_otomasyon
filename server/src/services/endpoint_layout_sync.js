@@ -35,7 +35,7 @@
 //     yeniden iki kez gorulmelidir).
 //   * `stop()` baslamis isi kesmez (transaction yarida birakilmaz); yalniz baslamamis isler atilir.
 
-const { planLayoutSync, parseBase, isFactoryLayout } = require('../utils/endpoint_layout');
+const { planLayoutSync, parseBase, isFactoryLayout, hasActuators, actuatorVector } = require('../utils/endpoint_layout');
 
 // ------------------------------------------------------------------------------
 // Sabitler (ortam degiskeni DEGIL)
@@ -82,6 +82,13 @@ const SQL = Object.freeze({
     "AND ((channel_type = 'relay' AND channel = ANY($3::int[])) OR (channel_type = 'shutter' AND channel = ANY($4::int[]))) " +
     'RETURNING id',
   saveBase: 'UPDATE devices SET reported_layout = $2::jsonb, reported_layout_at = CURRENT_TIMESTAMP WHERE id = $1',
+  // WP-S2 [Y2]: endpoints.actuator_type = panonun relays[].act (yalniz bildirimde ya da tabanda eylemci varsa calisir).
+  // Degisen satirlari dondurur; yeni eylemci kanallarinin role kurallari disableRules ile kapatilir [O6].
+  syncActuators:
+    'UPDATE endpoints e SET actuator_type = v.act, updated_at = CURRENT_TIMESTAMP ' +
+    'FROM unnest($2::int[], $3::varchar[]) AS v(channel, act) ' +
+    'WHERE e.device_id = $1 AND e.channel_index = v.channel AND e.actuator_type IS DISTINCT FROM v.act ' +
+    'RETURNING e.channel_index, e.actuator_type',
   audit:
     'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
     "VALUES ($1, $2, $3, NULL, 'device', NULL, $4::jsonb)",
@@ -419,6 +426,7 @@ class EndpointLayoutSync {
       let plan = planFor(dev, rows, layout, confirmShrink);
       let wrote = false;
       let ruleIds = [];
+      let actuatorChanges = [];
       if (plan.changed || plan.baseChanged) {
         // 6b) D10 yazma butcesi: satir degistiren calisma cihaz basina saatte en cok APPLY_BUDGET_PER_HOUR
         this._rollBudget(limit, t);
@@ -429,6 +437,7 @@ class EndpointLayoutSync {
         plan = out.plan;
         wrote = out.wrote;
         ruleIds = out.ruleIds;
+        actuatorChanges = out.actuators || [];
         if (wrote && plan.changed) limit.applies += 1;
       }
       // Buradan sonrasi yalniz COMMIT edilmis (ya da hic yazmamis) calisma icindir.
@@ -465,6 +474,7 @@ class EndpointLayoutSync {
         pendingShrink: plan.pendingShrink,
       };
       if (deferred > 0) summary.deferred = deferred;
+      if (actuatorChanges.length > 0) summary.actuators = actuatorChanges.length;
       if (!wrote) {
         this.counters.noops += 1;
         return { status: 'noop', summary };
@@ -538,15 +548,31 @@ class EndpointLayoutSync {
       ]);
     }
 
+    // WP-S2 [Y2][O6]: eylemci rolu (act) -> endpoints.actuator_type. Yalniz bildirimde ya da tabanda eylemci varsa
+    // calisir (v:2 yolu sorgu sayisi ve sirasi AYNEN). Yeni eylemci kanallarinin role kurallari kapatilir: "lambayi ac"
+    // kurali vanayi acmasin (sunucu tarafinda ayrica scheduler _checkTarget reddeder).
+    const actuators = [];
+    let relayRuleChannels = plan.ruleRelayChannels;
+    if (hasActuators(layout) || hasActuators(parseBase(dev.reported_layout))) {
+      const vec = actuatorVector(layout);
+      const ar = await tx.query(SQL.syncActuators, [deviceId, vec.channels, vec.acts]);
+      for (const row of (ar && ar.rows) || []) {
+        actuators.push({ channel: Number(row.channel_index), actuator_type: row.actuator_type || null });
+      }
+      actuators.sort((a, b) => a.channel - b.channel);
+      const added = actuators.filter((a) => a.actuator_type).map((a) => a.channel);
+      if (added.length > 0) relayRuleChannels = [...new Set([...relayRuleChannels, ...added])].sort((a, b) => a - b);
+    }
+
     let ruleIds = [];
-    if (plan.ruleRelayChannels.length > 0 || plan.ruleShutterPairs.length > 0) {
-      const r = await tx.query(SQL.disableRules, [homeId, deviceId, plan.ruleRelayChannels, plan.ruleShutterPairs]);
+    if (relayRuleChannels.length > 0 || plan.ruleShutterPairs.length > 0) {
+      const r = await tx.query(SQL.disableRules, [homeId, deviceId, relayRuleChannels, plan.ruleShutterPairs]);
       ruleIds = ((r && r.rows) || []).map((row) => row.id);
     }
 
     if (plan.baseChanged) await tx.query(SQL.saveBase, [deviceId, JSON.stringify(plan.newBase)]);
 
-    if (plan.changed) {
+    if (plan.changed || actuators.length > 0) {
       const s = plan.summary;
       const details = {
         relays: layout.count,
@@ -558,9 +584,10 @@ class EndpointLayoutSync {
         rules_disabled: ruleIds,
       };
       if (deferredOf(plan) > 0) details.deferred = plan.deferred; // D1: ertelenen degisiklik sayisi
+      if (actuators.length > 0) details.actuators = actuators; // WP-S2: eylemci rolu degisen kanallar
       await tx.query(SQL.audit, [AUDIT_EVENT, dev.device_uuid, homeId, JSON.stringify(details)]);
     }
-    return { plan, wrote: true, ruleIds };
+    return { plan, wrote: true, ruleIds, actuators };
   }
 }
 

@@ -10,6 +10,7 @@ import '../panel/service_glass.dart';
 import '../service_setup_controller.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
+import 'step_7_safety.dart';
 import 'step_common.dart';
 
 /// Adım 7 - Röle Testi: Aç/Kapat -> panonun **gerçek** durum bildirimi -> "yük çalıştı mı?" teyidi.
@@ -31,7 +32,9 @@ class Step7Relays extends StatelessWidget {
       7,
       continueHint: r.problemCount > 0
           ? 'Sorunlu röle var: düzeltip yeniden test edin ya da "Kullanılmıyor" işaretleyin.'
-          : 'Devam etmek için her röleyi test edin (pano cevabı + "yük çalıştı mı?") veya "Kullanılmıyor" işaretleyin.',
+          : (r.needsSafetySave
+              ? 'Güvenlik cihazı atamalarını "Güvenlik Ayarlarını Panoya Yaz" ile kaydedin.'
+              : 'Devam etmek için her röleyi test edin (pano cevabı + "yük çalıştı mı?") veya "Kullanılmıyor" işaretleyin.'),
       statusText: r.loaded ? '${r.okCount + r.unusedCount}/${r.relays.length} tamam' : null,
       // Ekranda zaten gradyan birincil var ("Panoya Bağlan" / "Röleleri Listele"): hata kutusundaki "Tekrar dene" aynı işi yapar,
       // çerçeveli ikincil olur (asıl kurtarma eylemi belli olsun).
@@ -82,6 +85,8 @@ class Step7Relays extends StatelessWidget {
               ),
             ),
             for (final relay in r.relays) _RelayCard(logic: r, relay: relay),
+            SafetyInputsCard(logic: r),
+            SafetySaveCard(logic: r),
           ] else if (!r.busy && c.conn.ready)
             Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -173,7 +178,15 @@ class _RelayCard extends StatelessWidget {
               spacing: 16,
               runSpacing: 8,
               children: [
-                if (relay.isImpulse)
+                if (relay.boardActuator)
+                  SetupOrbAction(
+                    orbKey: Key('btn_relay_zone_test_$id'),
+                    icon: Icons.science_outlined,
+                    family: AppFamilies.sky,
+                    label: 'Bölge Testi',
+                    onTap: busy ? null : () => logic.testActuator(id),
+                  )
+                else if (relay.isImpulse)
                   SetupOrbAction(
                     orbKey: Key('btn_relay_on_$id'),
                     icon: Icons.bolt_rounded,
@@ -213,7 +226,7 @@ class _RelayCard extends StatelessWidget {
                             : 'Pano: açma bekleniyor'),
                   ok: relay.sawOn || (relay.isImpulse && relay.cmdSent),
                 ),
-                if (!relay.isImpulse)
+                if (!relay.isImpulse && !relay.boardActuator)
                   _FeedbackChip(label: relay.sawOff ? 'Pano: kapandı ✔' : 'Pano: kapanma bekleniyor', ok: relay.sawOff),
               ],
             ),
@@ -255,6 +268,7 @@ class _RelayCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 8),
                 child: SetupInfoRow(icon: Icons.warning_amber_rounded, color: SetupColors.error, text: relay.note!),
               ),
+            RelayAssignmentPanel(logic: logic, relay: relay),
             Wrap(
               spacing: 8,
               children: [

@@ -51,6 +51,21 @@ const NOTICE_ACTION = 'close_all';
 const ANDROID_CHANNEL_ID = 'peace_reminder';
 const APNS_CATEGORY = 'PEACE_CLOSE_ALL';
 
+// --- Güvenlik push türleri (WP-S3, tasarım §5.2.3; kararlar §7.2b-3/4) ---
+// safety_alarm: alarm açıldı / vana arızası (owner + resident). Android yüksek önem kanalı (uygulama oluşturur),
+//   APNs `time-sensitive` (kritik uyarı izni başvurusu YOK, §7.2b-3). collapse = alarm_<ev>_<pano>_<bölge>.
+// safety_info : alarm durumu doğrulanamadı (lost) / politika değişti (yalnız owner), bilgi kanalı.
+const PUSH_KINDS = Object.freeze(['peace', 'safety_alarm', 'safety_info']);
+const SAFETY_ALARM_TTL_SEC = 6 * 3600;
+const SAFETY_INFO_TTL_SEC = 24 * 3600;
+const SAFETY_ALARM_CHANNEL_ID = 'safety_alarm';
+const SAFETY_INFO_CHANNEL_ID = 'safety_info';
+const SAFETY_ALARM_CATEGORY = 'SAFETY_ALARM';
+const SAFETY_INFO_CATEGORY = 'SAFETY_INFO';
+const SAFETY_TOKEN_RE = /^[a-z][a-z0-9_]{0,23}$/; // kind / status / reason: kısa makine kodu
+// Bildirim alabilecek ev rolleri: misafir ve servis rolleri HİÇBİR türde almaz (§7.2b-4).
+const RECIPIENT_ROLES = Object.freeze(['owner', 'resident']);
+
 // Jeton / sürüm doğrulaması (route ve servis aynı kuralı kullanır).
 const TOKEN_MIN = 20;
 const TOKEN_MAX = 512;
@@ -146,12 +161,80 @@ function buildDataPayload(data) {
   };
 }
 
+/** Güvenlik verisi: YALNIZ bilinen alanlar, hepsi dizge (kişisel veri / serbest metin aktarılmaz). */
+function buildSafetyData(type, data) {
+  const d = data && typeof data === 'object' ? data : {};
+  const pick = (...keys) => {
+    for (const k of keys) if (d[k] !== undefined && d[k] !== null) return d[k];
+    return undefined;
+  };
+  const safeId = (v) => (v !== undefined && SAFE_ID_RE.test(String(v)) ? String(v) : '');
+  const token = (v) => (v !== undefined && SAFETY_TOKEN_RE.test(String(v)) ? String(v) : '');
+  const out = {
+    type,
+    v: String(MESSAGE_VERSION),
+    home_id: safeId(pick('home_id', 'homeId')),
+    device_id: safeId(pick('device_id', 'deviceId')),
+    alarm_id: safeId(pick('alarm_id', 'alarmId')),
+  };
+  if (type === 'safety_alarm') {
+    const zone = Math.trunc(Number(pick('zone')));
+    out.zone = Number.isInteger(zone) && zone >= 1 && zone <= 4 ? String(zone) : '';
+    out.kind = token(pick('kind'));
+    out.status = token(pick('status'));
+  } else {
+    out.reason = token(pick('reason'));
+  }
+  return out;
+}
+
+/** safety_alarm / safety_info FCM v1 gövdesi. */
+function buildSafetyMessage({ token, title, body, data, nowMs, kind }) {
+  const alarm = kind === 'safety_alarm';
+  const payload = buildSafetyData(kind, data);
+  const ttl = alarm ? SAFETY_ALARM_TTL_SEC : SAFETY_INFO_TTL_SEC;
+  const collapse = alarm
+    ? `alarm_${payload.home_id || 'unknown'}_${payload.device_id || 'unknown'}_${payload.zone || '0'}`
+    : `safety_info_${payload.home_id || 'unknown'}`;
+  const expirySec = Math.floor(Number(nowMs) / 1000) + ttl;
+  return {
+    message: {
+      token,
+      notification: { title: clampText(title, MAX_TITLE_CHARS), body: clampText(body, MAX_BODY_CHARS) },
+      data: payload,
+      android: {
+        priority: 'HIGH',
+        ttl: `${ttl}s`,
+        collapse_key: collapse,
+        notification: { channel_id: alarm ? SAFETY_ALARM_CHANNEL_ID : SAFETY_INFO_CHANNEL_ID, tag: collapse },
+      },
+      apns: {
+        headers: {
+          'apns-priority': alarm ? '10' : '5',
+          'apns-collapse-id': collapse,
+          'apns-expiration': String(expirySec),
+        },
+        payload: {
+          aps: {
+            category: alarm ? SAFETY_ALARM_CATEGORY : SAFETY_INFO_CATEGORY,
+            'thread-id': payload.home_id || 'unknown',
+            sound: 'default',
+            'interruption-level': alarm ? 'time-sensitive' : 'active',
+          },
+        },
+      },
+    },
+  };
+}
+
 /**
  * FCM HTTP v1 mesaj gövdesi. Aynı ev için gelen yeni bildirim eskisinin YERİNE geçsin diye
  * collapse anahtarları ev bazlıdır (yeniden deneme çift bildirim üretmez).
- * @param {{ token:string, title:string, body:string, data?:object, nowMs:number }} p
+ * `kind`: 'peace' (varsayılan; gece hatırlatması, AYNEN) | 'safety_alarm' | 'safety_info' (WP-S3).
+ * @param {{ token:string, title:string, body:string, data?:object, nowMs:number, kind?:string }} p
  */
-function buildMessage({ token, title, body, data, nowMs }) {
+function buildMessage({ token, title, body, data, nowMs, kind }) {
+  if (kind === 'safety_alarm' || kind === 'safety_info') return buildSafetyMessage({ token, title, body, data, nowMs, kind });
   const payload = buildDataPayload(data);
   const collapse = `peace_${payload.home_id || 'unknown'}`;
   const expirySec = Math.floor(Number(nowMs) / 1000) + MESSAGE_TTL_SEC;
@@ -452,10 +535,37 @@ function createPushService(deps = {}) {
 
   /**
    * Evin bildirim alacak cihazları: yalnızca owner + resident (misafir/servis hariç), aktif hesap,
-   * devre dışı olmayan jeton.
+   * devre dışı olmayan jeton. `roles` (WP-S3): bu kümenin ALT kümesi (ör. bilgi push'u yalnız ['owner']);
+   * misafir/servis rolü verilse de süzülür, geçerli rol kalmazsa sorgu yapılmaz.
    * @returns {Promise<Array<{id:string,userId:string,token:string,platform:string}>>}
    */
-  async function recipientsForHome(homeId) {
+  async function recipientsForHome(homeId, { roles } = {}) {
+    if (roles !== undefined) {
+      const wanted = (Array.isArray(roles) ? roles : []).filter((r) => RECIPIENT_ROLES.includes(r));
+      const uniq = RECIPIENT_ROLES.filter((r) => wanted.includes(r));
+      if (uniq.length === 0) return [];
+      const rr = await getDb().query(
+        `SELECT id, user_id, token, platform
+           FROM (
+             SELECT pt.id, pt.user_id, pt.token, pt.platform, pt.last_seen_at,
+                    row_number() OVER (PARTITION BY pt.user_id ORDER BY pt.last_seen_at DESC, pt.id) AS rn
+               FROM home_users hu
+               JOIN users u        ON u.id = hu.user_id
+                                  AND u.is_active IS NOT FALSE
+                                  AND u.account_status = 'active'
+               JOIN push_tokens pt ON pt.user_id = u.id
+                                  AND pt.disabled_at IS NULL
+              WHERE hu.home_id = $1
+                AND hu.role IN ('owner', 'resident')
+                AND hu.role = ANY($4::text[])
+           ) ranked
+          WHERE rn <= $2
+          ORDER BY last_seen_at DESC, id
+          LIMIT $3`,
+        [homeId, MAX_RECIPIENT_TOKENS_PER_USER, MAX_RECIPIENT_TOKENS, uniq]
+      );
+      return (rr.rows || []).map((row) => ({ id: row.id, userId: row.user_id, token: row.token, platform: row.platform }));
+    }
     // Önce kullanıcı başına en yeni N jeton (row_number), SONRA genel LIMIT: tek bir hesap ne kadar
     // jeton kaydederse kaydetsin listeden en çok N yer alır; ev sahibinin gerçek cihazı itilmez.
     const r = await getDb().query(
@@ -541,7 +651,8 @@ function createPushService(deps = {}) {
    *   istekler kalan süreyle sınırlanır: çağıran (evaluator) söz asla askıda kalmaz, kira süresi dolmadan
    *   ikinci bir örnek aynı alıcılara yeniden göndermez.
    */
-  async function sendNotice({ tokens, title, body, data, deadlineMs } = {}) {
+  async function sendNotice({ tokens, title, body, data, deadlineMs, kind } = {}) {
+    const msgKind = PUSH_KINDS.includes(kind) ? kind : 'peace';
     const result = { attempted: 0, sent: 0, failed: 0, disabledTokenIds: [], transient: false, errors: [] };
 
     if (!isConfigured()) {
@@ -622,7 +733,7 @@ function createPushService(deps = {}) {
       });
       aborted.catch(() => {}); // yarış kaybedilirse yakalanmamış ret olmasın
       try {
-        const payload = JSON.stringify(buildMessage({ token: target.token, title, body, data, nowMs: sentAtMs }));
+        const payload = JSON.stringify(buildMessage({ token: target.token, title, body, data, nowMs: sentAtMs, kind: msgKind }));
         const res = await Promise.race([
           fetchFn(url, {
             method: 'POST',
@@ -767,6 +878,8 @@ module.exports = {
   createPushService,
   createPushRouter,
   MESSAGE_VERSION,
+  PUSH_KINDS,
+  RECIPIENT_ROLES,
   // Route ve testler için
   normalizeToken,
   normalizePlatform,

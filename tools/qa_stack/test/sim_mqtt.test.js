@@ -1,4 +1,4 @@
-// Cihaz simulatoru <-> broker (CONTRACTS §2) = firmware MqttManager portu: kimlikle baglanma, retained state v2/status, LWT, cmd hatti,
+// Cihaz simulatoru <-> broker (CONTRACTS §2) = firmware MqttManager portu: kimlikle baglanma, retained state v3 (v1.2.0; v2'nin ust kumesi)/status, LWT, cmd hatti,
 // abonelik sonrasi 1500 ms yok sayma, id tekillestirme, sys, offline/crash/power-cycle, slow, DI, Wi-Fi kaybi.
 import test from 'node:test';
 import { performance } from 'node:perf_hooks';
@@ -82,7 +82,10 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
     assert.equal(h.states()[0].qos, 0, 'state QoS 0');
 
     const s = h.states()[0].json;
-    assert.equal(s.v, 2);
+    assert.equal(s.v, 3);   // v1.2.0: v:3 = v:2'nin kati ust kumesi (spec 3.1); yapilandirilmamis panoda ek anahtarlar yalniz caps/boot/bn/time_ok/epoch
+    assert.deepEqual(s.caps, ['safety', 'actuator', 'event', 'cfg']);
+    assert.match(s.bn, /^[0-9a-f]{8}$/);
+    for (const k of ['sensors', 'actuators', 'safety', 'cfg', 'last_rej']) assert.ok(!(k in s), `${k} yapilandirilmamis panoda yazilmaz`);
     assert.equal(s.uid, UID);
     assert.equal(s.fw, FW_VERSION_DEFAULT);
     assert.equal(s.seq, 1);
@@ -109,7 +112,7 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
     await waitFor(() => got.length >= 2, { timeoutMs: 3000, label: 'retained mesajlar gelmedi' });
     assert.ok(got.every((m) => m.retain), 'state ve status retained');
     assert.equal(got.find((m) => m.topic.endsWith('/status')).payload, 'online');
-    assert.equal(JSON.parse(got.find((m) => m.topic.endsWith('/state')).payload).v, 2);
+    assert.equal(JSON.parse(got.find((m) => m.topic.endsWith('/state')).payload).v, 3);
   } finally {
     await endClients(app);
     await h.close();

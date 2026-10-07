@@ -39,6 +39,27 @@ const MIN_STATE_VERSION = 2; // firmware `doc["v"] = 2` (relays[].name/type bu s
 /** Panonun `relays[].type` metinleri (MqttManager.cpp relayTypeName). */
 const RELAY_TYPES = Object.freeze(['light', 'impulse', 'shutter_up', 'shutter_down']);
 
+/**
+ * Eylemci rolleri (state v:3 `relays[].act`, tasarim §3.1 kural 6, K1). Bu metinler endpoints.actuator_type'a yazilir
+ * (033 CHECK). `type` alani eylemci rolesinde de bugunku RelayType adiyla (light/impulse) gelir ve DEGISMEZ.
+ * Bilinmeyen (ileride eklenecek) bir act metni `generic` sayilir: eylemci olarak isaretlemek guvenli taraftir
+ * (lamba sayilmaz, duz role komutu ve zamanli kural almaz).
+ */
+const ACTUATOR_TYPES = Object.freeze(['valve', 'siren', 'fan', 'generic']);
+const ACT_RE = /^[a-z][a-z0-9_]{0,15}$/;
+
+/** Ham `act` -> { ok, act }: yok/null -> act null; gecerli metin -> bilinen ya da 'generic'; baska her sey supheli. */
+function readAct(raw) {
+  if (raw === undefined || raw === null) return { ok: true, act: null };
+  if (typeof raw !== 'string' || !ACT_RE.test(raw)) return { ok: false, act: null };
+  return { ok: true, act: ACTUATOR_TYPES.includes(raw) ? raw : 'generic' };
+}
+
+/** Role satirlarindan imza dizisi: act YOKSA eski bicim [id,type,name] (v:2 imzasi birebir korunur). */
+function relaySigRow(r) {
+  return r.act ? [r.id, r.type, r.name, r.act] : [r.id, r.type, r.name];
+}
+
 // Bulut tohum sablonu: device_service.js SEED_ENDPOINTS_SQL ile BIREBIR ayni olmalidir (test bunu denetler).
 const SEED_TABLE = Object.freeze([
   null,
@@ -288,7 +309,10 @@ function extractReportedLayout(obj) {
     if (typeof r.type !== 'string' || !RELAY_TYPES.includes(r.type)) return null;
     if (typeof r.state !== 'boolean') return null;
     if (r.name !== undefined && typeof r.name !== 'string') return null; // D15: null dahil dizge olmayan ad -> null
+    const act = readAct(r.act); // v:3 eylemci rolu [Y2]
+    if (!act.ok) return null;
     relays[r.id - 1] = { id: r.id, type: r.type, name: sanitizeReportedName(r.name), state: r.state };
+    if (act.act) relays[r.id - 1].act = act.act; // v:2'de anahtar HIC yok: role nesnesi eskisiyle ayni
   }
 
   const pairs = [];
@@ -313,7 +337,7 @@ function extractReportedLayout(obj) {
   }
   if (seen.size !== pairs.length || !pairs.every((p) => seen.has(p))) return null; // tutarsiz anlik goruntu
 
-  const signature = JSON.stringify(relays.map((r) => [r.id, r.type, r.name]));
+  const signature = JSON.stringify(relays.map(relaySigRow));
   return { count: n, relays, pairs, shutterPos, signature };
 }
 
@@ -324,7 +348,7 @@ function extractReportedLayout(obj) {
 function serializeBase(reported) {
   return {
     v: BASE_VERSION,
-    relays: reported.relays.map((r) => ({ id: r.id, type: r.type, name: r.name })),
+    relays: reported.relays.map((r) => (r.act ? { id: r.id, type: r.type, name: r.name, act: r.act } : { id: r.id, type: r.type, name: r.name })),
   };
 }
 
@@ -345,14 +369,31 @@ function parseBase(raw) {
     if (r === null || typeof r !== 'object') return null;
     if (!Number.isInteger(r.id) || r.id < 1 || r.id > MAX_CHANNELS) return null;
     if (typeof r.type !== 'string' || typeof r.name !== 'string') return null;
-    relays.push({ id: r.id, type: r.type, name: r.name });
+    if (r.act !== undefined && (typeof r.act !== 'string' || !ACTUATOR_TYPES.includes(r.act))) return null;
+    relays.push(r.act ? { id: r.id, type: r.type, name: r.name, act: r.act } : { id: r.id, type: r.type, name: r.name });
   }
   return { v: BASE_VERSION, relays };
 }
 
 function sameBase(a, b) {
   if (!a || !b) return false;
-  return JSON.stringify(a.relays.map((r) => [r.id, r.type, r.name])) === JSON.stringify(b.relays.map((r) => [r.id, r.type, r.name]));
+  return JSON.stringify(a.relays.map(relaySigRow)) === JSON.stringify(b.relays.map(relaySigRow));
+}
+
+/** Bildirimde ya da tabanda eylemci var mi? (Eylemci esitleme sorgusu yalniz o zaman calisir: v:2 yolu aynen.) */
+function hasActuators(layoutOrBase) {
+  return Boolean(layoutOrBase && Array.isArray(layoutOrBase.relays) && layoutOrBase.relays.some((r) => r && r.act));
+}
+
+/** Kanal -> act (yoksa null) listesi: endpoints.actuator_type toplu esitlemesi icin [kanallar], [act|null]. */
+function actuatorVector(reported) {
+  const channels = [];
+  const acts = [];
+  for (const r of reported.relays) {
+    channels.push(r.id);
+    acts.push(r.act || null);
+  }
+  return { channels, acts };
 }
 
 // Panonun fabrika tipleri (ConfigManager.cpp applyDefaults): 1-2 ve 3-4 panjur cifti, 5-8 lamba.
@@ -365,6 +406,8 @@ const FACTORY_TYPES = Object.freeze(['shutter_up', 'shutter_down', 'shutter_up',
 function isFactoryLayout(reported) {
   if (!reported || !Array.isArray(reported.relays) || reported.count !== FACTORY_TYPES.length) return false;
   if (reported.relays.length !== FACTORY_TYPES.length) return false;
+  // Eylemci tasiyan pano kurulumcu tarafindan yapilandirilmistir: GECICI (D1) degildir; eylemci atamasi ertelenmez.
+  if (hasActuators(reported)) return false;
   return reported.relays.every(
     (r, i) => r && r.id === i + 1 && r.type === FACTORY_TYPES[i] && isBoardDefaultName(r.id, r.name)
   );
@@ -578,6 +621,10 @@ module.exports = {
   BASE_VERSION,
   MIN_STATE_VERSION,
   RELAY_TYPES,
+  ACTUATOR_TYPES,
+  readAct,
+  hasActuators,
+  actuatorVector,
   foldName,
   sanitizeReportedName,
   classOf,

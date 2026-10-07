@@ -11,9 +11,11 @@
 // gecersiz kilinabilir. 1.1.1: yalniz gomulu web arayuzu degisti (WebPortalPage.h: yeni gorunum + kalici cihaz anahtari);
 // Wi-Fi/MQTT/guvenlik davranisi 1.1.0 ile aynidir. 1.1.2: provizyon yolu -- factory/init + rekey NVS yazma hatasinda
 // 503 "storage", atomik ConfigManager::provisionIfEmpty (seri FACTORYINIT ile ortak; TOCTOU yok), RESETKEY metni;
-// gomulu web sayfasi metinleri (anahtar ipucu, provizyon formu uyarisi) duzeltildi.
+// gomulu web sayfasi metinleri (anahtar ipucu, provizyon formu uyarisi) duzeltildi. 1.2.0: guvenlik katmani (su baskini + vana;
+// SafetyManager, ValveGuard), state v:3 (v:2 ust kumesi), ev/{t}/event + event_ack, zorunlu uid, sys cfg_get/cfg_patch (1024 bayt),
+// yerel guvenlik uclari (/api/actuator, /api/alarm/*, /api/events, /api/safety/config), kilitliyken reboot/reset force ister.
 #ifndef FW_VERSION
-#define FW_VERSION "1.1.2"
+#define FW_VERSION "1.2.0"
 #endif
 
 // ============================================================================

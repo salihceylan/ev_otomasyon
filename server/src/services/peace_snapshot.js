@@ -28,6 +28,8 @@
 //            boş olan eski satırları kanal numarasından çözer. Çift numarası CİHAZA özeldir
 //            (iki cihazlı evde ikisinde de "1. panjur" vardır) -> tekilleştirme (cihaz, çift) ile.
 //   plug ve impulse satırları lamba/panjur sayılmaz.
+//   Eylemci kanalı (endpoints.actuator_type dolu: vana/siren/fan; WP-S2 [Y3]) lamba SAYILMAZ: NC selenoidin normal
+//   "röle açık" konumu her gece "1 lamba açık" bildirimi üretirdi. Kolon NULL iken sonuç eskisiyle aynıdır.
 
 const OPEN_SHUTTER_MIN_POS = 1; // current_position >= 1 -> açık (0 = tam kapalı)
 const LIVE_WINDOW_SEC = 120; // mqtt_bridge.js süpürücü eşiğiyle aynı
@@ -45,7 +47,7 @@ const SQL = Object.freeze({
     "e.name, COALESCE(e.room, '" + DEFAULT_ROOM + "') AS room, e.current_state, e.current_position " +
     'FROM devices d ' +
     'LEFT JOIN endpoints e ON e.device_id = d.id ' +
-    "AND ((e.type = 'light' AND e.current_state IS TRUE) OR (e.type = 'shutter' AND e.current_position >= $3)) " +
+    "AND ((e.type = 'light' AND e.actuator_type IS NULL AND e.current_state IS TRUE) OR (e.type = 'shutter' AND e.current_position >= $3)) " +
     'WHERE d.home_id = $1 ' +
     'ORDER BY d.id, e.channel_index',
 });
@@ -98,7 +100,8 @@ async function loadLiveSnapshot(db, homeId) {
     if (!live || row.endpoint_id === null || row.endpoint_id === undefined) continue; // bayat veriye GÜVENME
 
     const room = typeof row.room === 'string' && row.room.trim() !== '' ? row.room : DEFAULT_ROOM;
-    if (row.type === 'light' && isTrue(row.current_state)) {
+    // Eylemci satiri (sorgu zaten eler; savunma: kolonu dondurmeyen eski/sahte sorgu icin anahtar yoksa eskisi gibi)
+    if (row.type === 'light' && isTrue(row.current_state) && (row.actuator_type === undefined || row.actuator_type === null)) {
       lights.push({
         endpointId: String(row.endpoint_id),
         deviceId,

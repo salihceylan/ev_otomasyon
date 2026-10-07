@@ -88,7 +88,7 @@ test('connect: abonelik QoS1 ile ev/+/status ve ev/+/state; isConnected true', a
   await flush();
   assert.equal(s.bridge.isConnected(), true);
   assert.equal(s.client.subscribed.length, 1);
-  assert.deepEqual(s.client.subscribed[0].topics, ['ev/+/status', 'ev/+/state']);
+  assert.deepEqual(s.client.subscribed[0].topics, ['ev/+/status', 'ev/+/state', 'ev/+/event']); // WP-S2: guvenlik olaylari
   assert.deepEqual(s.client.subscribed[0].opts, { qos: 1 });
   assert.ok(s.logger.lines.some((l) => l.includes('Dinlenen konular')));
 });

@@ -796,9 +796,21 @@ async function pgFixture(db, { timezone = 'Europe/Istanbul', time = '23:30', ena
     homeId,
     deviceIds,
     async cleanup() {
-      await db.query('DELETE FROM homes WHERE id = $1', [homeId]).catch(() => {});
-      if (deviceIds.length > 0) await db.query('DELETE FROM devices WHERE id = ANY($1::uuid[])', [deviceIds]).catch(() => {});
-      await db.query('DELETE FROM users WHERE id = $1', [userId]).catch(() => {});
+      // Kilitlenme (40P01) / kilit zaman asimi (55P03) kurbani olursa silme yeniden denenir; hata yutulup satir sizdirilmaz (inceleme turu 2
+      // RV2-2). Son denemede de olmazsa hata firlatilir (test gorunur bicimde basarisiz olur).
+      const del = async (sql, params) => {
+        for (let attempt = 1; ; attempt++) {
+          try {
+            return await db.query(sql, params);
+          } catch (err) {
+            if (!(err && (err.code === '40P01' || err.code === '55P03') && attempt < 4)) throw err;
+            await new Promise((r) => setTimeout(r, 50 * attempt));
+          }
+        }
+      };
+      await del('DELETE FROM homes WHERE id = $1', [homeId]);
+      if (deviceIds.length > 0) await del('DELETE FROM devices WHERE id = ANY($1::uuid[])', [deviceIds]);
+      await del('DELETE FROM users WHERE id = $1', [userId]);
     },
   };
 }

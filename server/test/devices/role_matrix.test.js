@@ -27,6 +27,12 @@ const MATRIX = {
   local_key: [false, true, true, true, true, false],
   device_credential: [true, true, true, true, false, false],
   mqtt_credentials: [true, true, true, true, true, true],
+  // Guvenlik modulu (WP-S4, tasarim §5.2.4; misafir §7.2b-4: kapatir, acamaz/onaylayamaz, bildirim almaz)
+  actuator_close: [true, true, true, true, true, true],
+  safety_ack: [true, true, true, true, true, false],
+  actuator_control: [true, true, true, true, true, false],
+  safety_test: [true, true, true, true, false, false],
+  safety_config: [true, true, true, true, false, false],
 };
 const ORDER = [S, F, P, O, R, G];
 

@@ -412,6 +412,15 @@ class AutomationApiService {
     'storage': 'Cihaz ayarı belleğine yazamadı. Tekrar deneyin.',
     'storage_error': 'Cihaz ayarı belleğine yazamadı. Tekrar deneyin.',
     'too_large': 'Gönderilen veri cihaz için çok büyük.',
+    // Güvenlik uçları (CONTRACTS §2.6 "LAN yanıtları")
+    'timeout': 'Pano komutu zamanında işleyemedi. Durumu kontrol edip yeniden deneyin.',
+    'unknown_field': 'Cihaz isteği anlayamadı (sürüm uyumsuz olabilir).',
+    'uid_mismatch': 'İstek başka bir panoya ait.',
+    'invalid_actuator': 'Geçersiz güvenlik cihazı kimliği.',
+    'invalid_zone': 'Geçersiz bölge.',
+    'invalid_aid': 'Geçersiz alarm kimliği.',
+    'invalid_id': 'Geçersiz komut kimliği.',
+    'invalid_after': 'Geçersiz olay kimliği.',
   };
 
   http.Response _check(http.Response res) {
@@ -435,6 +444,8 @@ class AutomationApiService {
       message = 'Cihaz çok fazla hatalı deneme nedeniyle kilitlendi. Biraz bekleyin.';
     } else if (error != null && _errorMessages.containsKey(error)) {
       message = _errorMessages[error]!;
+    } else if (isSafetyRejectCode(error)) {
+      message = safetyRejectMessage(error); // güvenlik ret kodu (zone_latched, gas_local_only ...)
     } else if (status == 400) {
       message = 'Cihaz isteği kabul etmedi.';
     } else if (status == 404) {
@@ -526,6 +537,128 @@ class AutomationApiService {
 
   /// Darbe/tetik rölesi (`state=1`).
   Future<bool> triggerImpulse(int channel) => setRelay(channel, true);
+
+  // ---------------------------------------------------------------------------
+  // Güvenlik modülü (tasarım §3.5; gövde MQTT `cmd` ile aynı, LAN'da `uid` gerekmez). Yanıt `{ok, id, rej?}`:
+  // `rej` komutun işlendiğinde yazılan ret kodudur (`last_rej` ile aynı kodlar) -> [LocalApiException] (409, kod).
+  // ---------------------------------------------------------------------------
+
+  /// Eylemci komutu: `POST /api/actuator {actuator, to, id?}`; [to] `closed|open|on|off` (MQTT `cmd` ile aynı gövde;
+  /// firmware bilinmeyen alanı `400 unknown_field` ile reddeder).
+  Future<void> postActuator(String actuatorId, String to, {String? id}) async {
+    if (actuatorId.isEmpty || actuatorId.length > 8) throw LocalApiException.invalid('Geçersiz eylemci kimliği.');
+    if (!const <String>{'closed', 'open', 'on', 'off'}.contains(to)) {
+      throw LocalApiException.invalid('Geçersiz eylemci hedefi.');
+    }
+    final res = await _send(
+      'POST',
+      '/api/actuator',
+      body: <String, dynamic>{'actuator': actuatorId, 'to': to, 'id': ?id},
+      timeout: const Duration(seconds: 5),
+    );
+    _throwIfRejected(res);
+  }
+
+  /// Alarm onayı / susturma: `POST /api/alarm/ack {zone, aid?, id?}` ([aid] bayatsa pano `stale_ack` döner).
+  Future<void> ackAlarm(int zone, {String? aid, String? id}) async {
+    if (zone < 1 || zone > 4) throw LocalApiException.invalid('Geçersiz bölge.');
+    final res = await _send(
+      'POST',
+      '/api/alarm/ack',
+      body: <String, dynamic>{'zone': zone, 'aid': ?aid, 'id': ?id},
+      timeout: const Duration(seconds: 5),
+    );
+    _throwIfRejected(res);
+  }
+
+  /// Bölge testi: `POST /api/alarm/test {zone, id?}`.
+  Future<void> testAlarm(int zone, {String? id}) async {
+    if (zone < 1 || zone > 4) throw LocalApiException.invalid('Geçersiz bölge.');
+    final res = await _send(
+      'POST',
+      '/api/alarm/test',
+      body: <String, dynamic>{'zone': zone, 'id': ?id},
+      timeout: const Duration(seconds: 5),
+    );
+    _throwIfRejected(res);
+  }
+
+  /// İnternetsiz alarm geçmişi: `GET /api/events?after=<eid>` -> `{bn, events:[…], more}` (halka 32 olay, sayfa en çok
+  /// 16; K5, CONTRACTS §2.6). `more` doluysa son eid'den sonrası sırayla okunur (en çok [maxPages] sayfa); bilinmeyen
+  /// `after` panoda baştan döner, yinelenen eid atlanır. Bozuk öğe atlanır.
+  Future<List<DeviceEventRecord>> fetchEvents({String? after, int maxPages = 4}) async {
+    final out = <DeviceEventRecord>[];
+    final seen = <String>{};
+    var cursor = after;
+    for (var page = 0; page < maxPages; page++) {
+      final res = await _send(
+        'GET',
+        '/api/events',
+        query: <String, String>{'after': ?cursor},
+        timeout: const Duration(seconds: 4),
+      );
+      final body = _json(res);
+      final raw = asList(body['events'] ?? body['data']) ?? const <dynamic>[];
+      for (final e in parseList(raw, DeviceEventRecord.fromJson, label: 'Event')) {
+        if (seen.add(e.eid)) out.add(e);
+      }
+      String? last;
+      for (final item in raw.reversed) {
+        last = asNonEmptyString(asMap(item)?['eid']);
+        if (last != null) break;
+      }
+      if (asBool(body['more']) != true || last == null || last == cursor) break;
+      cursor = last;
+    }
+    return out;
+  }
+
+  /// Güvenlik yapılandırması (LAN; CONTRACTS §2.6): `GET /api/safety/config` -> `{rev, crc, policy, zones, lights,
+  /// sensors, actuators}` (adlar dahil). Sihirbaz `rev`'i iyimser eşzamanlılık için okur (`base_rev`).
+  Future<Map<String, dynamic>> fetchSafetyConfig() async {
+    final res = await _send('GET', '/api/safety/config', timeout: const Duration(seconds: 5));
+    return _json(res);
+  }
+
+  /// TEK öğelik yapılandırma yaması (CONTRACTS §2.6): `POST /api/safety/config` gövdesi
+  /// `{base_rev?, set:{sensor|actuator|policy|zone|light:{…}}}` ya da `{base_rev?, del:{sensor|actuator:"a2"}}`;
+  /// yanıt `200 {status:"ok", rev, crc}`. Ret:
+  /// `400 cfg_invalid` (`detail`), `403 local_loosen_forbidden` (yerel anahtarla gevşetme yasak, karar 7.2b-7),
+  /// `409 cfg_conflict` / `zone_latched`, `500 storage_error`, `503 busy` -> [LocalApiException] (kod + Türkçe metin).
+  Future<Map<String, dynamic>> saveSafetyConfig(Map<String, dynamic> body) async {
+    final res = await _send('POST', '/api/safety/config', body: body, timeout: const Duration(seconds: 8));
+    _throwIfRejected(res);
+    return _json(res);
+  }
+
+  /// Yamaları SIRAYLA uygular; her isteğin `base_rev`'i bir öncekinin yanıtındaki `rev`'dir (ilki [baseRev]). Bir yama
+  /// reddedilirse durur ve hatayı fırlatır (öncekiler panoda kalır; sihirbaz yeniden okuyup kalanı yazar). Dönüş: son
+  /// `rev` ve `crc` (yama yoksa [baseRev]).
+  Future<({int rev, String? crc})> applySafetyConfigPatches(List<Map<String, dynamic>> patches, {required int baseRev}) async {
+    var rev = baseRev;
+    String? crc;
+    for (final patch in patches) {
+      final res = await saveSafetyConfig(<String, dynamic>{'base_rev': rev, ...patch});
+      final next = asInt(res['rev']);
+      if (next == null) {
+        throw const LocalApiException(
+          statusCode: 502,
+          code: 'bad_response',
+          message: 'Pano yapılandırma yanıtı anlaşılamadı (sürüm uyumsuz olabilir).',
+        );
+      }
+      rev = next;
+      crc = asNonEmptyString(res['crc']);
+    }
+    return (rev: rev, crc: crc);
+  }
+
+  void _throwIfRejected(http.Response res) {
+    final body = _json(res);
+    final rej = asNonEmptyString(body['rej'])?.toLowerCase();
+    if (rej == null) return;
+    throw LocalApiException(statusCode: 409, code: rej, message: safetyRejectMessage(rej));
+  }
 
   /// Panjur komutu: [pair] **1 tabanlı**; [action] `up|down|stop|step|pos`; `pos` için [value]
   /// (0..100) **zorunludur**.

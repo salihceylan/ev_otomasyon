@@ -815,6 +815,6 @@ test('kaynak: bas aciklama blogu WP-L maddesini tasir; "kopru kullanmaz" ifadesi
   assert.match(header, /ENDPOINT_LAYOUT_SYNC/);
   assert.doesNotMatch(source, /metindir \(kopru kullanmaz\)/);
   assert.match(header, /relays\[\]\.type/);
-  assert.match(source, /new MqttBridge\(\{ reconcile: true, layoutSync: true \}\)/);
+  assert.match(source, /new MqttBridge\(\{ reconcile: true, layoutSync: true, alarms: true \}\)/); // WP-S2: alarm servisi
   assert.equal(source.includes('\r'), false, 'satir sonu LF');
 });

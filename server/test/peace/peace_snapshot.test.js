@@ -157,7 +157,8 @@ test('SQL PARAMETRELERI: [homeId, 120, 1]; yalnizca SELECT; DB saati; panjur cif
   assert.match(text, /CURRENT_TIMESTAMP - \(\$2::int \* INTERVAL '1 second'\)/, 'sure DB saatiyle ve parametreyle');
   assert.match(text, /d\.is_online IS TRUE/);
   assert.match(text, /COALESCE\(e\.shutter_pair_index, \(e\.channel_index \+ 1\) \/ 2\)/);
-  assert.match(text, /e\.type = 'light' AND e\.current_state IS TRUE/);
+  // WP-S2 [Y3]: eylemci kanali (actuator_type dolu) lamba sayilmaz
+  assert.match(text, /e\.type = 'light' AND e\.actuator_type IS NULL AND e\.current_state IS TRUE/);
   assert.match(text, /e\.type = 'shutter' AND e\.current_position >= \$3/);
   assert.match(text, /WHERE d\.home_id = \$1/);
   assert.doesNotMatch(text, /'plug'|'impulse'/, 'priz/impuls lamba sayilmaz');

@@ -128,7 +128,7 @@ export async function runSmoke({ rt, apiBase = `http://127.0.0.1:${PORTS.api}/ap
       expect(!(await subscribeOnce(ownerMqtt, 'ev/#')), 'joker abonelik KABUL edildi (olmamali)');
       await waitFor(() => msgs.some((m) => m.t.endsWith('/state')), { timeoutMs: 8000, label: 'retained state gelmedi' });
       const st = JSON.parse(msgs.find((m) => m.t.endsWith('/state')).p);
-      expect(st.v === 2 && st.uid === uid, `state v=${st.v} uid=${st.uid}`);
+      expect(st.v >= 2 && st.uid === uid, `state v=${st.v} uid=${st.uid}`);   // v1.2.0 state v:3 (v:2 ust kumesi; tuketiciler v >= 2 denetler [O8])
       expect(msgs.find((m) => m.t.endsWith('/state')).retain === true, 'state retained degil');
     });
     await check('uygulama kimligi MQTT\'ye YAYIN YAPAMAZ (cmd dusurulur, cihaz uygulamaz)', async () => {

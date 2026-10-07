@@ -208,6 +208,20 @@ function makeWorld(SQL) {
         for (const r of hit) r.enabled = false;
         return { rows: hit.map((r) => ({ id: r.id })), rowCount: hit.length };
       }
+      case SQL.syncActuators: {
+        // WP-S2: endpoints.actuator_type = act (IS DISTINCT FROM); degisen satirlar doner
+        const [deviceId, channels, acts] = params;
+        const out = [];
+        channels.forEach((channel, i) => {
+          const e = w.endpoints.find((x) => x.device_id === deviceId && x.channel_index === channel);
+          const act = acts[i] === undefined ? null : acts[i];
+          if (e && (e.actuator_type === undefined ? null : e.actuator_type) !== act) {
+            e.actuator_type = act;
+            out.push({ channel_index: channel, actuator_type: act });
+          }
+        });
+        return { rows: out, rowCount: out.length };
+      }
       case SQL.saveBase: {
         const d = w.devices.get(params[0]);
         if (!d) return { rows: [], rowCount: 0 };

@@ -21,6 +21,14 @@
 //   'group'              -> toplu komut (all_*)      (misafir YOK)
 //   'child_lock'         -> cocuk kilidi             (misafir YOK)
 //   'runtime'            -> panjur kalibrasyonu      (yalnizca owner/servis/super)
+//   'actuator'           -> eylemci (vana/siren/fan/generic; WP-S4, tasarim §3.3): yetenek YONE gore secilir
+//                           (closed/off -> actuator_close: misafir dahil; open/on -> actuator_control: misafir YOK)
+//   'alarm_ack'          -> alarm onayi/susturma     (safety_ack: misafir YOK)
+//   'alarm_test'         -> bolge testi              (safety_test: owner/servis/super)
+//
+// Guvenlik komutlari (actuator, alarm_ack, alarm_test) `uid` ZORUNLU tasir: komut ev konusuna gider ve evdeki tum
+// panolar alir; eylemci (a1..a16) ve bolge numaralari pano basinadir. uid eslesmeyen pano komutu SESSIZCE yok sayar.
+// `event_ack` ve `cfg_*` YALNIZ backend'den cikar: bu sema onlari tanimaz (uygulama gonderemez).
 // ==============================================================================
 
 const MAX_RELAY = 40; // firmware MAX_TOTAL_RELAYS
@@ -32,6 +40,13 @@ const POS_MIN = 0;
 const POS_MAX = 100;
 
 const COMMAND_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,24}$/;
+// Guvenlik komutlari (tasarim §3.3): eylemci kimligi a1..a16, bolge 1..4, alarm kimligi `<bn>-<n>` (bn 8 hex, n <= 5 hane)
+const ACTUATOR_ID_PATTERN = /^a([1-9]|1[0-6])$/;
+const AID_PATTERN = /^[0-9A-Fa-f]{8}-[0-9]{1,5}$/;
+const UID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/; // mqtt_bridge UID_RE ile ayni
+const ACTUATOR_TARGETS = Object.freeze(['closed', 'open', 'on', 'off']);
+const SAFE_TARGETS = Object.freeze(['closed', 'off']); // guvenli yon: kapatmak / susturmak
+const MAX_ZONE = 4;
 
 const SHUTTER_ACTIONS = Object.freeze(['up', 'down', 'stop', 'step']);
 const GROUP_COMMANDS = Object.freeze([
@@ -48,6 +63,9 @@ const KINDS = Object.freeze({
   GROUP: 'group',
   CHILD_LOCK: 'child_lock',
   RUNTIME: 'runtime',
+  ACTUATOR: 'actuator',
+  ALARM_ACK: 'alarm_ack',
+  ALARM_TEST: 'alarm_test',
 });
 
 function fail(error, field = null) {
@@ -181,6 +199,64 @@ function validateGroupCommand(input, keys, id) {
   return { ok: true, kind: KINDS.GROUP, command: withId({ cmd: input.cmd }, id) };
 }
 
+/** Zorunlu `uid` (guvenlik komutlari). Buyuk harfe normalize edilir (kopru ve firmware buyuk/kucuk harf duyarsiz). */
+function readRequiredUid(input) {
+  if (!Object.prototype.hasOwnProperty.call(input, 'uid')) {
+    return { ok: false, error: 'Güvenlik komutlarında hedef pano kimliği (uid) zorunludur.' };
+  }
+  const uid = typeof input.uid === 'string' ? input.uid.trim() : '';
+  if (!UID_PATTERN.test(uid)) return { ok: false, error: 'Pano kimliği (uid) geçersiz.' };
+  return { ok: true, value: uid.toUpperCase() };
+}
+
+function validateActuatorCommand(input, keys, id) {
+  const unknown = findUnknownKey(keys, ['actuator', 'to', 'uid', 'id']);
+  if (unknown) return fail(`Bilinmeyen alan: ${safeKey(unknown)}`, unknown);
+  if (typeof input.actuator !== 'string' || !ACTUATOR_ID_PATTERN.test(input.actuator)) {
+    return fail('Eylemci kimliği "a1" ile "a16" arasında olmalı.', 'actuator');
+  }
+  if (typeof input.to !== 'string' || !ACTUATOR_TARGETS.includes(input.to)) {
+    return fail(`Eylemci hedefi (to) şu değerlerden biri olmalı: ${ACTUATOR_TARGETS.join(', ')}.`, 'to');
+  }
+  const uid = readRequiredUid(input);
+  if (!uid.ok) return fail(uid.error, 'uid');
+  return { ok: true, kind: KINDS.ACTUATOR, command: withId({ actuator: input.actuator, to: input.to, uid: uid.value }, id) };
+}
+
+function readZone(input) {
+  if (!isIntInRange(input.zone, 1, MAX_ZONE)) {
+    return { ok: false, error: `Bölge (zone) 1 ile ${MAX_ZONE} arasında bir tamsayı olmalı.` };
+  }
+  return { ok: true, value: input.zone };
+}
+
+function validateAlarmAckCommand(input, keys, id) {
+  const unknown = findUnknownKey(keys, ['cmd', 'zone', 'aid', 'uid', 'id']);
+  if (unknown) return fail(`Bilinmeyen alan: ${safeKey(unknown)}`, unknown);
+  const zone = readZone(input);
+  if (!zone.ok) return fail(zone.error, 'zone');
+  if (typeof input.aid !== 'string' || !AID_PATTERN.test(input.aid)) {
+    return fail('Alarm kimliği (aid) geçersiz.', 'aid');
+  }
+  const uid = readRequiredUid(input);
+  if (!uid.ok) return fail(uid.error, 'uid');
+  return {
+    ok: true,
+    kind: KINDS.ALARM_ACK,
+    command: withId({ cmd: 'alarm_ack', zone: zone.value, aid: input.aid.toLowerCase(), uid: uid.value }, id),
+  };
+}
+
+function validateAlarmTestCommand(input, keys, id) {
+  const unknown = findUnknownKey(keys, ['cmd', 'zone', 'uid', 'id']);
+  if (unknown) return fail(`Bilinmeyen alan: ${safeKey(unknown)}`, unknown);
+  const zone = readZone(input);
+  if (!zone.ok) return fail(zone.error, 'zone');
+  const uid = readRequiredUid(input);
+  if (!uid.ok) return fail(uid.error, 'uid');
+  return { ok: true, kind: KINDS.ALARM_TEST, command: withId({ cmd: 'alarm_test', zone: zone.value, uid: uid.value }, id) };
+}
+
 // Hata mesajina girecek anahtar adini guvenli/kisa tut (log/yanit enjeksiyonunu onler).
 function safeKey(key) {
   return String(key).replace(/[^A-Za-z0-9_.-]/g, '?').slice(0, 32);
@@ -210,6 +286,11 @@ function validateCommand(input) {
     return validateRuntimeCommand(input, keys, id);
   }
 
+  if (has('actuator')) {
+    if (has('relay') || has('shutter') || has('cmd')) return fail('Eylemci komutu "relay", "shutter" veya "cmd" içeremez.');
+    return validateActuatorCommand(input, keys, id);
+  }
+
   if (has('relay')) {
     if (has('shutter')) return fail('Bir komut hem "relay" hem "shutter" içeremez.');
     return validateRelayCommand(input, keys, id);
@@ -235,6 +316,14 @@ function validateCommand(input) {
     return validateChildLockCommand(input, keys, id);
   }
 
+  if (input.cmd === 'alarm_ack') {
+    return validateAlarmAckCommand(input, keys, id);
+  }
+
+  if (input.cmd === 'alarm_test') {
+    return validateAlarmTestCommand(input, keys, id);
+  }
+
   return fail('Bilinmeyen komut.', 'cmd');
 }
 
@@ -253,14 +342,42 @@ function capabilityForKind(kind) {
       return 'child_lock';
     case KINDS.RUNTIME:
       return 'calibrate';
+    case KINDS.ALARM_ACK:
+      return 'safety_ack';
+    case KINDS.ALARM_TEST:
+      return 'safety_test';
     default:
-      return null;
+      return null; // ACTUATOR: yon komuttan okunur (capabilityForCommand)
   }
+}
+
+/**
+ * Dogrulanmis komutun (validateCommand sonucu) yetenegi. Eylemcide YON belirler: kapatma/susturma (`closed`/`off`)
+ * herkese aciktir (misafir dahil, mevcut `control` kumesi); acma/calistirma `actuator_control` ister.
+ * Gaz vanasi acma icin yetenek YOKTUR: hedef denetimi (device_service) 409 GAS_LOCAL_ONLY doner.
+ */
+function capabilityForCommand(validated) {
+  if (!validated || validated.ok !== true) return null;
+  if (validated.kind === KINDS.ACTUATOR) {
+    return SAFE_TARGETS.includes(validated.command.to) ? 'actuator_close' : 'actuator_control';
+  }
+  return capabilityForKind(validated.kind);
+}
+
+/** Eylemci hedefi guvenli yonde mi (kapat/sustur)? */
+function isSafeTarget(to) {
+  return SAFE_TARGETS.includes(to);
 }
 
 module.exports = {
   validateCommand,
   capabilityForKind,
+  capabilityForCommand,
+  isSafeTarget,
+  isValidAid: (aid) => typeof aid === 'string' && AID_PATTERN.test(aid),
+  ACTUATOR_TARGETS,
+  SAFE_TARGETS,
+  MAX_ZONE,
   isValidCommandId: (id) => typeof id === 'string' && COMMAND_ID_PATTERN.test(id),
   KINDS,
   MAX_RELAY,

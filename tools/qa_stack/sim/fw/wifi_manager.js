@@ -36,7 +36,7 @@ export const STA_STABLE_MS = ApPolicy.STABLE_MS;
 export const MIN_BACKOFF_MS = StaMachine.MIN_BACKOFF_MS;
 export const MAX_BACKOFF_MS = StaMachine.MAX_BACKOFF_MS;
 // firmware WiFiManager.h FW_VERSION (test/sim_device.test.js "surum:" testi esitligi denetler)
-export const FW_VERSION_DEFAULT = '1.1.2';
+export const FW_VERSION_DEFAULT = '1.2.0';
 
 /** SoftAP ag bilgisi (firmware startAp: 192.168.4.1/24) */
 export const AP_IP = '192.168.4.1';

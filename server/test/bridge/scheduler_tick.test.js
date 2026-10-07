@@ -48,6 +48,7 @@ function makeWorld({
     devices,
     published: [],
     housekeeping: 0,
+    eventRetention: 0,
     creatorQueries: 0,
     endpoints,
     targetQueries: [],
@@ -110,6 +111,7 @@ function makeWorld({
       },
     },
     { match: (t) => t === SQL.housekeeping, reply: () => { world.housekeeping++; return { rows: [], rowCount: 0 }; } },
+    { match: (t) => t === SQL.eventRetention, reply: () => { world.eventRetention++; return { rows: [], rowCount: 0 }; } },
   ]);
 
   const mqttBridge = {
@@ -466,8 +468,21 @@ test('gunluk temizligi gunde bir kez calisir', async () => {
   await s.runTick(AT_0830);
   await s.runTick(AT_0830 + MIN);
   assert.equal(w.world.housekeeping, 1);
+  assert.equal(w.world.eventRetention, 1, 'device_events 90 gun temizligi ayni gunluk isle');
   await s.runTick(AT_0830 + 25 * 60 * MIN);
   assert.equal(w.world.housekeeping, 2);
+  assert.equal(w.world.eventRetention, 2);
+});
+
+test('olay gunlugu temizligi: 90 gun; hatasi kural turunu ve calisma gunlugu temizligini bozmaz', async () => {
+  assert.match(SQL.eventRetention, /DELETE FROM device_events WHERE received_at < CURRENT_TIMESTAMP - INTERVAL '90 days'/);
+  const w = makeWorld({ rules: [] });
+  w.db.addRule({ match: (t) => t === SQL.eventRetention, reply: new Error('tablo yok') });
+  const s = w.makeScheduler();
+  const r = await s.runTick(AT_0830);
+  assert.ok(!r.error);
+  assert.equal(w.world.housekeeping, 1);
+  assert.ok(w.logger.lines.some((l) => l.includes('Olay gunlugu temizligi')));
 });
 
 test('gunluk yazimi basarisiz olsa da kural calisir (gunluk yardimcidir)', async () => {
@@ -661,5 +676,6 @@ test('D4: hedef sorgusu cihaz belirsiz/yoksa veya yetki yoksa hic calismaz (ek y
 
 test('D4 SQL sozlesmesi: hedef sorgusu yalniz yer tutucu (cihaz + kanal dizisi), endpoints tipini okur', () => {
   assert.equal(typeof SQL.target, 'string');
-  assert.match(SQL.target, /^SELECT channel_index, type FROM endpoints WHERE device_id = \$1::uuid AND channel_index = ANY\(\$2::int\[\]\)$/);
+  // WP-S2 [O6]: eylemci kanalini ayirt etmek icin actuator_type da okunur
+  assert.match(SQL.target, /^SELECT channel_index, type, actuator_type FROM endpoints WHERE device_id = \$1::uuid AND channel_index = ANY\(\$2::int\[\]\)$/);
 });

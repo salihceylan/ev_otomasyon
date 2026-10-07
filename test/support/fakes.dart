@@ -566,6 +566,77 @@ class FakeCloudApi extends EvCloudApiService {
     return CommandResult(delivered: true, deviceOnline: true, commandId: command['id'] as String?);
   }
 
+  // --- Güvenlik modülü (tasarım §5.2.4) ---
+
+  final List<ActuatorCall> actuatorCalls = <ActuatorCall>[];
+
+  /// Eylemci komutu davranışı (varsayılan: iletildi, cihaz çevrimiçi, komut kimliği yankılanır).
+  Future<CommandResult> Function(ActuatorCall call)? actuatorHandler;
+
+  final List<({String alarmId, String commandId})> ackCalls = <({String alarmId, String commandId})>[];
+  final List<({String deviceId, int zone, String commandId})> alarmTestCalls =
+      <({String deviceId, int zone, String commandId})>[];
+
+  /// `GET /homes/:id/alarms` yanıtı.
+  List<AlarmRecord> alarmRecords = const <AlarmRecord>[];
+  Object? alarmsError;
+
+  @override
+  Future<CommandResult> actuatorCommand({
+    required String homeId,
+    required String deviceId,
+    required String actuatorId,
+    required String to,
+    required String commandId,
+  }) async {
+    final call = ActuatorCall(homeId: homeId, deviceId: deviceId, actuatorId: actuatorId, to: to, commandId: commandId);
+    calls.add('actuator:$actuatorId:$to');
+    actuatorCalls.add(call);
+    final handler = actuatorHandler;
+    if (handler != null) return handler(call);
+    return CommandResult(delivered: true, deviceOnline: true, commandId: commandId);
+  }
+
+  @override
+  Future<CommandResult> ackAlarm({required String homeId, required String alarmId, required String commandId}) async {
+    calls.add('ackAlarm:$alarmId');
+    ackCalls.add((alarmId: alarmId, commandId: commandId));
+    return CommandResult(delivered: true, deviceOnline: true, commandId: commandId);
+  }
+
+  @override
+  Future<CommandResult> alarmTest({
+    required String homeId,
+    required String deviceId,
+    required int zone,
+    required String commandId,
+  }) async {
+    calls.add('alarmTest:$zone');
+    alarmTestCalls.add((deviceId: deviceId, zone: zone, commandId: commandId));
+    return CommandResult(delivered: true, deviceOnline: true, commandId: commandId);
+  }
+
+  @override
+  Future<List<AlarmRecord>> alarms(String homeId, {bool openOnly = true, String? before}) async {
+    calls.add('alarms:$homeId');
+    final error = alarmsError;
+    if (error != null) throw error;
+    return alarmRecords;
+  }
+
+  /// `GET /homes/:id/devices/:uid/safety-config` yanıtları (pano uid'i -> gövde). Yoksa `404 CONFIG_NOT_AVAILABLE`.
+  final Map<String, Map<String, dynamic>> safetyConfigs = <String, Map<String, dynamic>>{};
+
+  @override
+  Future<Map<String, dynamic>> safetyConfig(String homeId, String deviceId) async {
+    calls.add('safetyConfig:$deviceId');
+    final body = safetyConfigs[deviceId.toUpperCase()];
+    if (body == null) {
+      throw const ApiException(statusCode: 404, code: 'CONFIG_NOT_AVAILABLE', message: 'Yapılandırma yok.');
+    }
+    return body;
+  }
+
   @override
   Future<ChildLockInfo> fetchChildLockInfo(String homeId) async {
     calls.add('getChildLock');
@@ -821,6 +892,7 @@ class FakeMqtt implements EvMqttService {
   final _link = StreamController<MqttLinkState>.broadcast();
   final _state = StreamController<DeviceStateMessage>.broadcast();
   final _status = StreamController<DevicePresenceMessage>.broadcast();
+  final _safety = StreamController<SafetyEvent>.broadcast();
 
   MqttLinkState _linkState = MqttLinkState.disconnected;
   String? _topic;
@@ -849,6 +921,12 @@ class FakeMqtt implements EvMqttService {
 
   @override
   Stream<DevicePresenceMessage> get statusMessages => _status.stream;
+
+  @override
+  Stream<SafetyEvent> get safetyEvents => _safety.stream;
+
+  /// Güvenlik olayı üretir (gerçek servis bunu ardışık `state` farkından türetir).
+  void emitSafetyEvent(SafetyEvent event) => _safety.add(event);
 
   @override
   int get droppedMessageCount => 0;
@@ -903,6 +981,7 @@ class FakeMqtt implements EvMqttService {
     _link.close();
     _state.close();
     _status.close();
+    _safety.close();
   }
 
   /// Cihaz `state` iletisi üretir.
@@ -928,6 +1007,23 @@ class FakeMqtt implements EvMqttService {
       receivedAt: DateTime.now(),
     ));
   }
+}
+
+/// [FakeCloudApi.actuatorCommand] çağrı kaydı.
+class ActuatorCall {
+  const ActuatorCall({
+    required this.homeId,
+    required this.deviceId,
+    required this.actuatorId,
+    required this.to,
+    required this.commandId,
+  });
+
+  final String homeId;
+  final String deviceId;
+  final String actuatorId;
+  final String to;
+  final String commandId;
 }
 
 /// `MqttTransport` sahtesi: gerçek `EvMqttService` döngüsünü (yenileme/yeniden bağlanma) sınar.

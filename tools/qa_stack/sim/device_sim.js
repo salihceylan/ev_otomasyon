@@ -22,6 +22,9 @@ import { WifiManager, WifiWorld, AUTH_FAIL_REASONS, AP_IP, FW_VERSION_DEFAULT } 
 import { MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, RelayType, DIMode } from './fw/sysconfig.js';
 import { clientOnSoftAp, ipToU32, u32ToIp } from './fw/ap_access.js';
 import { PhysicalObserver } from './fw/observer.js';
+import { parseSensorId, parseActuatorId } from './fw/safety_cfg_api.js';
+import { SensorSrc } from './fw/sensor_hub.js';
+import { relayLevelFor } from './fw/actuator_map.js';
 
 export const UID_RE = /^AHBU-[A-Z0-9-]{3,32}$/;
 export const S3_UID_RE = /^AHBU-S3-[0-9A-F]{6}$/;
@@ -135,6 +138,10 @@ export class DeviceSimulator {
     this.lastWifiTick = -Infinity;
     this.lastMqttStep = -Infinity;
     this.observer = new PhysicalObserver();
+    // guvenlik katmani QA modelleri (yeniden baslatmalarda korunur: fiziksel dunya)
+    this.bridgeFeed = new Map();   // kopru yuvasi -> aktif (raporlar 5 sn'de bir yinelenir)
+    this.lastBridgeReport = 0;
+    this.valveFb = new Map();      // eylemci -> geri bildirim modeli
   }
 
   // =========================================================================== yardimcilar
@@ -217,6 +224,8 @@ export class DeviceSimulator {
       ext: this.ext,
       timeScale: this.timeScale,
       bootHoldMs: this.opts.bootHoldMs,
+      // firmware NetUtil::isTimeSynced() ? time(nullptr) : 0 (alarm "since")
+      epoch: () => (this.fw && this.fw.wifi.isTimeSynced() ? Math.floor(Date.now() / 1000) : 0),
       hooks: {
         event: hooks.event,
         beep: (ms, reason) => { this.counters.beeps = (this.counters.beeps || 0) + 1; this.lastBeep = { ms, reason, t: isoNow() }; },
@@ -351,6 +360,8 @@ export class DeviceSimulator {
     const fw = this.fw;
     if (!fw || this.booting) return;
     const now = this.millis();
+    this.#serviceValveFb(now);
+    if (this.bridgeFeed.size && u32(now - this.lastBridgeReport) >= 5000) for (const slot of this.bridgeFeed.keys()) this.#bridgeReport(slot);
     fw.automation.loop(now);
     if (this.fw !== fw) return;   // loop icinde yeniden baslatma istendi
     this.#observe(now);
@@ -675,6 +686,140 @@ export class DeviceSimulator {
     else throw new RangeError('action: chip_reset | stuck_on | drop');
     this.event('qa_tca_fault', { action, relay });
     return { latch: t.latch, shadow: t.shadow };
+  }
+
+  // =========================================================================== guvenlik katmani: hata enjeksiyonu (spec 5.4, WP-Q1; firmware'de YOK)
+  #sensorCfg(id) {
+    const fw = this.fw;
+    if (!fw || !fw.automation.safetyOn) throw new Error('guvenlik katmani yok');
+    const sid = parseSensorId(String(id));
+    if (!sid) throw new RangeError(`sensor kimligi gecersiz: ${id}`);
+    const c = fw.automation.safety.copyConfig();
+    const s = c.sens.slice(0, c.nSens).find((x) => x.src === sid.src && x.index === sid.index);
+    return { sid, cfg: s || null };
+  }
+
+  /** Sensoru islak/kuru yapar (DI: NC sensorde kontak ACILIR; kopru: rapor). Kopru raporu her 5 sn tekrarlanir (bridgeSilence durdurur). */
+  setSensor(id, wet) {
+    const { sid, cfg } = this.#sensorCfg(id);
+    if (sid.src === SensorSrc.DI) {
+      const nc = cfg ? cfg.active_open === 1 : false;
+      return this.setDi(sid.index, nc ? !wet : !!wet);
+    }
+    this.bridgeFeed.set(sid.index, !!wet);
+    this.#bridgeReport(sid.index);
+    return { changed: true };
+  }
+
+  #bridgeReport(slot) {
+    const fw = this.fw;
+    if (!fw || !this.bridgeFeed.has(slot)) return;
+    fw.automation.safety.postBridgeReport({ slot, active: this.bridgeFeed.get(slot), ok: true, at_ms: this.millis() });
+    this.lastBridgeReport = this.millis();
+  }
+
+  /** Kopru yuvasinin raporlarini keser (kalp atisi asilinca sensor ok=false olur). */
+  bridgeSilence(slot) { this.bridgeFeed.delete(slot); this.event('qa_bridge_silence', { slot }); }
+
+  /** Damla: onMs islak / offMs kuru, n kez. @returns {Promise<void>} */
+  pulseSensor(id, onMs, offMs, n) {
+    return new Promise((resolve) => {
+      let k = 0;
+      const step = (wet) => {
+        if (this.stopped) { resolve(); return; }
+        try { this.setSensor(id, wet); } catch (_) { /* aciliyor */ }
+        if (!wet && ++k >= n) { resolve(); return; }
+        const t = setTimeout(() => { this.timers.delete(t); step(!wet); }, (wet ? onMs : offMs));
+        this.timers.add(t);
+      };
+      step(true);
+    });
+  }
+
+  /**
+   * Vana geri bildirim DI'si modeli: 'follow' = vana role seviyesini delayMs sonra izler (kapali konumda kontak "kapali" bildirir),
+   * 'stuck_open' = hep "acik" bildirir, 'none' = modeli kaldirir (DI degismez).
+   */
+  setValveFeedback(actId, mode, delayMs = 0) {
+    const fw = this.fw;
+    if (!fw || !fw.automation.safetyOn) throw new Error('guvenlik katmani yok');
+    const i = parseActuatorId(String(actId));
+    const c = fw.automation.safety.copyConfig();
+    if (i === null || i >= c.nAct || !c.act[i].fb_di) throw new RangeError(`geri bildirimli vana degil: ${actId}`);
+    if (!['follow', 'stuck_open', 'none'].includes(mode)) throw new RangeError('mode: follow | stuck_open | none');
+    if (mode === 'none') this.valveFb.delete(i);
+    else this.valveFb.set(i, { mode, delayMs, closed: null, since: this.millis() });
+    this.event('qa_valve_fb', { actuator: i + 1, mode, delay_ms: delayMs });
+    return { actuator: i + 1, mode };
+  }
+
+  #serviceValveFb(now) {
+    const fw = this.fw;
+    if (!fw || !fw.automation.safetyOn || this.valveFb.size === 0) return;
+    const c = fw.automation.safety.copyConfig();
+    const snap = fw.automation.getSnapshot();
+    for (const [i, m] of this.valveFb) {
+      const a = c.act[i];
+      if (!a) continue;
+      const closedNow = m.mode === 'stuck_open' ? false : (!!snap.relays[a.relay - 1] === relayLevelFor(a, true));
+      if (m.closed !== closedNow) { m.closed = closedNow; m.since = now; }
+      if (u32(now - m.since) < m.delayMs) continue;
+      const contact = a.fb_closed_active ? closedNow : !closedNow;
+      try { this.setDi(a.fb_di, contact); } catch (_) { /* yok say */ }
+    }
+  }
+
+  /** Guvenlik yapilandirmasinin NVS kaydini bozar (CRC) ve guc keser: acilista guvenli kip (cfg_corrupt). */
+  corruptSafetyCfg() {
+    const s = this.nvs.get('safety');
+    if (s) this.nvs.put('safety', { ...s, crc: (s.crc ^ 0x5a5a5a5a) >>> 0 });
+    this.event('qa_safety_cfg_corrupted', {});
+    this.powerCycle();
+  }
+
+  /** Ek modul ms boyunca yanit vermez (RS485 kablosu cekildi). */
+  extModuleDown(ms) {
+    this.setHwFail({ ext_module: true });
+    const t = setTimeout(() => { this.timers.delete(t); this.setHwFail({ ext_module: false }); }, ms);
+    this.timers.add(t);
+  }
+
+  /** Sonraki n event_ack komutu cihazda yok sayilir (onay kaybi). */
+  dropEventAcks(n) { if (this.fw) this.fw.mqtt.qaDropAcks = n; this.event('qa_drop_event_acks', { n }); }
+
+  /** Broker baglantisi ms boyunca kesilir (LWT), sonra yeniden baglanir. */
+  brokerDown(ms) {
+    this.forceOffline();
+    const t = setTimeout(() => { this.timers.delete(t); this.forceOnline(); }, ms);
+    this.timers.add(t);
+  }
+
+  /** Elektrik gitti/geldi (NVS korunur). */
+  reboot() { this.powerCycle(); }
+
+  /** Yazilimsal yeniden baslatma (shutdown kancasi dahil). */
+  softRestart() { this.softReboot(); }
+
+  /** /__sim/safety govdesi: {sensor, wet} | {pulse:{id,on_ms,off_ms,n}} | {valve_fb:{actuator,mode,delay_ms}} | {corrupt_cfg:true} |
+   *  {ext_down_ms} | {drop_acks} | {broker_down_ms} | {bridge_silence} */
+  qaSafety(b = {}) {
+    if (b.sensor !== undefined) return this.setSensor(b.sensor, !!b.wet);
+    if (b.pulse) { this.pulseSensor(b.pulse.id, b.pulse.on_ms, b.pulse.off_ms, b.pulse.n); return { ok: true }; }
+    if (b.valve_fb) return this.setValveFeedback(b.valve_fb.actuator, b.valve_fb.mode, b.valve_fb.delay_ms || 0);
+    if (b.corrupt_cfg) { this.corruptSafetyCfg(); return { ok: true }; }
+    if (b.ext_down_ms !== undefined) { this.extModuleDown(b.ext_down_ms); return { ok: true }; }
+    if (b.drop_acks !== undefined) { this.dropEventAcks(b.drop_acks); return { ok: true }; }
+    if (b.broker_down_ms !== undefined) { this.brokerDown(b.broker_down_ms); return { ok: true }; }
+    if (b.bridge_silence !== undefined) { this.bridgeSilence(b.bridge_silence); return { ok: true }; }
+    throw new RangeError('bilinmeyen guvenlik enjeksiyonu');
+  }
+
+  /** QA: guvenlik katmaninin ozeti (gorunum + olay kutusu). */
+  qaSafetyState() {
+    const fw = this.fw;
+    if (!fw || !fw.automation.safetyOn) return null;
+    const s = fw.automation.safety;
+    return { view: s.copyView(), mode: s.mode, latched_mask: s.latchedMask, outbox: s.outbox.list().map((x) => ({ eid: x.eid, type: x.ev.type })), last_rej: s.lastReject() };
   }
 
   /** /__sim/state: ic durumun tamami (anahtar degerleri YOK). */

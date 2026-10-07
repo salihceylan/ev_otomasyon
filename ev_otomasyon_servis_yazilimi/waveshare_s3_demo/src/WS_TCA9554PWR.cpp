@@ -231,6 +231,68 @@ bool TCA_ClearBits(uint8_t clearMask)
   return ok;
 }
 
+// Bağımsız emniyet görevi (ValveGuard): donanımdaki çıkış yazmacı. Gölgeye bakılmaz (çip sıfırlansa da gölge "1" der).
+bool TCA_ReadOutputHw(uint8_t* out)
+{
+  if (!out || !I2C_Lock(80)) return false;
+  const bool ok = TCA_ReadReg(TCA9554_OUTPUT_REG, out);
+  I2C_Unlock();
+  return ok;
+}
+
+uint8_t TCA_ShutterPairMask(void)
+{
+  if (!I2C_Lock(20)) return 0x0F;   // belirsizse bütün çiftler panjur sayılır: SetSafeBits hiçbir şey kurmaz
+  const uint8_t m = (uint8_t)(s_guard.shutterPairs() & 0x0F);
+  I2C_Unlock();
+  return m;
+}
+
+// Güvenli seviyesi 1 olan vana bitlerini kurar (ENERGIZE_TO_CLOSE vana enerjisiz kaldıysa). Panjur çifti bitleri süzülür: bu yol hiçbir
+// zaman bir panjur rölesini enerjilemez. Önce donanım okunup gölge + InterlockGuard eşitlenir (düşen bitler o yazımla geri ÇEKİLMEZ,
+// yalnız istenen güvenli bitler eklenir); okunamazsa hiçbir şey yazılmaz.
+bool TCA_SetSafeBits(uint8_t mask)
+{
+  if (!I2C_Lock(80)) return false;
+  uint8_t deny = 0;
+  const uint8_t pairs = (uint8_t)(s_guard.shutterPairs() & 0x0F);
+  for (uint8_t p = 0; p < 4; p++) if (pairs & (1u << p)) deny = (uint8_t)(deny | (0x03u << (2 * p)));
+  mask = (uint8_t)(mask & ~deny);
+  if (mask == 0) {
+    I2C_Unlock();
+    return true;
+  }
+  uint8_t dropped = 0;
+  bool readFailed = false;
+  (void)tcaResyncLocked(&dropped, &readFailed, false);
+  if (readFailed) {
+    I2C_Unlock();
+    return false;
+  }
+  const uint8_t next = (uint8_t)(s_outShadow | mask);
+  if (next == s_outShadow) {
+    I2C_Unlock();
+    return true;
+  }
+  if (s_guard.check(next, millis()) != InterlockGuard::OK) {   // süzülmüş bitlerle beklenmez; savunma
+    I2C_Unlock();
+    return false;
+  }
+  bool ok = false;
+  for (int attempt = 0; attempt < 3 && !ok; attempt++) {
+    ok = TCA_WriteReg(TCA9554_OUTPUT_REG, next);
+    if (!ok && attempt < 2) vTaskDelay(pdMS_TO_TICKS(2));
+  }
+  if (ok) {
+    s_guard.commit(next, millis());
+    s_outShadow = next;
+  } else {
+    s_writeFailures++;
+  }
+  I2C_Unlock();
+  return ok;
+}
+
 // Periyodik doğrulama (SmartAutomation::loop, 2 sn) ve yazım ön denetimiyle AYNI eşitleme (tcaResyncLocked).
 TcaVerifyResult TCA_Verify(void)
 {

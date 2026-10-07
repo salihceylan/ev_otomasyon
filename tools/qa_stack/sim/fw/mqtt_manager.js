@@ -16,7 +16,13 @@
 import mqtt from 'mqtt';
 import { isPrintableAsciiNoSpace, sanitizeInto } from './netutil.js';
 import { LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN } from './sysconfig.js';
-import { validateCommand, MAX_PAYLOAD_BYTES } from '../command_schema.js';
+import { validateCommand, MAX_PAYLOAD_BYTES, isValidCommandId } from '../command_schema.js';
+import { writeStateExtras, relayActText } from './safety_view.js';
+import { Rej } from './safety_fsm.js';
+import { parseCfgEdit } from './safety_cfg_api.js';
+import { CfgResult } from './safety_manager.js';
+import { planDump, writeDumpPart, DUMP_PART_CAP } from './safety_cfg_edit.js';
+import { VIA_CLOUD } from './event_outbox.js';
 import { CmdSource } from './automation.js';
 import { PublishPacer, ReconnectBackoff, Wait } from './net_time.js';
 
@@ -24,6 +30,7 @@ export const TASK_TICK_MS = 50;
 export const HEARTBEAT_MS = PublishPacer.HEARTBEAT_MS;
 export const COALESCE_MS = PublishPacer.COALESCE_MS;
 export const IGNORE_WINDOW_MS = 1500;
+export const MAX_SYS_PAYLOAD_BYTES = 1024;   // sys (cfg_patch) ayri sinir [D2][B11]; cmd 512'de kalir
 export const NO_TIME_RETRY_MS = 2000;
 export const PUBLISH_RETRY_MAX_MS = PublishPacer.RETRY_MAX_MS;
 const SIG_CHECK_MS = 100;   // durum gozcusu: 100 ms'de bir
@@ -103,6 +110,9 @@ export class MqttManager {
     this.topicState = '';
     this.topicCmd = '';
     this.topicSys = '';
+    this.topicEvent = '';
+    this.connectedAt = 0;
+    this.qaDropAcks = 0;   // QA: sonraki N event_ack yok sayilir
     this.clientId = `ESP32S3_${mac.replace(/:/g, '').toUpperCase()}`;
 
     this.publishedSig = '';
@@ -133,8 +143,9 @@ export class MqttManager {
       this.topicState = `ev/${tid}/state`;
       this.topicCmd = `ev/${tid}/cmd`;
       this.topicSys = `ev/${tid}/sys`;
+      this.topicEvent = `ev/${tid}/event`;
     } else {
-      this.topicStatus = this.topicState = this.topicCmd = this.topicSys = '';
+      this.topicStatus = this.topicState = this.topicCmd = this.topicSys = this.topicEvent = '';
     }
     this.haveCreds = have;
   }
@@ -216,6 +227,7 @@ export class MqttManager {
     if (this.connected) {
       this.#watchStateChanges(now);
       this.#publishIfDue(now);
+      this.#publishEventsIfDue(now);   // ev/{t}/event: uygulama duzeyinde onayli teslim (spec 3.4)
     }
   }
 
@@ -297,6 +309,7 @@ export class MqttManager {
     sub(this.topicSys, 'sys');
     const now = this.clock.now();
     this.ignore.arm(now, this.timing.ignoreWindowMs);   // "retained yok say" penceresi (her tur yoklanir: sessizlikte bayat kalmaz)
+    this.connectedAt = now;   // olay tamponu bu pencere bitmeden bosaltilmaz [D4]
 
     this.connected = true;
     this.reconnect.reset();
@@ -358,6 +371,8 @@ export class MqttManager {
       s.relays.map((b) => (b ? 1 : 0)).join(''), s.dis.map((b) => (b ? 1 : 0)).join(''), s.childLock, s.totalRelays, s.totalDIs,
       s.shutters.map((x) => ((x.moving ? 1 : 0) | ((x.dir & 3) << 1) | (x.waiting ? 8 : 0) | (x.configured ? 16 : 0))),
       s.shutters.map((x) => x.target), s.lastId,
+      // guvenlik katmani: gorunum imzasi (since_up haric), ret sayaci, saat durumu (spec 3.2 "Yayin tetigi")
+      this.#safety()?.viewSig() ?? '', this.#safety()?.rejSeq ?? 0, this.wifi.isTimeSynced(),
     ]);
   }
 
@@ -377,14 +392,26 @@ export class MqttManager {
     if (this.pace.due(now, this.needPublish)) this.publishState(now);
   }
 
-  /** MQTT `state` yuku (v:2). Yalniz gercekten panjur olarak tanimli ciftler raporlanir ("hayalet panjur" yok). */
+  #safety() { return this.automation.safetyOn ? this.automation.safety : null; }
+
+  /** v:3 eki (firmware writeStateExtras ile ayni bayt dizisi) ve role "act" alanlari. */
+  #stateExtras() {
+    const sm = this.#safety();
+    const v = sm?.copyView() ?? { configured: 0, act: [] };
+    const m = sm ? sm.stateMeta() : { boot: 0, bn: 0, rejId: '', rej: Rej.OK };
+    const timeOk = this.wifi.isTimeSynced();
+    return { view: v, text: writeStateExtras(v, { ...m, timeOk, epoch: timeOk ? Math.floor(Date.now() / 1000) : 0 }) };
+  }
+
+  /** MQTT `state` yuku (v:3 = v:2'nin kati ust kumesi). Yalniz gercekten panjur olarak tanimli ciftler raporlanir ("hayalet panjur" yok). */
   buildState() {
     const snap = this.automation.getSnapshot();
     const c = this.cm.config;
     const nR = Math.min(snap.totalRelays, 40);
     const nD = Math.min(snap.totalDIs, 40);
+    const ex = this.#stateExtras();
     const doc = {
-      v: 2,
+      v: 3,
       uid: this.uid,
       fw: this.fw,
       seq: this.seq,
@@ -393,9 +420,12 @@ export class MqttManager {
       child_lock: snap.childLock,
     };
     if (snap.lastId !== '') doc.last_id = snap.lastId;   // bos last_id gonderilmez
-    doc.relays = Array.from({ length: nR }, (_, i) => ({
-      id: i + 1, name: sanitizeInto(32, c.relays[i].name), type: relayTypeName(c.relays[i].type), state: !!snap.relays[i],
-    }));
+    doc.relays = Array.from({ length: nR }, (_, i) => {
+      const r = { id: i + 1, name: sanitizeInto(32, c.relays[i].name), type: relayTypeName(c.relays[i].type), state: !!snap.relays[i] };
+      const act = relayActText(ex.view, i + 1);
+      if (act) r.act = act;   // yalniz eylemci rolelerinde (type ayni kalir) [K1]
+      return r;
+    });
     const shutters = [];
     for (let p = 0; p < Math.floor(nR / 2); p++) {
       const sh = snap.shutters[p];
@@ -403,7 +433,7 @@ export class MqttManager {
     }
     doc.shutters = shutters;
     doc.dis = Array.from({ length: nD }, (_, i) => ({ id: i + 1, state: !!snap.dis[i] }));
-    return doc;
+    return Object.assign(doc, JSON.parse(`{${ex.text.slice(1)}}`));   // firmware: ek, nesnenin sonuna eklenir
   }
 
   publishState(now) {
@@ -457,7 +487,7 @@ export class MqttManager {
       return { kind: 'ignored_window' };
     }
     const len = payload.length;
-    if (len === 0 || len > MAX_PAYLOAD_BYTES) {
+    if (len === 0 || len > (isSys ? MAX_SYS_PAYLOAD_BYTES : MAX_PAYLOAD_BYTES)) {
       this.event('cmd_ignored', { reason: 'bad_payload_size', bytes: len });
       return { kind: 'bad_size' };
     }
@@ -471,13 +501,34 @@ export class MqttManager {
       this.hooks.counter?.('mqtt_cmd_rejected');
       return { kind: 'bad_json' };
     }
+    // uid: ev konusu evdeki butun panolara gider; baska panonun komutu SESSIZCE yok sayilir (last_rej yazilmaz) [Y5]
+    if (obj && typeof obj === 'object' && !Array.isArray(obj) && Object.prototype.hasOwnProperty.call(obj, 'uid') && obj.uid !== this.uid) {
+      this.event('cmd_ignored', { reason: 'other_uid' });
+      return { kind: 'other_uid' };
+    }
+    const rejId = obj && typeof obj.id === 'string' && isValidCommandId(obj.id) ? obj.id : '';
     const v = validateCommand(obj, { totalRelays: this.cm.config.totalRelays() });
     if (!v.ok) {
       this.event('cmd_rejected', { source: 'mqtt', reason: v.reason, bytes: payload.length });
       this.hooks.counter?.('mqtt_cmd_rejected');
+      this.#rejectCmd(rejId, Rej.BAD_CMD, now);
       return { kind: 'rejected', reason: v.reason };
     }
+    if (v.eventAck) {
+      if (this.qaDropAcks > 0) { this.qaDropAcks--; this.event('event_ack_dropped_by_qa', {}); return { kind: 'event_ack_dropped' }; }
+      const sm = this.#safety();
+      const n = sm ? sm.outbox.ackMany(v.eids) : 0;
+      this.event('event_ack', { acked: n, of: v.eids.length });
+      return { kind: 'event_ack', acked: n };
+    }
     const cmd = { ...v.cmd, source: CmdSource.MQTT };
+    // RV-2: uid'siz duz role komutu (butun panolara gider) bu panonun eylemci rolesine gelirse SESSIZCE yok sayilir.
+    const hasUid = obj && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, 'uid');
+    const sm0 = this.#safety();
+    if ((cmd.type === 'RELAY_SET' || cmd.type === 'RELAY_TOGGLE') && !hasUid && sm0 && sm0.isActuatorRelay(cmd.index)) {
+      this.event('cmd_ignored', { reason: 'actuator_relay_without_uid', relay: cmd.index });
+      return { kind: 'actuator_relay_without_uid' };
+    }
     if (cmd.id && this.#seenId(cmd.id)) {
       this.event('cmd_ignored', { reason: 'duplicate_id', id: cmd.id });
       this.hooks.counter?.('mqtt_cmd_ignored');
@@ -485,12 +536,20 @@ export class MqttManager {
     }
     if (!this.post(cmd)) {
       this.event('cmd_dropped_queue_full', { cmd: cmd.type });
+      this.#rejectCmd(rejId, Rej.BUSY, now);
       return { kind: 'queue_full' };   // id kaydedilmez: istemci yeniden deneyebilir
     }
     if (cmd.id) this.#rememberId(cmd.id);
     this.hooks.counter?.('mqtt_cmd_queued');
     this.triggerPublish(now);
     return { kind: 'queued', cmd };
+  }
+
+  /** Komut reddi: id'si cozulebilen ve bu panoya ait komut icin state.last_rej (firmware MqttManager::rejectCmd) [O10]. */
+  #rejectCmd(id, rej, now) {
+    const sm = this.#safety();
+    if (sm) sm.noteReject(id, rej);
+    this.triggerPublish(now);
   }
 
   #handleSys(payload) {
@@ -500,6 +559,8 @@ export class MqttManager {
       this.event('sys_rejected', { reason: 'bad_json' });
       return { kind: 'sys_rejected', reason: 'bad_json' };
     }
+    if (typeof obj.cmd !== 'string') { this.event('sys_rejected', { reason: 'cmd_not_string' }); return { kind: 'sys_rejected', reason: 'cmd_not_string' }; }
+    if (obj.cmd === 'cfg_get' || obj.cmd === 'cfg_patch') return this.#handleCfgSys(obj);
     let cmd = null;
     let key = null;
     for (const [k, val] of Object.entries(obj)) {
@@ -533,6 +594,64 @@ export class MqttManager {
     }
     this.event('sys_failed', { reason: 'store' });
     return { kind: 'sys_failed' };
+  }
+
+  // ------------------------------------------------------------------ guvenlik: sys cfg_get / cfg_patch (WP-F4)
+  /** cfg_*: "module":"safety" ve "uid" ZORUNLU (uid eslesmezse sessiz). Bulut yolu gevsetebilir (yetki sunucuda); cakismada pano kazanir. */
+  #handleCfgSys(obj) {
+    if (typeof obj.uid !== 'string') { this.event('sys_rejected', { reason: 'uid_required' }); return { kind: 'sys_rejected', reason: 'uid_required' }; }
+    if (obj.uid !== this.uid) return { kind: 'other_uid' };
+    if (obj.module !== 'safety') { this.event('sys_rejected', { reason: 'module' }); return { kind: 'sys_rejected', reason: 'module' }; }
+    const sm = this.#safety();
+    if (!sm) return { kind: 'sys_rejected', reason: 'no_safety' };
+    const rejId = typeof obj.id === 'string' && isValidCommandId(obj.id) ? obj.id : '';
+    const now = this.clock.now();
+    if (obj.cmd === 'cfg_get') {
+      if (!Object.keys(obj).every((k) => ['cmd', 'module', 'uid', 'id'].includes(k))) { this.event('sys_rejected', { reason: 'unknown_field' }); return { kind: 'sys_rejected', reason: 'unknown_field' }; }
+      return { kind: 'cfg_dump', parts: this.#publishCfgDump() };
+    }
+    const p = parseCfgEdit(obj, true);
+    if (p.err) {
+      this.event('cfg_patch_rejected', { reason: p.err });
+      this.#rejectCmd(rejId, Rej.CFG_INVALID, now);
+      return { kind: 'cfg_rejected', reason: p.err };
+    }
+    const res = sm.submitEdit(p.edit, p.hasBase, p.baseRev, VIA_CLOUD, this.cm.config, { nowMs: now });
+    const done = (o) => {
+      this.event('cfg_patch', { result: o.r, rev: o.rev });
+      if (o.r === CfgResult.OK) this.triggerPublish(now);
+      else if (o.r === CfgResult.CONFLICT) this.#rejectCmd(rejId, Rej.CFG_CONFLICT, now);
+      else if (o.r === CfgResult.LATCHED) this.#rejectCmd(rejId, Rej.ZONE_LATCHED, now);
+      else if (o.r === CfgResult.INVALID) this.#rejectCmd(rejId, Rej.CFG_INVALID, now);
+      else this.#rejectCmd(rejId, Rej.BUSY, now);
+      return { kind: 'cfg_patch', result: o.r, rev: o.rev, err: o.err };
+    };
+    return res instanceof Promise ? res.then(done) : done(res);
+  }
+
+  /** ev/{t}/event: zamani gelen en eski olay (her 50 ms en cok bir); abonelikten sonraki 1500 ms'de bosaltilmaz [D4]. retain YOK. */
+  #publishEventsIfDue(now) {
+    const sm = this.#safety();
+    if (!sm || !this.topicEvent || !this.client || !this.client.connected) return;
+    const box = sm.outbox;
+    const slot = box.nextDue(now, this.connectedAt);
+    if (slot < 0) return;
+    const json = box.toJson(slot, this.uid, sm.bootCount);
+    if (!json) { box.ack(box.eidOf(slot)); this.event('event_dropped_too_big', {}); return; }
+    box.markSent(slot, now);
+    this.client.publish(this.topicEvent, json, { qos: 0, retain: false });
+    this.event('event_published', { eid: box.eidOf(slot) });
+  }
+
+  /** cfg_dump: outbox DISINDA, onaysiz, her parca <= 3500 bayt (part/parts). @returns {number} parca sayisi */
+  #publishCfgDump() {
+    const sm = this.#safety();
+    if (!sm || !this.topicEvent || !this.client || !this.client.connected) return 0;
+    const c = sm.copyConfig();
+    const parts = planDump(c, DUMP_PART_CAP);
+    parts.forEach((p, k) => this.client.publish(this.topicEvent, writeDumpPart(c, p, k + 1, parts.length, this.uid), { qos: 0, retain: false }));
+    this.event('cfg_dump', { parts: parts.length, rev: c.rev });
+    return parts.length;
   }
 
   // ------------------------------------------------------------------ QA ozeti

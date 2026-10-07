@@ -99,6 +99,15 @@ class _ShutterTarget {
   final int? direction;
 }
 
+/// Eylemci komutunun İYİMSER hedefi. Yalnız güvenli yön (vanayı kapat, sireni/fanı kapat) iyimser gösterilir;
+/// güvenli olmayan yön (vanayı aç, sireni/fanı aç) onaya kadar gerçek değerde kalır (hedef `null`).
+class _ActuatorTarget {
+  const _ActuatorTarget({this.pos, this.on});
+
+  final ValvePos? pos;
+  final bool? on;
+}
+
 /// Bir panonun uç nokta listesiyle UYUŞMAYAN yerleşiminin izlenmesi (yalnızca iç kullanım; WP-STATE2): en son görülen
 /// yerleşim (imzası aynı kaldıkça) ve bu imza için harcanan sessiz yenileme denemesi.
 class _LayoutWatch {
@@ -243,6 +252,18 @@ class AutomationState extends ChangeNotifier {
   DevicePresence _presence = DevicePresence.unknown;
   MqttLinkState _mqttLink = MqttLinkState.disconnected;
   final Map<int, ShutterRuntime> _shutterRuntime = <int, ShutterRuntime>{};
+
+  /// Pano (`state.uid`, büyük harf) başına son güvenlik durumu (bulut kipi; `state v:3`). Eşitlik denetimli: özdeş
+  /// kalp atışı bildirim üretmez (PF-04).
+  final Map<String, SafetyState> _safetyByUid = <String, SafetyState>{};
+
+  /// Pano anahtarı ([safetyByDevice] anahtarı) başına yapılandırma kopyasından gelen sensör/eylemci ADLARI [B12].
+  /// `cfg.safety.rev/crc` değişince yeniden okunur: bulutta `GET …/devices/:uid/safety-config` (sunucunun `cfg_dump`
+  /// kopyası), LAN'da `GET /api/safety/config` (CONTRACTS §1.5d, §2.6). Okunamazsa kimlik / uç nokta adı gösterilir.
+  final Map<String, SafetyConfigNames> _safetyNames = <String, SafetyConfigNames>{};
+  final Set<String> _safetyNamesInFlight = <String>{};
+  final Map<String, DateTime> _safetyNamesRetryAt = <String, DateTime>{};
+  static const Duration _safetyNamesRetry = Duration(seconds: 60);
   DeviceStatus? _lastLiveSnapshot;
   DateTime? _lastLiveSnapshotAt;
 
@@ -341,6 +362,9 @@ class AutomationState extends ChangeNotifier {
   AppMode? _shutterItemsMode;
   DeviceStatus? _statusMemo;
   int _statusGen = -1;
+  Map<String, SafetyState>? _safetyMemo;
+  int _safetyGen = -1;
+  AppMode? _safetyMode;
 
   // `capabilities` önbelleği: kullanıcı, aktif ev (kimlik) ve misafir penceresinin O ANKİ sonucu aynı kaldıkça.
   Capabilities? _capsMemo;
@@ -460,7 +484,7 @@ class AutomationState extends ChangeNotifier {
     final cached = _relayItemsMemo;
     if (cached != null && _relayItemsGen == _viewGen && _relayItemsMode == _mode) return cached;
     final built = _mode == AppMode.cloud
-        ? relayItemsFromEndpoints(cloudEndpoints)
+        ? relayItemsFromEndpoints(cloudEndpoints).where((r) => !r.isActuator).toList(growable: false)
         : (status?.controllableRelays ?? const <RelayItem>[]);
     final view = UnmodifiableListView<RelayItem>(built);
     _relayItemsMemo = view;
@@ -666,7 +690,7 @@ class AutomationState extends ChangeNotifier {
 
   int get openLightsCount {
     if (_mode == AppMode.cloud) {
-      return cloudEndpoints.where((e) => e.isLight && e.currentState).length;
+      return cloudEndpoints.where((e) => e.isLight && !e.isActuator && e.currentState).length;
     }
     return status?.controllableRelays.where((r) => r.isLight && r.state).length ?? 0;
   }
@@ -1053,6 +1077,10 @@ class AutomationState extends ChangeNotifier {
     _devices = const [];
     _presence = DevicePresence.unknown;
     _shutterRuntime.clear();
+    _safetyByUid.clear();
+    _safetyNames.clear();
+    _safetyNamesInFlight.clear();
+    _safetyNamesRetryAt.clear();
     _lastLiveSnapshot = null;
     _lastLiveSnapshotAt = null;
     _lastLiveStateAt = null;
@@ -2635,6 +2663,13 @@ class AutomationState extends ChangeNotifier {
       _lastDeviceIp = snapshot.ip;
       changed = true;
     }
+    final safetyKey = snapshot.uid?.toUpperCase() ?? '';
+    final safety = snapshot.safety;
+    if ((safety.supported || _safetyByUid.containsKey(safetyKey)) && _safetyByUid[safetyKey] != safety) {
+      _safetyByUid[safetyKey] = safety; // desteklenmeyen (eski yazılım) değer de yazılır: görünümden düşer
+      changed = true;
+    }
+    if (safety.supported) _ensureSafetyNames(safetyKey, safety); // ad kopyası (cfg rev değişince)
     if (!retained) {
       // Canlı ileti = cihaz yaşıyor (retained "offline" status'u da düzeltilir). Saklı/retained
       // `state` çevrimiçiliği KANITLAMAZ.
@@ -2902,6 +2937,7 @@ class AutomationState extends ChangeNotifier {
         _resumeDirectPolling(); // anahtar çalışıyor: durdurma / 423 beklemesi yok
         _status = st;
         _invalidateViews();
+        if (st.safety.supported) _ensureSafetyNames(st.uid ?? st.safety.deviceUid ?? '_lan', st.safety);
         if (st.childLockKnown) {
           _childLockByUid['_lan'] = st.childLock;
           _childLockDeviceAt = clock.now();
@@ -3083,8 +3119,13 @@ class AutomationState extends ChangeNotifier {
     return false;
   }
 
-  void _reject(String key, String message, {CommandFailureReason reason = CommandFailureReason.rejected}) {
-    _pipeline.emitFailure(CommandFailure(key: key, reason: reason, message: message));
+  void _reject(
+    String key,
+    String message, {
+    CommandFailureReason reason = CommandFailureReason.rejected,
+    String? code,
+  }) {
+    _pipeline.emitFailure(CommandFailure(key: key, reason: reason, message: message, code: code));
   }
 
   /// Komutun onay politikası: canlı `state` kanalı varsa cihaz onayı beklenir; bulutta kanal
@@ -3111,9 +3152,11 @@ class AutomationState extends ChangeNotifier {
     required Future<CommandResult> Function(String commandId) send,
     ConfirmPredicate? confirms,
     CommandConfirmMode? mode,
+    String? targetUid,
   }) async {
     final effective = mode ?? _stateConfirmMode;
     final dispatch = await _pipeline.submit(
+      targetUid: targetUid,
       key: key,
       original: original,
       target: target,
@@ -3136,6 +3179,7 @@ class AutomationState extends ChangeNotifier {
     required Future<CommandResult> Function(String commandId) send,
     ConfirmPredicate? confirms,
     CommandConfirmMode? mode,
+    String? targetUid,
   }) async =>
       (await _submit(
         key: key,
@@ -3144,6 +3188,7 @@ class AutomationState extends ChangeNotifier {
         send: send,
         confirms: confirms,
         mode: mode,
+        targetUid: targetUid,
       ))
           .ok;
 
@@ -3170,6 +3215,7 @@ class AutomationState extends ChangeNotifier {
       return false;
     }
     if (!_controlAllowed(key: key)) return false;
+    if (_rejectIfActuatorChannel(key, channel)) return false;
 
     if (_mode == AppMode.direct) {
       final relay = status?.relayById(channel);
@@ -3200,6 +3246,7 @@ class AutomationState extends ChangeNotifier {
       key: key,
       original: endpoint.currentState,
       target: on,
+      targetUid: endpoint.deviceUuid,
       send: (id) => cloudApi.sendCommand(
         homeId: home.id,
         deviceId: ref,
@@ -3225,6 +3272,7 @@ class AutomationState extends ChangeNotifier {
       return false;
     }
     if (!_controlAllowed(key: key)) return false;
+    if (_rejectIfActuatorChannel(key, channel)) return false;
     if (_mode == AppMode.direct) {
       return _dispatch(
         key: key,
@@ -3249,6 +3297,7 @@ class AutomationState extends ChangeNotifier {
       original: null,
       target: null,
       mode: CommandConfirmMode.delivery,
+      targetUid: endpoint.deviceUuid,
       send: (id) => cloudApi.sendCommand(
         homeId: home.id,
         deviceId: ref,
@@ -3300,12 +3349,407 @@ class AutomationState extends ChangeNotifier {
       key: key,
       original: original,
       target: _ShutterTarget(pos: percent),
+      targetUid: endpoint.deviceUuid,
       send: (id) => cloudApi.sendCommand(
         homeId: home.id,
         deviceId: ref,
         command: <String, dynamic>{'shutter': pair, 'pos': percent, 'id': id},
       ),
       confirms: CommandConfirm.shutterPosition(pair, percent),
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Güvenlik modülü: durum (tasarım §5.3.2) ve komutlar (vana / siren / fan / alarm onayı / bölge testi)
+  // ---------------------------------------------------------------------------
+  //
+  // İyimser arayüz kuralı (güvenlik): yalnız GÜVENLİ yön iyimser gösterilir. Vanayı kapatmak ve sireni/fanı kapatmak
+  // anında görünür (ret/zaman aşımında geri alınır); vanayı AÇMAK, sireni/fanı AÇMAK ve alarm onayı panonun `state`
+  // onayına kadar gerçek değerde kalır (yalnız "uygulanıyor" göstergesi: [isActuatorPending], [isAlarmAckPending]).
+  // Gerekçe: kullanıcı açık görünen bir vanaya güvenip evden çıkmamalı; ret (`last_rej`) ANINDA geri alınır.
+
+  /// Güvenlik durumu, pano (`uid`) başına; yalnız güvenlik destekleyen panolar. Doğrudan (LAN) kipte tek pano.
+  /// Adlar uç nokta / röle adlarından (kanal eşlemesi) doldurulur [B12]; bekleyen güvenli-yön komutları yansıtılır.
+  /// Girdiler değişmedikçe AYNI harita döner (PF-20).
+  Map<String, SafetyState> get safetyByDevice {
+    final cached = _safetyMemo;
+    if (cached != null && _safetyGen == _viewGen && _safetyMode == _mode) return cached;
+    final out = <String, SafetyState>{};
+    if (_mode == AppMode.direct) {
+      final st = _status;
+      if (st != null && st.safety.supported) {
+        final key = st.uid ?? st.safety.deviceUid ?? '_lan';
+        _ensureSafetyNames(key, st.safety);
+        out[key] = _decorateSafety(st.safety, key);
+      }
+    } else {
+      for (final entry in _safetyByUid.entries) {
+        if (!entry.value.supported) continue;
+        _ensureSafetyNames(entry.key, entry.value);
+        out[entry.key] = _decorateSafety(entry.value, entry.key);
+      }
+    }
+    final view = Map<String, SafetyState>.unmodifiable(out);
+    _safetyMemo = view;
+    _safetyGen = _viewGen;
+    _safetyMode = _mode;
+    return view;
+  }
+
+  /// Birincil (tek panolu evde tek) güvenlik durumu: etkin alarmı olan pano önceliklidir. Hiçbir pano güvenlik
+  /// desteklemiyorsa (ya da henüz `state` gelmediyse) [SafetyState.unsupported]: güvenlik bölümü gizlenir.
+  SafetyState get safety {
+    final all = safetyByDevice.values;
+    if (all.isEmpty) return SafetyState.unsupported;
+    for (final s in all) {
+      if (s.hasActiveAlarm) return s;
+    }
+    return all.first;
+  }
+
+  /// Bütün panoların normal olmayan bölgeleri (alarm, arıza, test); [AlarmItem.deviceUid] damgalı.
+  List<AlarmItem> get alarmItems => <AlarmItem>[for (final s in safetyByDevice.values) ...s.alarms];
+
+  /// Bütün panoların eylemcileri (iyimser güvenli-yön değerleriyle).
+  List<ActuatorItem> get actuatorItems => <ActuatorItem>[for (final s in safetyByDevice.values) ...s.actuators];
+
+  List<SensorItem> get sensorItems => <SensorItem>[for (final s in safetyByDevice.values) ...s.sensors];
+
+  /// Yapılandırma kopyasındaki adlar [_safetyNames] (eylemci adı yoksa röle kanalının uç nokta / röle adı) ve bekleyen
+  /// güvenli-yön komutları.
+  SafetyState _decorateSafety(SafetyState base, String key) {
+    final cfg = _safetyNames[key];
+    final names = <String, String>{};
+    for (final a in base.actuators) {
+      final name = cfg?.actuators[a.id] ?? _actuatorName(a);
+      if (name != null) names[a.id] = name;
+    }
+    final sensorNames = cfg?.sensors ?? const <String, String>{};
+    var out = (names.isEmpty && sensorNames.isEmpty) ? base : base.withNames(actuators: names, sensors: sensorNames);
+    if (_pipeline.hasPending) {
+      var touched = false;
+      final actuators = <ActuatorItem>[
+        for (final a in out.actuators)
+          () {
+            final target = _pipeline.pendingFor(_actuatorKey(a))?.target;
+            if (target is! _ActuatorTarget) return a;
+            touched = true;
+            return a.copyWith(pos: target.pos, on: target.on);
+          }(),
+      ];
+      if (touched) {
+        out = SafetyState(
+          supported: out.supported,
+          configured: out.configured,
+          policy: out.policy,
+          safeMode: out.safeMode,
+          caps: out.caps,
+          sensors: out.sensors,
+          alarms: out.alarms,
+          actuators: List<ActuatorItem>.unmodifiable(actuators),
+          zones: out.zones,
+          lastRej: out.lastRej,
+          deviceUid: out.deviceUid,
+          cfgRev: out.cfgRev,
+          cfgCrc: out.cfgCrc,
+        );
+      }
+    }
+    return out;
+  }
+
+  /// Ad kopyası bu yapılandırmaya (`cfg.safety.rev/crc`) ait değilse arka planda okur (pano başına tek uçuş; hata ya da
+  /// henüz eski bulut kopyasında 60 sn sonra yeniden). Yapılandırılmamış panoda (rev yok) hiçbir şey yapmaz.
+  void _ensureSafetyNames(String key, SafetyState state) {
+    if (!state.supported || !state.configured || state.cfgRev == null) return;
+    final cached = _safetyNames[key];
+    if (cached != null && cached.matches(state)) return;
+    if (_safetyNamesInFlight.contains(key)) return;
+    final retryAt = _safetyNamesRetryAt[key];
+    if (retryAt != null && clock.now().isBefore(retryAt)) return;
+    final direct = _mode == AppMode.direct;
+    final home = _activeHome;
+    final uid = state.deviceUid ?? ((key.isEmpty || key == '_lan') ? null : key);
+    if (!direct && (home == null || uid == null)) return;
+    final epoch = _sessionEpoch;
+    _safetyNamesInFlight.add(key);
+    unawaited(() async {
+      try {
+        final json = direct ? await directApi.fetchSafetyConfig() : await cloudApi.safetyConfig(home!.id, uid!);
+        if (_isStaleSession(epoch)) return;
+        final names = SafetyConfigNames.fromJson(json);
+        _safetyNames[key] = names;
+        if (names.matches(state)) {
+          _safetyNamesRetryAt.remove(key);
+        } else {
+          _safetyNamesRetryAt[key] = clock.now().add(_safetyNamesRetry); // bulut kopyası henüz eski olabilir
+        }
+        _invalidateViews();
+        notifyListeners();
+      } catch (_) {
+        if (!_isStaleSession(epoch)) _safetyNamesRetryAt[key] = clock.now().add(_safetyNamesRetry);
+      } finally {
+        _safetyNamesInFlight.remove(key);
+      }
+    }());
+  }
+
+  String? _actuatorName(ActuatorItem a) {
+    if (_mode == AppMode.direct) return _status?.relayById(a.relay)?.name;
+    final uid = a.deviceUid;
+    for (final endpoint in _cloudEndpoints) {
+      if (endpoint.isShutter || endpoint.channel != a.relay) continue;
+      final epUid = endpoint.deviceUuid?.toUpperCase();
+      if (uid == null || epUid == null || epUid == uid) return endpoint.name;
+    }
+    return null;
+  }
+
+  /// Bir panonun HAM güvenlik durumu (iyimser değer yok): komut ön denetimleri buna bakar.
+  SafetyState _rawSafetyFor(String? uid) {
+    if (_mode == AppMode.direct) return _status?.safety ?? SafetyState.unsupported;
+    final key = uid?.toUpperCase();
+    if (key != null && _safetyByUid.containsKey(key)) return _safetyByUid[key]!;
+    if (key == null && _safetyByUid.length == 1) return _safetyByUid.values.first;
+    return SafetyState.unsupported;
+  }
+
+  /// Vanayı uygulamadan açmanın önündeki engel (ham durumdan; iyimser değer yok): `null` = açılabilir. Arayüz düğmeyi
+  /// devre dışı bırakıp gerekçeyi ([safetyRejectMessage]) yazar; [openValve] aynı denetimi ağa çıkmadan yineler.
+  String? valveOpenBlockReason(ActuatorItem valve) {
+    if (valve.isGasValve) return 'gas_local_only';
+    return _rawSafetyFor(valve.deviceUid).openBlockReason(valve);
+  }
+
+  /// Alarm geçmişi (plan 2.6): bulutta sunucunun alarm kayıtları (açık + kapanmış), doğrudan (LAN) kipte panonun son
+  /// olayları (`GET /api/events`, internetsiz; K5). Hata çağırana fırlatılır (sayfa yeniden deneme gösterir).
+  Future<AlarmHistory> fetchAlarmHistory() async {
+    if (_mode == AppMode.direct) {
+      final events = await directApi.fetchEvents();
+      return AlarmHistory.local(events);
+    }
+    final home = _activeHome;
+    if (home == null) return const AlarmHistory.cloud(<AlarmRecord>[]);
+    final records = await cloudApi.alarms(home.id, openOnly: false);
+    return AlarmHistory.cloud(records);
+  }
+
+  static String _scoped(String base, String? uid) => uid == null ? base : '$base@$uid';
+  String _actuatorKey(ActuatorItem a) => _scoped('actuator:${a.id}', a.deviceUid);
+  String _alarmAckKey(int zone, String? uid) => _scoped('alarm:ack:$zone', uid);
+
+  /// Eylemci komutu yolda / onay bekliyor ("uygulanıyor" göstergesi).
+  bool isActuatorPending(ActuatorItem a) => _pipeline.isPending(_actuatorKey(a));
+
+  /// Alarm onayı yolda / panonun susturma ya da kilit kaldırma bildirimini bekliyor.
+  bool isAlarmAckPending(AlarmItem alarm) => _pipeline.isPending(_alarmAckKey(alarm.zone, alarm.deviceUid));
+
+  /// Düz röle komutu güvenlik eylemcisi kanalına gidiyorsa yerelde reddeder (firmware ve sunucu da reddeder; ağ
+  /// gidiş-dönüşü ve yanıltıcı iyimser değer önlenir). Eylemcisiz panoda hiçbir zaman tutmaz.
+  bool _rejectIfActuatorChannel(String key, int channel) {
+    final isActuator = _mode == AppMode.direct
+        ? (_status?.relayById(channel)?.isActuator ?? false)
+        : (_relayEndpoint(channel)?.isActuator ?? false);
+    if (!isActuator) return false;
+    _reject(key, safetyRejectMessage('actuator_relay'), code: 'actuator_relay');
+    return true;
+  }
+
+  bool _safetyAllowed(String key, bool allowed) {
+    if (allowed) return true;
+    _reject(key, 'Bu işlem için yetkiniz yok.', reason: CommandFailureReason.forbidden);
+    return false;
+  }
+
+  /// Vanayı KAPATIR (güvenli yön; her durumda serbest, misafir dahil). İyimser: anında "kapatıldı" görünür.
+  Future<bool> closeValve(ActuatorItem valve) async {
+    final key = _actuatorKey(valve);
+    if (!valve.isValve) {
+      _reject(key, 'Bu cihaz bir vana değil.', reason: CommandFailureReason.validation);
+      return false;
+    }
+    if (!_safetyAllowed(key, capabilities.canCloseActuators)) return false;
+    return _actuatorCommand(
+      valve,
+      'closed',
+      optimistic: const _ActuatorTarget(pos: ValvePos.cmdClosed),
+      confirms: CommandConfirm.valvePos(valve.id, closed: true, uid: valve.deviceUid),
+    );
+  }
+
+  /// Vanayı AÇAR. İyimser DEĞİL. Yalnız bölgeler normal, sensörler `ok` ve kuru, pano güvenli kipte değilken; gaz
+  /// vanası uygulamadan hiçbir zaman açılmaz [Y-3][K-4]. Engel varsa ağa çıkmadan gerekçeli ret ([CommandFailure.code]).
+  Future<bool> openValve(ActuatorItem valve) async {
+    final key = _actuatorKey(valve);
+    if (!valve.isValve) {
+      _reject(key, 'Bu cihaz bir vana değil.', reason: CommandFailureReason.validation);
+      return false;
+    }
+    if (valve.isGasValve) {
+      _reject(key, safetyRejectMessage('gas_local_only'), code: 'gas_local_only');
+      return false;
+    }
+    if (!_safetyAllowed(key, capabilities.canControlActuators)) return false;
+    final reason = _rawSafetyFor(valve.deviceUid).openBlockReason(valve);
+    if (reason != null) {
+      _reject(key, safetyRejectMessage(reason), code: reason);
+      return false;
+    }
+    return _actuatorCommand(
+      valve,
+      'open',
+      confirms: CommandConfirm.valvePos(valve.id, closed: false, uid: valve.deviceUid),
+    );
+  }
+
+  /// Siren / fan / genel eylemci. Kapatma (güvenli yön) misafir dahil serbest ve iyimser; açma iyimser değil.
+  Future<bool> setActuatorOn(ActuatorItem actuator, bool on) async {
+    final key = _actuatorKey(actuator);
+    if (actuator.isValve) {
+      _reject(key, 'Vana için Vanayı Aç / Vanayı Kapat kullanılır.', reason: CommandFailureReason.validation);
+      return false;
+    }
+    if (!_safetyAllowed(key, on ? capabilities.canControlActuators : capabilities.canCloseActuators)) return false;
+    return _actuatorCommand(
+      actuator,
+      on ? 'on' : 'off',
+      optimistic: on ? null : const _ActuatorTarget(on: false),
+      confirms: CommandConfirm.actuatorOn(actuator.id, on, uid: actuator.deviceUid),
+    );
+  }
+
+  Future<bool> _actuatorCommand(
+    ActuatorItem actuator,
+    String to, {
+    _ActuatorTarget? optimistic,
+    required ConfirmPredicate confirms,
+  }) async {
+    final key = _actuatorKey(actuator);
+    if (_mode == AppMode.direct) {
+      return _dispatch(
+        key: key,
+        original: null,
+        target: optimistic,
+        send: (id) async {
+          await directApi.postActuator(actuator.id, to, id: id);
+          return CommandResult.accepted;
+        },
+        confirms: confirms,
+      );
+    }
+    final home = _activeHome;
+    final ref = actuator.deviceUid ?? _primaryDeviceRef();
+    if (home == null || ref == null) {
+      _reject(key, 'Güvenlik cihazı bulunamadı.');
+      return false;
+    }
+    return _dispatch(
+      key: key,
+      original: null,
+      target: optimistic,
+      targetUid: actuator.deviceUid,
+      send: (id) => cloudApi.actuatorCommand(
+        homeId: home.id,
+        deviceId: ref,
+        actuatorId: actuator.id,
+        to: to,
+        commandId: id,
+      ),
+      confirms: confirms,
+    );
+  }
+
+  /// Alarmı onaylar: ıslakken susturur, kuruyken (≥ `dry_hold`) kilidi kaldırır (§5.1.3). İyimser DEĞİL. Onay alarm
+  /// kimliğini (`aid`) taşır: arada yeni alarm oluştuysa pano `stale_ack` ile reddeder [Y-9]. Bulutta sunucudaki
+  /// alarm kaydı `aid` ile bulunur (kayıt henüz yoksa ağa komut gitmez, anlaşılır ret).
+  Future<bool> ackAlarm(AlarmItem alarm) async {
+    final key = _alarmAckKey(alarm.zone, alarm.deviceUid);
+    if (!_safetyAllowed(key, capabilities.canAckAlarm)) return false;
+    final confirms = CommandConfirm.alarmSilencedOrCleared(alarm.zone, uid: alarm.deviceUid);
+    if (_mode == AppMode.direct) {
+      return _dispatch(
+        key: key,
+        original: null,
+        target: null,
+        send: (id) async {
+          await directApi.ackAlarm(alarm.zone, aid: alarm.aid, id: id);
+          return CommandResult.accepted;
+        },
+        confirms: confirms,
+      );
+    }
+    final home = _activeHome;
+    if (home == null) {
+      _reject(key, 'Aktif daire seçili değil.');
+      return false;
+    }
+    return _dispatch(
+      key: key,
+      original: null,
+      target: null,
+      targetUid: alarm.deviceUid,
+      send: (id) async {
+        final record = await _findAlarmRecord(home.id, alarm);
+        if (record == null) {
+          throw const ApiException(
+            statusCode: 409,
+            code: 'ALARM_NOT_FOUND',
+            message: 'Alarm kaydı sunucuya henüz ulaşmadı. Birkaç saniye sonra yeniden deneyin.',
+          );
+        }
+        return cloudApi.ackAlarm(homeId: home.id, alarmId: record.id, commandId: id);
+      },
+      confirms: confirms,
+    );
+  }
+
+  Future<AlarmRecord?> _findAlarmRecord(String homeId, AlarmItem alarm) async {
+    final records = await cloudApi.alarms(homeId);
+    final uid = alarm.deviceUid?.toUpperCase();
+    AlarmRecord? byZone;
+    for (final r in records) {
+      if (!r.isOpen || r.zone != alarm.zone) continue;
+      if (uid != null && r.deviceUuid != null && r.deviceUuid != uid) continue;
+      if (alarm.aid != null && r.aid == alarm.aid) return r;
+      byZone ??= alarm.aid == null ? r : null;
+    }
+    return byZone;
+  }
+
+  /// Bölge testi (§5.1.1 NORMAL -> TEST): vanalar kapanır, siren 3 sn çalar, geri bildirim süresi ölçülür. İletim
+  /// yeterlidir (test kısa sürer; sonucu `state`/`test_result` gösterir).
+  Future<bool> testZone(int zone, {String? deviceUid}) async {
+    final key = _scoped('alarm:test:$zone', deviceUid?.toUpperCase());
+    if (zone < 1 || zone > 4) {
+      _reject(key, 'Geçersiz bölge.', reason: CommandFailureReason.validation);
+      return false;
+    }
+    if (!_safetyAllowed(key, capabilities.canTestSafety)) return false;
+    if (_mode == AppMode.direct) {
+      return _dispatch(
+        key: key,
+        original: null,
+        target: null,
+        mode: CommandConfirmMode.delivery,
+        send: (id) async {
+          await directApi.testAlarm(zone, id: id);
+          return CommandResult.accepted;
+        },
+      );
+    }
+    final home = _activeHome;
+    final ref = deviceUid ?? _primaryDeviceRef();
+    if (home == null || ref == null) {
+      _reject(key, 'Pano bulunamadı.');
+      return false;
+    }
+    return _dispatch(
+      key: key,
+      original: null,
+      target: null,
+      mode: CommandConfirmMode.delivery,
+      targetUid: deviceUid,
+      send: (id) => cloudApi.alarmTest(homeId: home.id, deviceId: ref, zone: zone, commandId: id),
     );
   }
 
@@ -3381,6 +3825,7 @@ class AutomationState extends ChangeNotifier {
       original: original,
       target: target,
       mode: mode,
+      targetUid: endpoint.deviceUuid,
       send: (id) => cloudApi.sendCommand(
         homeId: home.id,
         deviceId: ref,

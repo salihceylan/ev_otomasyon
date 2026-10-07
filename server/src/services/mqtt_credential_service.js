@@ -196,7 +196,8 @@ class MqttCredentialService {
        VALUES ($1, $2, 'allow', 'publish',   $3),
               ($1, $2, 'allow', 'publish',   $4),
               ($1, $2, 'allow', 'subscribe', $5),
-              ($1, $2, 'allow', 'subscribe', $6)`,
+              ($1, $2, 'allow', 'subscribe', $6),
+              ($1, $2, 'allow', 'publish',   $7)`,
       [
         credentialId,
         username,
@@ -204,6 +205,8 @@ class MqttCredentialService {
         `ev/${topic}/status`,
         `ev/${topic}/cmd`,
         `ev/${topic}/sys`,
+        // Guvenlik olaylari (WP-S1, migration 033): pano -> bulut, retain=false; uygulama kimlikleri ABONE OLMAZ.
+        `ev/${topic}/event`,
       ]
     );
 

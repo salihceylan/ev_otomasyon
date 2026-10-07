@@ -30,7 +30,8 @@ const GENERIC_SERVER_MESSAGE = 'Sunucu hatası oluştu. Lütfen daha sonra tekra
 const DEADLOCK_MESSAGE = 'Eşzamanlı işlem çakışması oluştu. Lütfen tekrar deneyin.';
 
 // Yanita eklenmesine izin verilen ek alanlar (beyaz liste; ic bilgi sizmasin).
-const EXPOSED_EXTRA_KEYS = Object.freeze(['retry_after', 'remaining_attempts', 'device_online', 'offline_devices', 'reason']);
+// ack_queued (WP-S4): cevrimdisi panoya alarm onayi istegi kaydedildi (pano donunce ayni alarm surerse iletilir).
+const EXPOSED_EXTRA_KEYS = Object.freeze(['retry_after', 'remaining_attempts', 'device_online', 'offline_devices', 'reason', 'ack_queued']);
 
 /**
  * @param {number} status

@@ -607,7 +607,10 @@ function createWorld({ clock = createClock() } = {}) {
   });
   db.on('INSERT INTO mqtt_acl', (ctx) => {
     const [credentialId, username, ...topics] = ctx.params;
-    const actions = topics.length === 4 ? ['publish', 'publish', 'subscribe', 'subscribe'] : ['subscribe', 'subscribe'];
+    // Cihaz kimligi (5 konu: state/status yayin, cmd/sys abonelik, event yayin - WP-S1); uygulama kimligi 2 abonelik.
+    const actions = topics.length === 5
+      ? ['publish', 'publish', 'subscribe', 'subscribe', 'publish']
+      : topics.length === 4 ? ['publish', 'publish', 'subscribe', 'subscribe'] : ['subscribe', 'subscribe'];
     topics.forEach((topic, i) => {
       insert(ctx, state.mqtt_acl, { credential_id: credentialId, username, permission: 'allow', action: actions[i], topic });
     });
@@ -649,8 +652,10 @@ function createWorld({ clock = createClock() } = {}) {
     if (!dev) return [];
     return [{ id: dev.id, device_uuid: dev.device_uuid, is_online: dev.is_online === true, topic_id: homeOf(dev.home_id).mqtt_username }];
   });
-  db.on('SELECT type FROM endpoints WHERE device_id = $1 AND channel_index = $2', ({ params }) =>
-    state.endpoints.filter((e) => e.device_id === params[0] && e.channel_index === params[1]).map((e) => ({ type: e.type }))
+  db.on('SELECT type, actuator_type FROM endpoints WHERE device_id = $1 AND channel_index = $2', ({ params }) =>
+    state.endpoints
+      .filter((e) => e.device_id === params[0] && e.channel_index === params[1])
+      .map((e) => ({ type: e.type, actuator_type: e.actuator_type === undefined ? null : e.actuator_type }))
   );
   db.on('SELECT d.id, COALESCE(d.is_online, FALSE) AS is_online FROM devices d WHERE d.home_id = $1', ({ params }) =>
     state.devices.filter((d) => d.home_id === params[0]).map((d) => ({ id: d.id, is_online: d.is_online === true }))
@@ -727,7 +732,7 @@ function createWorld({ clock = createClock() } = {}) {
   db.on("SELECT EXISTS (SELECT 1 FROM endpoints WHERE home_id = $1 AND type = 'plug') AS has_plug", ({ params }) => [
     { has_plug: state.endpoints.some((e) => e.home_id === params[0] && e.type === 'plug') },
   ]);
-  db.on('SELECT device_id, type, channel_index, shutter_pair_index, current_position FROM endpoints WHERE home_id = $1', ({ params }) =>
+  db.on('SELECT device_id, type, channel_index, shutter_pair_index, current_position, actuator_type FROM endpoints WHERE home_id = $1', ({ params }) =>
     copies(state.endpoints.filter((e) => e.home_id === params[0]))
   );
   db.on("SELECT id, to_char(local_date, 'YYYY-MM-DD') AS local_date, status, summary_text", ({ params }) =>

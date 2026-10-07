@@ -44,6 +44,9 @@ const RULE_TIMEOUT_MS = 10 * 1000;
 const CONCURRENCY = 10;
 const HOUSEKEEPING_EVERY_MS = 24 * 60 * 60 * 1000;
 const RUN_LOG_RETENTION_DAYS = 30;
+// Guvenlik olay gunlugu (device_events; migration 033) saklama suresi. Tekillestirme eid'si acilis nonce'u tasidigindan
+// eski satirin silinmesi yinelenen olayi yeniden islemez (yeni acilis = yeni bn). Alarm kayitlari (alarms) SILINMEZ.
+const DEVICE_EVENT_RETENTION_DAYS = 90;
 const WARN_INTERVAL_MS = 10 * 60 * 1000;
 
 const AUTHORIZED_HOME_ROLES = new Set(['owner', 'resident', 'service_user']);
@@ -297,13 +300,14 @@ const SQL = Object.freeze({
     'SELECT id, home_id, is_online FROM devices ' +
     'WHERE home_id = $1 AND ($2::uuid IS NULL OR id = $2::uuid)',
   // WP-L D4: atesleme aninda kuralin kanal(lar)inin guncel uc nokta tipi (cozulen cihaz).
-  target: 'SELECT channel_index, type FROM endpoints WHERE device_id = $1::uuid AND channel_index = ANY($2::int[])',
+  target: 'SELECT channel_index, type, actuator_type FROM endpoints WHERE device_id = $1::uuid AND channel_index = ANY($2::int[])',
   logRun:
     'INSERT INTO scheduled_rule_runs (rule_id, home_id, device_id, slot_at, status, detail, command_id) ' +
     'VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7) ' +
     'ON CONFLICT (rule_id, slot_at) DO UPDATE SET status = EXCLUDED.status, detail = EXCLUDED.detail, ' +
     'command_id = EXCLUDED.command_id, attempts = scheduled_rule_runs.attempts + 1, updated_at = CURRENT_TIMESTAMP',
   housekeeping: `DELETE FROM scheduled_rule_runs WHERE created_at < CURRENT_TIMESTAMP - INTERVAL '${RUN_LOG_RETENTION_DAYS} days'`,
+  eventRetention: `DELETE FROM device_events WHERE received_at < CURRENT_TIMESTAMP - INTERVAL '${DEVICE_EVENT_RETENTION_DAYS} days'`,
 });
 
 // ------------------------------------------------------------------------------
@@ -498,6 +502,12 @@ class Scheduler {
     } catch (err) {
       this._warnOnce('housekeeping', `Calisma gunlugu temizligi hatasi: ${safeMessage(err)}`);
     }
+    try {
+      // Guvenlik olay gunlugu 90 gun (device_events_received_idx); hata kural turunu etkilemez.
+      await this.db.query(SQL.eventRetention, []);
+    } catch (err) {
+      this._warnOnce('event-retention', `Olay gunlugu temizligi hatasi: ${safeMessage(err)}`);
+    }
   }
 
   async _executeRule(rule, slot, nowMs) {
@@ -599,6 +609,12 @@ class Scheduler {
     if (rows.length === 0) return null;
     const typeOf = new Map(rows.map((r) => [Number(r.channel_index), r.type]));
     if (!isShutter) {
+      // WP-S2 [O6]: eylemci (vana/siren/fan) kanalina zamanli role komutu GONDERILMEZ (esitleme kurali kapatmayi
+      // kacirsa bile). Kolon gelmezse (eski satir/sorgu) eski davranis.
+      const row = rows.find((r) => Number(r.channel_index) === n);
+      if (row && row.actuator_type !== undefined && row.actuator_type !== null) {
+        return 'kanal artik bir guvenlik eylemcisi; role kurali calistirilmadi';
+      }
       return typeOf.get(n) === 'shutter' ? 'kanal artik panjur; role kurali calistirilmadi' : null;
     }
     const ok = channels.every((ch) => typeOf.get(ch) === 'shutter');

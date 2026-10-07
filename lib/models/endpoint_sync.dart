@@ -113,6 +113,7 @@ List<RelayItem> relayItemsFromEndpoints(List<EndpointModel> endpoints) {
           name: endpoint.name,
           type: endpoint.isImpulse ? 3 : 0,
           state: endpoint.currentState,
+          actuator: ActuatorKind.tryParse(endpoint.actuatorType),
         ),
   ];
 }
@@ -178,10 +179,13 @@ String _kindLetter(_RelayKind kind) {
 /// (röle `2p-1` YUKARI <=> röle `2p` AŞAĞI); `shutters[]` çift kümesi türlerden çıkan kümeyle aynı. (`v >= 2`
 /// sürüm alanı [DeviceStatus]'ta tutulmaz; eski bellenim zaten `type` bildirmez ve yukarıdaki türden elenir.)
 class ReportedLayout {
-  ReportedLayout._(this._uid, this._kinds, this.shutterPairs);
+  ReportedLayout._(this._uid, this._kinds, this.shutterPairs, this._acts);
 
   final String? _uid;
   final List<_RelayKind> _kinds;
+
+  /// Röle başına güvenlik eylemcisi türü (`act`, `null` = eylemci değil) [Y2].
+  final List<ActuatorKind?> _acts;
 
   /// Türlerden çıkan panjur çiftleri (1 tabanlı).
   final Set<int> shutterPairs;
@@ -193,9 +197,38 @@ class ReportedLayout {
   int get relayCount => _kinds.length;
 
   /// Kararlı yerleşim imzası: `UID|` + röle başına bir harf (`L` lamba/priz, `I` darbe, `U` panjur YUKARI,
-  /// `D` panjur AŞAĞI), ör. `AHBU-S3-AB12CD|UDUDLLLL`. Yalnız tür dizisine ve cihaza bağlıdır; ad, açık/kapalı ve
-  /// konum değişimi imzayı DEĞİŞTİRMEZ.
-  late final String signature = '$device|${_kinds.map(_kindLetter).join()}';
+  /// `D` panjur AŞAĞI), ör. `AHBU-S3-AB12CD|UDUDLLLL`. Güvenlik eylemcisi rölesinde harfin ardına küçük bir eylemci
+  /// harfi gelir (`v` vana, `s` siren, `f` fan, `g` genel, `x` bilinmeyen; ör. `UDUDLvLLL`): lambanın vanaya çevrilmesi
+  /// eşitlemeyi tetikler [Y2]. Eylemcisiz panoda imza bugünküyle BİREBİR aynıdır. Yalnız tür dizisine ve cihaza
+  /// bağlıdır; ad, açık/kapalı ve konum değişimi imzayı DEĞİŞTİRMEZ.
+  late final String signature = '$device|${_letters()}';
+
+  String _letters() {
+    final out = StringBuffer();
+    for (var i = 0; i < _kinds.length; i++) {
+      out
+        ..write(_kindLetter(_kinds[i]))
+        ..write(_actLetter(_acts[i]));
+    }
+    return out.toString();
+  }
+
+  static String _actLetter(ActuatorKind? act) {
+    switch (act) {
+      case null:
+        return '';
+      case ActuatorKind.valve:
+        return 'v';
+      case ActuatorKind.siren:
+        return 's';
+      case ActuatorKind.fan:
+        return 'f';
+      case ActuatorKind.generic:
+        return 'g';
+      case ActuatorKind.unknown:
+        return 'x';
+    }
+  }
 
   /// [status] bildirdiği yerleşimi çözer; sunucunun da eşitlemeyeceği (kısıtlı / boş / tutarsız) ileti için `null`.
   static ReportedLayout? from(DeviceStatus status) {
@@ -205,9 +238,11 @@ class ReportedLayout {
     if (count == 0 || count > kMaxReportedRelays) return null;
 
     final slots = List<_RelayKind?>.filled(count, null);
+    final acts = List<ActuatorKind?>.filled(count, null);
     for (final relay in relays) {
       final id = relay.id;
       if (!relay.typeKnown || id < 1 || id > count || slots[id - 1] != null) return null;
+      acts[id - 1] = relay.actuator;
       if (relay.isLight) {
         slots[id - 1] = _RelayKind.light;
       } else if (relay.isShutterUp) {
@@ -245,7 +280,12 @@ class ReportedLayout {
         !reported.containsAll(pairs)) {
       return null;
     }
-    return ReportedLayout._(status.uid?.toUpperCase(), List<_RelayKind>.unmodifiable(kinds), Set<int>.unmodifiable(pairs));
+    return ReportedLayout._(
+      status.uid?.toUpperCase(),
+      List<_RelayKind>.unmodifiable(kinds),
+      Set<int>.unmodifiable(pairs),
+      List<ActuatorKind?>.unmodifiable(acts),
+    );
   }
 
   /// [endpoints] listesinin bu yerleşimle uyuşup uyuşmadığı. **Yalnız aynı cihaza ait satırlar** değerlendirilir
@@ -257,11 +297,14 @@ class ReportedLayout {
   /// * panoda lamba/priz ya da darbe olan kanalda satır yok ya da satırın sınıfı farklı (lamba <-> darbe,
   ///   panjur satırı kalmış, ek modül kanalı hiç açılmamış);
   /// * panoda panjur rölesi olan kanalda lamba/darbe (panjur olmayan) satır var;
-  /// * satırın kanalı panonun bildirdiği 1..N kanalının dışında (küçülme / ek modül kapandı).
+  /// * satırın kanalı panonun bildirdiği 1..N kanalının dışında (küçülme / ek modül kapandı);
+  /// * lamba/darbe satırının eylemci türü (`actuator_type`) panonun `act` alanıyla aynı değil [Y2]. (Eski sunucu
+  ///   `actuator_type` göndermez: eylemcili panoda uyuşmazlık sayılır ve imza başına en çok 3 sessiz yenileme yapılır.)
   ///
   /// Panjurun yalnız bir satırı eksikse (YUKARI ya da AŞAĞI) görünür bir fark yoktur; uyuşmazlık sayılmaz.
   EndpointLayoutVerdict compareWith(List<EndpointModel> endpoints) {
     final rowClasses = <int, _RowClass>{};
+    final rowActs = <int, ActuatorKind?>{};
     final rowPairs = <int>{};
     for (final endpoint in endpoints) {
       final deviceUuid = endpoint.deviceUuid?.toUpperCase();
@@ -272,6 +315,7 @@ class ReportedLayout {
         rowPairs.add(endpoint.pair);
       } else {
         rowClasses[endpoint.channel] = endpoint.isImpulse ? _RowClass.impulse : _RowClass.light;
+        rowActs[endpoint.channel] = ActuatorKind.tryParse(endpoint.actuatorType);
       }
     }
 
@@ -286,9 +330,9 @@ class ReportedLayout {
         case _RelayKind.shutterDown:
           if (row != null && row != _RowClass.shutter) return EndpointLayoutVerdict.mismatch;
         case _RelayKind.light:
-          if (row != _RowClass.light) return EndpointLayoutVerdict.mismatch;
+          if (row != _RowClass.light || rowActs[i + 1] != _acts[i]) return EndpointLayoutVerdict.mismatch;
         case _RelayKind.impulse:
-          if (row != _RowClass.impulse) return EndpointLayoutVerdict.mismatch;
+          if (row != _RowClass.impulse || rowActs[i + 1] != _acts[i]) return EndpointLayoutVerdict.mismatch;
       }
     }
     for (final channel in rowClasses.keys) {
@@ -330,7 +374,10 @@ bool sameEndpointList(List<EndpointModel> a, List<EndpointModel> b) {
         x.currentState != y.currentState ||
         x.shutterPosition != y.shutterPosition ||
         x.shutterDurationSec != y.shutterDurationSec ||
-        x.deviceOnline != y.deviceOnline) {
+        x.deviceOnline != y.deviceOnline ||
+        x.actuatorType != y.actuatorType ||
+        x.dimmable != y.dimmable ||
+        x.dimmerSource != y.dimmerSource) {
       return false;
     }
   }

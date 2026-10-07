@@ -97,13 +97,14 @@ test('basarili sahiplenme: yeni ev (h_+16 hex), sahiplik, cihaz, kanallar, envan
   assert.ok(bcrypt.compareSync(cred.password, row.password_hash), 'DB ozeti bcrypt ve parolayla eslesmeli');
   assert.ok(!JSON.stringify(state).includes(cred.password), 'duz metin parola hicbir tabloda olmamali');
 
-  // cihaz ACL: pub state/status, sub cmd/sys
+  // cihaz ACL: pub state/status/event, sub cmd/sys
   const acl = state.mqtt_acl.map((a) => `${a.action}:${a.topic}`).sort();
   assert.deepStrictEqual(acl, [
     `publish:ev/${home.mqtt_username}/state`,
     `publish:ev/${home.mqtt_username}/status`,
     `subscribe:ev/${home.mqtt_username}/cmd`,
     `subscribe:ev/${home.mqtt_username}/sys`,
+    `publish:ev/${home.mqtt_username}/event`, // WP-S1: guvenlik olaylari
   ].sort());
 
   // denetim kaydi: IP var, sir yok

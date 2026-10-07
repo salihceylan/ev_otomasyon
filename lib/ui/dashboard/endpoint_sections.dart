@@ -8,6 +8,8 @@ import '../../services/automation_state.dart';
 import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
+import '../pages/alarm_history_page.dart';
+import '../widgets/actuator_card.dart';
 import '../widgets/app_pill.dart';
 import '../widgets/orb/orb.dart';
 import '../widgets/di_status_pill.dart';
@@ -272,9 +274,34 @@ class _MiniOrbPainter extends CustomPainter {
 String _signature(AutomationState s, String? roomKeyFilter) {
   final items = itemsForRoom(s, roomKeyFilter);
   final dis = s.mode == AppMode.direct ? (s.status?.dis ?? const <DIItem>[]) : const <DIItem>[];
+  final safety = safetyItemsForRoom(s, roomKeyFilter);
   return '${items.relays.map((r) => '${r.id}:${r.type}:${r.name}').join('|')}#'
       '${items.shutters.map((x) => '${x.pair}:${x.name}').join('|')}#'
-      '${dis.map((d) => d.id).join(',')}';
+      '${dis.map((d) => d.id).join(',')}#'
+      '${safety.actuators.map((a) => '${a.deviceUid}:${a.id}').join(',')}#'
+      '${safety.sensors.map((x) => '${x.id}:${x.kind}:${x.ok}:${x.active}:${x.name}').join(',')}#'
+      '${s.capabilities.canAckAlarm}';
+}
+
+/// Oda filtresine göre güvenlik eylemcileri ve sensörleri (tasarım §5.3.3). Eylemcinin odası, rölesinin uç noktasından
+/// gelir (bulut); sensörlerin odası yoktur: oda süzgeci seçiliyken gizlenir. Doğrudan (LAN) kipte süzgeç yoktur.
+({List<ActuatorItem> actuators, List<SensorItem> sensors}) safetyItemsForRoom(AutomationState s, String? roomKeyFilter) {
+  final actuators = s.actuatorItems;
+  final sensors = s.sensorItems;
+  if (s.mode == AppMode.direct || roomKeyFilter == null) return (actuators: actuators, sensors: sensors);
+  String? roomOf(ActuatorItem a) {
+    for (final e in s.cloudEndpoints) {
+      if (e.isShutter || e.channel != a.relay) continue;
+      final uid = e.deviceUuid?.toUpperCase();
+      if (a.deviceUid == null || uid == null || uid == a.deviceUid) return roomKey(e.room);
+    }
+    return null;
+  }
+
+  return (
+    actuators: actuators.where((a) => roomOf(a) == roomKeyFilter).toList(growable: false),
+    sensors: const <SensorItem>[],
+  );
 }
 
 /// Panjur / aydınlatma / DI bölümleri. Yalnızca **yapılandırılmış** panjur çiftleri (`shutterItems`)
@@ -296,8 +323,10 @@ class DeviceSections extends StatelessWidget {
     final state = context.read<AutomationState>();
     final items = itemsForRoom(state, roomKeyFilter);
     final dis = state.mode == AppMode.direct ? (state.status?.dis ?? const <DIItem>[]) : const <DIItem>[];
+    final safety = safetyItemsForRoom(state, roomKeyFilter);
+    final hasSafety = safety.actuators.isNotEmpty || safety.sensors.isNotEmpty;
 
-    if (items.relays.isEmpty && items.shutters.isEmpty && dis.isEmpty) {
+    if (items.relays.isEmpty && items.shutters.isEmpty && dis.isEmpty && !hasSafety) {
       return Container(
         key: const Key('empty_devices'),
         padding: const EdgeInsets.all(24),
@@ -321,6 +350,10 @@ class DeviceSections extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        if (hasSafety) ...[
+          _SafetySection(actuators: safety.actuators, sensors: safety.sensors, showHistory: state.capabilities.canAckAlarm),
+          const SizedBox(height: 24),
+        ],
         if (items.shutters.isNotEmpty) ...[
           // Bölüm başlığı orb'u bölümün anlam ailesinde: panjur = sky, lamba = amber, duvar butonu = emerald (kartlarla aynı).
           SectionHeader(
@@ -375,6 +408,62 @@ class DeviceSections extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [for (final d in dis) DIStatusPill(key: ValueKey('di_${d.id}'), di: d)],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// "Güvenlik ve Eylemciler" bölümü (panjurlardan önce): eylemci kartları + sensör hapları + alarm geçmişi bağlantısı.
+/// Kartlar canlı değerlerini kendileri seçer; bölüm yalnız kart kümesi değişince kurulur ([_signature]).
+class _SafetySection extends StatelessWidget {
+  const _SafetySection({required this.actuators, required this.sensors, required this.showHistory});
+
+  final List<ActuatorItem> actuators;
+  final List<SensorItem> sensors;
+  final bool showHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const Key('section_safety'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(
+          icon: Icons.shield_outlined,
+          title: 'Güvenlik ve Eylemciler',
+          family: AppFamilies.rose,
+          action: showHistory
+              ? TextButton.icon(
+                  key: const Key('btn_alarm_history'),
+                  style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const AlarmHistoryPage()),
+                  ),
+                  icon: const Icon(Icons.history_rounded, size: 18),
+                  label: const Text('Alarm Geçmişi'),
+                )
+              : null,
+        ),
+        const SizedBox(height: 10),
+        if (actuators.isNotEmpty)
+          CardGrid(
+            children: [
+              for (var i = 0; i < actuators.length; i++)
+                StaggeredEntrance(
+                  key: ValueKey('enter_actuator_${actuators[i].deviceUid}_${actuators[i].id}'),
+                  index: i,
+                  child: ActuatorCard(actuatorId: actuators[i].id, deviceUid: actuators[i].deviceUid),
+                ),
+            ],
+          ),
+        if (sensors.isNotEmpty) ...[
+          if (actuators.isNotEmpty) const SizedBox(height: 12),
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            children: [for (final x in sensors) SensorStatusPill(key: ValueKey('pill_sensor_${x.id}'), sensor: x)],
           ),
         ],
       ],

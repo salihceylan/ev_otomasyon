@@ -20,6 +20,13 @@ export const CmdType = Object.freeze({
   ALL_SHUTTERS_STOP: 'ALL_SHUTTERS_STOP',
   SET_CHILD_LOCK: 'SET_CHILD_LOCK',
   SET_RUNTIME: 'SET_RUNTIME',
+  // Guvenlik katmani (DeviceCommand.h eki; SafetyManager::handleCommand)
+  ACTUATOR_SET: 'ACTUATOR_SET',
+  ALARM_ACK: 'ALARM_ACK',
+  ALARM_TEST: 'ALARM_TEST',
+  SAFETY_ARM: 'SAFETY_ARM',
+  CLIMATE_TARGET: 'CLIMATE_TARGET',
+  SCENE_RUN: 'SCENE_RUN',
 });
 
 export const MAX_ID_LENGTH = 24;
@@ -37,8 +44,24 @@ const F_POS = 16;
 const F_ENABLED = 32;
 const F_SEC = 64;
 const F_ID = 128;
+const F_ACTUATOR = 1 << 8;
+const F_TO = 1 << 9;
+const F_ZONE = 1 << 10;
+const F_AID = 1 << 11;
+const F_MODE = 1 << 12;
+const F_C10 = 1 << 13;
+const F_SCENE = 1 << 14;
+const F_EIDS = 1 << 15;
+const F_UID = 1 << 16;
 
-const FLAG_OF = { relay: F_RELAY, shutter: F_SHUTTER, cmd: F_CMD, state: F_STATE, pos: F_POS, enabled: F_ENABLED, sec: F_SEC, id: F_ID };
+const FLAG_OF = {
+  relay: F_RELAY, shutter: F_SHUTTER, cmd: F_CMD, state: F_STATE, pos: F_POS, enabled: F_ENABLED, sec: F_SEC, id: F_ID,
+  actuator: F_ACTUATOR, to: F_TO, zone: F_ZONE, aid: F_AID, mode: F_MODE, c10: F_C10, scene: F_SCENE, eids: F_EIDS, uid: F_UID,
+};
+/** ACTUATOR_SET value kodlamasi (firmware safety::ACT_TO_*): vana closed/open 0x10/0x11, anahtar off/on 0x20/0x21 */
+export const ACT_TO = Object.freeze({ closed: 0x10, open: 0x11, off: 0x20, on: 0x21 });
+/** eid: "<8 hex>-<n>" (firmware validEidText: [0-9a-f-], 3..14 karakter) */
+export const isValidEid = (s) => typeof s === 'string' && s.length >= 3 && s.length < 15 && /^[0-9a-f-]+$/.test(s);
 
 const fail = (reason) => ({ ok: false, reason });
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -58,9 +81,11 @@ const GLOBAL_CMDS = {
 };
 
 /**
+ * Firmware MqttManager.cpp parseCommand() portu (CONTRACTS 2.3 + 2.6). Guvenlik komutlari (actuator, alarm_ack, alarm_test, safety_arm,
+ * climate_target, scene_run, event_ack) "uid" ZORUNLU ister; duz v:2 komutlarinda uid istege baglidir (eslesme cagiranda denetlenir).
  * @param {unknown} obj  ayristirilmis JSON
  * @param {{totalRelays:number, totalPairs?:number}} limits
- * @returns {{ok:true, cmd:{type:string,index:number,value:number,id:string}} | {ok:false, reason:string}}
+ * @returns {{ok:true, cmd:{type:string,index:number,value:number,id:string,aid?:string}, uid?:string, eventAck?:boolean, eids?:string[]} | {ok:false, reason:string}}
  */
 export function validateCommand(obj, limits) {
   if (!isObj(obj)) return fail('kok nesne olmali');
@@ -73,7 +98,7 @@ export function validateCommand(obj, limits) {
     if (f === undefined || !Object.prototype.hasOwnProperty.call(FLAG_OF, k)) return fail('bilinmeyen alan');
     flags |= f;
   }
-  const body = flags & ~F_ID & 0xFF;
+  const body = flags & ~(F_ID | F_UID);
 
   if ((flags & F_RELAY) && !isInt(obj.relay)) return fail('relay tamsayi olmali');
   if ((flags & F_SHUTTER) && !isInt(obj.shutter)) return fail('shutter tamsayi olmali');
@@ -82,14 +107,34 @@ export function validateCommand(obj, limits) {
   if ((flags & F_STATE) && typeof obj.state !== 'boolean') return fail('state boolean olmali');
   if ((flags & F_ENABLED) && typeof obj.enabled !== 'boolean') return fail('enabled boolean olmali');
   if ((flags & F_CMD) && typeof obj.cmd !== 'string') return fail('cmd metin olmali');
+  if ((flags & F_ACTUATOR) && typeof obj.actuator !== 'string') return fail('actuator metin olmali');
+  if ((flags & F_TO) && typeof obj.to !== 'string') return fail('to metin olmali');
+  if ((flags & F_ZONE) && !isInt(obj.zone)) return fail('zone tamsayi olmali');
+  if ((flags & F_AID) && typeof obj.aid !== 'string') return fail('aid metin olmali');
+  if ((flags & F_MODE) && typeof obj.mode !== 'string') return fail('mode metin olmali');
+  if ((flags & F_C10) && !isInt(obj.c10)) return fail('c10 tamsayi olmali');
+  if ((flags & F_SCENE) && !isInt(obj.scene)) return fail('scene tamsayi olmali');
+  if ((flags & F_EIDS) && !Array.isArray(obj.eids)) return fail('eids dizi olmali');
+  if ((flags & F_UID) && typeof obj.uid !== 'string') return fail('uid metin olmali');
 
   const relay = flags & F_RELAY ? obj.relay : 0;
   const shutter = flags & F_SHUTTER ? obj.shutter : 0;
   const pos = flags & F_POS ? obj.pos : 0;
   const sec = flags & F_SEC ? obj.sec : 0;
+  const zone = flags & F_ZONE ? obj.zone : 0;
   let cmd = null;
+  let needsUid = false;
+  let eventAck = false;
+  let eids;
 
-  if (flags & F_CMD) {
+  if (flags & F_ACTUATOR) {
+    if (body !== (F_ACTUATOR | F_TO)) return fail('actuator yalnizca to ile');
+    const m = /^a([1-9][0-9]?)$/.exec(obj.actuator);
+    if (!m || Number(m[1]) > 16) return fail('actuator araligi (a1..a16)');
+    if (!Object.prototype.hasOwnProperty.call(ACT_TO, obj.to)) return fail('to gecersiz (closed|open|on|off)');
+    cmd = { type: CmdType.ACTUATOR_SET, index: Number(m[1]), value: ACT_TO[obj.to] };
+    needsUid = true;
+  } else if (flags & F_CMD) {
     const c = obj.cmd;
     if (c === 'toggle') {
       if (body !== (F_CMD | F_RELAY)) return fail('toggle yalnizca relay ile');
@@ -110,6 +155,45 @@ export function validateCommand(obj, limits) {
       if (shutter < 1 || shutter > totalPairs) return fail('shutter araligi');
       if (sec < RUNTIME_MIN_SEC || sec > RUNTIME_MAX_SEC) return fail('sec araligi (1..300)');
       cmd = { type: CmdType.SET_RUNTIME, index: shutter, value: sec };
+    } else if (c === 'alarm_ack') {
+      if (body !== (F_CMD | F_ZONE) && body !== (F_CMD | F_ZONE | F_AID)) return fail('alarm_ack zone (ve aid) ister');
+      if (zone < 0 || zone > 4) return fail('zone araligi (0..4)');
+      cmd = { type: CmdType.ALARM_ACK, index: zone, value: 0, aid: '' };
+      if (flags & F_AID) {
+        if (!isValidEid(obj.aid)) return fail('aid gecersiz');
+        cmd.aid = obj.aid;
+      }
+      needsUid = true;
+    } else if (c === 'alarm_test') {
+      if (body !== (F_CMD | F_ZONE)) return fail('alarm_test yalnizca zone ile');
+      if (zone < 1 || zone > 4) return fail('zone araligi (1..4)');
+      cmd = { type: CmdType.ALARM_TEST, index: zone, value: 0 };
+      needsUid = true;
+    } else if (c === 'safety_arm') {
+      if (body !== (F_CMD | F_MODE)) return fail('safety_arm yalnizca mode ile');
+      const v = { away: 1, home: 2, off: 0 }[obj.mode];
+      if (v === undefined) return fail('mode gecersiz (away|home|off)');
+      cmd = { type: CmdType.SAFETY_ARM, index: 0, value: v };
+      needsUid = true;
+    } else if (c === 'climate_target') {
+      if (body !== (F_CMD | F_ZONE | F_C10)) return fail('climate_target zone ve c10 ister');
+      if (zone < 1 || zone > 4) return fail('zone araligi (1..4)');
+      if (obj.c10 < 50 || obj.c10 > 350) return fail('c10 araligi (50..350)');
+      cmd = { type: CmdType.CLIMATE_TARGET, index: zone, value: obj.c10 };
+      needsUid = true;
+    } else if (c === 'scene_run') {
+      if (body !== (F_CMD | F_SCENE)) return fail('scene_run yalnizca scene ile');
+      if (obj.scene < 1 || obj.scene > 32) return fail('scene araligi (1..32)');
+      cmd = { type: CmdType.SCENE_RUN, index: obj.scene, value: 0 };
+      needsUid = true;
+    } else if (c === 'event_ack') {
+      if (body !== (F_CMD | F_EIDS)) return fail('event_ack yalnizca eids ile');
+      if (obj.eids.length < 1 || obj.eids.length > 8) return fail('eids 1..8 oge');
+      for (const x of obj.eids) if (!isValidEid(x)) return fail('eid gecersiz');
+      cmd = { type: 'EVENT_ACK', index: 0, value: 0 };
+      eventAck = true;
+      eids = [...obj.eids];
+      needsUid = true;
     } else {
       return fail('bilinmeyen komut');
     }
@@ -124,13 +208,18 @@ export function validateCommand(obj, limits) {
     return fail('gecersiz komut bicimi');
   }
 
+  if (needsUid && !(flags & F_UID)) return fail('uid zorunlu');
+
   let id = '';
   if (flags & F_ID) {
     if (typeof obj.id !== 'string') return fail('id metin olmali');
     if (!isValidCommandId(obj.id)) return fail('id gecersiz (1..24, [A-Za-z0-9._:-])');
     id = obj.id;
   }
-  return { ok: true, cmd: { ...cmd, id } };
+  const r = { ok: true, cmd: { ...cmd, id } };
+  if (flags & F_UID) r.uid = obj.uid;
+  if (eventAck) { r.eventAck = true; r.eids = eids; }
+  return r;
 }
 
 /**

@@ -40,6 +40,42 @@ export const SOURCES = {
   'test/test_modbus_rtu/test_main.cpp': 'test/fw_modbus.test.js',
   'test/test_ap_access/test_main.cpp': 'test/fw_ap_access.test.js',
   'test/test_net_time/test_main.cpp': 'test/fw_net_time.test.js',
+  // Guvenlik katmani (WP-F1): saf cekirdekler ve Unity testleri
+  'src/sensors/SensorTypes.h': 'sim/fw/sensor_hub.js',
+  'src/sensors/SensorHub.h': 'sim/fw/sensor_hub.js',
+  'src/sensors/DiSensor.h': 'sim/fw/sensor_hub.js (DiSensor)',
+  'src/sensors/BridgeSensor.h': 'sim/fw/sensor_hub.js (BridgeSensor)',
+  'src/actuators/ActuatorTypes.h': 'sim/fw/actuator_map.js',
+  'src/actuators/ActuatorMap.h': 'sim/fw/actuator_map.js',
+  'src/safety/SafetyConfig.h': 'sim/fw/safety_config.js',
+  'src/safety/SafetyFsm.h': 'sim/fw/safety_fsm.js',
+  'src/events/EventOutbox.h': 'sim/fw/event_outbox.js',
+  'test/test_sensor_hub/test_main.cpp': 'test/fw_sensor_hub.test.js',
+  'test/test_actuator_map/test_main.cpp': 'test/fw_actuator_map.test.js',
+  'test/test_safety_config/test_main.cpp': 'test/fw_safety_config.test.js',
+  'test/test_safety_fsm/test_main.cpp': 'test/fw_safety_fsm.test.js',
+  'test/test_event_outbox/test_main.cpp': 'test/fw_event_outbox.test.js',
+  // Guvenlik katmani (WP-F2): baglayicilar ve SmartAutomation kancalarinin donanim uclari
+  'src/safety/SafetyManager.h': 'sim/fw/safety_manager.js',
+  'src/safety/SafetyManager.cpp': 'sim/fw/safety_manager.js',
+  'src/safety/SafetyStore.h': 'sim/fw/safety_manager.js (SafetyStore, NvsImage safety/latch)',
+  'src/safety/SafetyStore.cpp': 'sim/fw/safety_manager.js (SafetyStore, NvsImage safety/latch)',
+  'src/events/EventOutboxRtos.h': 'sim/fw/safety_manager.js (simulator tek is parcacigi: kilitsiz EventOutbox)',
+  'src/WS_Relay.cpp': 'sim/fw/automation.js (TcaDriver.init: Relay_Init kilit maskesi)',
+  'src/WS_GPIO.cpp': 'sim/fw/automation.js (beep: Buzzer_SetAlarm alarm kipi)',
+  // Guvenlik katmani (WP-F3): bagimsiz emniyet (ValveGuard) ve TCA guvenli bit yardimcilari
+  'src/safety/ValveGuard.h': 'sim/fw/valve_guard.js',
+  'src/WS_TCA9554PWR.h': 'sim/fw/automation.js (TcaDriver.readOutputHw/setSafeBits)',
+  'test/test_valve_guard/test_main.cpp': 'test/fw_valve_guard.test.js',
+  // Guvenlik katmani (WP-F4/F5): durum gorunumu (state v:3), yapilandirma yamasi/JSON'u, LAN olay halkasi, ayristirici
+  'src/safety/SafetyView.h': 'sim/fw/safety_view.js',
+  'src/safety/SafetyCfgEdit.h': 'sim/fw/safety_cfg_edit.js',
+  'src/safety/SafetyCfgJson.h': 'sim/fw/safety_cfg_edit.js (JSON / cfg_dump)',
+  'src/safety/SafetyCfgApi.h': 'sim/fw/safety_cfg_api.js',
+  'src/safety/SafetyCfgApi.cpp': 'sim/fw/safety_cfg_api.js',
+  'test/test_safety_view/test_main.cpp': 'test/fw_safety_view.test.js',
+  'test/test_safety_cfg_edit/test_main.cpp': 'test/fw_safety_cfg_edit.test.js',
+  'test/test_event_log/test_main.cpp': 'test/fw_event_log.test.js',
 };
 
 /**

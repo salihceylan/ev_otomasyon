@@ -79,7 +79,9 @@ test('numara: 032 yalnizca bu dosyada; 031\'den hemen sonra; calistirici surum 3
   const files = listMigrationFiles(DIR);
   const upTo031 = files.filter((f) => f.version <= 31).map((f) => f.name);
   const plan = planMigrations(files, new Map(upTo031.map((n) => [n, { checksum: null, baseline: false }])));
-  assert.deepEqual(plan.pending.map((f) => f.name), [FILE]);
+  // 032 ilk bekleyendir; sonrakiler (033+) yalniz daha buyuk surumlerdir.
+  assert.equal(plan.pending[0].name, FILE);
+  assert.ok(plan.pending.slice(1).every((f) => f.version > 32));
   assert.deepEqual(plan.outOfOrder, []);
 });
 

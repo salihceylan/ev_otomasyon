@@ -225,7 +225,7 @@ test.after(async () => {
 // ================================================================================================
 // Sahiplenme (claim)
 // ================================================================================================
-test('PG claim: ev, uyelik, cihaz, 8 kanal, envanter, cihaz kimligi (bcrypt + 4 ACL), denetim; tekrar sahiplenme 409', { skip: SKIP }, async () => {
+test('PG claim: ev, uyelik, cihaz, 8 kanal, envanter, cihaz kimligi (bcrypt + 5 ACL), denetim; tekrar sahiplenme 409', { skip: SKIP }, async () => {
   const c = await getCtx();
   const h = c.helpers;
   const owner = await h.user();
@@ -256,7 +256,8 @@ test('PG claim: ev, uyelik, cihaz, 8 kanal, envanter, cihaz kimligi (bcrypt + 4 
   assert.equal(credRow.kind, 'device');
   assert.ok(await c.bcrypt.compare(cred.password, credRow.password_hash));
   const acl = await h.rows('SELECT action, topic FROM mqtt_acl WHERE username = $1 ORDER BY action, topic', [cred.username]);
-  assert.deepEqual(acl.map((a) => `${a.action}:${a.topic.split('/')[2]}`), ['publish:state', 'publish:status', 'subscribe:cmd', 'subscribe:sys']);
+  // WP-S1: cihaz kimligi ev/{t}/event yayin satirini da alir (guvenlik olaylari)
+  assert.deepEqual(acl.map((a) => `${a.action}:${a.topic.split('/')[2]}`).sort(), ['publish:event', 'publish:state', 'publish:status', 'subscribe:cmd', 'subscribe:sys']);
   const audit = await h.rows('SELECT event, ip_address, details FROM device_audit_logs WHERE device_uuid = $1', [inv.device_uuid]);
   assert.equal(audit.length, 1);
   assert.equal(audit[0].event, 'device_claimed');
@@ -859,7 +860,7 @@ test('PG MQTT kimlikleri: 10 kimlik siniri, sure, gecmis bitis 403, sure dolan t
   const after = await h.rows(`SELECT id FROM mqtt_credentials WHERE home_id = $1 AND kind = 'device'`, [t.home.id]);
   assert.equal(after.length, 1);
   assert.notEqual(after[0].id, before.id);
-  assert.equal(await h.count('mqtt_acl', 'username = $1', [`d_${t.home.mqtt_username}`]), 4);
+  assert.equal(await h.count('mqtt_acl', 'username = $1', [`d_${t.home.mqtt_username}`]), 5); // + ev/{t}/event (WP-S1)
 
   // ES ZAMANLI rotasyon: advisory kilit olmadan biri UNIQUE (23505) ihlaliyle dusuyordu (gercek PostgreSQL'de gozlendi)
   const settled = await Promise.allSettled([1, 2, 3, 4].map(() => cr.issueDeviceCredential({ homeId: t.home.id, deviceId: t.dev.id })));

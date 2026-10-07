@@ -13,6 +13,8 @@
 #include "WiFiManager.h"
 #include "MqttManager.h"
 #include "CliParse.h"
+#include "safety/SafetyManager.h"
+#include "safety/SafetyCfgApi.h"
 
 // Görev gözetleyici (TWDT) zaman aşımı: loopTask ve ilgili görevler bu sürede beslenmezse cihaz
 // kendini YENİDEN BAŞLATIR (EVOTOMASYON_TASKS: "hiçbir görev kilitlenmeyecek").
@@ -186,13 +188,143 @@ static void cliPrintStatus() {
   Serial.printf("]\r\n");
 }
 
+// ---- Güvenlik katmanı (seri CLI = fiziksel erişim; spec §5.1.6, karar 7.2b-7/10, WP-F5) ----------------------------------
+// Ana yapılandırma değişiminin güvenlik yapılandırmasıyla çapraz doğrulaması [B3]: geçersizse kayıt YAPILMAZ.
+static bool cliSafetyAllows(const SystemConfig& next) {
+  safety::SafetyConfig* sc = (safety::SafetyConfig*)malloc(sizeof(safety::SafetyConfig));
+  uint64_t guard = 0;
+  if (!sc || !safety::SafetyManager::instance().copyConfig(*sc, &guard)) {
+    free(sc);
+    Serial.printf("[CLI-HATA] Guvenlik yapilandirmasi okunamadi, degisiklik yapilmadi.\r\n");
+    return false;
+  }
+  const safety::CfgErr ve = safety::validateSystemChange(next, *sc, guard);   // açılış/kilit maskesi rolesi panjur/darbe olamaz [FW2-1]
+  free(sc);
+  if (ve == safety::CfgErr::OK) return true;
+  Serial.printf("[CLI-HATA] Guvenlik yapilandirmasiyla celisiyor (%s)%s; degisiklik yapilmadi.\r\n", safety::cfgErrText(ve),
+                safety::SafetyManager::instance().latchedMask() ? " ve kilitli alarm var" : "");
+  return false;
+}
+
+static const char* cfgResultText(safety::CfgResult r) {
+  switch (r) {
+    case safety::CfgResult::OK: return "uygulandi";
+    case safety::CfgResult::CONFLICT: return "cakisma";
+    case safety::CfgResult::INVALID: return "gecersiz";
+    case safety::CfgResult::LATCHED: return "kilitli bolgeye dokunuyor (zone_latched)";
+    case safety::CfgResult::LOOSEN: return "gevsetme yasak";
+    case safety::CfgResult::STORAGE: return "NVS yazilamadi";
+    default: return "mesgul";
+  }
+}
+
+static void cliSafetyStatus() {
+  auto& sm = safety::SafetyManager::instance();
+  safety::SafetyView* v = (safety::SafetyView*)malloc(sizeof(safety::SafetyView));
+  if (!v || !sm.copyView(*v)) {
+    free(v);
+    Serial.printf("[CLI-HATA] Guvenlik gorunumu alinamadi.\r\n");
+    return;
+  }
+  Serial.printf("[GUVENLIK] politika=%s kip=%s%s rev=%lu acilis=%lu bn=%08lx\r\n", v->policyOn ? "ACIK" : "KAPALI",
+                v->mode ? "GUVENLI KIP: " : "normal", v->mode ? safety::safeReasonText((safety::SafeReason)v->mode) : "",
+                (unsigned long)v->rev, (unsigned long)sm.bootCount(), (unsigned long)sm.bootNonce());
+  for (uint8_t i = 0; i < v->nZones; i++) {
+    const safety::ZoneView& z = v->zones[i];
+    Serial.printf("  - Bolge %u: %s (aid %s, %lu sn once, %s)\r\n", (unsigned)z.id, safety::zoneStText((safety::ZoneSt)z.st), z.aid,
+                  (unsigned long)z.sinceUp, z.silenced ? "susturuldu" : "caliyor");
+  }
+  if (v->nZones == 0) Serial.printf("  - Butun bolgeler NORMAL\r\n");
+  for (uint8_t i = 0; i < v->nSens; i++) {
+    char id[5];
+    safety::sensorIdText(v->sens[i].code, id);
+    Serial.printf("  - Sensor %s (%s, bolge %u): %s%s\r\n", id, safety::sensorKindText(v->sens[i].kind), (unsigned)v->sens[i].zone,
+                  v->sens[i].active ? "AKTIF" : "bosta", v->sens[i].ok ? "" : " [ARIZA/OKUNAMIYOR]");
+  }
+  for (uint8_t i = 0; i < v->nAct; i++) {
+    const safety::ActuatorView& a = v->act[i];
+    if (a.kind == (uint8_t)safety::ActKind::VALVE) {
+      Serial.printf("  - Eylemci a%u (vana, role %u): %s%s\r\n", (unsigned)(i + 1), (unsigned)a.relay,
+                    safety::valvePosText((safety::ValvePos)a.pos), a.fault ? " [GERI BILDIRIM ARIZASI]" : "");
+    } else {
+      Serial.printf("  - Eylemci a%u (%s, role %u): %s\r\n", (unsigned)(i + 1), safety::actKindText(a.kind), (unsigned)a.relay,
+                    a.on ? "ACIK" : "kapali");
+    }
+  }
+  free(v);
+}
+
+// SAFETY [STATUS] | SAFETY TEST <bolge> | SAFETY ACK [bolge] [FORCE] | SAFETY POLICY ON|OFF | SAFETY DEL <aN|dN|bN>
+// Gevsetme (politika kapatma, silme) yalniz burada (fiziksel erisim) ya da bulutta owner/servis rolüyle yapilir (karar 7.2b-7).
+// FORCE: guvenli kipten yerel cikis (karar 7.2b-10; LAN/bulut force reddedilir).
+static void cliSafety(const String& cmd) {
+  auto& sa = SmartAutomation::instance();
+  auto& sm = safety::SafetyManager::instance();
+  const String sub = cliWord(cmd, 1);
+  if (sub.isEmpty() || eq(sub, "STATUS")) {
+    cliSafetyStatus();
+  } else if (eq(sub, "TEST")) {
+    const int z = cliWord(cmd, 2).toInt();
+    if (z < 1 || z > safety::MAX_ZONES) {
+      Serial.printf("[CLI-HATA] Kullanim: SAFETY TEST <1-4>\r\n");
+      return;
+    }
+    postDeviceCommand(makeCommand(CmdType::ALARM_TEST, CmdSource::CLI, (uint8_t)z, 0));
+    Serial.printf("[CLI-SONUC] Bolge %d testi kuyruga yazildi (sonuc: SAFETY).\r\n", z);
+  } else if (eq(sub, "ACK")) {
+    String a = cliWord(cmd, 2);
+    bool force = eq(a, "FORCE") || eq(cliWord(cmd, 3), "FORCE");
+    const int z = (a.isEmpty() || eq(a, "FORCE")) ? 0 : a.toInt();
+    if (z < 0 || z > safety::MAX_ZONES) {
+      Serial.printf("[CLI-HATA] Kullanim: SAFETY ACK [0-4] [FORCE]\r\n");
+      return;
+    }
+    postDeviceCommand(makeCommand(CmdType::ALARM_ACK, CmdSource::CLI, (uint8_t)z, force ? 1 : 0));
+    Serial.printf("[CLI-SONUC] Alarm onayi%s kuyruga yazildi (bolge %d).\r\n", force ? " (FORCE: guvenli kipten yerel cikis)" : "", z);
+  } else if (eq(sub, "POLICY") || eq(sub, "DEL")) {
+    safety::CfgEdit e;
+    safety::editInit(e);
+    if (eq(sub, "POLICY")) {
+      const String a = cliWord(cmd, 2);
+      if (!eq(a, "ON") && !eq(a, "OFF")) {
+        Serial.printf("[CLI-HATA] Kullanim: SAFETY POLICY ON|OFF\r\n");
+        return;
+      }
+      e.op = safety::EditOp::SET_POLICY;
+      e.hasPolicyOn = 1;
+      e.policyOn = eq(a, "ON") ? 1 : 0;
+    } else {
+      String id = cliWord(cmd, 2);
+      id.toLowerCase();
+      if (id.startsWith("a") && safety::parseActuatorId(id.c_str(), e.actIndex)) {
+        e.op = safety::EditOp::DEL_ACTUATOR;
+      } else if (safety::parseSensorId(id.c_str(), e.sens.src, e.sens.index)) {
+        e.op = safety::EditOp::DEL_SENSOR;
+      } else {
+        Serial.printf("[CLI-HATA] Kullanim: SAFETY DEL <a1-a16 | d1-d40 | b1-b16>\r\n");
+        return;
+      }
+    }
+    const safety::CfgOutcome o = sm.submitEdit(e, false, 0, safety::VIA_CLI, true, sa.wantMask());
+    if (o.r == safety::CfgResult::INVALID) {
+      Serial.printf("[CLI-SONUC] Guvenlik yapilandirmasi: %s (%s).\r\n", cfgResultText(o.r), safety::cfgErrText(o.err));
+    } else {
+      Serial.printf("[CLI-SONUC] Guvenlik yapilandirmasi: %s (rev %lu).\r\n", cfgResultText(o.r), (unsigned long)o.rev);
+    }
+    if (o.r == safety::CfgResult::OK) MqttManager::instance().triggerPublish();
+  } else {
+    Serial.printf("[CLI-HATA] Kullanim: SAFETY [STATUS] | SAFETY TEST <1-4> | SAFETY ACK [0-4] [FORCE] | SAFETY POLICY ON|OFF | SAFETY DEL <aN|dN|bN>\r\n");
+  }
+}
+
 static void cliHelp() {
   Serial.printf("[CLI] Komutlar: STATUS, MQTT, MQTT PUB, RELAY <n> [ON|OFF|TOGGLE], RELAY ALL ON|OFF,\r\n");
   Serial.printf("      SHUTTER <n> UP|DOWN|STOP|STEP|POS <0-100>, SHUTTER ALL UP|DOWN|STOP, DI, CFG,\r\n");
   Serial.printf("      SET_DI <di> <hedef_role> <mod>, DEFAULT_DI, WIFI <ssid> <parola>, WIFI CLEAR,\r\n");
   Serial.printf("      EXTMOD <0|1> [kanal], SCAN, SCAN RESULT, CH <n> [ON|OFF|TOGGLE], SEND <hex>,\r\n");
   Serial.printf("      BAUD <baud>, CHILDLOCK [ON|OFF|STATUS], AP [ON|OFF|STATUS] (servis AP'si, 10 dk),\r\n");
-  Serial.printf("      FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY (yerel anahtari siler), REBOOT\r\n");
+  Serial.printf("      FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY (yerel anahtari siler), REBOOT [FORCE],\r\n");
+  Serial.printf("      SAFETY [STATUS], SAFETY TEST <bolge>, SAFETY ACK [bolge] [FORCE], SAFETY POLICY ON|OFF, SAFETY DEL <aN|dN|bN>\r\n");
 }
 
 // Gizli içerikli String'i bellekte sıfırla (yığın artığı kalmasın; Arduino String'i serbest bırakınca sıfırlamaz).
@@ -241,6 +373,8 @@ static void handleCliLine(String cmd) {
     cliHelp();
   } else if (eq(first, "STATUS")) {
     cliPrintStatus();
+  } else if (eq(first, "SAFETY")) {
+    cliSafety(cmd);
   } else if (eq(first, "MQTT")) {
     if (eq(cliWord(cmd, 1), "PUB")) {
       MqttManager::instance().triggerPublish();
@@ -260,7 +394,7 @@ static void handleCliLine(String cmd) {
         // Yalnızca AYDINLATMA röleleri (panjur röleleri interlock'tan geçer; toplu AÇMA yok)
         int n = 0;
         for (int i = 0; i < totalR; i++) {
-          if (cfg.relays[i].type == RELAY_TYPE_LIGHT) {
+          if (cfg.relays[i].type == RELAY_TYPE_LIGHT && safety::SafetyManager::instance().actuatorOfRelay((uint8_t)(i + 1)) < 0) {   // vana/siren lamba degildir
             postDeviceCommand(makeCommand(CmdType::RELAY_SET, CmdSource::CLI, (uint8_t)(i + 1), 1));
             n++;
           }
@@ -354,6 +488,14 @@ static void handleCliLine(String cmd) {
     int di = cliWord(cmd, 1).toInt(), target = cliWord(cmd, 2).toInt(), mode = cliWord(cmd, 3).toInt();
     if (di >= 1 && di <= cfg.totalDIs() && target >= 0 && target <= totalR && mode >= 0 && mode <= DI_MODE_SHUTTER_DOWN &&
         !cliWord(cmd, 3).isEmpty()) {
+      SystemConfig* next = (SystemConfig*)malloc(sizeof(SystemConfig));
+      if (!next) return;
+      memcpy(next, &cfg, sizeof(SystemConfig));
+      next->dis[di - 1].target_relay = (uint8_t)target;
+      next->dis[di - 1].mode = (uint8_t)mode;
+      const bool allowed = cliSafetyAllows(*next);
+      free(next);
+      if (!allowed) return;
       cfg.dis[di - 1].target_relay = (uint8_t)target;
       cfg.dis[di - 1].mode = (uint8_t)mode;
       bool ok = cfgMgr.save();
@@ -398,6 +540,14 @@ static void handleCliLine(String cmd) {
     if (a.isEmpty() || (en && !isValidExtChannelCount((uint8_t)ch)) || ch < 0 || ch > 255) {
       Serial.printf("[CLI-HATA] Kullanim: EXTMOD <0|1> [kanal: 2,4,8,12,16,24,32]\r\n");
     } else {
+      SystemConfig* next = (SystemConfig*)malloc(sizeof(SystemConfig));
+      if (!next) return;
+      memcpy(next, &cfg, sizeof(SystemConfig));
+      next->ext_module_enabled = en;
+      next->ext_module_channels = en ? (uint8_t)ch : next->ext_module_channels;
+      const bool allowed = cliSafetyAllows(*next);
+      free(next);
+      if (!allowed) return;
       cfg.ext_module_enabled = en;
       cfg.ext_module_channels = en ? (uint8_t)ch : cfg.ext_module_channels;
       bool ok = cfgMgr.save();
@@ -540,6 +690,11 @@ static void handleCliLine(String cmd) {
                   "/api/factory/init). AP gerekirse: AP ON\r\n",
                   ok ? "SILINDI" : "SILINEMEDI");
   } else if (eq(first, "REBOOT") || eq(first, "RESTART")) {
+    // Kilitli alarm varken "REBOOT FORCE" ister [K-2]: kilit ahbu_latch'ten geri gelir, guvenli bitler yeniden baslatma boyunca korunur.
+    if (safety::SafetyManager::instance().latchedMask() != 0 && !eq(cliWord(cmd, 1), "FORCE")) {
+      Serial.printf("[CLI-HATA] Kilitli alarm var: yeniden baslatmak icin REBOOT FORCE yazin.\r\n");
+      return;
+    }
     Serial.printf("[CLI-SONUC] Panjurlar durdurulup cihaz yeniden baslatiliyor...\r\n");
     sa.requestRestart(300);
   } else {

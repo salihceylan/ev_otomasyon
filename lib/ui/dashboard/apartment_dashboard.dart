@@ -9,6 +9,7 @@ import '../pages/wifi_recovery_dialog.dart';
 import '../motion/motion.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
+import '../widgets/critical_alarm_card.dart';
 import '../widgets/quick_scenario_bar.dart';
 import 'dashboard_states.dart';
 import 'endpoint_sections.dart';
@@ -278,6 +279,8 @@ class _CloudContentState extends State<_CloudContent> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const OfflineBanner(),
+        // Kritik güvenlik uyarıları (alarm / vana arızası / güvenli kip / su kesik) panonun EN ÜSTÜNDE (§5.3.3).
+        const SafetyAlertsPanel(),
         if (!vm.empty) ...[
           const StaggeredEntrance(index: 0, child: HomeHero()),
           const SizedBox(height: 12),
@@ -444,6 +447,8 @@ class _DirectContent extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (vm.hasStatus) ...[
+          // Aynı kritik alarm kartı LAN kipinde de (K5: internetsiz alarm görünür).
+          const SafetyAlertsPanel(),
           const StaggeredEntrance(index: 0, child: HomeHero()),
           const SizedBox(height: 12),
         ],

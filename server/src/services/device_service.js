@@ -25,7 +25,7 @@ const crypto = require('crypto');
 const { generateNumericPin, isUuid } = require('../utils/helpers');
 const { httpError } = require('../utils/http_errors');
 const { can } = require('../utils/role_matrix');
-const { validateCommand, capabilityForKind, KINDS } = require('../utils/command_schema');
+const { validateCommand, capabilityForCommand, isSafeTarget, KINDS } = require('../utils/command_schema');
 
 // --- Sabitler ---------------------------------------------------------------
 const PIN_MAX_ATTEMPTS = 5;
@@ -49,6 +49,25 @@ const DEFAULT_MODEL = 'ESP32-S3-POE-ETH-8DI-8RO';
 const REQUIRED_COMMISSIONING_CHECKS = Object.freeze(['relays', 'buttons', 'shutters', 'network', 'cloud']);
 // Toplu "isiklari kapat" komutlari (firmware'de esanlamli): evde priz varsa "Hepsini Kapat" kurali uygulanir (DAIRE-01).
 const LIGHTS_OFF_GROUP_COMMANDS = Object.freeze(['all_lights_off', 'all_off']);
+// Guvenlik komutlari (WP-S4, tasarim §5.2.4): uid ZORUNLU, hedef denetimi + hedef uid'nin onay/ret yankisi beklenir.
+const SAFETY_KINDS = Object.freeze(['actuator', 'alarm_ack', 'alarm_test']);
+const SAFETY_ACK_TIMEOUT_MS = 10 * 1000;
+// Firmware ret kodlari (state.last_rej.code, tasarim §3.2) -> kullaniciya gosterilecek metin (§5.3.3)
+const REJECTION_TEXT = Object.freeze({
+  zone_latched: 'Alarm sürerken vana açılamaz. Önce sensörün kuruduğundan emin olup alarmı onaylayın.',
+  zone_test: 'Bölge testi sürüyor; test bitince yeniden deneyin.',
+  actuator_relay: 'Bu kanal bir güvenlik cihazına bağlı; lamba gibi açılamaz.',
+  unknown_actuator: 'Pano bu eylemciyi tanımıyor; yapılandırmayı kontrol edin.',
+  bad_state: 'Bu cihaz için geçersiz hedef durum.',
+  unsupported: 'Pano yazılımı bu komutu desteklemiyor.',
+  cfg_conflict: 'Panodaki yapılandırma değişmiş; güncel durumu yükleyip yeniden deneyin.',
+  cfg_invalid: 'Yapılandırma geçersiz.',
+  gas_local_only: 'Gaz vanası güvenlik gereği yalnız yerinde, panodaki düğmeyle açılır.',
+  stale_ack: 'Bu arada yeni bir alarm oluştu; lütfen güncel alarmı inceleyip yeniden onaylayın.',
+  safe_mode: 'Pano güvenli kipte; vanalar açılamaz. Kurulumcunuza başvurun.',
+  bad_cmd: 'Pano komutu geçersiz buldu.',
+  busy: 'Pano meşgul; birkaç saniye sonra yeniden deneyin.',
+});
 
 const DEVICE_UUID_PATTERN = /^AHBU-[A-Z0-9-]{3,32}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1854,7 +1873,8 @@ class DeviceService {
     const validated = validateCommand(command);
     if (!validated.ok) throw httpError(400, validated.error, 'VALIDATION');
 
-    const capability = capabilityForKind(validated.kind);
+    // Yetenek: eylemcide YONE gore (kapat/sustur herkese, ac/calistir misafire kapali); eski turler AYNEN.
+    const capability = capabilityForCommand(validated);
     if (!can(capability, actor && actor.access)) {
       throw httpError(403, 'Bu komut için yetkiniz yetersizdir.', 'FORBIDDEN');
     }
@@ -1879,11 +1899,19 @@ class DeviceService {
       });
     }
 
+    const safety = SAFETY_KINDS.includes(validated.kind);
+    if (safety && String(device.device_uuid || '').toUpperCase() !== validated.command.uid) {
+      // Komut ev konusuna gider; uid baska panoyu gosteriyorsa o pano uygular: hedef cihazla ESLESMELI.
+      throw httpError(400, 'Komuttaki pano kimliği (uid) hedef cihazla eşleşmiyor.', 'VALIDATION');
+    }
+
     await this._assertCommandTarget(device.id, validated);
 
     if (!device.is_online) {
       throw httpError(409, 'Cihaz çevrimdışı; komut iletilmedi.', 'DEVICE_OFFLINE', { device_online: false });
     }
+
+    if (safety) return this._sendSafetyCommand(device, validated);
 
     // Toplu "isiklari kapat" (DAIRE-01): firmware'de priz tipi yok; all_lights_off / all_off uygulamada 'plug' (priz)
     // diye isaretlenen roleleri de kapatirdi. Evde priz varsa "Hepsini Kapat" ile AYNI kural (peace_service): yalniz
@@ -1900,13 +1928,20 @@ class DeviceService {
     }
 
     const commandId = validated.command.id || this._newCommandId();
-    await this._publishCommand(device.topic_id, { ...validated.command, id: commandId });
+    const payload = { ...validated.command, id: commandId };
+    // Duz role komutu ev konusuna gider (evdeki BUTUN panolar alir): guvenlik destekli panoya (caps 'safety', firmware 1.2+)
+    // hedef uid'si eklenir; baska panonun ayni numarali eylemci rolesine (siren/vana) dusmez. v:2 firmware bilinmeyen alani
+    // reddettigi icin eski panoya eklenmez (inceleme RV-2; firmware ayrica uid'siz komutu eylemci rolesinde yok sayar).
+    if (validated.kind === KINDS.RELAY && Array.isArray(device.caps) && device.caps.includes('safety') && device.device_uuid) {
+      payload.uid = String(device.device_uuid).toUpperCase();
+    }
+    await this._publishCommand(device.topic_id, payload);
     return { delivered: true, device_online: true, command_id: commandId };
   }
 
   async _findHomeDevice(homeId, { id = null, uuid = null }) {
     const res = await this.db.query(
-      `SELECT d.id, d.device_uuid, COALESCE(d.is_online, FALSE) AS is_online, h.mqtt_username AS topic_id
+      `SELECT d.id, d.device_uuid, COALESCE(d.is_online, FALSE) AS is_online, h.mqtt_username AS topic_id, d.caps
          FROM devices d
          JOIN homes h ON h.id = d.home_id
         WHERE d.home_id = $1 AND ((d.id::text = $2) OR (d.device_uuid = $3))`,
@@ -1918,16 +1953,104 @@ class DeviceService {
     return res.rows[0];
   }
 
-  /** Panjur kanallari role komutuyla surulemez (cift yon riskine karsi derinlemesine savunma). */
+  /**
+   * Hedef denetimi (derinlemesine savunma; asil yetki firmware'dedir):
+   *  - Panjur kanallari role komutuyla surulemez (cift yon riskine karsi).
+   *  - Eylemci kanalina (endpoints.actuator_type dolu) duz role komutu -> 409 ACTUATOR_USE_SAFETY_COMMAND [WP-S4 1].
+   *  - Guvenlik komutlari: caps 'safety' yoksa 409 FIRMWARE_UNSUPPORTED [O1]; gaz vanasina open -> 409 GAS_LOCAL_ONLY
+   *    [K-4]; vana open: mode normal, vananin bolgeleri normal, bolgedeki ayni akiskanli sensorler ok && !active
+   *    olmali, degilse 409 ZONE_ALARM_ACTIVE [Y-3]. Bolge testi yalniz normal bolgede.
+   *    (caps denetimi once yapilir: caps yoksa ozet de yoktur; tasarimdaki sira 4. maddeydi - uygulama notu.)
+   */
   async _assertCommandTarget(deviceId, validated) {
-    if (validated.kind !== KINDS.RELAY) return;
-    const res = await this.db.query(
-      'SELECT type FROM endpoints WHERE device_id = $1 AND channel_index = $2',
-      [deviceId, validated.command.relay]
-    );
-    if (res.rows.length > 0 && res.rows[0].type === 'shutter') {
-      throw httpError(400, 'Panjur kanalları röle komutuyla sürülemez; panjur komutu kullanın.', 'VALIDATION');
+    if (validated.kind === KINDS.RELAY) {
+      const res = await this.db.query(
+        'SELECT type, actuator_type FROM endpoints WHERE device_id = $1 AND channel_index = $2',
+        [deviceId, validated.command.relay]
+      );
+      const row = res.rows[0];
+      if (row && row.type === 'shutter') {
+        throw httpError(400, 'Panjur kanalları röle komutuyla sürülemez; panjur komutu kullanın.', 'VALIDATION');
+      }
+      if (row && row.actuator_type !== undefined && row.actuator_type !== null) {
+        throw httpError(409, 'Bu kanal bir güvenlik cihazına bağlı; lamba gibi açılamaz. Güvenlik komutunu kullanın.', 'ACTUATOR_USE_SAFETY_COMMAND');
+      }
+      return;
     }
+    if (!SAFETY_KINDS.includes(validated.kind)) return;
+
+    const res = await this.db.query('SELECT caps, safety_state FROM devices WHERE id = $1', [deviceId]);
+    const row = res.rows[0] || {};
+    const caps = Array.isArray(row.caps) ? row.caps : null;
+    if (!caps || !caps.includes('safety')) {
+      throw httpError(409, 'Bu pano yazılımı güvenlik modülünü desteklemiyor; pano yazılımını güncelleyin.', 'FIRMWARE_UNSUPPORTED');
+    }
+    const st = row.safety_state && typeof row.safety_state === 'object' ? row.safety_state : {};
+    const zones = Array.isArray(st.zones) ? st.zones : [];
+    const zoneNormal = (id) => {
+      const z = zones.find((x) => x && x.id === id);
+      return !z || z.st === 'normal'; // bildirilmeyen bolge: firmware karar verir
+    };
+
+    if (validated.kind === KINDS.ALARM_TEST) {
+      if (st.mode !== 'normal' || !zoneNormal(validated.command.zone)) {
+        throw httpError(409, 'Bölgede alarm ya da test sürüyor; test başlatılamadı.', 'ZONE_ALARM_ACTIVE');
+      }
+      return;
+    }
+    if (validated.kind !== KINDS.ACTUATOR) return;
+
+    const actuators = Array.isArray(st.actuators) ? st.actuators : [];
+    const act = actuators.find((a) => a && a.id === validated.command.actuator);
+    if (!act) throw httpError(404, 'Eylemci bulunamadı.', 'NOT_FOUND');
+    const to = validated.command.to;
+    const isValve = act.kind === 'valve';
+    if (isValve !== (to === 'open' || to === 'closed')) {
+      throw httpError(400, isValve ? 'Vana için hedef "open" ya da "closed" olmalı.' : 'Bu cihaz için hedef "on" ya da "off" olmalı.', 'VALIDATION');
+    }
+    if (isSafeTarget(to)) return; // kapatma / susturma her zaman serbest
+    if (isValve && act.medium === 'gas') {
+      throw httpError(409, 'Gaz vanası güvenlik gereği yalnız yerinde, panodaki düğmeyle açılır.', 'GAS_LOCAL_ONLY');
+    }
+    if (isValve) {
+      const actZones = Array.isArray(act.zones) ? act.zones : [];
+      const sensors = Array.isArray(st.sensors) ? st.sensors : [];
+      const wetOrUnknown = sensors.some(
+        (s) => s && actZones.includes(s.zone) && s.kind === act.medium && !(s.ok === true && s.active !== true)
+      );
+      if (st.mode !== 'normal' || !actZones.every(zoneNormal) || wetOrUnknown) {
+        throw httpError(409, 'Alarm sürerken vana açılamaz. Önce sensörün kuruduğundan emin olup alarmı onaylayın.', 'ZONE_ALARM_ACTIVE');
+      }
+    }
+  }
+
+  /**
+   * Guvenlik komutu yayini: onay bekleyicisi YAYINDAN ONCE kurulur ve YALNIZ hedef panonun (uid) yankisini kabul eder
+   * [Y5]. last_id -> applied:true; last_rej -> 409 DEVICE_REJECTED (reason = firmware kodu); zaman asimi -> applied:null.
+   */
+  async _sendSafetyCommand(device, validated) {
+    const commandId = validated.command.id || this._newCommandId();
+    const payload = { ...validated.command, id: commandId };
+    const bridge = this.bridge;
+    const canWait = typeof bridge.expectOutcome === 'function';
+    const waiter = canWait ? bridge.expectOutcome(device.topic_id, commandId, SAFETY_ACK_TIMEOUT_MS, { uid: validated.command.uid }) : null;
+    try {
+      await this._publishCommand(device.topic_id, payload);
+    } catch (err) {
+      if (canWait && typeof bridge.cancelAck === 'function') bridge.cancelAck(device.topic_id, commandId);
+      throw err;
+    }
+    const outcome = waiter ? await waiter : null;
+    if (outcome && outcome.rejected) {
+      const code = String(outcome.rejected);
+      throw httpError(409, REJECTION_TEXT[code] || 'Pano komutu reddetti.', 'DEVICE_REJECTED', { reason: code });
+    }
+    return {
+      delivered: true,
+      device_online: true,
+      command_id: commandId,
+      applied: outcome && outcome.ok === true ? true : null,
+    };
   }
 
   // ===========================================================================

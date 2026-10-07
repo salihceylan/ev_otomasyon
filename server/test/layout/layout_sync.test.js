@@ -87,6 +87,12 @@ test('disa aktarim: SQL metinleri plandakiyle BIREBIR (gercek PG testleri ve kop
       "AND ((channel_type = 'relay' AND channel = ANY($3::int[])) OR (channel_type = 'shutter' AND channel = ANY($4::int[]))) " +
       'RETURNING id',
     saveBase: 'UPDATE devices SET reported_layout = $2::jsonb, reported_layout_at = CURRENT_TIMESTAMP WHERE id = $1',
+    // WP-S2 [Y2]: yalniz bildirimde/tabanda eylemci (act) varsa calisir; v:2 yolunda HIC cagrilmaz
+    syncActuators:
+      'UPDATE endpoints e SET actuator_type = v.act, updated_at = CURRENT_TIMESTAMP ' +
+      'FROM unnest($2::int[], $3::varchar[]) AS v(channel, act) ' +
+      'WHERE e.device_id = $1 AND e.channel_index = v.channel AND e.actuator_type IS DISTINCT FROM v.act ' +
+      'RETURNING e.channel_index, e.actuator_type',
     audit:
       'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
       "VALUES ($1, $2, $3, NULL, 'device', NULL, $4::jsonb)",

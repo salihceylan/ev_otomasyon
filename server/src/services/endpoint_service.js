@@ -79,6 +79,10 @@ function presentEndpoint(row) {
     endpoint_type: row.type,
     shutter_position: row.current_position,
     online: row.device_online === true,
+    // Guvenlik/K4 (WP-S1/S2, migration 033): kolon sorgudan geldiyse eklenir (eski sorgu/sahte satirda anahtar yok)
+    ...(row.actuator_type !== undefined ? { actuator_type: row.actuator_type || null } : {}),
+    ...(row.dimmable !== undefined ? { dimmable: row.dimmable === true } : {}),
+    ...(row.dimmer_source !== undefined ? { dimmer_source: row.dimmer_source || null } : {}),
   };
 }
 
@@ -103,6 +107,7 @@ class EndpointService {
     const res = await this.db.query(
       `SELECT e.id, e.home_id, e.device_id, e.channel_index, e.name, e.type, e.room, e.shutter_pair_index,
               e.shutter_duration_sec, e.current_state, e.current_position, e.created_at, e.updated_at,
+              e.actuator_type, e.dimmable, e.dimmer_source,
               d.device_uuid, COALESCE(d.is_online, FALSE) AS device_online
          FROM endpoints e
          LEFT JOIN devices d ON d.id = e.device_id
@@ -247,6 +252,7 @@ class EndpointService {
       const out = await tx.query(
         `SELECT e.id, e.home_id, e.device_id, e.channel_index, e.name, e.type, e.room, e.shutter_pair_index,
                 e.shutter_duration_sec, e.current_state, e.current_position, e.created_at, e.updated_at,
+              e.actuator_type, e.dimmable, e.dimmer_source,
                 d.device_uuid, COALESCE(d.is_online, FALSE) AS device_online
            FROM endpoints e
            LEFT JOIN devices d ON d.id = e.device_id

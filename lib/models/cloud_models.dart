@@ -345,6 +345,9 @@ class EndpointModel {
     this.shutterPosition = 0,
     this.shutterDurationSec = 20,
     this.deviceOnline,
+    this.actuatorType,
+    this.dimmable,
+    this.dimmerSource,
   });
 
   final String id;
@@ -376,6 +379,17 @@ class EndpointModel {
 
   /// Cihazın çevrimiçi bilgisi (`device_online`); bilinmiyorsa `null`.
   final bool? deviceOnline;
+
+  /// Güvenlik eylemcisi türü (`actuator_type`, 033; K1): `valve|siren|fan|generic`; `null` = eylemci değil. Panonun
+  /// `state` röle satırındaki `act` alanından sunucu yerleşim eşitlemesiyle gelir [Y2]. [endpointType] DEĞİŞMEZ
+  /// (eylemci rölesi `light`/`impulse` olarak kalır); eylemci lamba sayılmaz [Y3].
+  final String? actuatorType;
+
+  /// K4: kanal parlaklık ayarlı mı (`dimmable`) ve dimmer kaynağı (`dimmer_source`: `modbus|bridge`). Eski sunucuda `null`.
+  final bool? dimmable;
+  final String? dimmerSource;
+
+  bool get isActuator => actuatorType != null;
 
   bool get isLight => endpointType == 'light';
   bool get isShutter => endpointType == 'shutter';
@@ -419,6 +433,9 @@ class EndpointModel {
       shutterPosition: clampInt(position ?? 0, 0, 100),
       shutterDurationSec: clampInt(duration ?? 20, 1, 300),
       deviceOnline: asBool(json['device_online'] ?? json['online']),
+      actuatorType: asNonEmptyString(json['actuator_type'])?.toLowerCase(),
+      dimmable: asBool(json['dimmable']),
+      dimmerSource: asNonEmptyString(json['dimmer_source'])?.toLowerCase(),
     );
   }
 
@@ -444,6 +461,9 @@ class EndpointModel {
       shutterPosition: shutterPosition ?? this.shutterPosition,
       shutterDurationSec: shutterDurationSec ?? this.shutterDurationSec,
       deviceOnline: deviceOnline ?? this.deviceOnline,
+      actuatorType: actuatorType,
+      dimmable: dimmable,
+      dimmerSource: dimmerSource,
     );
   }
 
@@ -461,6 +481,9 @@ class EndpointModel {
         'current_position': shutterPosition,
         'shutter_duration_sec': shutterDurationSec,
         if (deviceOnline != null) 'device_online': deviceOnline,
+        'actuator_type': ?actuatorType,
+        'dimmable': ?dimmable,
+        'dimmer_source': ?dimmerSource,
       };
 }
 

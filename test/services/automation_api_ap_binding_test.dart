@@ -95,6 +95,12 @@ void main() {
     route('POST', '/api/mqtt/config', (_) => jsonResponse(<String, dynamic>{'status': 'ok'}));
     route('GET', '/api/child-lock', (_) => jsonResponse(<String, dynamic>{'child_lock': false}));
     route('POST', '/api/child-lock', (_) => jsonResponse(<String, dynamic>{'status': 'queued'}));
+    route('POST', '/api/actuator', (_) => jsonResponse(<String, dynamic>{'ok': true}));
+    route('POST', '/api/alarm/ack', (_) => jsonResponse(<String, dynamic>{'ok': true}));
+    route('POST', '/api/alarm/test', (_) => jsonResponse(<String, dynamic>{'ok': true}));
+    route('GET', '/api/events', (_) => jsonResponse(<String, dynamic>{'events': <dynamic>[]}));
+    route('GET', '/api/safety/config', (_) => jsonResponse(<String, dynamic>{'rev': 1}));
+    route('POST', '/api/safety/config', (_) => jsonResponse(<String, dynamic>{'ok': true, 'rev': 2}));
   }
 
   /// `GET /api/wifi/status` yanıtlarını sırayla verir (son yanıt tekrarlanır).
@@ -186,6 +192,12 @@ void main() {
     ),
     'fetchChildLock': ((a) => a.fetchChildLock(), 'GET /api/child-lock'),
     'setChildLock': ((a) => a.setChildLock(true), 'POST /api/child-lock'),
+    'postActuator': ((a) => a.postActuator('a1', 'closed', id: 'c1'), 'POST /api/actuator'),
+    'ackAlarm': ((a) => a.ackAlarm(1, aid: '9f3a11c0-3', id: 'c2'), 'POST /api/alarm/ack'),
+    'testAlarm': ((a) => a.testAlarm(1, id: 'c3'), 'POST /api/alarm/test'),
+    'fetchEvents': ((a) => a.fetchEvents(), 'GET /api/events'),
+    'fetchSafetyConfig': ((a) => a.fetchSafetyConfig(), 'GET /api/safety/config'),
+    'saveSafetyConfig': ((a) => a.saveSafetyConfig(<String, dynamic>{'base_rev': 1}), 'POST /api/safety/config'),
   };
 
   group('her AP çağrısında kira ÖNCE alınır, SONRA istek, EN SON bırakılır', () {

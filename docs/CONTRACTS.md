@@ -143,12 +143,19 @@ Rol kaynakları: global `users.role` ∈ {`user`,`service_user`,`super_user`}; e
 | Envanter oluştur/sil/durum | ✔ | ✖ | ✖ | ✖ | ✖ | ✖ |
 | Envanter listele | ✔ | ✔ (yalnız kendi stoku) | ✖ | ✖ | ✖ | ✖ |
 | Yönetici hesapları (admin panel) | ✔ | ✖ | ✖ | ✖ | ✖ | ✖ |
+| Güvenlik: vanayı kapat / sireni-fanı sustur (`actuator_close`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |
+| Güvenlik: alarmı onayla / sustur (`safety_ack`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✖ |
+| Güvenlik: su vanasını aç, siren/fan/diğer aç (`actuator_control`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✖ |
+| Güvenlik: **gaz vanasını aç** | ✖ | ✖ | ✖ | ✖ | ✖ | ✖ |
+| Güvenlik: bölge testi (`safety_test`), güvenlik yapılandırması (`safety_config`) | ✔ | ✔ | ✔ | ✔ | ✖ | ✖ |
 
 \* staff = `home_users` kaydı olan kalıcı servis personeli (yalnız o evler). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
 \*\*\* Gerekçe ≥ 15 karakter + cihaz UUID'sinin yazarak teyidi + denetim kaydı (IP dahil). Servis personeli kendisini yeni sahip yapamaz.
 Staff'in ev üyeliği claim/devirde 72 saatliğine verilir; istemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
 
 Misafir (`guest`) için her istekte `valid_from <= now <= valid_until` doğrulanır; dışındaysa `403 GUEST_EXPIRED`.
+
+Güvenlik satırları (WP-S4, tasarım `docs/superpowers/specs/2026-10-06-guvenlik-iklim-senaryo-mimarisi-design.md` §5.2.4, kararlar §7.2b-4/8): yetenek eylemcide **yöne** göre seçilir (`to` = `closed`/`off` → `actuator_close`; `open`/`on` → `actuator_control`; `server/src/utils/command_schema.js` `capabilityForCommand`). Misafir vanayı her durumda **kapatabilir**, açamaz, alarmı onaylayamaz ve **güvenlik push'u almaz**. Gaz vanası buluttan hiçbir rolle açılmaz (`409 GAS_LOCAL_ONLY`; yalnız yerinde `GAS_RESET` düğmesi ya da elle kurmalı vana).
 
 ### 1.5 Uçlar (bu sürümde sabitlenen / yeni olanlar)
 
@@ -253,6 +260,36 @@ Hepsi `/api/v1/...` altındadır (eski `/api/...` takma adı da vardır); başar
   `{device, setup_pin, local_key, qr_claim_url (PIN'li), message}` — gizli değerler **yalnız bu yanıtta** (`no-store`). Sahipsiz cihaz kaydındaki bekleyen yerel anahtar (`devices.local_key_pending_enc`, §1.5b) temizlenir (migration `032` tetikleyicisi `trg_devices_pending_key_superseded`): yeni etiket anahtarı esastır. Hatalar: `400 VALIDATION` (geçersiz UID), `403`, `404 NOT_FOUND`, `409 CONFLICT` (IN_STOCK değil / daireye bağlı), `429 RATE_LIMITED` (kullanıcı başına 20/saat), `503 SERVICE_UNAVAILABLE` (`LOCAL_KEY_SECRET` yok; anahtar üretilemez).
 - **`POST /homes/join-preview`** gövde `{code}` — davet/devir kodunu **TÜKETMEDEN** önizler (giriş yapmış kullanıcı; servis PIN oturumu hariç). Yanıt `data`: `{kind:"invitation"|"transfer", is_transfer, home_name, resident_count, role, expires_at, already_member?, guest_valid_from?, guest_valid_until?}`.
   Bulunamayan/kullanılmış/süresi dolmuş kod AYNI yanıttır: `410 GONE` (numaralandırma ayrımı yok; istemci 404/405'i "uç yok" sayar); devir kodu yalnız HEDEF hesaba önizlenir (`403`), hedef kimlik hiçbir yanıtta dönmez; `400 VALIDATION` (biçim), kendi dairenizi kendinize devir `400`. Hız sınırı: IP başına 30/15 dk, kullanıcı başına 10/15 dk.
+
+### 1.5d Güvenlik uçları ve komutları (WP-S4, 2026-10-06; kod + gerçek PostgreSQL ile doğrulandı)
+
+Tasarım: `docs/superpowers/specs/2026-10-06-guvenlik-iklim-senaryo-mimarisi-design.md` §3.3, §5.2. Migration `033`. Hepsi `/api/v1/homes/...` (ve eski `/api/homes/...`) altındadır; `homeId` yalnız üyelikten okunur (`requireHomeAccess`). Komutlar `POST /devices/:id/command` ile AYNI hattan geçer (şema → rol → hedef denetimi → çevrimdışı `409` → yayın).
+
+| Uç | Yetki | Gövde / yanıt |
+|---|---|---|
+| `GET /homes/:homeId/alarms?state=open\|all&before=<id>&limit=<1..200>` | `view` (tüm roller) | `data: {items:[{id, device_id, device_uuid, aid, zone, kind, status: latched\|fault\|silenced\|cleared\|lost, origin: event\|state, sources[], raised_at, device_epoch, acked_at, ack_requested, cleared_at, cleared_by: device_event\|device_state\|superseded\|lost}], next_before}`; `superseded` = aynı bölgede yeni tehlike türüyle YENİ alarm açıldı (eski satır kapanır); yeniden eskiye, mezar taşı satırları (`origin='tomb'`) listelenmez; `no-store`. |
+| `POST /homes/:homeId/alarms/:alarmId/ack` | `safety_ack` | Gövde `{id?}` (istemci komut kimliği; aşağıda). Panoya `{cmd:"alarm_ack", zone, aid, uid, id}` gider; `zone`/`aid` **alarm satırından**, `uid` cihazdan. Yanıt `{delivered, device_online, command_id, applied: true\|null, alarm_id}`. Kapalı alarm `409 ALARM_NOT_OPEN`. **Pano çevrimdışı:** onay isteği kaydedilir (`alarms.ack_requested_*`) ve `409 DEVICE_OFFLINE` + `ack_queued:true`; pano dönünce köprü onayı YALNIZ state'teki bölge `aid`'si aynıysa gönderir, farklıysa (kullanıcının görmediği yeni alarm) istek düşer. |
+| `POST /homes/:homeId/devices/:deviceId/actuators/:actuatorId` gövde `{to, id?}` (eski `{state}` metni de kabul; uygulama `to` gönderir) | rota: tüm roller; servis: yöne göre `actuator_close`/`actuator_control` | `to`: vana `open\|closed`, siren/fan/diğer `on\|off`. `:deviceId` cihaz kaydı UUID'si ya da `device_uuid`. Panoya `{actuator:"a1", to, uid, id}`. |
+| `POST /homes/:homeId/devices/:deviceId/alarm-test` gövde `{zone, id?}` | `safety_test` | Panoya `{cmd:"alarm_test", zone, uid, id}`. |
+| `GET /homes/:homeId/devices/:deviceId/safety-config` | `view` (tüm roller) | Panonun yapılandırma kopyası (`cfg_dump`'tan; sensör/eylemci/bölge **adları** yalnız burada): `data: {device_uuid, rev, crc, updated_at, policy, zones:[{id,name}], lights, sensors:[{id,kind,zone,active_open,flags,confirm_ms,name}], actuators:[{id,relay,relay2?,kind,close_mode,medium,zones,fb_di,fb_closed_active,fb_timeout_s,run_limit_s,exproof,name}]}` = panonun `GET /api/safety/config` biçimi (§2.6). Kopya henüz yoksa `404 CONFIG_NOT_AVAILABLE`. `no-store`. Uygulama `state.cfg.safety.rev/crc` değişince okur. |
+
+**İstemci komut kimliği:** üç güvenlik ucunda gövdedeki isteğe bağlı `id` (≤ 24, `[A-Za-z0-9_.:-]`; geçersizse `400`) panoya **aynen** gider ve `state.last_id` / `last_rej.id`'de geri yankılanır; uygulama reddi kendi komutuyla anında eşler. Verilmezse sunucu üretir.
+
+**Liste sayfalama:** `before` bir önceki sayfanın `next_before`'udur (alarm kimliği, tarih DEĞİL). Uygulama `data.items`'ı okur.
+
+**Komut şeması** (`command_schema.js`): yeni türler `actuator`, `alarm_ack`, `alarm_test`; üçünde de `uid` **zorunlu** (yoksa `400`), sunucuda büyük harfe çevrilir ve hedef cihazın `device_uuid`'siyle eşleşmelidir (`400`). `actuator` = `a1`…`a16`, `zone` 1..4, `aid` = `<bn 8 hex>-<n ≤ 5 hane>`. Durum anahtarı `to`'dur (`state` boolean yalnız röle içindir). `event_ack`, `cfg_get`/`cfg_patch` uygulamadan **gönderilemez** (yalnız backend üretir). Düz `relay` komutunda `uid` isteğe bağlıdır: sunucu güvenlik destekli panoya (`caps` `safety` içeriyor, firmware 1.2+) hedef `uid`'yi **ekler**; v:2 panoya eklemez (bilinmeyen alanı reddeder). Firmware 1.2+ eylemci rölesine gelen **`uid`'siz** düz röle komutunu **sessizce yok sayar** (ev konusu bütün panolara gider; başka panonun aynı numaralı lambası için gönderilen komut çalan sireni susturmasın — inceleme RV-2). Eylemci olmayan rölede `uid`'siz komut v:2 gibi uygulanır.
+
+**Hedef denetimi** (`device_service._assertCommandTarget`; savunma katmanı, asıl yetki firmware'dedir):
+1. `endpoints.actuator_type` dolu kanala düz `relay` komutu (toggle dahil) → `409 ACTUATOR_USE_SAFETY_COMMAND`. Panjur kanalına röle komutu → `400` (aynen).
+2. `devices.caps` içinde `safety` yoksa → `409 FIRMWARE_UNSUPPORTED` (kapatma dahil: eski firmware komutu tanımaz). Bu denetim önce yapılır.
+3. Gaz vanasına (`safety_state.actuators[].medium = "gas"`) `open` → `409 GAS_LOCAL_ONLY` (her rol).
+4. Vana `open`: `safety_state.mode = "normal"`, vananın bütün bölgeleri `normal` ve o bölgelerdeki aynı akışkanlı sensörler `ok && !active` değilse → `409 ZONE_ALARM_ACTIVE`. Kapatma/susturma her zaman serbest. Bilinmeyen eylemci `404`; vana/anahtar hedef uyumsuzluğu `400`. Bölge testi alarm/test sürerken `409 ZONE_ALARM_ACTIVE`.
+
+**Uygulamanın ret eşlemesi:** `409 DEVICE_REJECTED` -> `reason` (firmware kodu) Türkçe ret metnine çevrilir ve komut hatasının kodu olur; `409 DEVICE_OFFLINE` + `ack_queued:true` -> "onay pano bağlanınca iletilecek"; `409 ALARM_NOT_OPEN` -> "alarm zaten kapanmış".
+
+**Onay:** güvenlik komutunda sunucu yayından önce bekleyici kurar ve en çok 10 sn **yalnız hedef panonun `uid`'siyle gelen** canlı state'i dinler (köprü `expectOutcome`): `last_id` = komut kimliği → `applied:true`; `last_rej.id` = komut kimliği → `409 DEVICE_REJECTED` + `reason:<firmware kodu>` (`zone_latched`, `gas_local_only`, `stale_ack`, `safe_mode`, `actuator_relay`, `busy` …; mesaj Türkçe ret metnidir); süre dolarsa `applied:null` (komut iletildi, sonuç state'te görünür). Aynı evdeki başka panonun aynı kimlikli yankısı sayılmaz. Vana açma **asla** kuyruğa alınmaz (çevrimdışı → `409 DEVICE_OFFLINE`).
+
+**Sunucu tarafı süzgeçler** (`actuator_type` dolu kanal; kolon NULL iken davranış birebir eskisi gibi): gece huzur özeti ve "Hepsini kapat" onu lamba saymaz (`peace_snapshot`); çok panolu evde o kanal numarası çakışma sayılır (`relay:N` başka panonun vanasını sürmez); zamanlı kural o kanalda çalışmaz (`scheduler` `skipped_invalid`) ve yeni kural oluşturulamaz (`400`); yerleşim eşitlemesi kanal eylemciye dönünce bağlı röle kurallarını kapatır. Uç nokta listesi (`GET /homes/:home_id/endpoints`) her satırda `actuator_type` (`valve`|`siren`|`fan`|`generic`|`null`), `dimmable` ve `dimmer_source` döner; `type` eylemci kanalında da `light`/`impulse` kalır.
 
 ## 2. MQTT sözleşmesi
 
@@ -364,6 +401,139 @@ global `fetch` ile yapılır (yeni bağımlılık yok). Her **belirteç için ay
 hatası sayılır ve belirteçlere **dokunulmaz** (operatör düzeltince sonraki denemede gider); 401/403/429/5xx/ağ hataları geçicidir (yeniden denenir).
 **İstemci kuralları:** `data` güvenilmeyen girdidir (sıkı doğrulama; geçersizse yok sayılır); aynı `notice_id` 10 dk içinde tek afiş üretir; uygulama ön plandayken sistem bildirimi gösterilmez,
 uygulama kendi afişini çıkarır; "Hepsini kapat" mevcut `POST …/close-all` ucunu `notice_id` ile çağırır (bildirimin kendisi komut taşımaz).
+
+**Güvenlik push'u (WP-S3, tasarım §5.2.3; kararlar §7.2b-3/4).** `push_service.sendNotice({kind})`; `kind` verilmezse yukarıdaki gece hatırlatması mesajı **aynen** üretilir.
+
+| | `safety_alarm` (alarm açıldı / vana arızası) | `safety_info` (alarm doğrulanamadı / politika değişti) |
+|---|---|---|
+| Alıcı | `owner` + `resident` (misafir ve servis rolleri **asla**) | yalnız `owner` |
+| `data` (hepsi metin) | `{type:"safety_alarm", v:"1", home_id, device_id, alarm_id, zone, kind, status}` (`status`: `latched`\|`fault`) | `{type:"safety_info", v:"1", home_id, device_id, alarm_id, reason}` (`reason`: `alarm_lost`\|`policy_off`\|`policy_on`) |
+| Android | `priority=HIGH`, `ttl=21600s`, `channel_id=safety_alarm` (**uygulama yüksek önemli bu kanalı oluşturmalı**), `collapse_key=tag=alarm_<home>_<device>_<zone>` | `priority=HIGH`, `ttl=86400s`, `channel_id=safety_info`, `collapse_key=safety_info_<home>` |
+| iOS | `apns-priority=10`, `aps.interruption-level=time-sensitive` (kritik uyarı izni **yok**), `aps.category=SAFETY_ALARM`, `sound=default` | `apns-priority=5`, `interruption-level=active`, `aps.category=SAFETY_INFO` |
+
+Tek gönderim: `alarms.push_status` `pending → claimed → sending → sent|failed|skipped` (yalnız `pending` satır alınır: en çok bir push); `valve_fault` ikinci push'u `fault_push_status` ile aynı döngüden geçer. Push yapılandırılmamışsa ya da alıcı yoksa `skipped` yazılır, alarm kaydı yine açılır. **Yeniden deneme:** gönderim hiçbir belirtece ulaşmazsa (`sent = 0` ya da istisna) 5 sn sonra alıcılar yeniden okunup **bir kez** daha denenir; ikinci deneme de başarısızsa `failed` (`alarm_service.pushRetryDelayMs`, sayaç `pushRetries`).
+
+**Olay günlüğü saklama:** `device_events` (ham olay + `(device_id, eid)` tekilleştirme) 90 gün tutulur; zamanlayıcının günlük temizliği (`scheduler.js` `SQL.eventRetention`, `received_at` indeksi) siler. `alarms` satırları silinmez. eid açılış nonce'u taşıdığından eski satırın silinmesi yinelenen olayı yeniden işletmez.
+### 2.6 Güvenlik katmanı: `state` v:3, yeni komutlar ve `ev/{t}/event` (firmware v1.2.0, WP-F0..F5, 2026-10-07)
+
+> **Durum: firmware'de UYGULANDI (v1.2.0; donanımda doğrulanmadı).** Sunucu (WP-S1..S4) ve uygulama (WP-A1..A4) bu sözleşmeye uyar.
+> Gerçekleşen ayrıntılar bu bölümün sonundaki "Gerçekleşen ayrıntılar (v1.2.0)" alt başlığındadır. Kaynak: `docs/superpowers/specs/2026-10-06-guvenlik-iklim-senaryo-mimarisi-design.md` §3 (revizyon 2 + karar 7.2b) ve
+> aynı belgenin "Uygulama notları (EKIP FW)" bölümü. Çelişkide **kod** esastır: `src/sensors/*`, `src/actuators/*`, `src/safety/*`, `src/events/EventOutbox.h`.
+
+**Sürüm kuralları.**
+- `v:3`, `v:2`'nin **katı üst kümesidir**: §2.4'teki her alan aynı ad, tür ve anlamla kalır. Tüketiciler `v === 2` değil `v >= 2` denetler.
+- Yapılandırılmamış panoda (sensör/eylemci tablosu boş: bugünkü saha ve fabrika varsayılanı) ek olarak yalnız `caps`, `boot`, `bn`, `time_ok`, `epoch` yazılır.
+  `sensors`, `actuators`, `safety` anahtarları yalnız en az bir sensör ya da eylemci varsa yazılır. Bilinmeyen alan yok sayılır.
+- Eylemci rölesinin `type`'ı bugünkü RelayType adıyla kalır (`light`/`impulse`); yalnız `act` eklenir (`valve|siren|fan|generic`). Eski istemci yerleşimi bozulmadan okur;
+  eylemci rölesine açma yönündeki düz `relay` komutu firmware'de `actuator_relay` ile reddedilir (kapatma yönü serbest). MQTT'de eylemci rölesine gelen `uid`'siz düz komut yok sayılır (yukarıda `cmd` ekleri).
+
+**`state` ekleri** (adlar state'te YOK; `cfg_dump` / `GET /api/safety/config` ile gelir):
+
+| Alan | Tür | Anlam |
+|---|---|---|
+| `caps` | dizge dizisi (≤ 8 × ≤ 12) | yetenekler, ör. `["safety","actuator","event","cfg"]`; yoksa pano güvenlik desteklemiyor sayılır |
+| `boot` / `bn` | u32 / 8 hex | açılış sayacı (`ahbu_latch`, fabrika sıfırlamasında silinmez) / açılış nonce'u (eid öneki) |
+| `time_ok`, `epoch` | bool, u32 | saat güvenilir mi; `false` ise `since` yazılmaz |
+| `cfg.safety` | `{rev:u32, crc:"8hex"}` | yapılandırma sürümü + CRC32 (pol + bölgeler + dolu sensör/eylemci yuvaları + ışık seçenekleri; `rev` CRC'ye girmez) |
+| `last_rej` | `{id ≤ 24, code ≤ 24}` | son reddedilen komut; kodlar: `zone_latched`, `zone_test`, `actuator_relay`, `unknown_actuator`, `bad_state`, `unsupported`, `cfg_conflict`, `cfg_invalid`, `gas_local_only`, `stale_ack`, `safe_mode`, `bad_cmd`, `busy` |
+| `relays[].act` | dizge | yalnız eylemci rölelerinde |
+| `sensors[]` | `{id:"d<1..40>"\|"b<1..16>", src:"di"\|"bridge", kind, zone, active, ok}` | ≤ 56; `ok=false` iken `active` anlamsızdır. `kind` ∈ `water, gas, smoke, door, window, motion, generic` **ya da yerel kumanda rolü** `alarm_ack, valve_close, gas_reset` (bu satırlarda `active` = ham basılı seviye; tehlike sensörü DEĞİL, vana açma iznine girmez) |
+| `actuators[]` | `{id:"a<1..16>", relay, relay2?, kind, medium?, zones[], pos?\|on?, fb?, fault}` | ≤ 16; `pos` ∈ `closed, closing, open, opening, cmd_closed, cmd_open, unknown`; `medium` (`water\|gas`) yalnız vanada; `fb` yalnız vanada: `true` = geri bildirim KAPALI, `false` = açık, `null` = geri bildirim yok / henüz okunmadı; siren/fan/generic `on` taşır |
+| `safety` | `{policy:"on"\|"off", mode:"normal"\|"safe", reason?, zones:[{id, st, kind?, aid?, since?, since_up, silenced, srcs[]}]}` | **`zones[]` yalnız NORMAL OLMAYAN bölgeleri listeler; listede olmayan bölge `normal`dır** (tüketiciler yokluğu normal saymalı; sunucu `zoneNormal`, uygulama `SafetyState.zoneStatus`). Yokluk ancak liste **tam** ise kanıttır: `zones` dizi değilse ya da bir öğe düşürüldüyse (bilinmeyen `st`, geçersiz öğe, sınır aşımı) sunucu özete `zones_complete:false` yazar ve listede olmayan bölgenin alarm satırına dokunmaz (inceleme turu 2). `st` ∈ `latched, fault, test`; `aid` ≤ 14 karakter; `mode:"safe"` iken `reason` ∈ `cfg_corrupt, latch_orphan, crash_loop` |
+
+**`cmd` ekleri.** Yeni komutların HEPSİNDE `uid` zorunludur (`cmd` ev konusuna gider, evdeki bütün panolar alır); yoksa `bad_cmd`, eşleşmezse komut **sessizce** yok sayılır.
+Eylemci komutu `state` (boolean) yerine `to` kullanır:
+```json
+{ "actuator": "a1", "to": "closed", "uid": "AHBU-S3-…", "id": "c81f" }        // vana: closed | open
+{ "actuator": "a2", "to": "on", "uid": "AHBU-S3-…" }                          // siren/fan/generic: on | off
+{ "cmd": "alarm_ack", "zone": 1, "aid": "9f3a11c0-3", "uid": "AHBU-S3-…" }   // aid bayatsa stale_ack, hiçbir şey susturulmaz
+{ "cmd": "alarm_test", "zone": 1, "uid": "AHBU-S3-…" }
+{ "cmd": "event_ack", "eids": ["9f3a11c0-3"], "uid": "AHBU-S3-…" }          // YALNIZ backend; ≤ 8 eid
+```
+- Vana `open` yalnız şu durumda kabul edilir: güvenli kip yok; vananın bütün bölgeleri `normal`; o bölgelerde vananın akışkanına uyan bütün sensörler `ok` ve boşta. Aksi `zone_latched` / `zone_test` / `safe_mode`.
+  **Gaz vanası** hiçbir uzak yoldan açılmaz (`gas_local_only`); yalnız panodaki `GAS_RESET` DI'sinden. `closed`/`off` her zaman ve her yoldan serbesttir.
+- `safety_arm`, `climate_target`, `scene_run`: ilgili modüle kadar `unsupported`.
+- sys konusu aynı `cmd` anahtarını kullanır: `{"cmd":"cfg_get"|"cfg_patch","module":"safety","uid":…}`; sys yük sınırı 1024 bayt (diğer konular 512).
+
+**`ev/{t}/event` konusu** (cihaz → backend; `retain=false`, QoS 0 + uygulama düzeyinde onay):
+```json
+{ "v":1, "uid":"AHBU-S3-…", "eid":"9f3a11c0-3", "bn":"9f3a11c0", "boot":57, "n":3, "type":"alarm_raised", "zone":1, "kind":"water",
+  "srcs":["d3"], "at":1791273000, "at_up":3000, "actions":[{"a":"a1","do":"close"},{"a":"a2","do":"on"}] }
+```
+- Alan sırası ve biçimi `EventOutbox::toJson` ile sabittir: `v, uid, eid, bn, boot, n, type, zone?, kind?, aid?, srcs?, <türe özel>, at?, at_up, actions?`. `kind` çoklu türde öncelikle `gas > smoke > water`.
+- **Alarm kimliği (`aid`):** `alarm_raised`'da alarm kimliği olayın kendi `eid`'sidir (`aid` alanı yazılmaz). Kilitli bölgeye YENİ tehlike türü eklenirse (ör. su alarmı sürerken gaz) firmware yeni bir `alarm_raised` üretir: bölgenin alarm kimliği bu olayın `eid`'si olur, `kind` bölgenin bütün türlerinin öncelikli olanıdır (gaz > duman > su), susturma/onay sıfırlanır; eski `aid` ile onay `stale_ack` alır, sunucu eski satırı `cleared_by=superseded` ile kapatır (inceleme E2E-2); `valve_fault`, `valve_fault_cleared`, `alarm_silenced`, `alarm_cleared` olayları bölgenin güncel alarm kimliğini `aid` ile taşır (sunucu alarm satırını bununla bulur; yoksa bölgenin açık alarmı). Test bölgesi ve bölgesiz olaylarda yoktur.
+- Türe özel alanlar: `test_result` → `zone`, `ok`, `fb_ms` (**yalnız** geri bildirimli vanada ölçüldüyse; yoksa alan yok = "gözle doğrulayın");
+  `safe_mode` → `reason` (`cfg_corrupt|latch_orphan|crash_loop`); `policy_changed` → `policy`, `via` (`cli|lan|cloud|local_web`); `cfg_conflict` → `rev`, `crc`; `nvs_fail` → `key`.
+- Türler: `alarm_raised`, `valve_fault`, `valve_fault_cleared`, `alarm_silenced`, `alarm_cleared`, `test_result`, `sensor_fault`, `sensor_fault_cleared`,
+  `actuator_fault`, `safe_mode`, `nvs_fail`, `policy_changed`, `actuator_changed`, `cfg_conflict`. `cfg_dump` olay DEĞİLDİR (outbox dışı, onaysız, parçalı ≤ 3,5 KB).
+- `eid = <bn>-<n>`; `n` açılış başına 1'den, 99999'dan sonra 1. Backend `(device_id, eid)` ile tekilleştirir ve her alışta (yineleme dahil) `event_ack` gönderir.
+- Yeniden deneme: 5, 10, 20, 40 sn, sonra 60 sn'de bir; aboneliğin ilk 1500 ms'inde yayın yok. Tampon 16 olay (RAM; yeniden başlatmada kaybolur → kilit state'te `safety.zones[].aid` ile görünür, backend state'ten uzlaştırır).
+- Taşma: önce en eski `actuator_changed`, sonra en eski `*_cleared`, sonra alarm dışı en eski; yalnız alarm kaldıysa en eski alarmın üstüne yazılır.
+- **Boyut (ölçülen):** en kötü durum (8 kaynak, 16 eylem, 20 karakter `uid`) **641 bayt** (spec'teki "≤ 400 B" tahmini tutmadı); köprü sınırı 4 KB'nin altında. Firmware arabelleği 768 B.
+- **ACL:** cihaz `ev/{t}/event`'e yayın yapar (migration 033); uygulama kimlikleri abone OLMAZ.
+
+**Yerel HTTP (LAN; aynı gövde, `uid` isteğe bağlı):** `POST /api/actuator`, `POST /api/alarm/ack`, `POST /api/alarm/test`,
+`GET /api/events?after=<eid>`, `GET|POST /api/safety/config`; yanıt `{ok, id, rej?}`. **Karar 7.2b-7:** yerel anahtarla politika KAPATILAMAZ ve eylemci SİLİNEMEZ (yalnız ekleme/sıkılaştırma);
+gevşetme yalnız seri CLI ya da bulutta owner/servis rolüyle. **Karar 7.2b-10:** güvenli kipten çıkış (`force` onayı) yalnız fiziksel erişimle: seri CLI `SAFETY ACK FORCE` ya da `ALARM_ACK` DI'si 5 sn basılı; LAN ve buluttan gelen `force` `safe_mode` ile reddedilir. Kilit varken `/api/system/reboot`, `/api/system/reset` `409 zone_latched` (`force=1` ile geçilir).
+
+**Pano davranışı (özet; ayrıntı spec §5.1):** ıslak (onaylı) → bölge `latched`, akışkana uyan vanalar kapanır (duman vana kapatmaz), siren + kart buzzer'ı; ACK ıslakken yalnız susturur;
+ACK + `dry_hold` (vars. 10 sn) kesintisiz kuruluk → `normal`, **vana kapalı kalır**. Kilit NVS `ahbu_latch`'te güvenli röle maskeleriyle tutulur; fabrika sıfırlaması bu ad alanını SİLMEZ;
+yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesini uygular. Bütün kararlar panoda, buluttan bağımsız verilir (K5).
+
+**Gerçekleşen ayrıntılar (v1.2.0).** Çelişkide kod esastır (`src/MqttManager.cpp`, `src/WebPortal.cpp`, `src/safety/*`).
+- **`uid`.** Düz v:2 komutlarında (`relay`, `shutter`, `cmd:toggle` ...) `uid` isteğe bağlıdır; verilir ve panonunkiyle eşleşmezse komut
+  sessizce yok sayılır. Ayrıştırılamayan komut, `id`'si geçerliyse ve `uid` yoksa ya da eşleşiyorsa `last_rej = bad_cmd` yazar; kuyruk
+  doluysa `busy`. Komut bayrak maskesi 17 alan nedeniyle `uint32_t`'dir.
+- **Eylemci `to` ve tür.** `closed`/`open` yalnız vanaya, `on`/`off` yalnız siren/fan/generic'e; uyuşmazsa `bad_state`. Olmayan eylemci
+  `unknown_actuator`. Güvenli kipte (yapılandırma bozuk/silinmiş) eylemci tablosu kullanılmadığından `a<n>` komutları `unknown_actuator`,
+  kilit maskesindeki röleye açma yönündeki düz `relay` komutu `actuator_relay` alır.
+- **`cfg_get` -> `cfg_dump`** (`ev/{t}/event`, retain yok, onaysız): `{"v":1,"uid","type":"cfg_dump","module":"safety","rev","crc",
+  "part":k,"parts":n, ["policy":{"on","dry_hold_ms"},"zones":[{"id","name"}],"lights":[{"relay","dimmable","src","addr","ch"}]],
+  "sensors":[...],"actuators":[...]}`; politika/bölge/ışık yalnız 1. parçada, her parça ≤ 3500 bayt; `body` sarmalayıcısı YOKTUR
+  (öğe dizileri köktedir; `sensors`/`actuators` her parçada bulunur, boş olabilir). Sunucu parçaları `(device, module, rev, crc)` ile
+  toplar, TEK belgeye birleştirir (`mergeCfgDumpParts`: baş parçadan politika/bölge/ışık, sırayla sensör ve eylemciler) ve
+  `device_configs.body`'ye yazar; uygulamaya `GET …/devices/:id/safety-config` (§1.5d) ile verir. Sensör öğesi
+  `{"id":"d3","kind","zone","active_open":0|1,"flags","confirm_ms","name"}`; eylemci öğesi `{"id":"a1","relay",["relay2"],"kind",
+  "close_mode":"energize"|"deenergize"|"pulse","medium":"water"|"gas"|"none","zones":[...],"fb_di","fb_closed_active","fb_timeout_s",
+  "run_limit_s","exproof","name"}`. Sensör kind'ları ayrıca `alarm_ack`, `valve_close`, `gas_reset` (yerel kumanda rolleri) olabilir.
+- **`cfg_patch` / `POST /api/safety/config` gövdesi** (tek öğe): `{"base_rev"?:N, "set":{"sensor"|"actuator"|"policy"|"zone"|"light":{...}}}`
+  ya da `{"base_rev"?:N, "del":{"sensor":"d3"}|{"actuator":"a2"}}`; öğe alanları `cfg_dump` ile aynıdır (eksik isteğe bağlı alanlar
+  türün varsayılanını alır; `id`'siz eylemci yeni satırdır). Eylemci silinince sonraki eylemcilerin kimliği bir kayar (`a3` -> `a2`).
+  Sıra: yama -> `validate(system, safety)` -> kilitli bölge kuralı -> (LAN ise) gevşetme yasağı -> `rev+1` -> NVS -> loopTask uygulaması.
+  Çalışırken eklenen su vanasının konumu o anki röle seviyesinden benimsenir (yapılandırma vanayı kendiliğinden açıp kapatmaz).
+  Bulut sonuçları: başarı -> state `cfg.safety.rev` artar; `base_rev` uyuşmazlığı -> `cfg_conflict` olayı + `last_rej = cfg_conflict`;
+  geçersiz -> `cfg_invalid`; kilitli bölgeye dokunuyor -> `zone_latched`.
+- **Gevşetme (LAN'dan yasak, karar 7.2b-7):** politika kapatma, `dry_hold_ms` kısaltma, tehlike sensörünü (su/gaz/duman) silme ya da
+  türünü/bölgesini değiştirme, `SF_REACT`/`SF_FAULT_CLOSE` bayrağını kaldırma, onay süresini uzatma, NC->NO; eylemciyi silme, rölesini/
+  türünü/kipini/akışkanını değiştirme, bölge çıkarma, geri bildirimi kaldırma/değiştirme ya da zaman aşımını uzatma, siren süresini kısaltma,
+  fanı ex-proof işaretleme; mevcut satırı `gas_reset`'e çevirme ya da `gas_reset`'in bölgesini değiştirme; **daha önce herhangi bir satırda
+  kullanılmış bir DI'ye yeni `gas_reset` ekleme** (kalıcı DI kullanım geçmişi NVS `ahbu_latch/di_hist`, fabrika sıfırlaması silmez; sil +
+  yeniden ekle yolunu kapatır). Hiç kullanılmamış girişe yeni `gas_reset` (sihirbaz) serbesttir. Kapı/pencere/hareket sensörleri ve diğer
+  yerel kumanda rolleri serbesttir.
+- **LAN gövdeleri (birebir).** `POST /api/actuator {actuator, to, uid?, id?}` (`state` DEĞİL), `POST /api/alarm/ack {zone, aid?, force?, uid?, id?}`,
+  `POST /api/alarm/test {zone, uid?, id?}`. Bilinmeyen alan `400 unknown_field`; diğer 400 kodları `invalid_actuator`, `invalid_value`,
+  `invalid_zone`, `invalid_aid`, `invalid_id`, `uid_mismatch`.
+- **LAN yanıtları.** `POST /api/actuator`, `/api/alarm/ack`, `/api/alarm/test`: `200 {"ok":true,"id"}` ya da `200 {"ok":false,"id","rej"}`;
+  1 sn içinde sonuç yoksa `504 {"error":"timeout","id"}`; kuyruk dolu `503 queue_full`; `id` verilmezse `lan-...` üretilir.
+  `GET /api/events?after=<eid>` -> `{"bn","events":[olay JSON'u...],"more":bool}` (en çok 16; bilinmeyen/başka açılışın eid'i -> baştan).
+  Halka 32 olaydır: `more:true` ise istemci son eid ile devam eder (uygulama en çok 4 sayfa okur, yinelenen eid'i atar). `GET /api/safety/config`
+  -> `{rev, crc, policy, zones, lights, sensors, actuators}` (cfg_dump öğeleriyle aynı alanlar, adlar dahil).
+  `POST /api/safety/config` -> `200 {"status":"ok","rev","crc"}` | `400 {"error":"cfg_invalid","detail"}` | `403 local_loosen_forbidden`
+  | `409 {"error":"cfg_conflict","rev","crc"}` | `409 zone_latched` | `500 storage_error` | `503 busy`.
+  `POST /api/config`: güvenlik yapılandırmasıyla uyuşmazsa `409 {"error":"cfg_invalid","detail"}` (kilit varken `409 zone_latched`).
+  Açılış güvenli maskesindeki (`safe_msk`) ya da kilit maskesindeki röle, güvenlik tablosu boş olsa bile (güvenli kip `cfg_corrupt`)
+  panjur/darbe rölesine çevrilemez: `detail` = `act_relay_shutter` / `act_relay_impulse` (inceleme turu 2).
+- **Kurulum sihirbazının yazımı (uygulama).** Sihirbaz panonun yapılandırmasını okur (`GET /api/safety/config`) ve planı **tek öğelik**
+  yamalara çevirir (`buildSafetyPatches`): sensör silme -> eylemci silme (büyük kimlikten; silme sonraki kimlikleri kaydırır) ->
+  mevcut eylemci güncelleme (kaydırılmış kimlikle, panodaki ad/`fb_timeout_s` gibi alanlar korunur) -> yeni eylemci (kimliksiz) ->
+  sensör ekleme/güncelleme -> ışık seçenekleri. Yalnız değişen öğe yazılır. Her istek bir öncekinin yanıtındaki `rev`'i `base_rev`
+  olarak taşır (`applySafetyConfigPatches`). Eşleme: iki röleli vana `close_mode:"pulse"`, `relay2` = açma rölesi, `run_limit_s` =
+  darbe süresi; `fb_di` `0` = geri bildirim yok; fan `exproof`; ışık `src` `1` = Modbus, `2` = köprü (`addr`, `ch`).
+  Ham RS485 (`/api/rs485/relay`, `/api/rs485/send`) eylemci kanalını açma / toplu yazım / TOGGLE: `409 actuator_relay`; güvenlik etkinken
+  (kilit ya da ek modülde eylemci/sensör) `POST /api/rs485/scan`: `409 safety_active`. `GET /api/status` (anahtarlı) MQTT state ile aynı
+  ek alanları ve rölelerde `act`'ı taşır.
+- **Seri CLI** (fiziksel erişim): `SAFETY [STATUS]`, `SAFETY TEST <1-4>`, `SAFETY ACK [0-4] [FORCE]`, `SAFETY POLICY ON|OFF`,
+  `SAFETY DEL <aN|dN|bN>`, `REBOOT FORCE` (kilit varken düz `REBOOT` reddedilir).
 
 ## 3. Firmware yerel HTTP API (LAN / AP)
 
@@ -624,7 +794,7 @@ Ek (C paketi, altyapı): `docker-compose` `${VAR:?}` ile **zorunlu** kılar → 
 `MQTT_RECONNECT_MIN_MS`, `MQTT_RECONNECT_MAX_MS`, `MQTT_PUBLISH_TIMEOUT_MS`. `MQTT_BACKEND_USER/PASS` yoksa köprü **başlamaz** (komutlar `502 BROKER_UNAVAILABLE`).
 Yönetim betikleri (yalnız komut satırında): `MIGRATE_CONFIRM=<db adı>`, `ALLOW_DEV_SEEDS`, `DEV_SEED_*`, `SUPER_USER_*`, `LEGACY_MQTT_*`. Tam liste `server/.env.example`'dadır.
 
-**Migration sırası (gerçekleşen):** `001…017` (+`010b`) → A: `018`, `019` → B: `020`, `021` → C: `022`–`026` → B2 (servis paneli): `027` (hesap silme), `028` (Home Admin atama), `029` (etiket yeniden üretimi) → H: `030` → L: `031` (yerleşim eşitleme tabanı: `devices.reported_layout`) → akış denetimi: `032` (bekleyen yerel anahtar: `devices.local_key_pending_enc/_at` + tetikleyici `trg_devices_pending_key_superseded`; kod `032`'siz veritabanında acil sıfırlamada `42703` verir: önce migration). Çalıştırıcı `server/scripts/migrate.js` (`schema_migrations`, hedef DB onayı `MIGRATE_CONFIRM`, `--baseline 17` mevcut canlı şema için).
+**Migration sırası (gerçekleşen):** `001…017` (+`010b`) → A: `018`, `019` → B: `020`, `021` → C: `022`–`026` → B2 (servis paneli): `027` (hesap silme), `028` (Home Admin atama), `029` (etiket yeniden üretimi) → H: `030` → L: `031` (yerleşim eşitleme tabanı: `devices.reported_layout`) → akış denetimi: `032` (bekleyen yerel anahtar: `devices.local_key_pending_enc/_at` + tetikleyici `trg_devices_pending_key_superseded`; kod `032`'siz veritabanında acil sıfırlamada `42703` verir: önce migration) → güvenlik modülü (WP-S1): `033` (`alarms`, `device_events`, `device_configs`, `devices.caps/safety_state`, `endpoints.actuator_type/dimmable/dimmer_source`, mevcut cihaz kimliklerine `ev/{t}/event` yayın ACL'i; köprü v:3 state'te `devices.caps`'i yazdığı için **dağıtım sırası: 033 → sunucu kodu → firmware**). Güvenlik modülü yeni ortam değişkeni eklemez (push `FCM_*` ile ortaktır). Çalıştırıcı `server/scripts/migrate.js` (`schema_migrations`, hedef DB onayı `MIGRATE_CONFIRM`, `--baseline 17` mevcut canlı şema için).
 Uygulanmış bir migration dosyası **yerinde değiştirilmez** (checksum hatası); düzeltme yeni bir migration'dır.
 
 \* ilgili özellik kullanılacaksa. `.env` git'te **takip edilmez**; `server/.env.example` yalnızca yer tutucu içerir.
@@ -647,3 +817,24 @@ Bir dosyaya yalnızca sahibi yazar. Başkasının dosyasında değişiklik gerek
 | **F — Servis kurulum paneli** | `lib/ui/pages/service_setup/**` (yeni), `service_mode_page.dart`, `service_management_page.dart`, `service_subscribers_page.dart`, `device_inventory_page.dart`, `replace_board_dialog.dart`, `system_doctor_dialog.dart`, ilgili testler |
 | **G — Fabrika aracı** | `ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py` |
 | **Akış denetimi düzeltmeleri (2026-10-04; geçici ekipler, tasarım: `docs/superpowers/specs/2026-10-04-akis-denetimi-duzeltmeleri.md`)** | Başka paketlerin dosyalarında testli değişiklikler; birleştirmeden sonra sahiplik eski paketlere döner. **S1:** `src/services/{device_service,device_reconciler,endpoint_service,peace_service,inventory_service}.js`, `src/mqtt_bridge.js` (yalnız `expectAck` / `cancelAck` / `pendingAcks` / `requestReconcile` ve uzlaştırıcıya `publishSys`), `server/migrations/032_local_key_pending.sql`. **S2:** `src/services/{auth_service,account_deletion_service,mqtt_credential_service,admin_user_service}.js`, `src/routes/auth_routes.js`. **C1:** `lib/ui/pages/service_setup/**`, `lib/ui/dashboard/{peace_banner,status_pills}.dart`, `transfer_ownership_dialog.dart`, `lib/models/api_models.dart`. **C2:** `lib/ui/pages/auth/**`, `lib/ui/common/deep_links.dart`, `lib/ui/widgets/user_profile_dialog.dart`, `lib/services/{automation_state,ev_cloud_api_service,ev_mqtt_service}.dart`, `lib/models/cloud_models.dart`. **F1:** firmware `src/{ConfigManager,WebPortal,WebPortalPage,WiFiManager,main}.*`, `firmware_releases/v1.1.2/**` + `version_info.json`, `tools/qa_stack/**`, `ev_otomasyon_servis_yazilimi/tests/**` |
+
+### 2.7 Güvenlik sözleşmesi: üretici / tüketici eşlemesi (tek doğru kaynak, 2026-10-07 hizalaması)
+
+§1.5d ve §2.6 tek doğru kaynaktır; aşağıdaki tablo her mesaj ve uç için üreten ve tüketen kodu gösterir (alan alan karşılaştırıldı,
+uyumsuzluklar düzeltildi; her düzeltmenin testi en az bir tarafta vardır).
+
+| Mesaj / uç | Üretici | Tüketici(ler) |
+|---|---|---|
+| `state` v:3 ekleri | FW `safety/SafetyView.h` `writeStateExtras` (MQTT + `GET /api/status`) | SRV `utils/safety_payload.js` `parseStateSafety`; APP `models/safety_models.dart` `SafetyState.fromStateJson` |
+| `ev/{t}/event` olayları | FW `events/EventOutbox.h` `eventJson` (+ LAN halkası) | SRV `validateEventPayload` + `services/alarm_service.js`; APP (LAN) `DeviceEventRecord` |
+| `cfg_dump` | FW `safety/SafetyCfgJson.h` `writeDumpPart` | SRV `validateEventPayload` (kök diziler) + `handleCfgDump` (`mergeCfgDumpParts`) -> `device_configs` |
+| `cmd` güvenlik komutları (`actuator`, `alarm_ack`, `alarm_test`, `event_ack`) | SRV `utils/command_schema.js` + `safety_service.js` / `alarm_service.js` | FW `MqttManager.cpp` `parseCommand` |
+| `sys` `cfg_get` | SRV `alarm_service._maybeRequestConfig` `{cmd, module:"safety", uid}` | FW `MqttManager.cpp` sys işleyicisi |
+| REST `…/alarms`, `…/ack`, `…/actuators/:a`, `…/alarm-test`, `…/safety-config` | SRV `routes/safety_routes.js` | APP `services/ev_cloud_api_service.dart` |
+| LAN `/api/actuator`, `/api/alarm/*`, `/api/events`, `/api/safety/config` | FW `WebPortal.cpp`, `safety/SafetyCfgApi.cpp` | APP `services/automation_api_service.dart`, sihirbaz `logic/safety_assignment.dart` |
+
+Bu turda düzeltilen uyumsuzluklar (ayrıntı: tasarım belgesi "Sözleşme hizalaması" bölümü): REST/LAN eylemci gövdesi `to`; alarm listesi
+`data.items` + `before` = kimlik; `safety.zones` yokluğu = normal (uygulamada vana açma kalıcı olarak engelleniyordu); `cfg_dump` kök
+dizileri (sunucu her dökümü `body` yok diye reddediyordu); LAN yapılandırma yazımı tek öğelik yama; firmware olaylarına `aid`;
+`test_result` `fb_ms` yalnız ölçüldüyse; LAN olay halkası sayfalama; adlar `cfg` kopyasından; sunucu `DEVICE_REJECTED`/`ack_queued`
+eşlemesi; istemci komut kimliğinin güvenlik uçlarında panoya taşınması; kumanda rolü sensörleri.

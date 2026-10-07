@@ -42,7 +42,7 @@ test('yayin zamanlamasi: baglanir baglanmaz ilk tam durum GECIKMESIZ; sonra kalp
   h.m.step(h.clock.t);
   assert.equal(h.states().length, 1, 'ilk tam durum hemen');
   const first = JSON.parse(h.states()[0].payload);
-  assert.deepEqual([first.v, first.uid, first.seq], [2, 'AHBU-S3-0A0001', 1]);
+  assert.deepEqual([first.v, first.uid, first.seq], [3, 'AHBU-S3-0A0001', 1]);   // v1.2.0: state v:3 (v:2'nin kati ust kumesi)
   assert.deepEqual([h.states()[0].opts.qos, h.states()[0].opts.retain], [0, true], 'state QoS 0 + retained');
   const sentAt = h.clock.t;
   for (let ms = 50; ms < 30000; ms += 50) {

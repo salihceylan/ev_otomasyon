@@ -142,6 +142,7 @@ function createApp(deps = {}) {
   const mqttRoutes = optionalRequire('./routes/mqtt_routes', 'routes/mqtt_routes');
   const homeDeviceRoutes = optionalRequire('./routes/home_device_routes', 'routes/home_device_routes');
   const scheduledRulesRoutes = optionalRequire('./routes/scheduled_rules_routes', 'routes/scheduled_rules_routes');
+  const safetyRoutes = optionalRequire('./routes/safety_routes', 'routes/safety_routes'); // WP-S4: alarm/eylemci
 
   const app = express();
   app.disable('x-powered-by');
@@ -249,6 +250,10 @@ function createApp(deps = {}) {
   }
   if (homeDeviceRoutes) {
     for (const p of mountsOf(homeDeviceRoutes)) app.use(p, homeDeviceRoutes);
+  }
+  // --- WP-S4: guvenlik (alarm listesi/onayi, eylemci, bolge testi); serviceRoutes'tan ONCE
+  if (safetyRoutes) {
+    for (const p of mountsOf(safetyRoutes)) app.use(p, safetyRoutes);
   }
   if (deviceRoutes) {
     app.use('/api/v1/devices', deviceRoutes);
@@ -395,7 +400,8 @@ function start(options = {}) {
   server.requestTimeout = 30 * 1000;
   server.keepAliveTimeout = 65 * 1000;
 
-  // MQTT koprusu
+  // MQTT koprusu. Guvenlik alarm push'u (WP-S3) icin ayni push servisi kopruye enjekte edilir (gece hatirlatmasiyla ortak).
+  if (typeof mqttBridge.setPushService === 'function') mqttBridge.setPushService(app.locals.pushService);
   try {
     mqttBridge.init();
   } catch (err) {

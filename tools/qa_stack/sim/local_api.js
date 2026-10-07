@@ -33,6 +33,15 @@ import { ProvisionResult } from './fw/config_manager.js';
 import { isInt } from './command_schema.js';
 import { AuthLimiter, ScanGate, ScanDriver, ScanPoll, ScanDecision } from './fw/net_time.js';
 import { ConnectLimiter, apOrigin, clientOnSoftAp, ipToU32, via, VIA_AP } from './fw/ap_access.js';
+import { writeStateExtras, relayActText } from './fw/safety_view.js';
+import { parseCfgEdit, parseActuatorId } from './fw/safety_cfg_api.js';
+import { writeConfigJson } from './fw/safety_cfg_edit.js';
+import { CfgResult } from './fw/safety_manager.js';
+import { RawDecision } from './fw/actuator_map.js';
+import { validateSystemChange, cfgErrText, CfgErr } from './fw/safety_config.js';
+import { VIA_LAN } from './fw/event_outbox.js';
+import { Rej } from './fw/safety_fsm.js';
+import { ACT_TO } from './command_schema.js';
 
 export const MAX_BODY_BYTES = 24576;
 export const AUTH_MAX_FAILS = AuthLimiter.MAX_FAILS;
@@ -348,6 +357,12 @@ function makeHandlers(sim, fw, ctx) {
     const nR = Math.min(snap.totalRelays, MAX_TOTAL_RELAYS);
     const nP = Math.floor(nR / 2);
     const nD = Math.min(snap.totalDIs, MAX_TOTAL_DIS);
+    // Guvenlik gorunumu ve ek (spec 3.5 [D3]): MQTT state ile ayni alanlar
+    const s = automation.safetyOn ? automation.safety : null;
+    const sv = s?.copyView() ?? { configured: 0, act: [] };
+    const meta = s ? s.stateMeta() : { boot: 0, bn: 0, rejId: '', rej: Rej.OK };
+    const timeOk = wifi.isTimeSynced();
+    const extra = JSON.parse(`{${writeStateExtras(sv, { ...meta, timeOk, epoch: timeOk ? Math.floor(Date.now() / 1000) : 0 }).slice(1)}}`);
     return {
       status: 200,
       body: {
@@ -380,12 +395,18 @@ function makeHandlers(sim, fw, ctx) {
         total_dis: v.totalDIs,
         child_lock: snap.childLock,
         last_id: snap.lastId,
-        relays: Array.from({ length: nR }, (_, i) => ({ id: i + 1, name: v.relays[i].name, type: v.relays[i].type, state: !!snap.relays[i] })),
+        relays: Array.from({ length: nR }, (_, i) => {
+          const r = { id: i + 1, name: v.relays[i].name, type: v.relays[i].type, state: !!snap.relays[i] };
+          const act = relayActText(sv, i + 1);
+          if (act) r.act = act;
+          return r;
+        }),
         shutters: Array.from({ length: nP }, (_, p) => {
           const sh = snap.shutters[p];
           return { pair: p + 1, is_shutter: sh.configured, is_moving: sh.moving, moving: sh.moving, dir: sh.dir, pos: sh.pos, target: sh.target };
         }),
         dis: Array.from({ length: nD }, (_, i) => ({ id: i + 1, name: v.dis[i].name, state: !!snap.dis[i] })),
+        ...extra,
       },
     };
   };
@@ -575,6 +596,11 @@ function makeHandlers(sim, fw, ctx) {
     const tmp = cfg().clone();
     const e = parseConfigInto(j.doc, tmp);
     if (e) return err(e === 'too_large' ? 413 : 400, e);
+    // Guvenlik yapilandirmasiyla capraz dogrulama (spec 2.3 madde 5 [B3][O-10]); bos guvenlik yapilandirmasinda her zaman gecer
+    if (automation.safetyOn) {
+      const ve = validateSystemChange(tmp, automation.safety.copyConfig(), automation.safety.relayGuard());   // FW2-1
+      if (ve !== CfgErr.OK) return automation.safety.latchedMask ? err(409, 'zone_latched') : err(409, 'cfg_invalid', { detail: cfgErrText(ve) });
+    }
     // canli yapilandirmaya yazma adimi (loopTask): panjur hareket halindeyse sure/tip/ek modul degisimi reddedilir
     const snap = automation.getSnapshot();
     let busy = false;
@@ -710,7 +736,7 @@ function makeHandlers(sim, fw, ctx) {
     if (d.s !== 'ok' || Buffer.byteLength(d.v) === 0 || Buffer.byteLength(d.v) > 256) return err(400, 'invalid_value');
     const hx = fieldBool(j.doc, 'isHex');
     if (hx.s === 'bad') return err(400, 'invalid_value');
-    if (!automation.rs485Send(d.v, hx.v, now())) return err(502, 'send_failed');
+    if (!automation.rs485Send(d.v, hx.v, now())) return automation.rawSendSafetyRejected ? err(409, 'actuator_relay') : err(502, 'send_failed');
     return ok();
   };
 
@@ -732,6 +758,7 @@ function makeHandlers(sim, fw, ctx) {
 
   h.rs485ScanStart = () => {
     if (automation.rs485ScanState() === 'running') return { status: 202, body: { status: 'scanning' } };
+    if (automation.safetyOn && automation.safety.scanBlocked()) return err(409, 'safety_active');   // [O-5][B6]
     // FW-core: ek modul panjuru hareket halindeyken tarama baslatilmaz (hat tarama suresince tutulur); hata kodu "busy", nedeni "message" duz metniyle
     if (!automation.rs485StartScan(now())) return err(503, 'busy', { message: 'ek modul panjuru hareket ediyor; tarama baslatilamadi' });
     return { status: 202, body: { status: 'scanning' } };
@@ -770,6 +797,12 @@ function makeHandlers(sim, fw, ctx) {
         if (t === RelayType.SHUTTER_UP || t === RelayType.SHUTTER_DOWN) return err(400, 'shutter_channel');
       }
     }
+    if (automation.safetyOn && automation.safety.hasExtActuator() && sid === cfg().ext_module_address) {
+      const s = automation.safety;
+      const relay1 = 8 + ch;
+      const isAct = ch !== 0 && s.actuatorOfRelay(relay1) >= 0;
+      if (ch === 0 || (isAct && action === 2) || (isAct && s.rawRelayCheck(relay1, action === 1) === RawDecision.REJECT)) return err(409, 'actuator_relay');
+    }
     const r = automation.rs485ControlExtRelay(sid, ch, action, now());
     const body = { success: r.ok, responseHex: r.responseHex.slice(0, 160) };
     if (!r.ok) body.error = 'no_response';
@@ -777,9 +810,11 @@ function makeHandlers(sim, fw, ctx) {
   };
 
   // ---- sistem
-  h.reboot = () => ({ status: 200, body: { status: 'rebooting' }, after: () => automation.requestRestart(RESTART_DELAY_MS, now()) });
+  h.reboot = () => latchBlocksRestart() || ({ status: 200, body: { status: 'rebooting' }, after: () => automation.requestRestart(RESTART_DELAY_MS, now()) });
 
   h.reset = () => {
+    const lb = latchBlocksRestart();
+    if (lb) return lb;
     sim.postCommand(makeCommand(CmdType.ALL_SHUTTERS_STOP, CmdSource.WEB));
     // resetToDefaults loopTask'ta calisir; yanit cikmadan once uygulanir (kimlik/MQTT/yerel anahtar KORUNUR)
     if (!cm.resetToDefaults()) return err(500, 'storage_error');
@@ -848,6 +883,123 @@ function makeHandlers(sim, fw, ctx) {
     return ok();
   };
 
+  // ---- guvenlik katmani (spec 3.5, WP-F5; firmware WebPortal guvenlik isleyicileri). Hepsi KEYED.
+  const sm = () => (automation.safetyOn ? automation.safety : null);
+  const lanUidOk = (doc) => !Object.prototype.hasOwnProperty.call(doc, 'uid') || doc.uid === wifi.getDeviceUid();
+  const validLanId = (id) => typeof id === 'string' && /^[A-Za-z0-9._:-]{1,24}$/.test(id);
+
+  /** Kuyruk + en cok 1 sn last_id / last_rej yoklamasi -> {ok, id, rej?} (g_job kullanilmaz [D3]). */
+  const postAndWait = async (c) => {
+    if (!c.id) { portal.lanCmdSeq = (portal.lanCmdSeq || 0) + 1; c.id = `lan-${now() & 0xFFFFF}-${portal.lanCmdSeq}`; }
+    const e = postOrFail(c);
+    if (e) return e;
+    const s = sm();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 1000) {
+      await new Promise((r) => setTimeout(r, 20));
+      const rj = s ? s.lastReject() : { id: '', code: '' };
+      if (rj.code && rj.id === c.id) return { status: 200, body: { ok: false, id: c.id, rej: rj.code } };
+      if (automation.getSnapshot().lastId === c.id) return { status: 200, body: { ok: true, id: c.id } };
+    }
+    return { status: 504, body: { error: 'timeout', id: c.id } };
+  };
+
+  const takeId = (doc, c) => {
+    if (!Object.prototype.hasOwnProperty.call(doc, 'id')) return null;
+    if (!validLanId(doc.id)) return err(400, 'invalid_id');
+    c.id = doc.id;
+    return null;
+  };
+
+  h.actuator = async () => {
+    const j = readJson();
+    if (j.e) return j.e;
+    if (!Object.keys(j.doc).every((k) => ['actuator', 'to', 'uid', 'id'].includes(k))) return err(400, 'unknown_field');
+    if (!lanUidOk(j.doc)) return err(400, 'uid_mismatch');
+    const a = parseActuatorId(j.doc.actuator);
+    if (a === null) return err(400, 'invalid_actuator');
+    if (typeof j.doc.to !== 'string' || !Object.prototype.hasOwnProperty.call(ACT_TO, j.doc.to)) return err(400, 'invalid_value');
+    const c = makeCommand(CmdType.ACTUATOR_SET, CmdSource.WEB, a + 1, ACT_TO[j.doc.to]);
+    return takeId(j.doc, c) || postAndWait(c);
+  };
+
+  // force LAN'dan guvenli kipten CIKARMAZ (karar 7.2b-10): istek safe_mode ile reddedilir.
+  h.alarmAck = async () => {
+    const j = readJson();
+    if (j.e) return j.e;
+    if (!Object.keys(j.doc).every((k) => ['zone', 'aid', 'force', 'uid', 'id'].includes(k))) return err(400, 'unknown_field');
+    if (!lanUidOk(j.doc)) return err(400, 'uid_mismatch');
+    const z = fieldInt(j.doc, 'zone');
+    if (z.s !== 'ok' || z.v < 0 || z.v > 4) return err(400, 'invalid_zone');
+    const f = fieldBool(j.doc, 'force');
+    if (f.s === 'bad') return err(400, 'invalid_value');
+    const c = makeCommand(CmdType.ALARM_ACK, CmdSource.WEB, z.v, f.s === 'ok' && f.v ? 1 : 0);
+    const aid = fieldString(j.doc, 'aid');
+    if (aid.s === 'bad' || (aid.s === 'ok' && (aid.v.length < 3 || aid.v.length >= 15))) return err(400, 'invalid_aid');
+    c.aid = aid.s === 'ok' ? aid.v : '';
+    return takeId(j.doc, c) || postAndWait(c);
+  };
+
+  h.alarmTest = async () => {
+    const j = readJson();
+    if (j.e) return j.e;
+    if (!Object.keys(j.doc).every((k) => ['zone', 'uid', 'id'].includes(k))) return err(400, 'unknown_field');
+    if (!lanUidOk(j.doc)) return err(400, 'uid_mismatch');
+    const z = fieldInt(j.doc, 'zone');
+    if (z.s !== 'ok' || z.v < 1 || z.v > 4) return err(400, 'invalid_zone');
+    const c = makeCommand(CmdType.ALARM_TEST, CmdSource.WEB, z.v, 0);
+    return takeId(j.doc, c) || postAndWait(c);
+  };
+
+  /** GET /api/events?after=<eid>: LAN olay halkasi (son 32, onaylananlar dahil), after'dan sonrakiler, en cok 16 (+ more). */
+  h.events = () => {
+    const after = ctx.args.has('after') ? ctx.args.get('after') : '';
+    if (after.length > 14) return err(400, 'invalid_after');
+    const s = sm();
+    if (!s) return { status: 200, body: { bn: '00000000', events: [], more: false } };
+    const box = s.outbox;
+    const n = box.logCount();
+    let i = box.logAfter(after);
+    const out = [];
+    for (; i < n && out.length < 16; i++) out.push(JSON.parse(box.logJson(i, wifi.getDeviceUid(), s.bootCount)));
+    return { status: 200, body: { bn: (s.bn >>> 0).toString(16).padStart(8, '0'), events: out, more: i < n } };
+  };
+
+  h.safetyConfigGet = () => {
+    const s = sm();
+    if (!s) return err(503, 'busy');
+    return { status: 200, body: JSON.parse(writeConfigJson(s.copyConfig())) };
+  };
+
+  // LAN yalniz ekleme/sikilastirma yapar (karar 7.2b-7): gevsetme 403 local_loosen_forbidden.
+  h.safetyConfigPost = async () => {
+    const j = readJson();
+    if (j.e) return j.e;
+    const s = sm();
+    if (!s) return err(503, 'busy');
+    const p = parseCfgEdit(j.doc, false);
+    if (p.err) return err(400, 'cfg_invalid', { detail: p.err });
+    const o = await s.submitEdit(p.edit, p.hasBase, p.baseRev, VIA_LAN, cfg(), { nowMs: now() });
+    const crc = (o.crc >>> 0).toString(16).padStart(8, '0');
+    switch (o.r) {
+      case CfgResult.OK: mqtt.triggerPublish(now()); return { status: 200, body: { status: 'ok', rev: o.rev, crc } };
+      case CfgResult.CONFLICT: return err(409, 'cfg_conflict', { rev: o.rev, crc });
+      case CfgResult.INVALID: return err(400, 'cfg_invalid', { detail: cfgErrText(o.err) });
+      case CfgResult.LATCHED: return err(409, 'zone_latched');
+      case CfgResult.LOOSEN: return err(403, 'local_loosen_forbidden');
+      case CfgResult.STORAGE: return err(500, 'storage_error');
+      default: return err(503, 'busy');
+    }
+  };
+
+  /** Kilitli alarm varken yazilimsal yeniden baslatma/sifirlama 409 zone_latched; ?force=1 ile gecilir [K-2][Y-5]. */
+  const latchBlocksRestart = () => {
+    const s = sm();
+    if (!s || s.latchedMask === 0) return null;
+    if (ctx.args.get('force') === '1') return null;
+    return err(409, 'zone_latched');
+  };
+
   return { h, authorize, authorizeApOrKeyed };
 }
 
@@ -856,7 +1008,7 @@ const ROOT_HTML = (sim, wifi) => `<!doctype html><html lang="tr"><head><meta cha
 <p><b>${wifi.getDeviceUid()}</b> &mdash; QA simulatoru (firmware degildir). Yerel API: <code>/api/status</code>.</p>
 <p>QA kontrol ucu yalnizca 127.0.0.1: <code>/__sim/state</code></p></body></html>`;
 
-// route tablosu: [yol, yontem] -> {handler, access: PUBLIC|KEYED|FACTORY|AP_OR_KEYED} (firmware setupRoutes: 26 rota, 3'u AP_OR_KEYED)
+// route tablosu: [yol, yontem] -> {handler, access: PUBLIC|KEYED|FACTORY|AP_OR_KEYED} (firmware setupRoutes: 32 rota, 3'u AP_OR_KEYED; v1.2.0 guvenlik +6)
 //   PUBLIC: anahtarsiz. KEYED: yalniz gecerli X-Device-Key. FACTORY: provizyonsuz cihazda factory/init.
 //   AP_OR_KEYED: gecerli X-Device-Key YA DA AP kaynakli yetki (ApAccess::via) -- yalniz wifi/scan|connect|status.
 export const ROUTES = [
@@ -885,6 +1037,12 @@ export const ROUTES = [
   ['/api/rs485/scan', 'POST', 'rs485ScanStart', 'KEYED'],
   ['/api/rs485/scan', 'GET', 'rs485ScanResult', 'KEYED'],
   ['/api/rs485/relay', 'POST', 'rs485Relay', 'KEYED'],
+  ['/api/actuator', 'POST', 'actuator', 'KEYED'],
+  ['/api/alarm/ack', 'POST', 'alarmAck', 'KEYED'],
+  ['/api/alarm/test', 'POST', 'alarmTest', 'KEYED'],
+  ['/api/events', 'GET', 'events', 'KEYED'],
+  ['/api/safety/config', 'GET', 'safetyConfigGet', 'KEYED'],
+  ['/api/safety/config', 'POST', 'safetyConfigPost', 'KEYED'],
   ['/api/system/reboot', 'POST', 'reboot', 'KEYED'],
   ['/api/system/reset', 'POST', 'reset', 'KEYED'],
 ];
@@ -967,6 +1125,10 @@ async function handleQa(sim, req, res, url, path) {
         const b = await readJsonBody();
         try { return sendJson(res, 200, { ok: true, ext: sim.setExt(b) }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
       }
+      case '/__sim/safety': {
+        const b = await readJsonBody();
+        try { return sendJson(res, 200, { ok: true, result: sim.qaSafety(b) ?? null }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
+      }
       case '/__sim/tca': {
         const b = await readJsonBody();
         try { return sendJson(res, 200, { ok: true, tca: sim.tcaFault(b) }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
@@ -1036,7 +1198,7 @@ async function handle(sim, req, res) {
     if (e) return sendJson(res, e.status, e.body, e.headers || {});
   }
 
-  const result = h[name]();
+  const result = await h[name]();   // guvenlik komutlari sonucu en cok 1 sn bekler (postAndWait)
   if (result.html !== undefined) sendRaw(res, result.status, 'text/html; charset=utf-8', result.html, result.headers || {});
   else if (result.text !== undefined) sendRaw(res, result.status, 'text/plain; charset=utf-8', result.text, result.headers || {});
   else sendJson(res, result.status, result.body, result.headers || {});

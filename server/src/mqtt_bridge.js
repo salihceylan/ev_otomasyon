@@ -58,6 +58,16 @@
 //     (retained OLMAYAN) state COMMIT edildikten sonra, uzlastirici bildiriminin ardindan servise bildirilir; servis
 //     `endpoints` satirlarini kendi kuyrugunda / transaction'inda uzlastirir. Ana state yolunu DEGISTIRMEZ ve hata
 //     yalitimlidir (cikarma ve bildirim ayri try/catch). `ENDPOINT_LAYOUT_SYNC=off|0|false` servisi hic kurmaz.
+//   - GUVENLIK MODULU (WP-S2/S4, CONTRACTS §2.6; tasarim 2026-10-06 §3-§5): `ev/+/event` aboneligi. Olay yuku KATI
+//     dogrulanir (utils/safety_payload.validateEventPayload; retained yok sayilir, <= 4 KB), uid evin cihazlarindan
+//     biri olmali; is ayni ev seridine `coalesce:false` ile girer (ara alarmlar birlesip kaybolmasin) ve
+//     services/alarm_service.js'e gider (device_events tekillestirme, alarms, event_ack, push). `cfg_dump` olay
+//     DEGILDIR: yapilandirma kopyasina (device_configs) gider, onaylanmaz. CANLI v:3 state'te `caps` ve guvenlik
+//     ozeti AYNI cihaz UPDATE'ine yazilir (devices.caps / devices.safety_state; ek sorgu yok) ve COMMIT sonrasi alarm
+//     servisi uzlastirma yapar. v:2 state (caps yok, onceden de yok) icin SQL ve sorgu sayisi DEGISMEZ.
+//     Ret yankisi [Y5]: `expectOutcome(topic, id, ms, {uid})` yalniz hedef uid'nin canli state'indeki `last_id`
+//     (onay) ya da `last_rej` (ret kodu) ile sonuclanir; eski `expectAck` (boolean) aynen calisir.
+//     Uretim tekili `alarms: true` ile kurulur; push servisi start() sirasinda `setPushService` ile enjekte edilir.
 //
 // Ortam degiskenleri (CONTRACTS §6): MQTT_HOST, MQTT_PORT, MQTT_BACKEND_USER,
 // MQTT_BACKEND_PASS. Opsiyonel: MQTT_TLS=true, MQTT_CLIENT_ID, MQTT_OFFLINE_AFTER_SEC,
@@ -70,18 +80,20 @@
 const os = require('os');
 const net = require('net');
 const { HttpError } = require('./utils/helpers');
+const { parseStateSafety, validateEventPayload } = require('./utils/safety_payload');
 
 // ------------------------------------------------------------------------------
 // Sabitler
 // ------------------------------------------------------------------------------
 const TOPIC_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const COMMAND_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(cmd|sys)$/;
-const INCOMING_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(state|status)$/;
+const INCOMING_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(state|status|event)$/;
 const UID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const FW_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$/;
 const LAST_ID_RE = /^[A-Za-z0-9_.:-]{1,24}$/;
 
 const MAX_PAYLOAD_BYTES = 64 * 1024; // gelen mesaj ust siniri
+const MAX_EVENT_BYTES = 4 * 1024; // olay yuku ust siniri (cfg_dump parcasi <= 3,5 KB + zarf; tasarim §3.4)
 const MAX_COMMAND_BYTES = 1024; // giden komut ust siniri (firmware JSON havuzu kucuktur)
 const MAX_ARRAY_ITEMS = 64;
 const MAX_RELAY_ID = 64;
@@ -105,7 +117,7 @@ const DEFAULTS = Object.freeze({
   warnIntervalMs: 60 * 1000,
 });
 
-const SUBSCRIPTIONS = Object.freeze(['ev/+/status', 'ev/+/state']);
+const SUBSCRIPTIONS = Object.freeze(['ev/+/status', 'ev/+/state', 'ev/+/event']);
 
 // ------------------------------------------------------------------------------
 // Hatalar
@@ -132,7 +144,7 @@ function isValidTopicId(value) {
   return typeof value === 'string' && TOPIC_ID_RE.test(value);
 }
 
-/** `ev/{id}/{state|status}` -> { topicId, kind } | null */
+/** `ev/{id}/{state|status|event}` -> { topicId, kind } | null */
 function parseIncomingTopic(topic) {
   if (typeof topic !== 'string') return null;
   const m = INCOMING_TOPIC_RE.exec(topic);
@@ -177,6 +189,7 @@ function validateStatePayload(obj) {
     relays: [],
     shutters: [],
     skipped: 0,
+    safety: null, // v:3 guvenlik ekleri (caps / last_rej varsa; utils/safety_payload.parseStateSafety)
   };
 
   if (obj.uid !== undefined) {
@@ -240,6 +253,12 @@ function validateStatePayload(obj) {
     }
   }
 
+  // v:3 ekleri: yalniz caps ya da last_rej varsa ayristirilir (v:2 yuku icin cikti AYNEN).
+  if (obj.caps !== undefined || obj.last_rej !== undefined) {
+    out.safety = parseStateSafety(obj);
+    skipped += out.safety.skipped;
+  }
+
   out.skipped = skipped;
   return { ok: true, value: out };
 }
@@ -287,8 +306,10 @@ function buildShutterPositionUpdate(deviceId, shutters) {
  * Cihaz telemetri guncellemesi.
  * @param {boolean} live  true: canli mesaj (cevrimici + last_seen + ack). false: retained
  *                        tekrar teslim (yalnizca ip/fw/cocuk kilidi; cevrimici bilgisi DEGISMEZ).
+ * @param {{clearSafety?:boolean}} [opts]  clearSafety: caps'siz CANLI state geldi ama cihazda caps kayitliydi
+ *                        (firmware geri alindi): devices.caps / safety_state NULL yapilir (tasarim §3.1 kural 5a).
  */
-function buildDeviceUpdate(deviceId, v, live) {
+function buildDeviceUpdate(deviceId, v, live, opts = {}) {
   const values = [deviceId];
   const sets = [];
   const changes = []; // retained yolunda gereksiz yazimi onlemek icin
@@ -305,6 +326,13 @@ function buildDeviceUpdate(deviceId, v, live) {
   // Cocuk kilidi YALNIZCA canli state'ten yazilir: bayat retained, yeni uygulanmis bir komutu ezmesin.
   // (Cevrimdisi pano icin retained uzlastirmasi: buildChildLockReconcile.)
   if (live && v.childLock !== null && v.childLock !== undefined) add('child_lock_enabled', v.childLock);
+  // Guvenlik yetenekleri / ozeti (WP-S2 [O1]): YALNIZ canli v:3 state (retained bayat olabilir). JSONB metin olarak.
+  if (live && v.safety && Array.isArray(v.safety.caps)) {
+    add('caps', JSON.stringify(v.safety.caps));
+    add('safety_state', JSON.stringify(v.safety.summary));
+  } else if (live && opts.clearSafety === true) {
+    sets.push('caps = NULL, safety_state = NULL');
+  }
 
   if (live) {
     sets.push('is_online = TRUE', 'last_seen_at = CURRENT_TIMESTAMP');
@@ -511,8 +539,10 @@ class KeyedWorkQueue {
 // Kopru
 // ------------------------------------------------------------------------------
 // `h.child_lock_requested` (021): bekleyen cocuk kilidi niyeti — uzlastiriciya EK SORGU OLMADAN iletilir (plan §5d-3).
+// `has_caps` / `safety_state` (033): guvenlik uzlastirmasi icin onceki ozet (EK SORGU OLMADAN).
 const RESOLVE_HOME_SQL =
-  'SELECT h.id AS home_id, h.child_lock_requested, d.id AS device_id, d.device_uuid ' +
+  'SELECT h.id AS home_id, h.child_lock_requested, d.id AS device_id, d.device_uuid, ' +
+  '(d.caps IS NOT NULL) AS has_caps, d.safety_state ' +
   'FROM homes h LEFT JOIN devices d ON d.home_id = h.id ' +
   'WHERE h.mqtt_username = $1';
 
@@ -568,6 +598,13 @@ class MqttBridge {
     this._layoutExtract = null; // extractReportedLayout (tembel yuklenir)
     this._layoutClosed = false; // end() kurar, init() sifirlar: kapanmis kopru servisi yeniden kurmaz / yerlesim cikarmaz
 
+    // Guvenlik alarm servisi (WP-S2): `alarms: true` (uretim tekili) -> tembel; `alarmService`: hazir ornek (test).
+    // Varsayilan KAPALI: dogrudan kurulan ornekler olay islemez (event konusu yine dogrulanir ve sayilir).
+    this._alarms = opts.alarmService || null;
+    this._alarmsInjected = this._alarms !== null;
+    this._alarmsEnabled = this._alarms !== null || opts.alarms === true;
+    this._push = opts.pushService || null; // start() setPushService ile enjekte eder
+
     this._backoffMs = DEFAULTS.reconnectMinMs;
     this._resubscribeTimer = null;
     this._resubscribeDelayMs = DEFAULTS.resubscribeDelayMs;
@@ -584,6 +621,7 @@ class MqttBridge {
       state: 0,
       status: 0,
       retained: 0,
+      event: 0,
       ignored: 0,
       invalid: 0,
       oversize: 0,
@@ -792,6 +830,13 @@ class MqttBridge {
       counters: { ...this.counters, queue: { ...this._queue.stats } },
     };
     if (this._reconciler && typeof this._reconciler.stats === 'function') status.reconcile = this._reconciler.stats();
+    if (this._alarms && typeof this._alarms.stats === 'function') {
+      try {
+        status.alarms = this._alarms.stats();
+      } catch (_) {
+        /* istatistik hatasi durum raporunu bozmasin */
+      }
+    }
     if (this._layoutSync && typeof this._layoutSync.stats === 'function') {
       try {
         status.layout_sync = this._layoutSync.stats();
@@ -847,6 +892,47 @@ class MqttBridge {
   requestReconcile(topicId) {
     if (!this._reconcileEnabled || !isValidTopicId(topicId)) return;
     this._notifyReconciler('rearm', topicId);
+  }
+
+  // -- Guvenlik alarm servisi (WP-S2, CONTRACTS §2.6) ------------------------------------
+  /** Push servisi (server.start() enjekte eder). Alarm servisi push'u her gonderimde buradan okur. */
+  setPushService(push) {
+    this._push = push || null;
+  }
+
+  /** Tembel olusturma (`_getLayoutSync` deseni); yuklenemezse kopru etkilenmez (bir kez uyarir). */
+  _getAlarmService() {
+    if (this._alarms) return this._alarms;
+    if (!this._alarmsEnabled || this._layoutClosed) return null;
+    try {
+      const { createAlarmService } = require('./services/alarm_service');
+      this._alarms = createAlarmService({
+        db: this.db,
+        publishCommand: (topicId, cmd) => this.publishCommand(topicId, cmd),
+        publishSys: (topicId, obj) => this.publishSys(topicId, obj),
+        isConnected: () => this.isConnected(),
+        getPush: () => this._push,
+        logger: this.logger,
+        now: this.now,
+        timers: this.timers,
+      });
+    } catch (err) {
+      this._alarmsEnabled = false;
+      this._warnOnce('alarms-init', `Alarm servisi baslatilamadi (devre disi): ${err && err.name ? err.name : 'bilinmiyor'}`);
+      return null;
+    }
+    return this._alarms;
+  }
+
+  /** Hata YALITIMI: alarm servisi kopruyu asla bozmaz. Sonuc beklenir (ev seridinde sira korunur). */
+  async _notifyAlarm(method, arg) {
+    try {
+      const svc = this._getAlarmService();
+      if (svc && typeof svc[method] === 'function') return await svc[method](arg);
+    } catch (err) {
+      this._warnOnce(`alarm-${method}`, `Alarm servisi hatasi: ${err && err.name ? err.name : 'bilinmiyor'}`);
+    }
+    return null;
   }
 
   // -- Yerlesim esitleme (WP-L, CONTRACTS §2.4b) --------------------------------------
@@ -936,7 +1022,7 @@ class MqttBridge {
     this._queue.clear();
     // Bekleyen cihaz onaylari: kapanista onay gelemez -> hepsi false (cagiran "uygulanmadi" sayar, DB'ye yazmaz).
     for (const set of [...this._ackWaiters.values()]) {
-      for (const waiter of [...set]) waiter.finish(false);
+      for (const waiter of [...set]) waiter.finish({ ok: false, cancelled: true });
     }
     if (this._reconciler && typeof this._reconciler.stop === 'function') {
       try {
@@ -946,6 +1032,14 @@ class MqttBridge {
       }
       // Tembel olusturulan ornek atilir: init() yeniden cagrilirsa taze (durdurulmamis) bir uzlastirici kurulur.
       if (!this._reconcilerInjected) this._reconciler = null;
+    }
+    if (this._alarms) {
+      try {
+        if (typeof this._alarms.stop === 'function') this._alarms.stop();
+      } catch (_) {
+        /* kapanis engellenmez */
+      }
+      if (!this._alarmsInjected) this._alarms = null;
     }
     if (this._layoutSync) {
       try {
@@ -1008,6 +1102,11 @@ class MqttBridge {
       }
       const retain = meta && meta.retain === true;
       if (retain) this.counters.retained++;
+      if (parsed.kind === 'event' && retain) {
+        // Olay retain EDILMEZ (yanlis yapilandirma savunmasi): bayat alarm yeniden islenmesin.
+        this.counters.ignored++;
+        return;
+      }
 
       const size = typeof payload === 'string' ? Buffer.byteLength(payload, 'utf8') : payload ? payload.length : 0;
       if (size === 0) {
@@ -1021,6 +1120,32 @@ class MqttBridge {
         return;
       }
       const text = typeof payload === 'string' ? payload : payload.toString('utf8');
+
+      if (parsed.kind === 'event') {
+        if (size > MAX_EVENT_BYTES) {
+          this.counters.oversize++;
+          this._warnOnce(`oversize-ev:${parsed.topicId}`, `Cok buyuk olay atildi [${parsed.topicId}] (${size} bayt)`);
+          return;
+        }
+        let evObj;
+        try {
+          evObj = JSON.parse(text);
+        } catch (_) {
+          this.counters.invalid++;
+          this._warnOnce(`badjson-ev:${parsed.topicId}`, `Gecersiz JSON olay atildi [${parsed.topicId}]`);
+          return;
+        }
+        const evCheck = validateEventPayload(evObj);
+        if (!evCheck.ok) {
+          this.counters.invalid++;
+          this._warnOnce(`badev:${parsed.topicId}`, `Gecersiz olay yuku atildi [${parsed.topicId}]: ${evCheck.reason}`);
+          return;
+        }
+        this.counters.event++;
+        // coalesce:false: ardisik olaylarin HER biri islenir (ara alarm kaybolmasin); ayni ev seridinde state ile sirali.
+        await this._queue.push(parsed.topicId, 'event', () => this._processEvent(parsed.topicId, evCheck.value), { coalesce: false });
+        return;
+      }
 
       if (parsed.kind === 'status') {
         const online = parseStatusPayload(text);
@@ -1056,8 +1181,13 @@ class MqttBridge {
       }
       this.counters.state++;
       // Cihaz onayi (DAIRE-03): yalniz CANLI state; kuyruga/birlestirmeye girmeden (ara state'teki yanki kaybolmasin).
+      // uid'li bekleyici (guvenlik komutlari) yalniz HEDEF panonun yankisini kabul eder [Y5].
       if (!retain && check.value.lastId && this._ackCount > 0) {
-        this._settleAcks(ackKey(parsed.topicId, check.value.lastId), true);
+        this._settleAcks(ackKey(parsed.topicId, check.value.lastId), { ok: true }, { uid: check.value.uid });
+      }
+      const rej = check.value.safety && check.value.safety.lastRej;
+      if (!retain && rej && this._ackCount > 0) {
+        this._settleAcks(ackKey(parsed.topicId, rej.id), { ok: false, rejected: rej.code }, { uid: check.value.uid, rejection: true });
       }
       // Yerlesim (WP-L): dogrulama BASARILI olduktan sonra HAM yukten cikarilir (esitleme kapaliysa cikarilmaz).
       // Kapanisa girer: kuyruk birlestirmesi en yeni mesajin degerini + yerlesimini birlikte kullanir.
@@ -1118,7 +1248,10 @@ class MqttBridge {
       }
 
       const hasChildLock = v.childLock !== null && v.childLock !== undefined;
-      const deviceUpdate = buildDeviceUpdate(device.device_id, v, !retain);
+      // Guvenlik (WP-S2): v:3 ise caps/ozet ayni UPDATE'e; caps'siz canli state ama cihazda caps vardi -> temizle.
+      const hadCaps = device.has_caps === true;
+      const capsNow = v.safety && Array.isArray(v.safety.caps) ? v.safety.caps : null;
+      const deviceUpdate = buildDeviceUpdate(device.device_id, v, !retain, { clearSafety: !retain && capsNow === null && hadCaps });
       // canli: kilit deviceUpdate icinde yazilir; retained: yalnizca cevrimdisi panoda uzlastirilir
       const childLockReconcile = retain && hasChildLock ? buildChildLockReconcile(device.device_id, v.childLock) : null;
       const relayUpdate = buildRelayStateUpdate(device.device_id, v.relays);
@@ -1156,9 +1289,54 @@ class MqttBridge {
       if (!retain && layout) {
         this._notifyLayoutSync('onLiveState', { topicId, homeId: device.home_id, deviceId: device.device_id, layout });
       }
+      // Guvenlik uzlastirmasi (WP-S2 §5.2.2): yalniz CANLI state; v:2 panoda (caps hic olmadi) HIC cagrilmaz.
+      if (!retain && this._alarmsEnabled && (capsNow !== null || hadCaps)) {
+        await this._notifyAlarm('onLiveState', {
+          topicId,
+          homeId: device.home_id,
+          deviceId: device.device_id,
+          uid: String(device.device_uuid || '').toUpperCase(),
+          caps: capsNow,
+          summary: capsNow !== null ? v.safety.summary : null,
+          prev: device.safety_state || null,
+          hadCaps,
+        });
+      }
     } catch (err) {
       this.counters.dbErrors++;
       this._warnOnce(`db-state:${topicId}`, `State guncelleme hatasi [${topicId}]: ${err.message}`);
+    }
+  }
+
+  /** Dogrulanmis olay: uid -> evin cihazi; alarm servisine (ya da cfg_dump -> yapilandirma kopyasi). */
+  async _processEvent(topicId, value) {
+    try {
+      const res = await this.db.query(RESOLVE_HOME_SQL, [topicId]);
+      const rows = ((res && res.rows) || []).filter((r) => r.device_id);
+      const device = rows.find((d) => String(d.device_uuid || '').toUpperCase() === value.uid) || null;
+      if (!device) {
+        this.counters.ignored++;
+        this._warnOnce(`ev-uid:${topicId}`, `Olay uid bu eve ait bir cihazla eslesmiyor [${topicId}]`);
+        return;
+      }
+      if (!this._alarmsEnabled) {
+        this.counters.ignored++;
+        return;
+      }
+      if (value.cfgDump) {
+        await this._notifyAlarm('handleCfgDump', { topicId, homeId: device.home_id, deviceId: device.device_id, dump: value });
+        return;
+      }
+      await this._notifyAlarm('handleEvent', {
+        topicId,
+        homeId: device.home_id,
+        deviceId: device.device_id,
+        uid: value.uid,
+        event: value,
+      });
+    } catch (err) {
+      this.counters.dbErrors++;
+      this._warnOnce(`db-event:${topicId}`, `Olay isleme hatasi [${topicId}]: ${err && err.message ? err.message : 'bilinmiyor'}`);
     }
   }
 
@@ -1290,6 +1468,22 @@ class MqttBridge {
    * @returns {Promise<boolean>}
    */
   expectAck(topicId, commandId, timeoutMs) {
+    return this._addWaiter(topicId, commandId, timeoutMs, { uid: null, legacy: true });
+  }
+
+  /**
+   * Guvenlik komutu sonucu [Y5]: YALNIZ hedef panonun (uid) CANLI state'inden.
+   *   last_id === commandId -> { ok: true }; last_rej.id === commandId -> { ok: false, rejected: <kod> };
+   *   zaman asimi -> { ok: false, timeout: true }; cancel/end -> { ok: false, cancelled: true }.
+   * Yayindan ONCE kurulur (expectAck ile ayni kurallar ve ayni ust sinir). Asla reddetmez.
+   * @param {{uid:string}} opts  hedef pano kimligi (buyuk/kucuk harf duyarsiz)
+   */
+  expectOutcome(topicId, commandId, timeoutMs, { uid } = {}) {
+    if (typeof uid !== 'string' || !UID_RE.test(uid.trim())) throw new TypeError('Gecersiz hedef pano kimligi (uid)');
+    return this._addWaiter(topicId, commandId, timeoutMs, { uid: uid.trim().toUpperCase(), legacy: false });
+  }
+
+  _addWaiter(topicId, commandId, timeoutMs, { uid, legacy }) {
     if (!isValidTopicId(topicId)) throw new TypeError('Gecersiz konu kimligi (topicId)');
     if (typeof commandId !== 'string' || !LAST_ID_RE.test(commandId)) throw new TypeError('Gecersiz komut kimligi (commandId)');
     if (this._ackCount >= ACK_MAX_WAITERS) {
@@ -1300,8 +1494,9 @@ class MqttBridge {
     const ms = Math.min(Math.max(requested, 1), ACK_MAX_TIMEOUT_MS);
     const key = ackKey(topicId, commandId);
     return new Promise((resolve) => {
-      const waiter = { done: false, timer: null, finish: null };
-      waiter.finish = (ok) => {
+      const waiter = { done: false, timer: null, finish: null, uid, legacy };
+      // outcome: { ok:true } | { ok:false, rejected|timeout|cancelled } ; eski bekleyici boolean cozer
+      waiter.finish = (outcome) => {
         if (waiter.done) return;
         waiter.done = true;
         if (waiter.timer) this.timers.clearTimeout(waiter.timer);
@@ -1311,7 +1506,8 @@ class MqttBridge {
           if (set.size === 0) this._ackWaiters.delete(key);
         }
         this._ackCount -= 1;
-        resolve(ok === true);
+        const out = outcome && typeof outcome === 'object' ? outcome : { ok: outcome === true };
+        resolve(legacy ? out.ok === true : out);
       };
       let set = this._ackWaiters.get(key);
       if (!set) {
@@ -1320,14 +1516,14 @@ class MqttBridge {
       }
       set.add(waiter);
       this._ackCount += 1;
-      waiter.timer = this.timers.setTimeout(() => waiter.finish(false), ms);
+      waiter.timer = this.timers.setTimeout(() => waiter.finish({ ok: false, timeout: true }), ms);
       if (waiter.timer && typeof waiter.timer.unref === 'function') waiter.timer.unref();
     });
   }
 
   /** Bekleyen onayi false ile kapatir (or. yayin basarisiz oldu). Bekleyen yoksa sessiz. */
   cancelAck(topicId, commandId) {
-    this._settleAcks(ackKey(topicId, commandId), false);
+    this._settleAcks(ackKey(topicId, commandId), { ok: false, cancelled: true });
   }
 
   /** Bekleyen cihaz onayi sayisi (izleme/test). */
@@ -1335,10 +1531,21 @@ class MqttBridge {
     return this._ackCount;
   }
 
-  _settleAcks(key, ok) {
+  /**
+   * @param {object} outcome  { ok:true } | { ok:false, ... } (eski cagri bicimi boolean da kabul edilir)
+   * @param {{uid?:string|null, rejection?:boolean}} [match]  yanki kaynagi: uid'li bekleyici yalniz AYNI uid'yi kabul
+   *   eder; ret yankisi (rejection) eski boolean bekleyicileri BITIRMEZ (eski davranis: zaman asimi).
+   */
+  _settleAcks(key, outcome, match = null) {
     const set = this._ackWaiters.get(key);
     if (!set) return;
-    for (const waiter of [...set]) waiter.finish(ok);
+    for (const waiter of [...set]) {
+      if (match) {
+        if (match.rejection && waiter.legacy) continue;
+        if (waiter.uid && waiter.uid !== match.uid) continue;
+      }
+      waiter.finish(outcome);
+    }
   }
 
   /** Yonetim komutu: `ev/{topicId}/sys` (yalnizca backend; ornek: set_local_key). Gizli deger tasiyabilir. */
@@ -1388,7 +1595,7 @@ class MqttBridge {
 
 // Uretim tekili: cevrimici olunca uzlastirma ACIK (plan §5d-3) + yerlesim esitleme ACIK (WP-L, CONTRACTS §2.4b;
 // ENDPOINT_LAYOUT_SYNC=off ile kapatilir). Testlerin kendi `new MqttBridge(...)` ornekleri KAPALI.
-const mqttBridge = new MqttBridge({ reconcile: true, layoutSync: true });
+const mqttBridge = new MqttBridge({ reconcile: true, layoutSync: true, alarms: true });
 
 module.exports = mqttBridge;
 module.exports.MqttBridge = MqttBridge;
@@ -1406,4 +1613,4 @@ module.exports.helpers = {
   buildHomeChildLockSync,
   serializeCommand,
 };
-module.exports.constants = { MAX_PAYLOAD_BYTES, MAX_COMMAND_BYTES, SUBSCRIPTIONS, DEFAULTS, ACK_MAX_WAITERS, ACK_MAX_TIMEOUT_MS };
+module.exports.constants = { MAX_PAYLOAD_BYTES, MAX_EVENT_BYTES, MAX_COMMAND_BYTES, SUBSCRIPTIONS, DEFAULTS, ACK_MAX_WAITERS, ACK_MAX_TIMEOUT_MS };
