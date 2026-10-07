@@ -186,10 +186,19 @@ void main() {
       expect(find.byTooltip('Kopyala'), findsNothing);
       expect(find.byType(SelectableText), findsNothing, reason: 'parola seçilebilir/kopyalanabilir metin değildir');
 
-      raw = 'WIFI:T:WPA;S:AHBU-ZZZZZZ;P:baska-pano-parola;;';
+      raw = 'WIFI:T:WPA;S:AHBU-FFFFFF;P:baska-pano-parola;;';
       await tapKey(tester, 'btn_scan_ap_qr');
       await pumpUntil(tester, env, () => present('ap_label_scan_error'));
       expect(find.textContaining('başka bir panonun'), findsOneWidget);
+
+      // Modemin (ev) karekodu bu düğmeyle okutulursa: parola alanına yazılmaz, doğru yer tarif edilir.
+      raw = 'WIFI:T:WPA;S:Ev_Modem;P:modem-sifre-123;;';
+      await tapKey(tester, 'btn_scan_ap_qr');
+      await pumpUntil(tester, env, () => find.textContaining('modemin (ev) Wi-Fi karekodu').evaluate().isNotEmpty);
+      expect(find.textContaining('Bağlandım: Panoyu Kontrol Et'), findsWidgets);
+      await tapKey(tester, 'btn_toggle_ap_password');
+      await tester.pump();
+      expect(find.textContaining('modem-sifre-123'), findsNothing, reason: 'modem parolası kurulum ağı parolası sayılmaz');
     });
   });
 

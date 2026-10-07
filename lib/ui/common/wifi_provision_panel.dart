@@ -202,8 +202,9 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         _mismatch = _mismatchMessage(status);
         if (status.provisioned == false) {
           _phase = _Phase.idle;
-          _checkError =
-              'Pano henüz kurulmamış görünüyor (fabrika kurulumu gerekir). Wi-Fi bilgileri bu aşamada gönderilemez.';
+          _checkError = 'Pano henüz kurulmamış görünüyor (ilk hazırlık yapılmamış). Wi-Fi bilgileri bu aşamada '
+              'gönderilemez: servis girişinden "Yeni Kurulum Başlat" sihirbazını açın; cihazı tanıtıp daireye bağladıktan '
+              'sonra 5. adımda (Wi-Fi Kurulumu) "Panoyu Hazırla" ile ilk hazırlığı yapın ve ev Wi-Fi bilgisini oradan gönderin.';
         }
       });
       if (status.provisioned == false) return;

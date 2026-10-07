@@ -6,6 +6,7 @@ import '../../../../utils/qr_router.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/orb/orb.dart';
 import '../../../widgets/settings/accent_button.dart';
+import '../../../common/validators.dart' show WifiValidators;
 import '../../../common/wifi_provision_panel.dart';
 import '../logic/wifi_logic.dart';
 import '../service_setup_controller.dart';
@@ -90,6 +91,16 @@ class _Step5WifiState extends State<Step5Wifi> {
     }
     final expected = WifiLogic.apSsidFor(widget.controller.target?.deviceUuid ?? '');
     final creds = payload.credentials;
+    // Modemin (ev) karekodu bu düğmeyle okutuldu: ev Wi-Fi bilgisi ancak telefon kurulum ağına bağlanıp pano
+    // doğrulandıktan sonra açılan "2) Müşterinin ev Wi-Fi bilgisi" bölümünde okutulur.
+    if (!WifiValidators.isBoardSetupNetwork(creds.ssid)) {
+      setState(() => _labelScanError =
+          'Bu, modemin (ev) Wi-Fi karekodu (${creds.ssid}). Bu düğme yalnızca pano etiketindeki kurulum ağı (AHBU-...) '
+          'karekodu içindir. Ev Wi-Fi karekodunu okutmak için önce telefonu panonun kurulum ağına bağlayıp '
+          '"Bağlandım: Panoyu Kontrol Et"e basın (yeni panoda ardından "Panoyu Hazırla"); sonra açılan '
+          '"2) Müşterinin ev Wi-Fi bilgisi" bölümündeki "Modem Wi-Fi Karekodu Tara" düğmesini kullanın.');
+      return;
+    }
     if (expected != null && creds.ssid != expected) {
       setState(() => _labelScanError =
           'Bu karekod başka bir panonun kurulum ağına (${creds.ssid}) ait. Kurulum yaptığınız panonun ($expected) etiketini okutun.');
