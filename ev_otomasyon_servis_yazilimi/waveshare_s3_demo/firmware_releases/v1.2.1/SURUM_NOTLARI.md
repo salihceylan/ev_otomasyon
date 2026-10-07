@@ -1,5 +1,7 @@
 # AHBU Akıllı Ev - ESP32-S3 firmware v1.2.1 (sürüm notları)
 
+> **DONANIMDA YALNIZ YAZMA VE AÇILIŞ DOĞRULANDI (2026-10-07):** COM9 test kartına (ESP32-S3, MAC E8:F6:0A:DD:87:54) esptool 4.11.0 ile 0x0'a yazıldı, "Hash of data verified"; kart açıldı, seri `STATUS` ve `SAFETY STATUS` yanıt verdi (`politika=ACIK kip=normal`, provizyonsuz, AP AHBU-DD8754). Sensör/eylemci, alarm kipi, siren ve provizyon denemeleri aşağıdaki listede ve henüz YAPILMADI.
+>
 > **DONANIMDA DOĞRULANMADI.** Bu imaj hiçbir karta yazılmadı ve hiçbir kartta açılmadı. Dosya düzeyinde doğrulandı (başlık,
 > bölüm tablosu, SHA-256 özetleri, 0x0000-0xFFFF bölgesinin v1.2.0 ve v1.1.2 ile bayt bayt eşitliği, dizgi taraması, fabrika aracının
 > imaj doğrulayıcısı) ve değişen kod donanımsız testlerle sınandı (firmware'in kendi Unity testleri MSVC ile, QA simülatörü, fabrika
