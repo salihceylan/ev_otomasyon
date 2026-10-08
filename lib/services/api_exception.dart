@@ -93,6 +93,12 @@ class ApiException implements Exception {
   /// E-posta/telefon veya parola/kod hatalı (401/400 `INVALID_CREDENTIALS`; kullanıcı varlığı sızmaz).
   bool get isInvalidCredentials => code == 'INVALID_CREDENTIALS';
 
+  /// Claim'de kurulum PIN'i hatalı: sunucu `403 FORBIDDEN` + "Geçersiz kurulum PIN kodu. Kalan deneme hakkı: N" ve
+  /// `remaining_attempts` döner. Genel "yetkiniz yok" 403'ünden ayrılır (kalan deneme var ya da mesaj/kod PIN diyor).
+  bool get isWrongSetupPin =>
+      code == 'INVALID_PIN' ||
+      (isForbidden && (remainingAttempts != null || message.toLowerCase().contains('kurulum pin')));
+
   /// Hesap dondurulmuş (403 `ACCOUNT_DISABLED`).
   bool get isAccountDisabled => code == 'ACCOUNT_DISABLED';
 

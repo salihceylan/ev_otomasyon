@@ -37,6 +37,7 @@ class WifiLogic extends SetupLogic {
   static const String lanLabel = 'Panoya ev ağından bağlanılıyor';
   static const String provisionLabel = 'Pano ilk kez hazırlanıyor';
   static const String fetchKeyLabel = 'Cihaz anahtarı sunucudan alınıyor';
+  static const String ethLabel = 'Panoya Ethernet adresinden bağlanılıyor';
 
   /// Kurulum ağı (AP) için **anahtarsız** pano istemcisi: `X-Device-Key` bu istemciye HİÇ uygulanmaz
   /// (Wi-Fi uçları AP'den anahtarsız çalışır; internet yokken anahtar zaten alınamaz).
@@ -52,6 +53,23 @@ class WifiLogic extends SetupLogic {
   bool _connected = false;
   bool _lostContact = false;
   String? _homeIp;
+  bool _ethernetMode = false;
+  bool _viaEthernet = false;
+
+  /// Teknisyen "Pano kabloyla (Ethernet) bağlı" yolunu seçti (ya da pano Ethernet bildirdi): kurulum ağı ve ev Wi-Fi
+  /// bilgisi adımları gizlenir; pano Ethernet IP'sinden doğrulanır ([confirmEthernet]).
+  bool get ethernetMode => _ethernetMode;
+
+  /// Adım Ethernet bağlantısıyla tamamlandı (teslim özeti: "Pano ev ağına Ethernet ile bağlı").
+  bool get viaEthernet => _viaEthernet;
+
+  /// Ethernet yolunu açar/kapatır (Wi-Fi akışı aynen kalır).
+  void setEthernetMode(bool on) {
+    if (_ethernetMode == on) return;
+    _ethernetMode = on;
+    clearProblem();
+    ctx.notify();
+  }
 
   /// Panoya ulaşıldı ve kimliği beklenen cihazla eşleşti (anahtarsız doğrulandı).
   DeviceIdentity? get identity => _identity;
@@ -119,6 +137,8 @@ class WifiLogic extends SetupLogic {
         // Wi-Fi bilgisi gönderilecek pano **kurulum ağındaki** (AP) panodur; kimliği anahtarsız doğrulanır.
         final identity = await DeviceIdentity.verify(apApi, t.deviceUuid);
         _identity = identity;
+        // Pano kablolu ağda olduğunu bildiriyor: Wi-Fi bilgisi gerekmez, Ethernet yolu önerilir.
+        if (identity.ethConnected == true) _ethernetMode = true;
         if (identity.provisioned == false) {
           _needsProvision = true;
           return;
@@ -271,7 +291,7 @@ class WifiLogic extends SetupLogic {
       final clean = ip.trim();
       final t = ctx.requireTarget;
       final identity = await ctx.link.probe(clean, expectedUid: t.deviceUuid);
-      if (!identity.wifiConnected) {
+      if (!identity.onHomeNetwork) {
         throw const SetupProblemException(SetupProblem(
           kind: SetupProblemKind.deviceRejected,
           title: 'Pano ev Wi-Fi ağına bağlı görünmüyor',
@@ -282,8 +302,63 @@ class WifiLogic extends SetupLogic {
       ctx.target = t.copyWith(ip: clean);
       _identity = identity;
       _connected = true;
+      _viaEthernet = !identity.wifiConnected && identity.ethConnected == true;
       _lostContact = false;
       _homeIp = clean;
+    });
+  }
+
+  /// Ethernet yolu: pano ev ağına kabloyla bağlı. Panonun Ethernet IP'sinden kimlik doğrulanır (kablolu ağdan gelen
+  /// istek panoda anahtarsız yetkilidir; CONTRACTS §3e) ve `eth_connected` bilgisine bakılır. Yanıt Ethernet alanlarını
+  /// taşımıyorsa (anahtarsız özet) bellekteki anahtarla tam durum okunur. Kurulum ağı ve internet gerekmez.
+  Future<bool> confirmEthernet(String ip) {
+    final error = validateHost(ip);
+    if (error != null) {
+      fail(SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Pano adresi geçersiz',
+        why: error,
+        todo: 'Modem arayüzündeki cihaz listesinden panonun kablolu (Ethernet) IP adresine bakın.',
+        retryable: false,
+      ));
+      return Future<bool>.value(false);
+    }
+    return run(ethLabel, () async {
+      final clean = ip.trim();
+      final t = ctx.requireTarget;
+      final identity = await ctx.link.probe(clean, expectedUid: t.deviceUuid);
+      var eth = identity.ethConnected;
+      if (eth == null) {
+        final key = t.localKey ?? ctx.link.key;
+        if (key != null && key.isNotEmpty) {
+          try {
+            ctx.link.useKey(key);
+            final status = await ctx.link.verifiedApi.fetchStatus();
+            eth = status.onEthernet;
+          } on LocalApiException catch (e) {
+            if (e.isNetwork) rethrow;
+            ctx.link.invalidate();
+          }
+        }
+      }
+      ctx.ensureActive();
+      if (eth != true) {
+        throw const SetupProblemException(SetupProblem(
+          kind: SetupProblemKind.deviceRejected,
+          title: 'Pano Ethernet bağlantısı bildirmiyor',
+          why: 'Panoya bu adresten ulaşıldı ama kablolu (Ethernet) ağa bağlı olduğunu bildirmiyor. Pano yazılımı '
+              'v1.3.0\'dan eskiyse Ethernet desteklenmez.',
+          todo: 'Ethernet kablosunu ve modemdeki ışığı kontrol edin; adresin panonun kablolu IP\'si olduğundan emin olun. '
+              'Olmazsa Wi-Fi ile kurun ("Pano kabloyla bağlı" seçimini kapatın).',
+        ));
+      }
+      ctx.target = ctx.requireTarget.copyWith(ip: clean);
+      _identity = identity;
+      _connected = true;
+      _viaEthernet = true;
+      _lostContact = false;
+      _homeIp = clean;
+      ctx.link.invalidate();
     });
   }
 
@@ -304,11 +379,17 @@ class WifiLogic extends SetupLogic {
   }
 
   @override
-  Map<String, dynamic> snapshot() => <String, dynamic>{'connected': _connected, 'lost': _lostContact};
+  Map<String, dynamic> snapshot() => <String, dynamic>{
+        'connected': _connected,
+        'lost': _lostContact,
+        if (_viaEthernet) 'eth': true,
+      };
 
   @override
   void restore(Map<String, dynamic> json) {
     _connected = json['connected'] == true;
     _lostContact = !_connected && json['lost'] == true;
+    _viaEthernet = _connected && json['eth'] == true;
+    _ethernetMode = _viaEthernet;
   }
 }

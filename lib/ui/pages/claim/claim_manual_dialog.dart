@@ -44,12 +44,13 @@ String claimErrorMessage(Object error) {
       return 'Bu cihaz zaten bir daireye bağlı veya işlem çakıştı. Cihaz önceki sahibine aitse '
           'devir kodu alın ya da servisle iletişime geçin.';
     }
+    // Yanlış kurulum PIN'i sunucuda 403 FORBIDDEN olarak gelir; genel "yetkiniz yok" metninden ÖNCE ayrılır.
+    if (error.isWrongSetupPin) return _withRemaining(error);
     if (error.isForbidden) {
       return 'Bu işlem için yetkiniz yok veya bu cihazı eşleştiremezsiniz.';
     }
-    if (error.isInvalidCredentials || error.isValidation) {
-      final remaining = error.remainingAttempts;
-      return remaining == null ? error.message : '${error.message} Kalan deneme: $remaining.';
+    if (error.isInvalidCredentials || error.isValidation || error.remainingAttempts != null) {
+      return _withRemaining(error);
     }
     if (error.isNetwork) {
       return 'Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.';
@@ -57,6 +58,18 @@ String claimErrorMessage(Object error) {
     return error.message;
   }
   return friendlyError(error, fallback: 'Eşleştirme tamamlanamadı. Lütfen tekrar deneyin.');
+}
+
+/// Eşleştirme sonrası bilgi: pano buluta kendiliğinden bağlanır (CONTRACTS §3f bootstrap).
+const String claimCloudBootstrapNote =
+    'Pano internete bağlı olduğunda birkaç dakika içinde kendiliğinden buluta bağlanır. Pano henüz ev ağına bağlı '
+    "değilse 'Pano Wi-Fi Kurulumu' ile bağlayın.";
+
+/// Sunucu mesajı + kalan deneme (mesaj sayıyı zaten içeriyorsa tekrarlanmaz).
+String _withRemaining(ApiException error) {
+  final remaining = error.remainingAttempts;
+  if (remaining == null || error.message.toLowerCase().contains('kalan deneme')) return error.message;
+  return '${error.message} Kalan deneme: $remaining.';
 }
 
 /// Cihaz eşleştirme (claim) diyaloğu: pano etiketindeki UID + 6 haneli kurulum PIN'i.
@@ -666,6 +679,9 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
           const SizedBox(height: 8),
           InlineMessage.warning(items[i], key: Key('claim_warning_$i')),
         ],
+        const SizedBox(height: 8),
+        // Pano (v1.3.0+) internete çıkınca bulut kimliğini kendisi alır (CONTRACTS §3f); sürüm denetimi yapılmaz.
+        const InlineMessage.info(claimCloudBootstrapNote, key: Key('claim_cloud_note')),
       ],
     );
   }

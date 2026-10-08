@@ -126,8 +126,11 @@ class HandoverLogic extends SetupLogic {
     }
 
     final lan = _lan;
-    final networkOk = wifi.isComplete && (lan == null || lan.wifiConnected);
+    final networkOk = wifi.isComplete && (lan == null || lan.onHomeNetwork);
     final rssi = lan != null && lan.wifiStaRssi != 0 ? ' (sinyal ${lan.wifiStaRssi} dBm)' : '';
+    // Ethernet: pano bildirdiyse (durum `eth_connected`), yoksa 5. adım Ethernet yoluyla doğrulandıysa.
+    final ethernet = lan != null ? (lan.netIf == 'eth' || (lan.onEthernet && !lan.wifiConnected)) : wifi.viaEthernet;
+    final ethIp = (lan != null && lan.ethIp.isNotEmpty) ? lan.ethIp : (ctx.target?.ip ?? '');
     final cloudOk = cloudLogic.isComplete && (_cloudOnlineNow ?? true);
 
     return CommissioningChecks(
@@ -136,7 +139,11 @@ class HandoverLogic extends SetupLogic {
       shutters: CommissionCheck(ok: shutters.isComplete, detail: shutterDetail),
       network: CommissionCheck(
         ok: networkOk,
-        detail: networkOk ? 'Pano ev Wi-Fi ağına bağlı$rssi' : 'Pano ev Wi-Fi ağına bağlı görünmüyor',
+        detail: !networkOk
+            ? 'Pano ev ağına (Wi-Fi ya da Ethernet) bağlı görünmüyor'
+            : (ethernet
+                ? 'Pano ev ağına Ethernet ile bağlı${ethIp.isEmpty ? '' : ' (IP $ethIp)'}'
+                : 'Pano ev Wi-Fi ağına bağlı$rssi'),
       ),
       cloud: CommissionCheck(
         ok: cloudOk,

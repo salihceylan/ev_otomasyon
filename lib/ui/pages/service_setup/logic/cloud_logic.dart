@@ -168,7 +168,8 @@ class CloudLogic extends SetupLogic {
         todo: 'Telefonunuzun ev Wi-Fi ağında olduğunu ve panonun ışıklarının yandığını kontrol edin, sonra "Tekrar dene"ye basın.',
       );
     }
-    if (!lan.wifiConnected) {
+    // Ethernet'li pano Wi-Fi'ye bağlı olmayabilir: "Wi-Fi'den düştü" yalnız ev ağında hiç görünmeyen panoya söylenir.
+    if (!lan.onHomeNetwork) {
       return const SetupProblem(
         kind: SetupProblemKind.deviceNetwork,
         title: 'Pano ev Wi-Fi ağından düştü',

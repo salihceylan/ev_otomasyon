@@ -133,7 +133,11 @@ class _Step5WifiState extends State<Step5Wifi> {
         children: [
           if (w.connected)
             _connectedCard(context)
-          else ...[
+          else if (w.ethernetMode) ...[
+            _ethernetChoice(context),
+            _ethernetCard(context),
+          ] else ...[
+            _ethernetChoice(context),
             _connectCard(context, c),
             if (w.identity != null) _identityCard(context),
             if (w.needsProvision) _provisionCard(context),
@@ -507,8 +511,88 @@ class _Step5WifiState extends State<Step5Wifi> {
     );
   }
 
+  /// "Pano kabloyla (Ethernet) bağlı" seçimi: açıkken kurulum ağı / ev Wi-Fi adımları gizlenir.
+  Widget _ethernetChoice(BuildContext context) {
+    final w = _w;
+    return SetupCard(
+      key: const Key('wifi_ethernet_choice'),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: SetupCheckTile(
+        key: const Key('check_ethernet_mode'),
+        value: w.ethernetMode,
+        onChanged: w.busy ? null : (v) => w.setEthernetMode(v),
+        label: 'Pano kabloyla (Ethernet) bağlı',
+      ),
+    );
+  }
+
+  /// Ethernet yolu: panonun kablolu IP'si ile doğrulama (kurulum ağı ve Wi-Fi bilgisi gerekmez).
+  Widget _ethernetCard(BuildContext context) {
+    final w = _w;
+    final suggested = w.identity?.ethIp ?? '';
+    if (_lanIp.text.isEmpty && suggested.isNotEmpty) _lanIp.text = suggested;
+    return SetupCard(
+      key: const Key('wifi_ethernet_card'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Pano ev ağına kabloyla bağlı',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: SetupColors.text(context)),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Kurulum ağına bağlanmanız ve Wi-Fi bilgisi göndermeniz gerekmez. Telefonunuzu ev ağına (Wi-Fi) bağlayın ve '
+            'panonun kablolu IP adresini yazın (modem arayüzündeki cihaz listesinde görünür).',
+            style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.muted(context)),
+          ),
+          SetupTextField(
+            key: const Key('field_eth_ip'),
+            controller: _lanIp,
+            label: 'Panonun Ethernet IP adresi',
+            hint: '192.168.1.40',
+            prefixIcon: Icons.settings_ethernet_rounded,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => w.confirmEthernet(_lanIp.text),
+          ),
+          const SizedBox(height: 12),
+          SetupPrimaryButton(
+            key: const Key('btn_confirm_ethernet'),
+            label: 'Ethernet ile Doğrula',
+            icon: Icons.settings_ethernet_rounded,
+            busy: w.busy && w.busyLabel == WifiLogic.ethLabel,
+            onPressed: w.busy ? null : () => w.confirmEthernet(_lanIp.text),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _connectedCard(BuildContext context) {
     final w = _w;
+    if (w.viaEthernet) {
+      final ethIp = widget.controller.target?.ip ?? w.homeIp ?? '';
+      return SetupCard(
+        key: const Key('wifi_connected_card'),
+        accent: SetupColors.ok,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SetupResultHeader(
+              key: const Key('wifi_connected_ethernet'),
+              text: 'Pano ev ağına Ethernet ile bağlı${ethIp.isEmpty ? '' : ' (IP: $ethIp)'}.',
+            ),
+            const SizedBox(height: 6),
+            const SetupInfoRow(
+              icon: Icons.info_outline_rounded,
+              color: SetupColors.info,
+              text: '6. adım panoya bu adresten bağlanır ve bulut kimliğini yazar (telefon ev ağında, internet gerekir).',
+            ),
+          ],
+        ),
+      );
+    }
     final ip = widget.controller.target?.ip ?? w.homeIp ?? '';
     // Pano ev ağındaki adresini bildirdiyse hedef artık kurulum ağı adresi değildir.
     final ipKnown = ip.isNotEmpty && !w.usingSetupNetwork;

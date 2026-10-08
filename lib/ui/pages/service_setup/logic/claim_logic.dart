@@ -297,14 +297,14 @@ class ClaimLogic extends SetupLogic {
 
   /// Claim hatalarını doğru adıma yönlendirir (PIN -> 2, müşteri kodu -> 3).
   Object _mapClaimError(ApiException e) {
-    if (e.isForbidden && e.remainingAttempts != null) {
+    if (e.isWrongSetupPin) {
       identify.clearPin();
       return SetupProblemException(SetupProblem(
         kind: SetupProblemKind.forbidden,
         title: 'Kurulum PIN\'i hatalı',
         why: e.message,
-        todo: 'Etiketteki 6 haneli "KURULUM PIN" değerini kontrol edip 2. adımda yeniden yazın. '
-            'Kalan deneme hakkı: ${e.remainingAttempts}.',
+        todo: 'Etiketteki 6 haneli "KURULUM PIN" değerini kontrol edip 2. adımda yeniden yazın.'
+            '${e.remainingAttempts == null ? '' : ' Kalan deneme hakkı: ${e.remainingAttempts}.'}',
         retryable: false,
         fixStep: SetupSteps.identify,
         remainingAttempts: e.remainingAttempts,

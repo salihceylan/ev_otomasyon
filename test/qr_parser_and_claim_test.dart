@@ -177,6 +177,9 @@ void main() {
 
       expect(find.byKey(const Key('claim_success')), findsOneWidget);
       expect(find.text('Müşteriye davet e-postası gönderilemedi.'), findsOneWidget);
+      // Pano buluta kendiliğinden bağlanır (CONTRACTS §3f): başarı ekranında bilgi satırı.
+      expect(find.byKey(const Key('claim_cloud_note')), findsOneWidget);
+      expect(find.textContaining('kendiliğinden buluta bağlanır'), findsOneWidget);
       expect(opened.done, isFalse, reason: 'uyarıyı okumadan kapanmaz');
       await tapKey(tester, 'btn_claim_done');
       expect(opened.result, isTrue);
@@ -226,6 +229,28 @@ void main() {
     testWidgets('403: yetki yok', (tester) async {
       await submitWithError(tester, apiError(403, 'Bu işlem için yetkiniz yok.', code: 'FORBIDDEN'));
       expect(textOf(tester, 'claim_error'), contains('yetkiniz yok'));
+    });
+
+    testWidgets('403 yanlış kurulum PIN kodu (sunucu FORBIDDEN + remaining_attempts): sunucu mesajı, "yetkiniz yok" DEĞİL',
+        (tester) async {
+      await submitWithError(
+        tester,
+        apiError(403, 'Geçersiz kurulum PIN kodu. Kalan deneme hakkı: 4', code: 'FORBIDDEN', remaining: 4),
+      );
+      expect(textOf(tester, 'claim_error'), 'Geçersiz kurulum PIN kodu. Kalan deneme hakkı: 4');
+      expect(textOf(tester, 'claim_error'), isNot(contains('yetkiniz yok')));
+    });
+
+    test('yanlış PIN eşlemesi: kalan deneme yoksa da mesaj PIN diyorsa sunucu mesajı; sayı mesajda yoksa eklenir', () {
+      expect(
+        claimErrorMessage(apiError(403, 'Geçersiz kurulum PIN kodu.', code: 'FORBIDDEN')),
+        'Geçersiz kurulum PIN kodu.',
+      );
+      expect(
+        claimErrorMessage(apiError(403, 'PIN yanlış.', code: 'FORBIDDEN', remaining: 2)),
+        'PIN yanlış. Kalan deneme: 2.',
+      );
+      expect(claimErrorMessage(apiError(403, 'Bu işlem için yetkiniz yok.', code: 'FORBIDDEN')), contains('yetkiniz yok'));
     });
 
     testWidgets('ağ hatası: bağlantı mesajı', (tester) async {

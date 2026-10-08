@@ -256,7 +256,7 @@ class SetupContext {
     link.markKeyChecked();
     target = requireTarget.copyWith(localKey: key);
     final host = t.ip.trim();
-    if ((link.lastIdentity?.wifiConnected ?? false) && host != AppConfig.current.deviceApHost) {
+    if ((link.lastIdentity?.onHomeNetwork ?? false) && host != AppConfig.current.deviceApHost) {
       onLanVerified?.call(host);
     }
     return link.verifiedApi;

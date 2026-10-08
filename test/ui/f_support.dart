@@ -247,8 +247,13 @@ class FakeDevice {
   int tplVer = 0;
   String tplLabel = '';
 
-  /// Ethernet alanları (firmware v1.3.0; `null` = durumda alan yok).
+  /// Ethernet alanları (firmware v1.3.0; `null` = durumda alan yok). Bağlıyken pano [ethIp] adresinden de erişilebilir ve
+  /// o adrese gelen istek anahtarsız yetkilidir (CONTRACTS §3e).
   bool? ethConnected;
+  String ethIp = '192.168.1.77';
+
+  /// Ethernet IP'sinden gelen istek mi (anahtarsız yetkili).
+  bool _viaEth(RecordedRequest r) => ethConnected == true && r.url.host == ethIp;
 
   /// Bir sonraki `POST /api/template/apply` bu hatayla reddedilir: `(status, error, path)` (tek seferlik).
   (int, String, String?)? templateRejectOnce;
@@ -338,7 +343,9 @@ class FakeDevice {
   bool _isReachable(RecordedRequest r) {
     _advance(); // zaman geçtiyse Wi-Fi bağlanma sonucu / AP kapanışı bu istek yanıtlanmadan ÖNCE işlenir
     final host = r.url.host;
-    return (host == apHost && apReachable) || (host == staIp && staIp.isNotEmpty && wifiConnected && lanReachable);
+    return (host == apHost && apReachable) ||
+        (host == staIp && staIp.isNotEmpty && wifiConnected && lanReachable) ||
+        (host == ethIp && ethConnected == true && lanReachable);
   }
 
   /// Adres erişilebilir değilse ağ hatası (telefon o ağda değil / AP kapandı).
@@ -350,6 +357,7 @@ class FakeDevice {
 
   /// Anahtar denetimi: null = geçti, aksi halde yanıt.
   http.Response? _auth(RecordedRequest r) {
+    if (_viaEth(r)) return null; // kablolu Ethernet: anahtarsız ve provizyonsuz yetkili
     if (!provisioned || localKey == null) return _err(403, 'unprovisioned');
     final key = _key(r);
     if (key == null || key.isEmpty) return _err(401, 'unauthorized');
@@ -430,7 +438,7 @@ class FakeDevice {
     _reach(r);
     _advance();
     final key = _key(r);
-    if (!provisioned || key == null || key.isEmpty) {
+    if (!_viaEth(r) && (!provisioned || key == null || key.isEmpty)) {
       return _json(<String, dynamic>{
         'device': uid,
         'name': 'Pano',
@@ -447,7 +455,7 @@ class FakeDevice {
       'device_name': 'Pano',
       'fw': firmware,
       'provisioned': true,
-      'ip': wifiConnected ? staIp : apHost,
+      'ip': wifiConnected ? staIp : (ethConnected == true ? ethIp : apHost),
       'wifi_rssi': wifiConnected ? -52 : 0,
       'uptime_sec': 100,
       'wifi_connected': wifiConnected,
@@ -471,7 +479,7 @@ class FakeDevice {
       if (templateCaps && tplId != null) 'tpl': <String, dynamic>{'id': tplId, 'ver': tplVer},
       if (ethConnected != null) ...<String, dynamic>{
         'eth_connected': ethConnected,
-        'eth_ip': ethConnected! ? '192.168.1.77' : '',
+        'eth_ip': ethConnected! ? ethIp : '',
         'net_if': ethConnected! ? 'eth' : (wifiConnected ? 'wifi' : 'none'),
       },
       if (safetyCaps) 'caps': <String>['safety', 'actuator', 'event', 'cfg', if (intrusionCaps) 'intrusion'],

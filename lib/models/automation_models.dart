@@ -397,6 +397,12 @@ class DeviceStatus {
   /// Etkin ağ arayüzü: `wifi` | `eth` | `none` (firmware v1.3.0+; eski panoda `null`).
   final String? netIf;
 
+  /// Pano kablolu Ethernet ile ağa bağlı (firmware v1.3.0+; eski panoda her zaman `false`).
+  bool get onEthernet => ethConnected == true || netIf == 'eth';
+
+  /// Pano ev ağında: Wi-Fi **ya da** Ethernet. Ethernet bilgisi olmayan (eski) panoda [wifiConnected] ile aynıdır.
+  bool get onHomeNetwork => wifiConnected || onEthernet;
+
   RelayItem? relayById(int id) {
     for (final r in relays) {
       if (r.id == id) return r;

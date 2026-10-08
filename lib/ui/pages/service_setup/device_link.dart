@@ -1,3 +1,4 @@
+import '../../../models/automation_models.dart';
 import '../../../services/automation_api_service.dart';
 import '../../../services/clock.dart';
 import 'setup_problem.dart';
@@ -23,14 +24,19 @@ class DeviceIdentity {
     if (uid == null || uid.toUpperCase() != expectedUid.toUpperCase()) {
       throw WrongDeviceException(expectedUid: expectedUid, foundUid: uid);
     }
-    return DeviceIdentity(
-      uid: uid,
-      provisioned: status.provisioned,
-      wifiConnected: status.wifiConnected,
-      firmware: status.firmware,
-      name: status.deviceName,
-    );
+    return DeviceIdentity.fromStatus(uid, status);
   }
+
+  /// Durum yanıtından kimlik (Ethernet alanları dahil; eski panoda `null`).
+  factory DeviceIdentity.fromStatus(String uid, DeviceStatus status) => DeviceIdentity(
+        uid: uid,
+        provisioned: status.provisioned,
+        wifiConnected: status.wifiConnected,
+        firmware: status.firmware,
+        name: status.deviceName,
+        ethConnected: status.ethConnected ?? (status.netIf == null ? null : status.netIf == 'eth'),
+        ethIp: status.ethIp,
+      );
 
   const DeviceIdentity({
     required this.uid,
@@ -38,9 +44,20 @@ class DeviceIdentity {
     required this.wifiConnected,
     this.firmware,
     this.name = '',
+    this.ethConnected,
+    this.ethIp = '',
   });
 
   final String uid;
+
+  /// Pano Ethernet ile bağlı mı (firmware v1.3.0+; yanıtta alan yoksa `null`).
+  final bool? ethConnected;
+
+  /// Panonun Ethernet IP'si (biliniyorsa).
+  final String ethIp;
+
+  /// Pano ev ağında: Wi-Fi **ya da** Ethernet.
+  bool get onHomeNetwork => wifiConnected || ethConnected == true;
 
   /// Cihazda yerel anahtar tanımlı mı (`null` = bildirmedi).
   final bool? provisioned;
@@ -130,13 +147,7 @@ class DeviceLink {
     }
     _verifiedUid = uid;
     api.localKey = _key;
-    return _lastIdentity = DeviceIdentity(
-      uid: uid,
-      provisioned: status.provisioned,
-      wifiConnected: status.wifiConnected,
-      firmware: status.firmware,
-      name: status.deviceName,
-    );
+    return _lastIdentity = DeviceIdentity.fromStatus(uid, status);
   }
 
   /// Kimlik doğrulanmış istemci (anahtar uygulanmış olabilir). Doğrulama yoksa fırlatır.
