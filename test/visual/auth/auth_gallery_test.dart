@@ -386,6 +386,9 @@ void main() {
             size: Size(_phone.width, 1400),
           );
           await _pushPage(tester, const RegisterPage());
+          // Onaysız "Kayıt Ol" pasiftir: doğrulama hatalarını göstermek için zorunlu sözleşme kutusu işaretlenir.
+          await tester.tap(find.byKey(const Key('chk_accept_terms')));
+          await _advance(tester, ms: 200);
           await tester.tap(find.byKey(const Key('btn_register_submit')));
           await _advance(tester, ms: 500);
           await _fitHeight(tester, width: _phone.width);
@@ -417,6 +420,8 @@ void main() {
             await tester.enterText(find.byKey(const Key('field_phone')), '0555 123 45 67');
             await tester.enterText(find.byKey(const Key('field_password')), 'dogru-parola-1234');
             await tester.enterText(find.byKey(const Key('field_password_confirm')), 'dogru-parola-1234');
+            await tester.tap(find.byKey(const Key('chk_accept_terms'))); // zorunlu Kullanıcı Sözleşmesi onayı
+            await _advance(tester, ms: 200);
             await tester.tap(find.byKey(const Key('btn_register_submit')));
             await _advance(tester, ms: 600);
             expect(find.byKey(const Key('register_error')), findsOneWidget);

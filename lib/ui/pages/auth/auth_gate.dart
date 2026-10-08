@@ -12,13 +12,14 @@ import '../../theme/tokens.dart';
 import '../../widgets/orb/orb.dart';
 import '../../widgets/surface_card.dart' show SurfaceRimPainter;
 import '../dashboard_page.dart';
+import '../legal/terms_acceptance_page.dart';
 import '../wifi_recovery_dialog.dart';
 import 'auth_brand.dart';
 import 'change_password_page.dart';
 import 'login_page.dart';
 
-/// Hangi ekranın gösterileceği. **Tek karar noktası**: biyometrik kilit, yerel mod ve zorunlu parola
-/// değişimi burada çözülür.
+/// Hangi ekranın gösterileceği. **Tek karar noktası**: biyometrik kilit, yerel mod, zorunlu parola
+/// değişimi ve Kullanıcı Sözleşmesi onayı burada çözülür.
 enum AuthGateView {
   /// Durum henüz hazır değil **veya** biyometrik kilit açık: panonun hiçbir türü açılmaz.
   splash,
@@ -30,6 +31,10 @@ enum AuthGateView {
 
   /// Sunucu parola değişimini zorunlu kıldı.
   forcedPasswordChange,
+
+  /// Kullanıcı Sözleşmesi'nin güncel sürümü onaylanmalı (`user.legal.needs_acceptance`; yalnız bulut kipinde, personel ve
+  /// servis PIN oturumu hariç).
+  termsAcceptance,
 }
 
 /// [state]'e göre gösterilecek görünümü belirler.
@@ -38,13 +43,17 @@ enum AuthGateView {
 ///   pano açılmaz (kilitli oturumda doğrudan mod ile kilidi atlama kapalıdır).
 /// * Yerel pano yalnızca **oturumsuz** (`unauthenticated`) ve doğrudan mod seçiliyken açılır.
 /// * Oturum açıkken `mustChangePassword` ise parola değiştirme ekranına zorlanır.
+/// * Ardından (parola kapısı ÖNCE gelir) sunucu onay istiyorsa ([AutomationState.needsTermsAcceptance]) Kullanıcı
+///   Sözleşmesi onay ekranı gösterilir; yerel ağ (LAN) kipinde, servis PIN oturumunda ve personelde hiç gösterilmez.
 @visibleForTesting
 AuthGateView gateViewFor(AutomationState state) {
   switch (state.authStatus) {
     case AuthStatus.checking:
       return AuthGateView.splash;
     case AuthStatus.authenticated:
-      return state.mustChangePassword ? AuthGateView.forcedPasswordChange : AuthGateView.dashboard;
+      if (state.mustChangePassword) return AuthGateView.forcedPasswordChange;
+      if (state.needsTermsAcceptance) return AuthGateView.termsAcceptance;
+      return AuthGateView.dashboard;
     case AuthStatus.unauthenticated:
       return state.mode == AppMode.direct ? AuthGateView.localDashboard : AuthGateView.login;
   }
@@ -54,12 +63,12 @@ AuthGateView gateViewFor(AutomationState state) {
 bool _isSignedInView(AuthGateView? view) => view == AuthGateView.dashboard || view == AuthGateView.localDashboard;
 
 /// Uygulama kapısı: açılışta oturum/biyometrik durumu çözülene kadar açılış ekranını gösterir, sonra
-/// giriş, pano (bulut/yerel) ya da zorunlu parola değişimi ekranına geçer.
+/// giriş, pano (bulut/yerel), zorunlu parola değişimi ya da Kullanıcı Sözleşmesi onay ekranına geçer.
 ///
 /// Açılış ekranı **durum hazır olunca biter**; sabit bir bekleme süresi yoktur.
 ///
 /// **Kilit/oturum geçişinde itilmiş sayfalar kapatılır:** pano görünümünden açılış/kilit ekranına
-/// (arka plandan >= 30 sn sonra biyometrik yeniden kilit), girişe (oturum kapandı) ya da zorunlu parola
+/// (arka plandan >= 30 sn sonra biyometrik yeniden kilit), girişe (oturum kapandı), zorunlu parola ya da sözleşme onay
 /// ekranına geçilirken Navigator'a itilmiş tüm sayfa ve diyaloglar kapanır; aksi halde kilit ekranının
 /// üstünde (ör. üye listesi) oturumun verisi görünür kalırdı. Kök rota (bu kapı) kalır.
 class AuthGate extends StatefulWidget {
@@ -155,6 +164,8 @@ class _AuthGateState extends State<AuthGate> {
         screen = const DashboardPage(key: ValueKey('dashboard_screen'));
       case AuthGateView.forcedPasswordChange:
         screen = const ChangePasswordPage(key: ValueKey('forced_password_screen'), forced: true);
+      case AuthGateView.termsAcceptance:
+        screen = const TermsAcceptancePage(key: ValueKey('terms_acceptance_screen'));
     }
 
     // Geçiş sürerken çıkan ve giren tam ekran birlikte canlı kalır (iki ekran ağacı); kısa tutulur (PF-12).

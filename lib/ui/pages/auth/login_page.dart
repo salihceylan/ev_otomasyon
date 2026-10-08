@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../../models/legal_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../common/auth_form.dart';
@@ -16,6 +17,7 @@ import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/orb/orb.dart';
 import '../../widgets/surface_card.dart';
+import '../legal/legal_document_page.dart';
 import '../wifi_recovery_dialog.dart';
 import 'auth_brand.dart';
 import 'forgot_password_dialog.dart';
@@ -508,6 +510,9 @@ class _LoginPageState extends State<LoginPage> {
                               ],
                             ),
                           ),
+                          const SizedBox(height: 18),
+                          // Yasal metinler girişsiz de okunabilir (kayıt ekranındaki bağlantılarla aynı sayfalar).
+                          const _LegalFooter(),
                         ],
                       ),
                     ),
@@ -566,6 +571,51 @@ class _LoginPageState extends State<LoginPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Giriş ekranının alt bağlantıları: "Kullanıcı Sözleşmesi" · "Gizlilik ve KVKK". Her bağlantının dokunma hedefi
+/// ≥ 48 dp; dar ekranda/büyük yazıda ikinci bağlantı alt satıra iner. Anahtarlar: `Key('btn_login_terms')`,
+/// `Key('btn_login_privacy')`.
+class _LegalFooter extends StatelessWidget {
+  const _LegalFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = AppTheme.getTextMuted(context);
+    Widget link(Key key, LegalDocumentKind kind) => InkWell(
+          key: key,
+          onTap: () => LegalDocumentPage.open(context, kind),
+          borderRadius: BorderRadius.circular(AppRadius.r8),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: AppTouch.minTarget),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                widthFactor: 1,
+                child: Text(
+                  kind.shortLabel,
+                  style: TextStyle(
+                    color: muted,
+                    fontSize: AppText.caption,
+                    fontWeight: FontWeight.w600,
+                    decoration: TextDecoration.underline,
+                    decorationColor: muted,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        link(const Key('btn_login_terms'), LegalDocumentKind.terms),
+        ExcludeSemantics(child: Text('·', style: TextStyle(color: muted, fontSize: AppText.caption))),
+        link(const Key('btn_login_privacy'), LegalDocumentKind.privacy),
+      ],
     );
   }
 }

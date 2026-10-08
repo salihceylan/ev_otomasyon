@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../config/app_config.dart';
 import '../services/alarm_watch/alarm_watch_controller.dart';
 import '../services/automation_state.dart';
 import '../services/peace_notice_controller.dart';
@@ -253,7 +254,7 @@ class _AppShellState extends State<AppShell> {
       child: MaterialApp(
         navigatorKey: _navigatorKey,
         scaffoldMessengerKey: _messengerKey,
-        title: 'AHBU Ev Otomasyonu',
+        title: AppConfig.appDisplayName,
         debugShowCheckedModeBanner: false,
         theme: AppTheme.lightTheme,
         darkTheme: AppTheme.darkTheme,

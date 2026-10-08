@@ -565,6 +565,7 @@ Future<void> _openRegisterAndSubmit(WidgetTester tester) async {
   await typeInto(tester, 'field_email', kUserEmail);
   await typeInto(tester, 'field_password', kStrongPassword);
   await typeInto(tester, 'field_password_confirm', kStrongPassword);
+  await tapKey(tester, 'chk_accept_terms'); // zorunlu Kullanıcı Sözleşmesi onayı
   await tapKey(tester, 'btn_register_submit', settleAfter: false);
 }
 

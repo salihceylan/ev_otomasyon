@@ -12,6 +12,7 @@ import '../widgets/settings/appearance_cards.dart';
 import '../widgets/settings/child_lock_card.dart';
 import '../widgets/settings/device_host_card.dart';
 import '../widgets/settings/info_cards.dart';
+import '../widgets/settings/legal_texts_card.dart';
 import '../widgets/settings/peace_notification_card.dart';
 import '../widgets/settings/scheduled_rules_card.dart';
 import '../widgets/settings/service_pin_card.dart';
@@ -38,6 +39,7 @@ typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatu
 /// | Pano değişimi | `canReplaceBoard` |
 /// | Kanallar ve panjurlar | bulut modu + `canCalibrate` (ev sahibi, personel, servis oturumu, süper) |
 /// | Telemetri | cihaz yanıt verdi + misafir değil |
+/// | Yasal metinler | HER ZAMAN (girişsiz yerel kip dahil; oturum/yetki gerektirmez) |
 ///
 /// Sayfa kökü durumu izlemez; yalnızca kart görünürlüğü için tek bir `select` kullanır, kartlar
 /// kendi değerlerini seçer. Bu dosya yalnızca iskelettir; kartlar `lib/ui/widgets/settings/**` altındadır.
@@ -96,6 +98,8 @@ class DeviceSettingsPage extends StatelessWidget {
         ],
       ),
       ('Aile', Icons.family_restroom_rounded, AppFeature.family.accentFamily, [if (vm.hasUser) const AccountCard()]),
+      // Yasal metinler her rolde ulaşılabilir (sözleşme, KVKK aydınlatma metni, açık kaynak lisansları).
+      ('Hakkında', Icons.info_rounded, AppFamilies.slate, [const LegalTextsCard()]),
     ];
 
     return Scaffold(

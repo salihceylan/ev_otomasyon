@@ -1,6 +1,7 @@
 import '../config/app_config.dart';
 import 'capabilities.dart';
 import 'json_utils.dart';
+import 'legal_models.dart';
 
 /// Oturum açmış kullanıcı (`/auth/login` -> `user`).
 ///
@@ -16,6 +17,7 @@ class UserModel {
     this.adminNotes,
     this.mustChangePassword = false,
     this.emailVerified = false,
+    this.legal = UserLegalStatus.none,
   });
 
   /// Kullanıcı UUID'si (servis PIN oturumunda boş: kullanıcı satırı yoktur).
@@ -36,6 +38,10 @@ class UserModel {
 
   /// E-posta doğrulanmış mı (`email_verified`).
   final bool emailVerified;
+
+  /// Yasal metin durumu (`legal`; Kullanıcı Sözleşmesi onayı). Sunucu vermezse [UserLegalStatus.none] (onay gerekmez).
+  /// Kalıcı kayıtta da saklanır: onay bekleyen kullanıcı uygulamayı yeniden açarak sözleşme onay kapısını atlayamaz.
+  final UserLegalStatus legal;
 
   GlobalRole get globalRole => GlobalRole.parse(role);
   bool get isSuperUser => globalRole == GlobalRole.superUser;
@@ -94,6 +100,7 @@ class UserModel {
       mustChangePassword:
           asBool(json['must_change_password'] ?? json['mustChangePassword']) ?? false,
       emailVerified: asBool(json['email_verified'] ?? json['emailVerified']) ?? false,
+      legal: UserLegalStatus.fromJson(json['legal']),
     );
   }
 
@@ -106,6 +113,7 @@ class UserModel {
         if (adminNotes != null) 'admin_notes': adminNotes,
         'must_change_password': mustChangePassword,
         'email_verified': emailVerified,
+        'legal': legal.toJson(),
       };
 
   UserModel copyWith({
@@ -114,6 +122,7 @@ class UserModel {
     String? role,
     bool? mustChangePassword,
     bool? emailVerified,
+    UserLegalStatus? legal,
   }) =>
       UserModel(
         id: id,
@@ -124,6 +133,7 @@ class UserModel {
         adminNotes: adminNotes,
         mustChangePassword: mustChangePassword ?? this.mustChangePassword,
         emailVerified: emailVerified ?? this.emailVerified,
+        legal: legal ?? this.legal,
       );
 }
 

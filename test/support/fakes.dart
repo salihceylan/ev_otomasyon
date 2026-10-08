@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/models/legal_models.dart';
 import 'package:ev_otomasyon/models/scheduled_rule_model.dart';
 import 'package:ev_otomasyon/services/automation_api_service.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
@@ -1014,6 +1015,89 @@ class FakeCloudApi extends EvCloudApiService {
     return List<ScheduledRule>.of(rules);
   }
 
+  // --- Yasal metinler (GET /legal, GET /legal/:id, POST /legal/accept, GET /auth/me) ---
+
+  /// Sunucudaki yasal metinler. Varsayılan: sunucunun ilk durumu ([testLegalDocuments]: iki TASLAK metin, sürüm 1).
+  List<LegalDocument> legalDocuments = testLegalDocuments();
+
+  /// Atanırsa liste ve tek metin istekleri bu hatayla biter (ör. çevrimdışı).
+  Object? legalError;
+
+  /// Atanırsa liste / tek metin istekleri bu kapı açılana kadar bekler (yükleniyor görünümü).
+  Completer<void>? legalGate;
+
+  /// Liste / tek metin istekleri. [calls]'a YAZILMAZ (kayıt sayfasını açan testlerin çağrı beklentileri değişmesin).
+  int legalListCalls = 0;
+  final List<String> legalDocumentCalls = <String>[];
+
+  /// `POST /legal/accept` davranışı: hata, kapı ve kayıt. Varsayılan: gerçek sunucu gibi, sürüm güncel değilse
+  /// `409 LEGAL_VERSION_MISMATCH` ([legalVersionMismatch]).
+  Object? legalAcceptError;
+  Completer<void>? legalAcceptGate;
+  final List<({String document, int version})> legalAccepts = <({String document, int version})>[];
+
+  /// `GET /auth/me` yanıtının kullanıcısı (`null`: [loginUser]) ve hatası. Yanıt İSTEK ANINDAKİ değerlerle üretilir
+  /// (sunucu durumu); [meGate] atanırsa yanıt kapı açılana kadar bekler (geç gelen eski yanıt).
+  UserModel? meUser;
+  Object? meError;
+  Completer<void>? meGate;
+  int meCalls = 0;
+
+  /// Yasal uçlara ve `/auth/me`'ye yapılan çağrılar SIRAYLA (`legal:list`, `legal:get:<id>`, `legal:accept:<doc>:<v>`, `me`).
+  final List<String> legalLog = <String>[];
+
+  @override
+  Future<List<LegalDocumentInfo>> fetchLegalDocuments() async {
+    legalListCalls++;
+    legalLog.add('legal:list');
+    final gate = legalGate;
+    if (gate != null) await gate.future;
+    final error = legalError;
+    if (error != null) throw error;
+    return <LegalDocumentInfo>[for (final d in legalDocuments) d.info];
+  }
+
+  @override
+  Future<LegalDocument> fetchLegalDocument(String idOrSlug) async {
+    legalDocumentCalls.add(idOrSlug);
+    legalLog.add('legal:get:$idOrSlug');
+    final gate = legalGate;
+    if (gate != null) await gate.future;
+    final error = legalError;
+    if (error != null) throw error;
+    for (final doc in legalDocuments) {
+      if (doc.id == idOrSlug || doc.slug == idOrSlug) return doc;
+    }
+    throw const ApiException(statusCode: 404, code: 'NOT_FOUND', message: 'Kayıt bulunamadı.');
+  }
+
+  @override
+  Future<LegalAcceptance> acceptLegalDocument({required String document, required int version}) async {
+    if (isServiceSession) throw ApiException.forbidden();
+    legalAccepts.add((document: document, version: version));
+    legalLog.add('legal:accept:$document:$version');
+    final gate = legalAcceptGate;
+    if (gate != null) await gate.future;
+    final error = legalAcceptError;
+    if (error != null) throw error;
+    for (final doc in legalDocuments) {
+      if (doc.id == document && doc.version != version) throw legalVersionMismatch(doc.version);
+    }
+    return LegalAcceptance(document: document, version: version, acceptedAt: kTestNow);
+  }
+
+  @override
+  Future<Map<String, dynamic>> fetchMe() async {
+    meCalls++;
+    legalLog.add('me');
+    final error = meError;
+    final user = meUser ?? loginUser;
+    final gate = meGate;
+    if (gate != null) await gate.future;
+    if (error != null) throw error;
+    return <String, dynamic>{'user': user.toJson(), 'homes': <dynamic>[]};
+  }
+
   int count(String prefix) => calls.where((c) => c == prefix || c.startsWith('$prefix:')).length;
 }
 
@@ -1341,6 +1425,62 @@ List<EndpointModel> testEndpoints({String homeId = kHomeA, String deviceUuid = '
     ep('e6', 6, 'plug', 'Priz'),
   ];
 }
+
+/// Yasal metin (sunucu yanıtı biçiminde çözülmüş): [id] `terms` | `privacy`.
+LegalDocument testLegalDocument(
+  String id, {
+  int version = 1,
+  String status = 'draft',
+  List<LegalBlock>? blocks,
+}) {
+  final kind = LegalDocumentKind.fromId(id)!;
+  return LegalDocument(
+    info: LegalDocumentInfo(
+      id: kind.id,
+      slug: kind.slug,
+      title: kind.title,
+      version: version,
+      effectiveDate: '2026-10-08',
+      status: status,
+      requiresAcceptance: kind == LegalDocumentKind.terms,
+      url: kind.publicPath,
+    ),
+    blocks: blocks ??
+        <LegalBlock>[
+          LegalBlock(type: LegalBlockType.h1, text: kind.title),
+          const LegalBlock(type: LegalBlockType.h2, text: '1. Taraflar'),
+          LegalBlock(type: LegalBlockType.p, text: '${kind.label} metninin **$version. sürümü**.'),
+          const LegalBlock(type: LegalBlockType.li, text: 'Madde işaretli öğe'),
+          const LegalBlock(type: LegalBlockType.oli, text: 'Numaralı öğe', n: 1),
+        ],
+  );
+}
+
+/// Sunucunun ilk durumu: Kullanıcı Sözleşmesi ve Gizlilik/KVKK metni, ikisi de TASLAK, sürüm 1.
+List<LegalDocument> testLegalDocuments({int termsVersion = 1, String termsStatus = 'draft'}) => <LegalDocument>[
+      testLegalDocument('terms', version: termsVersion, status: termsStatus),
+      testLegalDocument('privacy'),
+    ];
+
+/// `409 LEGAL_VERSION_MISMATCH` (sunucu gövdesi: `data.current_version`).
+ApiException legalVersionMismatch(int currentVersion) => ApiException(
+      statusCode: 409,
+      code: 'LEGAL_VERSION_MISMATCH',
+      message: ApiException.clientMessages['LEGAL_VERSION_MISMATCH']!,
+      details: <String, dynamic>{
+        'success': false,
+        'code': 'LEGAL_VERSION_MISMATCH',
+        'data': <String, dynamic>{'current_version': currentVersion},
+      },
+    );
+
+/// Onay bekleyen (kesinleşmiş sözleşmenin [current] sürümünü henüz onaylamamış) kullanıcının yasal durumu.
+UserLegalStatus pendingTerms({int current = 1, int? accepted}) => UserLegalStatus(
+      termsAcceptedVersion: accepted,
+      termsCurrentVersion: current,
+      termsStatus: 'final',
+      needsAcceptance: true,
+    );
 
 /// Cihaz `state` yükü (CONTRACTS §2.4) üretir.
 Map<String, dynamic> stateJson({

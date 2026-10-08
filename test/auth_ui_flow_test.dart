@@ -330,11 +330,14 @@ void main() {
       if (phone.isNotEmpty) await typeInto(tester, 'field_phone', phone);
       await typeInto(tester, 'field_password', password);
       await typeInto(tester, 'field_password_confirm', password);
+      await tapKey(tester, 'chk_accept_terms'); // zorunlu Kullanıcı Sözleşmesi onayı
     }
 
     testWidgets('boş alanlar ve politika dışı şifre reddedilir; API çağrılmaz', (tester) async {
       final env = e2Env(authenticated: false);
       await pumpApp(tester, state: env.state, child: const RegisterPage());
+      await settle(tester); // güncel sözleşme sürümü alındı
+      await tapKey(tester, 'chk_accept_terms'); // onaysız düğme zaten pasif: doğrulama hataları için işaretlenir
 
       await tapKey(tester, 'btn_register_submit');
       expect(find.text('Lütfen adınızı ve soyadınızı girin'), findsOneWidget);
@@ -384,6 +387,7 @@ void main() {
       expect(args['email'], 'yeni+kayit@ornek.com.tr');
       expect(args['passwordEdgeSpace'], isTrue, reason: 'şifre kırpılmadan gitti');
       expect(args['phone'], isNull, reason: 'boş telefon gönderilmez');
+      expect(args['acceptTermsVersion'], 1, reason: 'onaylanan sözleşme sürümü kayıtla gider');
       expect(env.state.authStatus, AuthStatus.authenticated);
     });
 

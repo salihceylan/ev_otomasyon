@@ -95,8 +95,11 @@ void main() {
       await pumpApp(tester, state: env.state, size: size, child: const RegisterPage());
       await settle(tester);
       noException(tester, 'açılış');
+      await tapVisible(tester, 'chk_accept_terms'); // onaysız düğme pasif: doğrulama hataları için işaretlenir
+      noException(tester, 'sözleşme onayı');
       await tapVisible(tester, 'btn_register_submit');
       noException(tester, 'doğrulama hataları');
+      expect(find.text('Lütfen adınızı ve soyadınızı girin'), findsOneWidget);
     },
     'şifremi unuttum': (tester, size) async {
       final env = e2Env(authenticated: false);
@@ -327,8 +330,10 @@ void main() {
       await typeInto(tester, 'field_phone', '05551112233');
       await typeInto(tester, 'field_password', 'ornek-parola-1234');
       await typeInto(tester, 'field_password_confirm', 'ornek-parola-1234');
+      await tapVisible(tester, 'chk_accept_terms');
       await tapVisible(tester, 'btn_register_submit');
       noException(tester, 'sunucu hatası');
+      expect(find.byKey(const Key('register_error')), findsOneWidget);
     },
     'aile listesi (yükleme hatası + yeniden dene)': (tester, size) async {
       final env = e2Env();

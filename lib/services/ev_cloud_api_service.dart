@@ -9,6 +9,7 @@ import '../models/api_models.dart';
 import '../models/cloud_models.dart';
 import '../models/install_template_models.dart';
 import '../models/json_utils.dart';
+import '../models/legal_models.dart';
 import '../models/safety_models.dart';
 import '../models/scheduled_rule_model.dart';
 import 'alarm_watch/refresh_gate.dart';
@@ -766,11 +767,16 @@ class EvCloudApiService {
   }
 
   /// Yeni kullanıcı kaydı.
+  ///
+  /// [acceptTermsVersion]: kullanıcının kayıt ekranında onayladığı Kullanıcı Sözleşmesi sürümü (`accept_terms_version`);
+  /// sunucu onayı hesapla BİRLİKTE kaydeder. Sürüm güncel değilse `409 LEGAL_VERSION_MISMATCH`
+  /// ([ApiException.isLegalVersionMismatch]) döner ve hesap AÇILMAZ (oturum başlamaz). Verilmezse alan gönderilmez.
   Future<Map<String, dynamic>> register({
     required String fullName,
     required String email,
     required String password,
     String? phone,
+    int? acceptTermsVersion,
   }) async {
     final body = await _call(
       'POST',
@@ -780,6 +786,7 @@ class EvCloudApiService {
         'email': email.trim(),
         'password': password,
         if (phone != null && phone.trim().isNotEmpty) 'phone': phone.trim(),
+        'accept_terms_version': ?acceptTermsVersion,
       },
       auth: false,
     );
@@ -2192,6 +2199,46 @@ class EvCloudApiService {
       if (e.statusCode == 404 || e.statusCode == 405) return null;
       rethrow;
     }
+  }
+
+  // --- Yasal metinler (Kullanıcı Sözleşmesi / KVKK) -------------------------------------------------------------
+  // Sunucu metinleri `server/legal/<slug>.md`'den okur; liste ve metin uçları herkese açıktır (kimliksiz: 401 yenileme /
+  // oturum sonu tetiklemez).
+
+  /// Yasal metin listesi (`GET /legal`, kimliksiz): `data.documents` sunucu sırasıyla (Kullanıcı Sözleşmesi, Gizlilik).
+  /// Sunucuda metin yoksa boş liste. Bozuk kayıt atlanır.
+  Future<List<LegalDocumentInfo>> fetchLegalDocuments() async {
+    final body = await _call('GET', '/v1/legal', auth: false);
+    final data = _data(body);
+    return parseList(data['documents'] ?? body['documents'], LegalDocumentInfo.fromJson, label: 'LegalDocumentInfo');
+  }
+
+  /// Tek yasal metin (`GET /legal/:id`, kimliksiz; [idOrSlug] `terms` | `privacy` ya da kısa ad): üst bilgi + bloklar.
+  /// Bilinmeyen metin `404 NOT_FOUND`; üst bilgisi eksik yanıt `502 BAD_RESPONSE`.
+  Future<LegalDocument> fetchLegalDocument(String idOrSlug) async {
+    final body = await _call('GET', '/v1/legal/${_seg(idOrSlug.trim())}', auth: false);
+    return _parseOrThrow(() => LegalDocument.fromJson(_data(body)));
+  }
+
+  /// Yasal metnin [version] sürümünü onaylar (`POST /legal/accept`; kullanıcı oturumu gerekir, servis PIN oturumunda
+  /// yasak). Sürüm güncel değilse `409 LEGAL_VERSION_MISMATCH` ([ApiException.currentLegalVersion] güncel sürümü
+  /// verir); onay gerektirmeyen / bilinmeyen metin `400 VALIDATION`. Aynı sürümün yinelenen onayı başarıdır (idempotent).
+  Future<LegalAcceptance> acceptLegalDocument({required String document, required int version}) async {
+    if (isServiceSession) throw ApiException.forbidden();
+    final doc = document.trim();
+    if (doc.isEmpty || version <= 0) throw ApiException.validation('Onaylanacak metin ya da sürümü geçersiz.');
+    final body = await _call(
+      'POST',
+      '/v1/legal/accept',
+      body: <String, dynamic>{'document': doc, 'version': version},
+    );
+    return LegalAcceptance.fromJson(_data(body), document: doc, version: version);
+  }
+
+  /// Oturumdaki kullanıcının profili (`GET /auth/me`): `data` = `{user, homes}` (`user.legal` dahil).
+  Future<Map<String, dynamic>> fetchMe() async {
+    final body = await _call('GET', '/v1/auth/me');
+    return _data(body);
   }
 }
 

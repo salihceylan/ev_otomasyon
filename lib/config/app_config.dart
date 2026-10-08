@@ -28,6 +28,9 @@ class AppConfig {
     required this.overridesApplied,
   });
 
+  /// Uygulamanın görünen adı (görev değiştirici başlığı, açık kaynak lisansları sayfası).
+  static const String appDisplayName = 'AHBU Ev Otomasyonu';
+
   /// Üretim REST kök adresi.
   static const String defaultApiBaseUrl = 'https://evotomasyon.gudeteknoloji.com.tr/api';
 

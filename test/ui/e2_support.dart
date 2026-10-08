@@ -68,6 +68,7 @@ class E2Cloud extends FakeCloudApi {
     required String email,
     required String password,
     String? phone,
+    int? acceptTermsVersion,
   }) async {
     calls.add('register');
     registerArgs.add(<String, Object?>{
@@ -76,6 +77,7 @@ class E2Cloud extends FakeCloudApi {
       'passwordLength': password.length,
       'passwordEdgeSpace': password != password.trim(),
       'phone': phone,
+      'acceptTermsVersion': acceptTermsVersion,
     });
     final gate = registerGate;
     if (gate != null) await gate.future;

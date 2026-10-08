@@ -14,6 +14,7 @@ import '../pages/auth/social_sign_in.dart';
 import '../pages/family/family_members_page.dart';
 import '../pages/family/invite_family_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
+import '../pages/legal/legal_texts_page.dart';
 import '../pages/service_management_page.dart';
 import '../motion/motion.dart';
 import '../theme/app_theme.dart';
@@ -319,6 +320,25 @@ class UserProfileDialog extends StatelessWidget {
                     ],
                   ),
                 ],
+                const SizedBox(height: 18),
+                // Yasal metinler her rolde (servis oturumu ve konsollar dahil) ulaşılabilir.
+                Text('Hakkında', style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: muted)),
+                const SizedBox(height: 8),
+                _InfoGroup(
+                  rows: [
+                    _ProfileRow(
+                      key: const Key('btn_open_legal'),
+                      icon: Icons.gavel_rounded,
+                      family: AppFamilies.slate,
+                      label: 'Yasal Metinler',
+                      onTap: () {
+                        final navigator = Navigator.of(context);
+                        navigator.pop();
+                        navigator.push(MaterialPageRoute<void>(builder: (_) => const LegalTextsPage()));
+                      },
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 16),
                 // Yıkıcı ama sık kullanılan çıkış: tonlu rose çerçeveli düğme (gradyan değil): birincil eylemle yarışmaz.
                 OutlinedButton.icon(

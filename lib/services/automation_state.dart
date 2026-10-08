@@ -13,6 +13,7 @@ import '../models/capabilities.dart';
 import '../models/cloud_models.dart';
 import '../models/endpoint_sync.dart';
 import '../models/json_utils.dart';
+import '../models/legal_models.dart';
 import '../models/scheduled_rule_model.dart';
 import '../utils/qr_claim_parser.dart';
 import 'alarm_watch/alarm_watch_support.dart';
@@ -1539,11 +1540,14 @@ class AutomationState extends ChangeNotifier {
     return _handleAuthSuccess(res, previousRefreshToken: previous);
   }
 
+  /// Yeni hesap. [acceptTermsVersion]: kayıt ekranında onaylanan Kullanıcı Sözleşmesi sürümü (onay hesapla birlikte
+  /// kaydedilir); güncel değilse `409 LEGAL_VERSION_MISMATCH` fırlar ve hesap açılmaz.
   Future<bool> register({
     required String fullName,
     required String email,
     required String password,
     String? phone,
+    int? acceptTermsVersion,
   }) async {
     final previous = cloudApi.currentRefreshToken;
     final res = await cloudApi.register(
@@ -1551,6 +1555,7 @@ class AutomationState extends ChangeNotifier {
       email: email,
       password: password,
       phone: phone,
+      acceptTermsVersion: acceptTermsVersion,
     );
     return _handleAuthSuccess(res, previousRefreshToken: previous);
   }
@@ -1947,6 +1952,7 @@ class AutomationState extends ChangeNotifier {
         await _startDirectSession(epoch);
       } else {
         unawaited(_selectInitialHome());
+        unawaited(_syncLegalStatus(epoch));
       }
       return;
     }
@@ -1961,6 +1967,7 @@ class AutomationState extends ChangeNotifier {
       await _startDirectSession(epoch);
     } else {
       unawaited(_selectInitialHome());
+      unawaited(_syncLegalStatus(epoch));
     }
   }
 
@@ -5196,5 +5203,97 @@ class AutomationState extends ChangeNotifier {
   Future<JoinCodePreview?> previewJoinCode(String code) async {
     if (!isAuthenticated || isServiceSession) throw ApiException.forbidden();
     return cloudApi.previewJoinCode(code);
+  }
+
+  // --- Yasal metinler (Kullanıcı Sözleşmesi / KVKK) -------------------------------------------------------------
+  // AYRIK blok. Sunucu sözleşmesi: `GET /legal`, `GET /legal/:id`, `POST /legal/accept`, kullanıcıdaki `legal` nesnesi.
+
+  /// Oturumdaki kullanıcı, uygulamayı kullanmaya devam etmeden önce Kullanıcı Sözleşmesi'nin güncel sürümünü onaylamalı
+  /// mı (`user.legal.needs_acceptance`; giriş kapısı `TermsAcceptancePage`'i gösterir). Sunucu bunu yalnız kesinleşmiş
+  /// (`final`) metin için ve personel dışı hesaplarda `true` döndürür. Personel (süper yönetici / servis sorumlusu), servis
+  /// PIN oturumu ve yerel ağ (LAN) kipinde HİÇBİR ZAMAN `true` değildir: ağ gerektiren bir onaya kullanıcı kilitlenmez.
+  bool get needsTermsAcceptance {
+    final user = _currentUser;
+    if (user == null || !isAuthenticated || _mode != AppMode.cloud || isServiceSession) return false;
+    if (user.isServiceManagerOrSuper || user.isServiceSession) return false;
+    return user.legal.needsAcceptance;
+  }
+
+  /// Yasal metin listesi (herkese açık; kayıt ekranı güncel sözleşme sürümünü buradan alır).
+  Future<List<LegalDocumentInfo>> fetchLegalDocuments() => cloudApi.fetchLegalDocuments();
+
+  /// Tek yasal metin (`terms` | `privacy`; herkese açık).
+  Future<LegalDocument> fetchLegalDocument(String id) => cloudApi.fetchLegalDocument(id);
+
+  /// Kullanıcı Sözleşmesi'nin [version] sürümünü onaylar: `POST /legal/accept`, ardından kullanıcı `GET /auth/me` ile
+  /// yenilenir (yetkili durum sunucudadır). Onay kaydedildi ama `/auth/me` alınamadıysa (ağ) yerel durum güncellenir:
+  /// kullanıcı çıkmaza düşmez. Sürüm güncel değilse `409 LEGAL_VERSION_MISMATCH` ([ApiException.isLegalVersionMismatch])
+  /// iletilir ve durum DEĞİŞMEZ (arayüz güncel metni yükleyip yeniden sorar). Servis PIN oturumunda yasak.
+  Future<void> acceptTerms(int version) async {
+    if (_currentUser == null || !isAuthenticated || isServiceSession) throw ApiException.forbidden();
+    final epoch = _sessionEpoch;
+    await cloudApi.acceptLegalDocument(document: LegalDocumentKind.terms.id, version: version);
+    if (_isStaleSession(epoch)) return;
+    var refreshed = false;
+    try {
+      refreshed = await refreshCurrentUser();
+    } catch (e) {
+      _log('Kullanıcı yenilenemedi (${e is ApiException ? e.statusCode : e.runtimeType})');
+    }
+    if (refreshed || _isStaleSession(epoch)) return;
+    final current = _currentUser;
+    if (current == null) return;
+    _applyUserUpdate(current.copyWith(legal: current.legal.withAcceptedTerms(version)), epoch);
+  }
+
+  /// Oturumdaki kullanıcıyı sunucudan yeniler (`GET /auth/me`) ve saklar. `false`: oturum yok / servis oturumu / yanıt
+  /// başka hesaba ait ya da çözülemedi (durum değişmez). Ağ ve sunucu hataları [ApiException] olarak iletilir.
+  Future<bool> refreshCurrentUser() async {
+    final user = _currentUser;
+    if (user == null || user.id.isEmpty || !isAuthenticated || isServiceSession) return false;
+    final epoch = _sessionEpoch;
+    final payload = await cloudApi.fetchMe();
+    if (_isStaleSession(epoch)) return false;
+    final fresh = _userFromMe(payload);
+    if (fresh == null || fresh.id != user.id) return false;
+    _applyUserUpdate(fresh, epoch);
+    return true;
+  }
+
+  /// Geri yüklenen bulut oturumunda yasal durumu sunucuyla eşitler (arka planda, sessiz): saklı kullanıcı kaydı eski
+  /// olabilir (ör. sözleşme bu arada kesinleşti ya da yeni sürümü yayımlandı). YALNIZ `legal` alanı güncellenir (ad,
+  /// rol gibi alanlar oturum açılışındaki davranışıyla kalır); ağ hatası yutulur ve saklı durum korunur (onay bekleyen
+  /// kullanıcı kapıyı atlayamaz). Yanıt gelene kadar kullanıcı kaydı değiştiyse (ör. sözleşme onaylandı ve `GET /auth/me`
+  /// ile yenilendi) bu yanıt ESKİDİR ve uygulanmaz: aksi halde onaydan önceki durum kapıyı yeniden açardı.
+  Future<void> _syncLegalStatus(int epoch) async {
+    final user = _currentUser;
+    if (user == null || user.id.isEmpty || _mode != AppMode.cloud || isServiceSession || _isStaleSession(epoch)) return;
+    try {
+      final payload = await cloudApi.fetchMe();
+      if (_isStaleSession(epoch) || !identical(_currentUser, user)) return;
+      final fresh = _userFromMe(payload);
+      if (fresh == null || fresh.id != user.id || fresh.legal == user.legal) return;
+      _applyUserUpdate(user.copyWith(legal: fresh.legal), epoch);
+    } catch (e) {
+      _log('Yasal metin durumu alınamadı (${e is ApiException ? e.statusCode : e.runtimeType})');
+    }
+  }
+
+  /// `GET /auth/me` yükündeki kullanıcı; yoksa / çözülemezse `null`.
+  UserModel? _userFromMe(Map<String, dynamic> payload) {
+    final map = asMap(payload['user']);
+    if (map == null) return null;
+    try {
+      return UserModel.fromJson(map);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Oturumdaki kullanıcı kaydını değiştirir, bildirir ve güvenli depoya yazar (oturum değiştiyse yazılmaz).
+  void _applyUserUpdate(UserModel updated, int epoch) {
+    _currentUser = updated;
+    notifyListeners();
+    unawaited(_enqueueStorage(() => secureStorage.saveUser(updated), epoch: epoch));
   }
 }

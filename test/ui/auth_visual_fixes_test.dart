@@ -470,6 +470,7 @@ void main() {
       await typeInto(tester, 'field_email', 'ayse@ornek.test');
       await typeInto(tester, 'field_password', 'dogru-parola-1234');
       await typeInto(tester, 'field_password_confirm', 'dogru-parola-1234');
+      await tapKey(tester, 'chk_accept_terms'); // zorunlu Kullanıcı Sözleşmesi onayı
       await tapKey(tester, 'btn_register_submit', settleAfter: false);
       await tester.pump();
       expect(find.descendant(of: find.byKey(const Key('btn_register_submit')), matching: find.byType(ProgressArc)), findsOneWidget);

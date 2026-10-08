@@ -137,6 +137,21 @@ class ApiException implements Exception {
   /// Hesap silinemiyor: kullanıcı bazı evlerin **tek sahibi** (409 `SOLE_OWNER`); önce devretmelidir.
   bool get isSoleOwner => code == 'SOLE_OWNER';
 
+  /// Onaylanmak istenen yasal metin sürümü güncel değil (409 `LEGAL_VERSION_MISMATCH`; kayıt ve sözleşme onayı): güncel
+  /// metin yeniden yüklenip kullanıcıya yeniden sorulmalıdır. Güncel sürüm [currentLegalVersion]'dadır.
+  bool get isLegalVersionMismatch => code == 'LEGAL_VERSION_MISMATCH';
+
+  /// `409 LEGAL_VERSION_MISMATCH` gövdesindeki güncel sürüm (`data.current_version`; eski biçim üst düzey
+  /// `current_version`). Yoksa / pozitif tam sayı değilse `null`.
+  int? get currentLegalVersion {
+    final details = this.details;
+    if (details == null) return null;
+    final data = details['data'];
+    final raw = (data is Map ? data['current_version'] : null) ?? details['current_version'];
+    final value = raw is int ? raw : (raw is num ? raw.toInt() : (raw is String ? int.tryParse(raw.trim()) : null));
+    return (value != null && value > 0) ? value : null;
+  }
+
   @override
   String toString() => message;
 
@@ -155,6 +170,8 @@ class ApiException implements Exception {
     // Faz 2 incelemesi G-1: bulut yolunun yetki sınırı (gaz vanası uzaktan açılabilir kılınamaz; kurulu kipte alarm zayıflatılamaz)
     'GAS_VALVE_LOCAL_ONLY': 'Bu değişiklik gaz vanasını uzaktan açılabilir kılar; yalnız panonun başında (seri bağlantıyla) yapılabilir.',
     'INTRUSION_ARMED': 'Alarm kurulu: alarmı zayıflatan değişiklik için önce alarmı kapatın.',
+    // Yasal metinler: kayıt / sözleşme onayı eski sürümle gönderildi (sunucu sürümünden bağımsız, tutarlı dil).
+    'LEGAL_VERSION_MISMATCH': 'Kullanıcı Sözleşmesi güncellendi. Lütfen güncel metni okuyup yeniden onaylayın.',
   };
 
   /// HTTP durum koduna göre varsayılan Türkçe mesaj (sunucu mesaj vermediyse).
