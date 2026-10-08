@@ -191,15 +191,22 @@ Evde en çok 20 açık davet.
 "Kod ile Bir Eve Katıl" → "Davet / Devir Kodu" → "Devam" (önizleme) → "Eve Katıl".
 
 ### 8.3 Üyeler
-"Aile & Misafir Yönetimi" → "Yetkiyi İptal Et". Son sahip kaldırılamaz.
+"Aile & Misafir Yönetimi" → "Yetkiyi İptal Et". Son sahip kaldırılamaz. Bekleyen (henüz kullanılmamış) davetler aynı
+ekranda listelenir ve iptal edilebilir.
+
+Sahip ya da aile üyesi (misafir değil) evden çıkarılınca sunucu, **tek panolu evde** panonun yerel anahtarını kendiliğinden
+değiştirir: çıkarılan kişinin bildiği anahtar geçersiz olur. Pano çevrimiçiyken birkaç saniyede tamamlanır; yerel moddaki
+telefonlar yeni anahtarı buluttan kendiliğinden alır. Çok panolu evde bu değişim yapılmaz.
 
 ### 8.4 Ev devri
 Sahip "48 Saatlik Devir Kodu & QR Üret" → yeni sahip kodu girip "DEVRAL" yazar → "Daireyi Devral". Eski sahip dahil tüm
-üyeler erişimini kaybeder. "Devir İşlemini İptal Et" ile vazgeçilebilir.
+üyeler erişimini kaybeder. "Devir İşlemini İptal Et" ile vazgeçilebilir. Devir kabul edilince panonun yerel anahtarı da
+değişir (8.3'teki gibi).
 
 ### 8.5 Servise geçici erişim
 "Yetkili Servis İçin Geçici PIN" → "6 Haneli Servis PIN'i Üret" (bir kez gösterilir, 2 saat, tek kullanım, yalnız bu ev).
-Açık servis oturumları listelenir; "Servis erişimini kapat" hepsini sonlandırır.
+Açık servis oturumları listelenir; "Servis erişimini kapat" hepsini sonlandırır. Servis oturumu panonun yerel anahtarını
+okuduysa oturum bitince anahtar değişir (8.3'teki gibi).
 
 ---
 
@@ -211,15 +218,27 @@ Açık servis oturumları listelenir; "Servis erişimini kapat" hepsini sonland�
 
 ---
 
-## 10. Açık kalan konular (onayınızla düzeltilecek)
+## 10. Açık kalan konular
 
-1. **Yerel moda ilk kez geçiş:** giriş yapılmamış ve anahtarı olmayan telefonda IP/anahtar alanı görünmeyebilir
-   (incelemede bulundu, elle denenmedi).
-2. **Kanal ve oda adlarını kullanıcı değiştiremiyor;** yalnız servis sihirbazında.
-3. **Provizyonsuz pano buluta kendiliğinden bağlanamaz;** pano atölyede provizyon görmediyse servis gerekir.
-4. **Pano modeme kabloyla bağlıysa** evin ağındaki herkes panoya anahtarsız erişebilir (kararınız; bilgi için).
-5. **Gece hatırlatması ve alarm, iOS'ta** yalnız uygulama açılınca görünür.
-6. **Uygulama içi güvenlik olay listesi "alarm kalktı" olayını üretmiyor olabilir** (pano normal bölgeleri durumda
-   göndermiyor; arka plan bildirimi bunu ayrıca çözüyor). İncelemede bulundu, elle denenmedi.
-7. **Arka plan bildirimi cihazda denenmedi:** servisin başlaması, kaydırıp kapatınca sürmesi, yeniden başlatmada açılması,
+> 2026-10-08 akşamı mantık denetiminden sonra güncellendi (ayrıntı `docs/denetim/2026-10-08-mantik-denetimi.md`). Önceki
+> listeden kapananlar: girişsiz yerel mod artık IP + anahtarla çalışıyor ve anahtar saklanıyor (bireysel-5, kullanim-7);
+> sahip kanal adını, odasını, lamba/priz tipini ve panjur süresini "Cihaz & Sistem Ayarları" → "Kanallar ve Panjurlar" →
+> "Kanalları Düzenle" ile değiştirebiliyor (bireysel-10; aile üyesi değiştiremez); güvenlik olay listesi "alarm kalktı"
+> olayını üretiyor (guvenlik-10).
+
+1. **Provizyonsuz pano buluta kendiliğinden bağlanamaz;** pano atölyede provizyon görmediyse servis gerekir.
+2. **Pano modeme kabloyla bağlıysa** evin ağındaki herkes panoya anahtarsız erişebilir (kararınız; bilgi için). Bunun gaz
+   vanası ve hırsız alarmı kurallarına etkisi aşağıdaki karar maddesindedir (guvenlik-14).
+3. **Gece hatırlatması ve alarm, iOS'ta** yalnız uygulama açılınca görünür.
+4. **Arka plan bildirimi cihazda denenmedi:** servisin başlaması, kaydırıp kapatınca sürmesi, yeniden başlatmada açılması,
    pil davranışı ve bildirim sesi ancak telefonda doğrulanır.
+5. **Kararınızı bekleyen maddeler** (raporda "Karar gerektiren maddeler"; uygulanmadı):
+   - **guvenlik-14:** Ethernet'teki anahtarsız erişim gaz vanasının su vanasına çevrilip açılmasına ve hırsız alarmının
+     anahtarsız çözülmesine izin veriyor; süresi biten misafir ev ağındayken bunu yapabiliyor. Öneri: gaz vanası yalnız
+     seri konsoldan, alarm Ethernet'te de anahtarla.
+   - **kayit-dogrulama:** kayıtta e-posta/telefon doğrulaması zorunlu değil; e-postasını doğrulamamış müşteri servis
+     kurulumunda parolasını e-postadaki bağlantıyla yeniden belirlemek zorunda kalır.
+   - **bireysel-9-yayin:** etiket karekodu telefon kamerasıyla okutulunca uygulama yerine tarayıcıda açılıyor (Android/iOS
+     bağlantı doğrulama dosyaları için imza bilgileri gerekli).
+   - **bireysel-5-eth:** girişsiz kullanıcıya Ethernet'teki anahtarsız erişim uygulamada açılmadı. Öneri: açılmasın (aynı
+     ağdaki herkes uygulamayı kurup panoyu yönetebilirdi).

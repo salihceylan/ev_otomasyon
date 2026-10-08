@@ -831,6 +831,34 @@ ve MQTT bağlanır. Bekleme: 202 → 10 dk, 401 → 60 dk, 429/ağ hatası → 3
 doğrulaması MQTT ile aynı kök sertifikalarla (ISRG). Provizyonsuz pano (yerel anahtar yok) bootstrap yapamaz.
 Durum alanı: tam `/api/status` ve seri `STATUS`'ta `bootstrap: idle|waiting_claim|ok|denied|error`.
 
+## 3g. 2026-10-08 mantık denetimi: sözleşme değişiklikleri (özet)
+
+Ayrıntı ve bileşen ekiplerinin tam notları: `docs/denetim/2026-10-08-mantik-denetimi.md` ("Sözleşme ve belge notları").
+Firmware v1.3.1, sunucu `c5f9ece` (migration `037`, `038`).
+
+- **Yerel anahtar izi `lk_fp`:** `HMAC-SHA256(anahtar = local_key, ileti = "ahbu-lk-fp/1|" + BÜYÜK HARF UID)` çıktısının
+  küçük harf hex ilk 8 karakteri; anahtarın kendisi hiçbir yere yazılmaz. Firmware yalnız provizyonluyken bildirir: tam
+  `GET /api/status` `lk_fp`, MQTT state `lk_fp`, seri `STATUS` "Anahtar izi:". Sunucu state'tekini `devices.local_key_fp`'ye
+  yazar; `GET /homes/:homeId/devices/:uuid/local-key` yanıtı `local_key_fp` da döndürür. Ethernet'te `auth/check` her zaman
+  200 olduğundan uygulama ve servis yazılımı anahtar uyumunu bununla doğrular. Test vektörü:
+  (`ABCDEFGH23456789`, `AHBU-S3-DD8754`) → `c7076562`.
+- **Yerel anahtar döndürme (pano-6):** sahip/aile üyesi çıkarma, ev devri, assign-admin'in üyelik silmesi, kalan evin
+  sahibinin/üyesinin hesap silmesi ve anahtarı okumuş servis oturumunun bitişi yeni anahtarı `local_key_pending_enc`'e yazar.
+  Köprü uzlaştırıcısı pano canlıyken `ev/{t}/sys {cmd:'set_local_key'}` yayınlar ve state'teki `lk_fp` yeni anahtara uyunca
+  takas eder (v1.3.1 öncesi panoda PUBACK sonrası). Yalnız tek panolu ev; uyumsuz izde `local_key_mismatch` denetim kaydı.
+- **`ev/{t}/status` JSON:** `{"status":"online|offline","uid":"<UID>"}` (bağlantı, LWT, planlı yeniden başlatma). Sunucu
+  düz metni de okur (geriye uyumlu); çok panolu evde bir panonun düşmesi diğerini çevrimdışı göstermez.
+- **Provizyon durumu:** tam durumda gerçek `provisioned` (Ethernet'ten anahtarsız erişilen provizyonsuz pano `false` bildirir).
+  Provizyonsuz panoda `POST /api/auth/rekey` → `403 unprovisioned`; MQTT `set_local_key` yok sayılır.
+- **Komut retleri:** reddedilen genel komutlar `last_rej` üretir; `cfg.safety{rev,crc}` boş yapılandırmada da bildirilir.
+- **Yeni REST uçları:** `GET /homes/:homeId/invitations` (kullanılmamış, süresi dolmamış davetler; kod dönmez),
+  `DELETE /homes/:homeId/invitations/:invitationId`, `POST /admin/inventory/:uuid/clear-pin-lock` (yalnız süper kullanıcı:
+  kurulum PIN deneme kilidi sıfırlanır).
+- **Ortam değişkeni:** `REFRESH_RETRY_GRACE_SEC` (varsayılan 3600, 0 = kapalı, en çok 86400): yanıtı kaybolan refresh
+  isteğinin tekrarı bu süre içinde oturum ailesini iptal ettirmez.
+- **Migration:** `034` (huzur bildirimi `skipped_hazard`), `035` (site/şablon), `036` (bootstrap nonce), `037` (yerel anahtar
+  izi ve tutarlılık), `038` (pano değişimi onarımları).
+
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 
 `src/DeviceCommand.h` içinde tanımlıdır. Her görev (MQTT, Web, CLI, DI) röle/panjur durumunu **doğrudan değiştirmez**;

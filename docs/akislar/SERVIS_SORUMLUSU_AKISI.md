@@ -207,17 +207,25 @@
 
 ---
 
-## 9. Açık kalan konular (onayınızla düzeltilecek)
+## 9. Açık kalan konular
+
+> 2026-10-08 akşamı mantık denetiminden sonra güncellendi (92 bulgu, 89'u düzeltildi; ayrıntı
+> `docs/denetim/2026-10-08-mantik-denetimi.md`). Önceki listeden kapananlar: servis yazılımında seçili sürüm artık v1.3.1
+> (kartta denendi); eskimiş ekran/rehber metinleri (atolye-16); daire "Teslim edildi" geçişi (servis_kurulum-10); "Kanalları
+> Uygula"ya basmadan kaydetme (atolye-9); Ethernet'te ilk hazırlık ve yeniden deneme artık panonun kablolu adresine gidiyor
+> (servis_kurulum-1); girişsiz karta yazımda kaydın kaybolması artık uyarılıyor (atolye-11).
 
 1. **Uzaktan güncelleme yok:** her firmware değişikliği için kart USB'ye takılmalı.
-2. **Provizyonsuz Ethernet panosu buluta kendiliğinden bağlanamaz** (kimlik isteğini imzalayacak anahtarı yok); sihirbazın
-   6. adımı ya da önceden provizyon gerekir.
-3. **Servis yazılımında güncel sürüm v1.2.1 seçili;** v1.3.0 donanımda denendikten sonra güncel yapılmalı.
-4. **Servis yazılımında eskimiş metinler:** "Karta Yaz" penceresi Ethernet için hâlâ "yerel anahtar sunucudan alınır"
-   diyor; giriş penceresi başlığı "Süper Kullanıcı Girişi"; rehberde v1.1.2 ve "Ethernet kapalı" yazıyor.
-5. **Ethernet yazımında kart kimliği denetlenmiyor** (kararınız; yanlış IP başka karta yazar).
-6. **Daire "Teslim edildi"ye fiilen geçmiyor:** sihirbazdaki teslim daire durumunu güncellemiyor.
-7. **Şablon düzenleyicide ek modül** "Kanalları Uygula"ya basılmadan kaydedilirse işlenmiyor.
-8. **Ethernet provizyonunda hızlı doğrulama başarısız olursa** yeniden doğrulama düğmesi kurulum ağı adresine gidiyor.
-9. **Giriş yapılmadan karta yazılırsa** yazım kaydı sunucuya düşmüyor ve uyarı çıkmıyor.
-10. **Telefon alarm bildirimi** yalnız Android'de ve cihazda henüz denenmedi; iOS'ta yok.
+2. **Provizyonsuz pano buluta kendiliğinden bağlanamaz** (kimlik isteğini imzalayacak anahtarı yok). Ethernet'te de sihirbaz
+   önce ilk hazırlığı ister (pano v1.3.1'de gerçek `provisioned` değerini bildirir).
+3. **Ethernet yazımında kart kimliği denetlenmiyor** (kararınız; yanlış IP başka karta yazar).
+4. **Telefon alarm bildirimi** yalnız Android'de ve cihazda henüz denenmedi; iOS'ta yok.
+5. **Ethernet kablosu ve panonun kendi bulut kimliği (bootstrap)** gerçek kablo ve sunucuyla henüz denenmedi.
+6. **Kararınızı bekleyen maddeler** (raporda "Karar gerektiren maddeler"; uygulanmadı):
+   - **guvenlik-14:** Ethernet'teki anahtarsız erişim, gaz vanası ve hırsız alarmı kurallarını deliyor (Ethernet'ten güvenlik
+     yapılandırması yazılabiliyor, alarm anahtarsız çözülebiliyor). Öneri: gaz vanası yalnız gerçek seri konsoldan açılsın,
+     alarm Ethernet'te de anahtar istesin; Ethernet kolaylığı korunur.
+   - **kayit-dogrulama:** kayıtta e-posta/telefon doğrulaması zorunlu değil. Doğrulanmamış hesaba servis kurulumunda/atamada
+     güvenlik için parola sıfırlaması gider. Öneri: sonraki sürümde "bekleyen kayıt" modeli (hesap kod girilince açılır).
+   - **bireysel-9-yayin:** etiket karekodunun telefonda doğrudan uygulamayı açması için Android/iOS bağlantı doğrulama
+     dosyaları gerekiyor (imza sertifikası parmak izi, uygulama kimliği, Apple Team ID). Bilgiler gelince eklenir.
