@@ -164,10 +164,10 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
   360x640 / 2.0x yazı düzen testi.
 
 ### Faz 5 — Dağıtım ve belgeler
-- [ ] **İP-5.1** Bağımsız kod incelemesi (sunucu+firmware+araç) ve bulguların düzeltilmesi.
+- [x] **İP-5.1** Bağımsız kod incelemesi (sunucu+firmware+araç) ve bulguların düzeltilmesi.
 - [ ] **İP-5.2** Canlı: DB yedeği → migration 035 → ev-api dağıtımı (dizin takası) → duman testi.
 - [ ] **İP-5.3** Firmware v1.3.0 yayımı (onayınızla karta yazılır); servis yazılımı kullanım rehberi; CONTRACTS.
-- [ ] **İP-5.5** Kullanım kitapçığı (PDF + Markdown): servis sorumlusu (site/şablon/karta yazma), atölye (flash +
+- [x] **İP-5.5** Kullanım kitapçığı (PDF + Markdown): servis sorumlusu (site/şablon/karta yazma), atölye (flash +
   şablon USB/Ethernet + etiket + PDF şema), saha ekibi (şemaya göre kablolama + kablolama testi), sorun giderme.
 - [ ] **İP-5.4** Sizin denemeniz: Ethernet kablosuyla şablon yazma, USB ile şablon yazma, PDF çıktısı, claim sonrası
   uygulamada adların gelmesi.

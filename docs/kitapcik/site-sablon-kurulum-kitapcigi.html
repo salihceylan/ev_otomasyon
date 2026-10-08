@@ -1,0 +1,203 @@
+﻿<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site ve Şablon Kurulum Kitapçığı</title>
+<style>
+  :root { --ink:#14202b; --muted:#5b6b78; --line:#d5dde4; --accent:#0e7490; --warn:#b45309; --bad:#b91c1c; --ok:#047857; --bg:#ffffff; --soft:#f3f7fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:11pt/1.5 "Segoe UI", "Noto Sans", Arial, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 24pt; margin: 0 0 4px; color: var(--accent); }
+  h2 { font-size: 15pt; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--accent); break-after: avoid; }
+  h3 { font-size: 12pt; margin: 18px 0 6px; break-after: avoid; }
+  p, li { margin: 4px 0; }
+  ol, ul { padding-left: 22px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .cover { border: 1px solid var(--line); border-radius: 10px; padding: 20px; background: var(--soft); }
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
+  .flow div { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; font-size: 10pt; }
+  .flow b { display:block; color: var(--accent); margin-bottom: 4px; }
+  .box { border-left: 4px solid var(--accent); background: var(--soft); padding: 8px 12px; margin: 10px 0; break-inside: avoid; }
+  .box.warn { border-color: var(--warn); background: #fff7ed; }
+  .box.bad { border-color: var(--bad); background: #fef2f2; }
+  .box.ok { border-color: var(--ok); background: #ecfdf5; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 10pt; break-inside: auto; }
+  th, td { border: 1px solid var(--line); padding: 5px 7px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); }
+  tr { break-inside: avoid; }
+  .chk li { list-style: none; margin-left: -18px; }
+  .chk li::before { content: "☐ "; }
+  code, .k { font-family: Consolas, monospace; font-size: 9.5pt; background: var(--soft); padding: 0 3px; border-radius: 3px; }
+  .btn { font-weight: 600; }
+  .page { break-before: page; }
+  footer { color: var(--muted); font-size: 9pt; margin-top: 30px; border-top: 1px solid var(--line); padding-top: 6px; }
+  @media (max-width: 640px) { .flow { grid-template-columns: 1fr 1fr; } }
+  @page { size: A4; margin: 16mm 14mm; }
+</style>
+</head>
+<body>
+<main>
+
+<section class="cover">
+  <h1>Site ve Şablon Kurulum Kitapçığı</h1>
+  <p class="sub">AHBU Ev Otomasyonu · Toplu (site) ve tek daire kurulumları · Firmware v1.3.0 ve sonrası · Ekim 2026</p>
+  <p><b>Kimler için:</b> servis sorumlusu ve süper kullanıcı (ofis), atölye personeli (kart hazırlama), saha ekibi (montaj ve kablolama).</p>
+  <div class="flow">
+    <div><b>1 · Ofis</b>Site açılır, daireler üretilir, daire tipi şablonları hazırlanır.</div>
+    <div><b>2 · Atölye</b>Firmware + provizyon (USB) → şablon (USB ya da Ethernet) → etiket + kablolama şeması (PDF).</div>
+    <div><b>3 · Saha</b>Pano takılır, şemaya göre kablolanır, duvar butonlarıyla denenir. İnternet gerekmez.</div>
+    <div><b>4 · Teslim</b>Servis sorumlusu panoyu eve bağlar; ayarlar panodan gelir, yalnız kontrol kalır.</div>
+  </div>
+  <div class="box warn"><b>Önemli:</b> Firmware v1.3.0'ın Ethernet ve şablon özellikleri henüz gerçek kartta denenmedi. İlk sitede bir
+  kartla deneme yapılmadan toplu üretime geçmeyin (bkz. Bölüm 8).</div>
+</section>
+
+<h2>1. Temel kavramlar</h2>
+<table>
+  <tr><th style="width:24%">Kavram</th><th>Anlamı</th></tr>
+  <tr><td>Site</td><td>Kurulum yapılan yapı grubu (ad, adres, sorumlu, telefon, blok ve daire sayısı). Servis yazılımının <span class="btn">🏢 4. Siteler</span> sekmesinde açılır.</td></tr>
+  <tr><td>Daire</td><td>Sitedeki tek konut (blok + numara). Her daireye bir daire tipi, bir şablon ve bir kart bağlanır.</td></tr>
+  <tr><td>Şablon</td><td>Daire tipinin pano ayarı: hangi röle ne (lamba, panjur, darbe, vana, siren), hangi giriş ne (buton, sensör), güvenlik ve dimmer ayarları. <span class="btn">📐 5. Şablonlar</span> sekmesinde hazırlanır.</td></tr>
+  <tr><td>Genel şablon</td><td>Bir siteye bağlı olmayan şablon (ör. "Standart 3+1"). Tek daire kurulumlarında kullanılır.</td></tr>
+  <tr><td>Şablon sürümü</td><td>Şablon her kaydedildiğinde yeni sürüm oluşur (v1, v2…). Eski sürümler değişmez; hangi karta hangi sürümün yazıldığı sunucuda kayıtlıdır.</td></tr>
+  <tr><td>Kablolama şeması</td><td>Şablondan üretilen PDF. Saha ekibi kabloları bu şemaya göre bağlar. Altında "Bu şema şablon sürümü vN içindir" yazar.</td></tr>
+  <tr><td>Provizyon (FACTORYINIT)</td><td>Karta kendi gizli anahtarını ve kurulum Wi-Fi parolasını yazma işlemi. Firmware yüklendikten sonra USB'den otomatik yapılır.</td></tr>
+</table>
+
+<h3>Kim ne yapabilir?</h3>
+<table>
+  <tr><th>İş</th><th>Süper kullanıcı</th><th>Servis sorumlusu</th></tr>
+  <tr><td>Site / daire ekleme, düzenleme, silme</td><td>Evet</td><td>Evet</td></tr>
+  <tr><td>Şablon ekleme, düzenleme, silme, sürüm geçmişi</td><td>Evet</td><td>Evet</td></tr>
+  <tr><td>Şablonu karta yazma (USB / Ethernet), PDF üretme</td><td>Evet</td><td>Evet</td></tr>
+  <tr><td>Kartı sunucu envanterine kaydetme, askıya alma, silme</td><td>Evet</td><td>Hayır</td></tr>
+</table>
+<p>Ev sahibinin servise verdiği geçici PIN oturumuyla bu işler yapılamaz.</p>
+
+<h2>2. Ofis: site ve daireleri açma</h2>
+<ol>
+  <li>Servis yazılımını açın, kendi hesabınızla giriş yapın (oturum çubuğunda rolünüz görünür).</li>
+  <li><span class="btn">🏢 4. Siteler</span> sekmesinde <span class="btn">Siteleri Yenile</span>, sonra <span class="btn">Site Ekle</span>: site adı (zorunlu), adres, il, ilçe, sorumlu adı, sorumlu telefonu, e-posta, blok sayısı, daire sayısı, not.</li>
+  <li>Siteyi seçin. <span class="btn">Toplu Daire Üret</span>: blok (ör. <code>A</code>), ilk ve son daire numarası (ör. 1–24), isteğe bağlı daire tipi ve şablon. Var olan blok+numara atlanır; her blok için tekrarlayın.</li>
+  <li>Şablonu sonradan atamak için daireyi seçip <span class="btn">Şablon Ata</span>.</li>
+</ol>
+<p><b>Durum sütunu:</b> Planlandı → Yazıldı (şablon karta yazıldı) → Kuruldu (kart bir eve bağlandı) → Teslim edildi.</p>
+<div class="box">Silme "yumuşaktır": silinen site ya da şablon listeden kalkar ama sürümleri ve yazım kayıtları sunucuda kalır. Dairesine kart bağlı bir site silinemez.</div>
+
+<h2>3. Ofis: şablon hazırlama</h2>
+<ol>
+  <li><span class="btn">📐 5. Şablonlar</span> sekmesinde üstten siteyi (ya da <b>Genel</b>) seçin, <span class="btn">Şablonları Yenile</span>.</li>
+  <li><span class="btn">Yeni Şablon</span>: şablon adı (ör. "A Tipi 3+1") ve daire tipi (1+1, 2+1, 3+1, dubleks…). Benzer bir şablon varsa <span class="btn">Çoğalt</span> ile başlayın.</li>
+  <li><b>Ek modül:</b> dairede ek röle modülü (RS485) varsa kutuyu işaretleyin, kanal sayısını ve adresini girip <span class="btn">Kanalları Uygula</span>'ya basın. Ana kart 8 röle + 8 giriştir; ek modül R9'dan / D9'dan başlar.</li>
+  <li><b>Röle çıkışları:</b> her röle için ad, oda, tip ve bağlanacak yük:
+    <ul>
+      <li><b>Lamba/Priz</b> — normal aç/kapa yük.</li>
+      <li><b>Panjur (çift)</b> — iki röle birlikte ayrılır: tek numaralı röle <b>Yukarı</b>, sonraki <b>Aşağı</b>; süre (1–300 sn) ikisinde aynıdır.</li>
+      <li><b>Darbe</b> — kısa süre çekip bırakan röle (kapı kilidi, zil); süre milisaniye.</li>
+    </ul></li>
+  <li><b>Parlaklık (dimmer):</b> lamba satırındaki 💡 düğmesi "Parlaklık ayarı yapılacak mı?" diye sorar. Evet derseniz dimmer kaynağını (Modbus dimmer modülü / köprü), adresini ve kanalını girin; pencere dimmerin nereye takılacağını söyler, aynı yönerge şemaya da basılır.</li>
+  <li><b>Girişler:</b> ad, hedef röle, kip ve kablolama notu. Sensör olan girişlerde güvenlik rolü (su, gaz, duman, kapı, pencere, hareket), kontak tipi (NO/NC) ve bölge seçilir; sensör girişinin hedef rölesi "Boşta" kalır.</li>
+  <li><b>Güvenlik:</b> tepkiler açık/kapalı, kuruluk bekleme süresi, bölge adları ve güvenlik cihazları (vana, siren, fan). Vanada kapanma kipi (enerji verince kapanan / enerji kesilince kapanan / iki röleli) ve akışkan (su/gaz) seçilir.</li>
+  <li><span class="btn">Doğrula ve Kaydet (yeni sürüm)</span>: şablon önce yazılımda, sonra sunucuda denetlenir ve yeni sürüm olarak kaydedilir. Hata varsa hangi alanda olduğu gösterilir.</li>
+</ol>
+<div class="box warn"><b>Girişlere yaylı buton bağlanır.</b> Pano her basışta lambayı değiştirir. Kalıcı (mandallı) duvar anahtarı desteklenmez: lamba iki çevirmede bir değişir ve anahtarın konumu lambayla uyuşmaz.</div>
+<div class="box bad"><b>Gaz:</b> pano bir gaz dedektörünün yerine geçmez. Gaz algılama için sertifikalı (EN 50194-1) bağımsız dedektör kullanılır; dedektörün NC alarm kontağı panoya bağlanır. Gaz ve duman girişleri her zaman NC'dir. Gaz vanası uzaktan açılamaz.</div>
+<div class="box">Güvenlik cihazı (vana, siren) panjur ya da darbe rölesine bağlanamaz; şablon buna izin vermez.</div>
+
+<h2>4. Atölye: kartı hazırlama</h2>
+<p>Her kart için aynı sıra izlenir. Ethernet kullanılacak olsa da <b>ilk iki adım her zaman USB'den</b> yapılır.</p>
+<ol>
+  <li><b>Kartı kaydet ve etiket al</b> (yalnız süper kullanıcı): <span class="btn">2. Karekod Üret &amp; Etiket Bas</span> sekmesinde karttan MAC'i okuyun, <span class="btn">SUNUCU ENVANTERİNE KAYDET &amp; KAREKOD ÜRET</span>.</li>
+  <li><b>Firmware yükle:</b> <span class="btn">1. Firmware Yükleyici</span> sekmesinde USB portunu seçip v1.3.0'ı yükleyin. Yükleme bitince araç aynı porttan <b>provizyonu (FACTORYINIT) kendisi yapar</b>.</li>
+  <li><b>Kartı daireye bağla:</b> <span class="btn">🏢 4. Siteler</span> → daireyi seçin → <span class="btn">Kart Bağla</span> → kartın UID'si (<code>AHBU-S3-XXXXXX</code>, etikette yazar). Yalnız stoktaki kartlar bağlanabilir.</li>
+  <li><b>Şablonu yaz:</b> daireyi seçip <span class="btn">Karta Yaz</span> (ya da provizyon sekmesindeki <span class="btn">📐 Şablon Yaz (aynı USB portu)</span>). Yol seçin:
+    <ul>
+      <li><b>USB (önerilen):</b> port seçilir. Araç önce takılı kartın o daireye bağlı kart olduğunu denetler; değilse hiçbir şey yazmaz.</li>
+      <li><b>Ethernet:</b> kart atölye ağına kabloyla bağlanır; kartın IP adresi ve UID'si girilir. Araç önce o IP'deki kartın gerçekten o UID olduğunu denetler, sonra kartın anahtarını sunucudan alır (ekranda gösterilmez, kayıt tutulur).</li>
+    </ul>
+    Kart şablonu tek parça uygular: geçersizse hiçbir şey değişmez. Sonra araç karttan geri okur ve sonucu sunucuya işler; daire <b>Yazıldı</b> olur.</li>
+  <li><b>Etiket:</b> şablon bu oturumda kaydedilen karta yazıldıysa etikete daire satırı eklenir (ör. <code>A Blok / Daire 12 · 3+1 · Şablon v4</code>). Etiketi yeniden kaydedip yazdırın, kartın üstüne yapıştırın.</li>
+  <li><b>Kablolama şeması:</b> <span class="btn">📄 Kablolama Şeması (PDF)</span> ile daireye ait şemayı üretin, yazdırın ve kartla birlikte paketleyin.</li>
+</ol>
+<h3>Atölye kontrol listesi (her kart)</h3>
+<ul class="chk">
+  <li>Firmware v1.3.0 yüklendi, provizyon "tamam" dedi.</li>
+  <li>Kart doğru daireye bağlandı (UID etiketle aynı).</li>
+  <li>Şablon yazıldı, geri okuma şablon adı ve sürümünü doğruladı.</li>
+  <li>Etiket daire satırıyla basıldı ve yapıştırıldı.</li>
+  <li>Kablolama şeması (PDF) basıldı; sürüm numarası etiketle aynı.</li>
+  <li>Paket üzerine blok/daire yazıldı.</li>
+</ul>
+
+<h2>5. Saha: montaj ve kablolama</h2>
+<ol>
+  <li>Kartı paketinden çıkarın; etiketteki blok/daire ile bulunduğunuz daire aynı mı kontrol edin. Şemadaki şablon sürümü etiketteki sürümle aynı olmalı.</li>
+  <li>Kabloları <b>şemaya göre</b> bağlayın: üstte R1–R8 röle çıkışları (COM ve NO), altta D1–D8 girişleri (DI ve GND). Ek modül varsa R9/D9'dan itibaren ayrı blok olarak gösterilir.</li>
+  <li>Kural: röle kontakları kuru kontaktır; faz COM'a, yük NO'ya. Yük akımı röle değerini aşıyorsa (motor, ısıtıcı) kontaktör kullanın. Girişlere şebeke gerilimi <b>vermeyin</b>; buton/sensör kontağı DI ile GND arasına bağlanır.</li>
+  <li><b>Panjur:</b> motorun yukarı ve aşağı uçları şemadaki çift rölelere bağlanır; ikisi asla aynı anda çekmez (yazılım kilidi). Yönleri ters bağlamayın; motor uç anahtarları (limit) ayarlı olmalı.</li>
+  <li><b>Vana:</b> şemada vananın kapanma kipi yazar (enerji verince kapanan / enerji kesilince kapanan). Vana tipini buna göre seçin.</li>
+  <li><b>Sensörler:</b> su sensörü şemadaki girişe ve kontak tipine (NO/NC) göre; gaz/duman dedektörünün NC alarm kontağı ilgili girişe.</li>
+  <li>Enerji verin. Pano internet olmadan çalışır.</li>
+</ol>
+<h3>Kablolama testi (internetsiz, uygulama gerekmez)</h3>
+<p>Şablon karta yazılı olduğu için duvar butonları hemen çalışır. Şemadaki giriş tablosunu yanınıza alın:</p>
+<ul class="chk">
+  <li>Her lamba butonuna basın: şemada yazan lamba yanmalı, tekrar basınca sönmeli.</li>
+  <li>Her panjur butonuna basın: panjur doğru yöne gitmeli, tekrar basınca durmalı. Yön ters ise motor uçlarını değiştirin.</li>
+  <li>Su sensörünü ıslatın (ya da kontağı kısa devre/açık yapın): vana kapanmalı, siren varsa çalmalı. Sonra sensörü kurutup alarmı onaylatın.</li>
+  <li>Bir şey şemadakinden farklı çalışıyorsa önce kabloyu kontrol edin; şablonu sahada değiştirmeyin, ofise bildirin.</li>
+</ul>
+<div class="box">Gaz dedektörünü test etmek için dedektörün kendi test düğmesini kullanın; gerçek gaz kullanmayın.</div>
+
+<h2>6. Teslim: panoyu eve bağlama</h2>
+<p>Teslimi servis sorumlusu uygulamadaki <b>Servis kurulumu</b> sihirbazıyla yapar (müşteri, Wi-Fi, bulut adımları bugünkü gibi). Şablon yazılmış kartta fark şudur:</p>
+<ul>
+  <li>Kart sahiplenilince ev adı daireden gelir (ör. "Güneş Sitesi A-12") ve cihaz listesi şablondaki ad, oda ve tiplerle kurulur.</li>
+  <li>7. adımda (Röle Testi) panodaki şablon görünür ("Şablon vN"); röleler, panjurlar ve butonlar şablondaki adlarla gelir, yalnız test edilir.</li>
+</ul>
+
+<h2>7. Tek daire kurulumu (şablonla)</h2>
+<ol>
+  <li>Sihirbazda panoya yerel ağdan bağlandıktan sonra 7. adımın üstünde <b>"Şablon uygula (isteğe bağlı)"</b> kartı çıkar (yalnız servis sorumlusu ve süper kullanıcı görür).</li>
+  <li>Site ya da <b>Genel</b> seçin, şablonu seçin; önizlemede lamba, panjur, giriş ve güvenlik sayıları görünür.</li>
+  <li><span class="btn">Panoya Uygula</span>: başarıyla yazılınca 7–9. adımlar şablon değerleriyle dolar; yalnız testleri yaparsınız.</li>
+  <li>Şablon kullanmak istemezseniz kartı geçin; sihirbaz eskisi gibi çalışır.</li>
+</ol>
+<div class="box warn">Pano "Panodaki güvenlik ayarı bu şablonla gevşer; atölyede USB ile yazın" derse: ağ üzerinden güvenlik ayarı gevşetilemez (ör. vana kaldırma). Şablonu USB ile servis yazılımından yazın.</div>
+
+<h2>8. İlk kartla deneme (toplu üretimden önce)</h2>
+<p>Firmware v1.3.0'ın yeni özellikleri gerçek kartta henüz denenmedi. İlk sitede şunları bir kartla deneyin:</p>
+<ul class="chk">
+  <li>Firmware v1.3.0 yükleme + otomatik provizyon.</li>
+  <li>Şablonu USB ile yazma ve geri okuma.</li>
+  <li>Kartı Ethernet kablosuyla atölye ağına bağlayıp kartın IP almasını görme (seri durum satırında <code>Ethernet: bagli &lt;ip&gt;</code>).</li>
+  <li>Şablonu Ethernet ile yazma (fabrika ayarındaki kartta).</li>
+  <li>Ethernet takılıyken kartın sunucuya bağlanması (uygulamada çevrimiçi görünmesi).</li>
+  <li>Duvar butonu, panjur ve su sensörü testleri (Bölüm 5).</li>
+  <li>Kablolama şemasının baskıda okunaklı olması.</li>
+</ul>
+<p>Hepsi tamamsa toplu üretime geçin; bir adım tutmazsa ekran görüntüsü ve seri çıktıyla bildirin.</p>
+
+<h2>9. Sorun giderme</h2>
+<table>
+  <tr><th style="width:36%">Mesaj</th><th>Anlamı</th><th>Ne yapmalı?</th></tr>
+  <tr><td>"USB ile yazın"</td><td>Ağdan güvenlik ayarı gevşetilemez.</td><td>Şablonu USB ile yazın.</td></tr>
+  <tr><td>"Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın"</td><td>Kartın provizyonu yapılmamış.</td><td>USB'den provizyon, sonra şablon.</td></tr>
+  <tr><td>"provizyonu Ethernet'ten kabul etmiyor"</td><td>Provizyon güvenlik için yalnız USB'den ya da kartın kurulum Wi-Fi'sinden yapılır.</td><td>Sıra: USB flash → USB provizyon → şablon.</td></tr>
+  <tr><td>"Kartın firmware'i şablon yazmayı desteklemiyor"</td><td>Firmware v1.3.0'dan eski.</td><td>Önce firmware güncelleyin.</td></tr>
+  <tr><td>"Bağlı kart … eşleşmiyor" / "Bu IP adresindeki kart … eşleşmiyor"</td><td>Yanlış kart takılı ya da IP başka karta ait.</td><td>Etiketteki UID'yi ve IP'yi kontrol edin.</td></tr>
+  <tr><td>"Bu kart stokta değil"</td><td>Kart müşteriye ait ya da askıda.</td><td>USB kullanın ya da ev üzerinden işlem yapın.</td></tr>
+  <tr><td>"Aktarım bozuldu (CRC uyuşmadı)"</td><td>USB verisi bozuldu; kartta hiçbir şey değişmedi.</td><td>Kabloyu kontrol edip yeniden deneyin.</td></tr>
+  <tr><td>"Kart meşgul"</td><td>Panjur hareket halinde ya da kart başka bir yazımı bitiriyor.</td><td>Birkaç saniye bekleyip yeniden deneyin.</td></tr>
+  <tr><td>"Pano yazmayı sürdürüyor"</td><td>Kart yazımı bitirmedi; uygulama sonucu kontrol ediyor.</td><td>Birkaç saniye sonra yeniden kontrol edin.</td></tr>
+  <tr><td>"kilitli (alarmdaki) bölge" / "Hırsız alarmı kurulu"</td><td>Kart güvenlik durumunda.</td><td>Alarmı onaylayın ya da kapatın, sonra yazın.</td></tr>
+  <tr><td>"kalıcı belleğinde yer yok"</td><td>Kartın belleği dolu; hiçbir şey yazılmadı.</td><td>Servis ekibine bildirin.</td></tr>
+  <tr><td>Seri durumda <code>Sablon: … YARIM</code></td><td>Yazım sırasında elektrik kesildi; kart güvenli kipte (röleler güvenli konumda).</td><td>Şablonu USB ile yeniden yazın.</td></tr>
+</table>
+
+<footer>AHBU Ev Otomasyonu · Site ve Şablon Kurulum Kitapçığı · Firmware v1.3.0 · Kaynak: docs/kitapcik/site-sablon-kurulum-kitapcigi.html</footer>
+</main>
+</body>
+</html>
