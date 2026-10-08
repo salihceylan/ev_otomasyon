@@ -131,6 +131,24 @@ class SerialLineTests(unittest.TestCase):
         other.absorb("rastgele satir (MAC: yok)")
         self.assertEqual((other.mac, other.provisioned), (None, None))
 
+    def test_status_parser_reads_the_v13_lines(self):
+        status = fc.SerialStatus()
+        self.assertIsNone(status.key_fp)
+        self.assertIsNone(status.supports_bootstrap)  # henüz bilinmiyor
+        for line in ("- Ethernet: bagli 192.168.1.60", "- Bootstrap: waiting_claim", "- Anahtar izi: C7076562",
+                     "- Sablon: 3f2a9c1e-5b7d-4e8f-9a01-23456789abcd v4 YARIM (guvenli kip; seri TPL ile yeniden yazin)"):
+            status.absorb(line)
+        self.assertEqual(status.key_fp, "c7076562")
+        self.assertTrue(status.supports_bootstrap)
+        self.assertEqual(status.template, ("3f2a9c1e-5b7d-4e8f-9a01-23456789abcd", 4))
+        empty = fc.SerialStatus()
+        empty.absorb("- Anahtar izi: yok")
+        empty.absorb("- Sablon: - v0")
+        self.assertEqual((empty.key_fp, empty.template), ("", (None, 0)))
+        old = fc.SerialStatus()  # v1.3.0 öncesi: son satır "Panjurlar:"; Bootstrap satırı yok
+        old.absorb("- Panjurlar: []")
+        self.assertIs(old.supports_bootstrap, False)
+
 
 # ============================================================================================================
 # Gerçek firmware kaynağıyla eşlik (CONTRACTS §3c "Fabrika aracının bağımlı olduğu seri çıktı kalıpları"): sahte
@@ -180,6 +198,34 @@ class FirmwareSerialOutputContractTests(unittest.TestCase):
             lines = firmware.pull(4096).decode("latin-1").splitlines()
             self.assertIn(template.replace("%s", word), lines)
 
+    def test_status_lines_of_the_firmware_are_parsed_by_the_tool(self):
+        """STATUS'un v1.3.0+ satırları (Bootstrap, Sablon) ve 1.3.1'in 'Anahtar izi' satırı (kaynakta varsa) araçça çözülür."""
+        if not os.path.isfile(MAIN_CPP):
+            self.skipTest("firmware kaynağı yok")
+        with open(MAIN_CPP, encoding="utf-8") as handle:
+            source = handle.read()
+        samples = {"Bootstrap": "waiting_claim", "Sablon": None, "Anahtar izi": "c7076562"}
+        for label in samples:
+            match = re.search(r'Serial\.printf\("(  - %s: [^"]*)\\r\\n"' % re.escape(label), source)
+            if match is None:
+                if label == "Anahtar izi":
+                    continue  # firmware 1.3.1 henüz bu satırı eklemediyse (paralel iş) araç satır yokken eski davranışı korur
+                self.fail("STATUS satırı bulunamadı: " + label)
+            fmt = match.group(1)
+            if label == "Sablon":
+                line = fmt.replace("%s", "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd", 1).replace("%lu", "4", 1).replace("%s", "", 1)
+            else:
+                line = fmt.replace("%s", samples[label], 1)
+            status = fc.SerialStatus()
+            status.absorb(line.strip())
+            with self.subTest(satir=label):
+                if label == "Bootstrap":
+                    self.assertTrue(status.supports_bootstrap, line)
+                elif label == "Sablon":
+                    self.assertEqual(status.template, ("3f2a9c1e-5b7d-4e8f-9a01-23456789abcd", 4), line)
+                else:
+                    self.assertEqual(status.key_fp, "c7076562", line)
+
     def test_every_factoryinit_reply_in_the_firmware_is_known_to_the_tool(self):
         if not os.path.isfile(MAIN_CPP):
             self.skipTest("firmware kaynağı yok")
@@ -228,6 +274,30 @@ class SerialProvisionerTests(unittest.TestCase):
         self.assertEqual(commands[-1], "STATUS")
         self.assertLess(commands.index("STATUS"), commands.index("FACTORYINIT"))
         self.assertTrue(any("doğrulan" in line for line in lines))
+
+    def test_key_fingerprint_line_is_compared_after_factoryinit(self):
+        provisioner, _, firmware, _ = make(key_fp_supported=True)
+        outcome, _lines = run(provisioner)
+        self.assertTrue(outcome.verified)
+        self.assertIs(outcome.key_fp_matched, True)
+        self.assertIs(outcome.supports_bootstrap, True)
+
+    def test_wrong_key_fingerprint_after_factoryinit_is_a_key_mismatch(self):
+        provisioner, _, firmware, _ = make(key_fp_supported=True, fp_override="00000000")
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            run(provisioner)
+        self.assertEqual(ctx.exception.code, "key_mismatch")
+        self.assertTrue(getattr(ctx.exception, "can_reset", False))  # araç RESETKEY ile yeniden yazmayı önerebilir
+        self.assertNotIn(KEY, str(ctx.exception) + ctx.exception.hint)
+
+    def test_status_without_fingerprint_keeps_the_old_behaviour(self):
+        for kwargs, bootstrap in ((dict(), True), (dict(tpl_supported=False), False)):
+            with self.subTest(**{"tpl": kwargs.get("tpl_supported", True)}):
+                provisioner, _, firmware, _ = make(**kwargs)
+                outcome, _lines = run(provisioner)
+                self.assertTrue(outcome.verified)
+                self.assertIsNone(outcome.key_fp_matched)
+                self.assertIs(outcome.supports_bootstrap, bootstrap)  # v1.3.0 öncesi kart: Bootstrap satırı yok
 
     def test_firmware_receives_the_exact_line_and_it_is_never_echoed(self):
         provisioner, _, firmware, _ = make(noise=True)
@@ -462,6 +532,66 @@ class SerialProvisionerTests(unittest.TestCase):
         self.assertTrue(outcome.verified)
         self.assertEqual((firmware.local_key, firmware.ap_pass), (KEY, AP))
         self.assertEqual(firmware.leaks, [])
+
+
+# ============================================================================================================
+# Flash öncesi kart yoklaması (probe_board): kurulu kart "boş kart" sanılmamalı (birleşik imaj ayarları siler)
+# ============================================================================================================
+class BoardProbeTests(unittest.TestCase):
+    TID = "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd"
+
+    def test_running_board_reports_its_key_template_and_bootstrap_support(self):
+        provisioner, backend, firmware, _ = make(provisioned=True)
+        firmware.tpl_id, firmware.tpl_ver = self.TID, 4
+        probe = provisioner.probe_board("COM7")
+        self.assertEqual((probe.mac, probe.provisioned, probe.template_id, probe.template_version), (MAC, True, self.TID, 4))
+        self.assertIs(probe.supports_bootstrap, True)
+        self.assertTrue(probe.has_settings)
+        self.assertTrue(backend.all_closed())
+
+    def test_status_lost_while_the_board_restarts_on_port_open_is_sent_again(self):
+        # Kart portu açınca yeniden başlar (rst:0x15): açılış sürerken gönderilen ilk STATUS kaybolur.
+        provisioner, backend, firmware, _ = make(provisioned=True, boot_ticks=12, boot_drops_input=True)
+        probe = provisioner.probe_board("COM7")
+        self.assertIsNotNone(probe)
+        self.assertTrue(probe.provisioned)
+        self.assertTrue(probe.has_settings)
+        self.assertTrue(backend.all_closed())
+
+    def test_silent_board_is_polled_for_about_ten_seconds_before_it_counts_as_blank(self):
+        provisioner, backend, _, clock = make(unresponsive=True)
+        start = clock.now()
+        self.assertIsNone(provisioner.probe_board("COM7"))
+        self.assertGreaterEqual(clock.now() - start, 8.0)
+        self.assertLessEqual(clock.now() - start, 14.0)
+        self.assertTrue(backend.all_closed())
+
+    def test_board_waiting_in_download_mode_is_not_mistaken_for_a_blank_board(self):
+        # BOOT+RESET ('Failed to connect' çözümü) kartı ROM yükleme kipinde bırakır: STATUS'a yanıt yok ama kart kurulu olabilir.
+        provisioner, backend, firmware, _ = make(provisioned=True, download_mode=True)
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            provisioner.probe_board("COM7")
+        self.assertEqual(ctx.exception.code, "download_mode")
+        self.assertIn("yükleme kipinde", ctx.exception.message)
+        self.assertIn("BOOT'a basmadan", ctx.exception.hint)
+        self.assertGreaterEqual(firmware.rom_syncs, 1)
+        self.assertEqual(firmware.received, [])  # karta hiçbir CLI komutu işlenmedi (yalnız SYNC çerçevesi)
+        self.assertTrue(backend.all_closed())
+
+    def test_usb_dropout_during_the_probe_reopens_the_port(self):
+        provisioner, backend, _, _ = make(provisioned=True)
+        backend.next_drop_after_reads = 1  # ilk bağlantı (kart yeniden başlarken) kopar
+        probe = provisioner.probe_board("COM7")
+        self.assertTrue(probe.provisioned)
+        self.assertEqual(len(backend.connections), 2)
+        self.assertTrue(backend.all_closed())
+
+    def test_port_that_stays_busy_is_an_error_not_a_blank_board(self):
+        provisioner, backend, _, _ = make()
+        backend.open_errors = [fc.SerialError("meşgul", kind="busy") for _ in range(200)]
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            provisioner.probe_board("COM7")
+        self.assertEqual(ctx.exception.code, "port_busy")
 
 
 # ============================================================================================================

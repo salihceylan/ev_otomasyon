@@ -86,6 +86,13 @@ class GuideConsistencyTests(unittest.TestCase):
         "Panjur (çift)",
         "Parlaklık ayarı yapılacak mı?",
         "Ek modül (RS485) var",
+        # 2026-10-08 düzeltmeleri (atolye-1/2/6/11, servis_kurulum-10)
+        "Güncelle (ayarlar korunur)",
+        "Etiketi Yeniden Bas (USB)",
+        "Sunucudaki Anahtarla Yeniden Provizyon (USB)",
+        "Teslim Edildi",
+        "Bekleyen Kayıtları Gönder",
+        "Alarmı Onayla (USB)",
     )
 
     # Bölüm 4b'nin alıntıladığı kart/araç mesajları (template_model.ERROR_TEXTS ve PDF).
@@ -120,6 +127,26 @@ class GuideConsistencyTests(unittest.TestCase):
         "Silme Onayı",
         "İşlem Sürüyor",
         "Eksik Paket",
+        # 2026-10-08 düzeltmeleri
+        "Kart Ayarları Silinecek",
+        "Güncelleme Yapılamadı",
+        "Etiket Yenilendi",
+        "Sunucudaki Anahtarla Yeniden Provizyon",
+        "Ethernet ile Doğrulanamadı",
+        "Güvenlik Öğesi Silinecek",
+        "NC Tehlike Girişi",
+        "Alarm Kilitlendi (Atölye)",
+        "Şablon Değişti",
+        "Daire Etiketi",
+        # 2026-10-08 inceleme düzeltmeleri: sürüm düşürme, yoklama hatası, SAFETY, yazım kaydı reddi, teslim ön denetimi
+        "Sürüm Düşürme Engellendi",
+        "Sürüm Düşürme",
+        "Kart Durumu Okunamadı",
+        "Güncelle Kipi Seçildi",
+        "Güvenlik Durumu Okunamadı",
+        "Alarm Sürüyor",
+        "Yazım Kaydı Reddedildi",
+        "Teslim Edilemez",
     )
 
     # Rehberin 6. adımda sıraladığı ilerleme satırları (başlangıç parçaları).
@@ -215,6 +242,50 @@ class GuideConsistencyTests(unittest.TestCase):
         for stale in ("`waveshare`", "150 ms"):
             with self.subTest(eski=stale):
                 self.assertNotIn(stale, lowered)
+
+    def test_stale_screen_texts_are_gone_and_current_ones_exist(self):
+        """atolye-16: ekrandaki eskimiş metinler (Ethernet'te anahtar sunucudan alınır, var olmayan düğme, yalnız süper kullanıcı
+        girişi) kaldırıldı; yerlerine güncel davranışı anlatan metinler geldi."""
+        for stale in ("Süper Kullanıcı Girişi", "Provizyonu Başlat", "yerel anahtar sunucudan alınır",
+                      "yerel anahtar bu UID'ye göre alınır", "Envanteri görmek için süper kullanıcı hesabıyla giriş yapın"):
+            with self.subTest(eski=stale):
+                self.assertNotIn(stale, self.source)
+        for current in ("Sunucuya Giriş (süper kullanıcı / servis sorumlusu)",
+                        "Ethernet (LAN) - kartın Ethernet IP'si; anahtar gerekmez",
+                        "IP'nin doğru karta ait olduğu DENETLENMEZ, yanlış IP başka karta yazar; UID yalnız yazım kaydı içindir",
+                        "Yazım kaydı için kart UID'si gerekir"):
+            with self.subTest(guncel=current):
+                self.assertIn(current, self.source)
+
+    def test_guide_is_current(self):
+        """Rehber: seçili sürüm version_info.json'a göre; Ethernet artık firmware'de etkin; roller; yeni akışlar."""
+        with open(os.path.join(BASE_DIR, "waveshare_s3_demo", "firmware_releases", "version_info.json"), encoding="utf-8") as handle:
+            import json
+
+            current = json.load(handle)["current_version"]
+        self.assertIn(f"v{current}", self.guide)
+        self.assertIn("v1.3.1", self.guide)  # donanım denemesi bekleyen sürüm
+        for stale in ("firmware'de kapalı", "bu firmware'de etkin değildir", "Güncel imaj `v1.1.2`'dir",
+                      "Bu araç yalnızca süper kullanıcı hesabıyla çalışır"):
+            with self.subTest(eski=stale):
+                self.assertNotIn(stale, self.guide)
+        for needle in ("2026-10-08", "anahtarsız", "servis sorumlusu", "NC", "DI-GND", "köprü", "app_0x10000"):
+            with self.subTest(gerekli=needle):
+                self.assertIn(needle, self.guide)
+
+    def test_guide_describes_the_flash_and_workshop_safeguards(self):
+        """Yükleme kipi (BOOT+RESET), yoklama süresi, sürüm düşürme, FAULT bölgesi ve kalıcı kayıt reddi araçla aynı anlatılır."""
+        for needle in ("BOOT'a basmadan", "~10 sn", "app_0x10000_v1.3.0.bin", "FAULT", "temizlemez", "kalıcı olarak reddetti",
+                       "kuyruktan çıkarıl"):
+            with self.subTest(gerekli=needle):
+                self.assertIn(needle, self.guide)
+        for needle in ("BOOT'a basmadan", "kalıcı olarak reddetti", "temizlemez", "~10 sn"):
+            with self.subTest(arac=needle):
+                self.assertIn(needle, self.source)
+        # 'Güncelleme Yapılamadı' satırı önce normal RESET'i önerir (birleşik imaj kurulu kartın ayarlarını siler)
+        row = next(line for line in self.guide.splitlines() if line.startswith("| Güncelleme Yapılamadı"))
+        self.assertIn("BOOT'a basmadan", row)
+        self.assertLess(row.index("BOOT'a basmadan"), row.index("birleşik") if "birleşik" in row else len(row))
 
     def test_guide_contains_no_secret_like_assignments(self):
         # Parola/anahtar/token atamaları (ör. "parola: abc123...") rehberde yer almamalı.

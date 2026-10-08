@@ -358,8 +358,11 @@ def build_wiring_document(
     number: Any = "",
     date: Optional[datetime] = None,
     font_loader: FontLoader = default_font_loader,
+    device_uid: Optional[str] = None,
 ) -> WiringDocument:
-    """Şablondan kablolama şeması sayfaları (PIL görüntüleri) üretir. Şablon geçersizse ``ValueError``."""
+    """Şablondan kablolama şeması sayfaları (PIL görüntüleri) üretir. Şablon geçersizse ``ValueError``.
+
+    ``device_uid``: dairenin bağlı kartı ya da yazımın yapıldığı kart (atolye-15): başlıkta 'Kart UID' satırı (yoksa '-')."""
     issue = tm.validate_template(template)
     if issue is not None:
         raise ValueError(str(issue))
@@ -374,6 +377,7 @@ def build_wiring_document(
         ("Daire tipi", meta["flat_type"]),
         ("Şablon sürümü", f"v{meta['version']}"),
         ("Tarih", when),
+        ("Kart UID", str(device_uid or "").strip().upper() or "-"),
     ]
     r = _Renderer(template, header, font_loader)
     r.new_page()
@@ -482,3 +486,65 @@ def save_wiring_pdf(path: str, template: dict[str, Any], **kwargs: Any) -> Wirin
     doc = build_wiring_document(template, **kwargs)
     doc.save(path)
     return doc
+
+
+# ---------------------------------------------------------------------------
+# Daire etiketi (atolye-15): kart UID + site/blok/daire + şablon. GİZLİ DEĞER İÇERMEZ.
+# ---------------------------------------------------------------------------
+FLAT_LABEL_SIZE = (800, 400)   # 100 x 50 mm @ 203 dpi (cihaz etiketiyle aynı boyut)
+FLAT_LABEL_DPI = (203, 203)
+FLAT_LABEL_NOTE = "Gizli bilgi içermez (PIN / parola yok). Kartın kendi kurulum etiketi ayrıdır."
+
+
+@dataclass
+class FlatLabel:
+    image: Any
+    texts: list[str] = field(default_factory=list)
+
+
+def build_flat_label(
+    *,
+    device_uid: str,
+    site_name: str = "",
+    block: Any = "",
+    number: Any = "",
+    template_name: str = "",
+    version: Any = None,
+    flat_type: str = "",
+    font_loader: FontLoader = default_font_loader,
+) -> FlatLabel:
+    """Karta şablon yazılınca dairenin kutusuna/panosuna yapıştırılacak etiket: kart UID'si, site, blok/daire ve şablon adı/sürümü.
+    PIN, AP parolası, yerel anahtar ya da karekod adresi parametre olarak bile ALINMAZ (fotoğrafı paylaşılabilir)."""
+    image = Image.new("RGB", FLAT_LABEL_SIZE, "#ffffff")
+    draw = ImageDraw.Draw(image)
+    title_font, ok1 = font_loader(BOLD_FONTS, 26)
+    caption_font, ok2 = font_loader(REGULAR_FONTS, 18)
+    value_font, ok3 = font_loader(BOLD_FONTS, 28)
+    note_font, ok4 = font_loader(REGULAR_FONTS, 16)
+    truetype = all((ok1, ok2, ok3, ok4))
+    texts: list[str] = []
+
+    def put(xy: tuple[float, float], text: str, font: Any, fill: str) -> None:
+        texts.append(text)
+        draw.text(xy, text if truetype else text.translate(_TR_TO_ASCII), font=font, fill=fill)
+
+    width, height = FLAT_LABEL_SIZE
+    draw.rectangle([(2, 2), (width - 3, height - 3)], outline="#0f172a", width=3)
+    draw.rectangle([(5, 5), (width - 6, 52)], fill="#0f172a")
+    put((18, 13), "AHBU DAİRE ETİKETİ", title_font, "#38bdf8")
+    template_text = f"{template_name or '-'}" + (f" v{version}" if version not in (None, "") else "") + (
+        f" ({flat_type})" if flat_type else "")
+    rows = (
+        ("Kart UID", str(device_uid or "").strip().upper() or "-"),
+        ("Site", site_name or "Genel (tek daire)"),
+        ("Blok / Daire", tm.flat_info_line(block, number) or "-"),
+        ("Şablon", template_text),
+    )
+    y = 66
+    for caption, value in rows:
+        put((22, y), caption, caption_font, "#64748b")
+        put((22, y + 20), value, value_font, "#0f172a")
+        y += 70
+    draw.line([(10, height - 40), (width - 10, height - 40)], fill="#cbd5e1", width=1)
+    put((22, height - 33), FLAT_LABEL_NOTE, note_font, "#475569")
+    return FlatLabel(image, texts)

@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import binascii
 import functools
+import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -120,12 +122,27 @@ class ApiError(FactoryError):
         retry_after: Optional[int] = None,
         detail: Optional[str] = None,
         path: Optional[str] = None,
+        data: Optional[Mapping[str, Any]] = None,
     ) -> None:
         super().__init__(message, code=code)
         self.status = status
         self.retry_after = retry_after
         self.detail = detail  # ör. şablon doğrulama kodu (422 TEMPLATE_INVALID -> "invalid_runtime"); yalnız güvenli biçimde
         self.path = path      # ör. "relays[3].runtime_s"
+        self.data: dict[str, Any] = dict(data or {})  # hata yanıtının güvenli ek alanları (ör. 409 TEMPLATE_CHANGED current_version)
+
+
+def _safe_error_data(value: Any) -> dict[str, Any]:
+    """Hata yanıtındaki ``data`` nesnesinden yalnız sayı/mantıksal ve kimlik biçimindeki kısa metinler alınır (ham metin yok)."""
+    if not isinstance(value, dict):
+        return {}
+    safe: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not _DETAIL_CODE_PATTERN.match(key):
+            continue
+        if isinstance(item, (bool, int)) or (isinstance(item, str) and _RESOURCE_ID_PATTERN.match(item)):
+            safe[key] = item
+    return safe
 
 
 class SessionExpiredError(ApiError):
@@ -250,6 +267,26 @@ def is_valid_ap_pass(value: Any) -> bool:
         and AP_PASS_MIN_LEN <= len(value) <= AP_PASS_MAX_LEN
         and all(0x20 <= ord(ch) <= 0x7E for ch in value)
     )
+
+
+# Yerel anahtar parmak izi (sözleşme 1, ``lk_fp``): firmware 1.3.1 tam durumda / MQTT state'te / seri STATUS'ta bildirir;
+# sunucu ve araç aynı formülle hesaplar. Anahtarı geri vermez; yine de yalnız eşitlik karşılaştırması için kullanılır.
+LK_FP_CONTEXT = "ahbu-lk-fp/1|"
+_LK_FP_PATTERN = re.compile(r"^[0-9a-f]{8}$")
+
+
+def local_key_fingerprint(local_key: str, uid: str) -> str:
+    """``HMAC-SHA256(anahtar = local_key ASCII baytları, ileti = 'ahbu-lk-fp/1|' + büyük harfli UID)`` çıktısının küçük harf
+    hex gösteriminin ilk 8 karakteri (UID = kartın ``device`` alanı, ör. ``AHBU-S3-DD8754``)."""
+    if not is_valid_local_key(local_key):
+        raise ValueError("Yerel anahtar geçersiz; parmak izi hesaplanamaz.")
+    message = (LK_FP_CONTEXT + str(uid or "").strip().upper()).encode("ascii", errors="replace")
+    return hmac.new(local_key.encode("ascii"), message, hashlib.sha256).hexdigest()[:8]
+
+
+def normalize_key_fp(value: Any) -> Optional[str]:
+    """Kartın bildirdiği ``lk_fp`` yalnız tam 8 küçük harf hex ise kabul edilir (aksi halde None: karşılaştırma yapılmaz)."""
+    return value if isinstance(value, str) and _LK_FP_PATTERN.match(value) else None
 
 
 # ---------------------------------------------------------------------------
@@ -459,8 +496,11 @@ def _format_wait(seconds: Optional[int]) -> str:
 
 
 DEVICE_NOT_IN_STOCK_TEXT = (  # yalnız daireye kart bağlama (PUT /sites/:id/flats/:flatId/device)
-    "Bu kart stokta değil (müşteriye ait ya da askıda); daireye bağlanamaz."
+    "Bu kart stokta değil (müşteriye ait ya da askıda); daireye bağlanamaz. Kart pano değişimiyle bu daireye takıldıysa "
+    "bağlantı sunucuda otomatik taşınır; değilse süper kullanıcı bağlayabilir."
 )
+# Sözleşme 13: daireye bağlı kart silinemez, REVOKED -> IN_STOCK yapılamaz, etiketi yenilenemez (409 DEVICE_LINKED_TO_FLAT).
+DEVICE_LINKED_TO_FLAT_TEXT = "Kart bir daireye bağlı; önce daireden ayırın."
 
 
 def friendly_api_error(
@@ -531,6 +571,8 @@ def friendly_api_error(
         return safe or "Kayıt bulunamadı."
     if status == 409 and code == "DEVICE_NOT_IN_STOCK":
         return DEVICE_NOT_IN_STOCK_TEXT
+    if status == 409 and code == "DEVICE_LINKED_TO_FLAT":
+        return DEVICE_LINKED_TO_FLAT_TEXT
     if status == 409:
         return safe or "Kayıt zaten mevcut veya mevcut durumla çakışıyor."
     if status == 410:
@@ -675,6 +717,20 @@ class RegistrationResult:
 
     def __repr__(self) -> str:  # sırlar repr'e sızmasın
         return f"RegistrationResult(device_uuid={self.device.get('device_uuid')!r}, <gizli alanlar gizlendi>)"
+
+
+@dataclass(repr=False)
+class LabelReissue:
+    """``POST /admin/inventory/:uuid/reissue-label`` yanıtı (sözleşme 13): yeni kurulum PIN'i ve PIN'li karekod adresi BİR KEZ
+    gelir; kartın yerel anahtarı DEĞİŞMEZ ve yanıtta YOKTUR (araç mevcut anahtarı ``fetch_local_key`` ile alır)."""
+
+    device: dict[str, Any]
+    setup_pin: str
+    qr_claim_url: str
+    qr_from_server: bool = True
+
+    def __repr__(self) -> str:  # sırlar repr'e sızmasın
+        return f"LabelReissue(device_uuid={self.device.get('device_uuid')!r}, <gizli alanlar gizlendi>)"
 
 
 def _role_rejection(role: str) -> str:
@@ -950,6 +1006,7 @@ class ServerClient:
             retry_after=retry_after,
             detail=detail if isinstance(detail, str) and _DETAIL_CODE_PATTERN.match(detail) else None,
             path=path if isinstance(path, str) and _FIELD_PATH_PATTERN.match(path) else None,
+            data=_safe_error_data(payload.get("data") if payload else None),
         )
 
     def _refresh_session(self, stale_access: Optional[str]) -> None:
@@ -1070,6 +1127,32 @@ class ServerClient:
     def delete_device(self, uid: str) -> dict[str, Any]:
         self._require_jwt()
         return self.request("DELETE", f"/admin/inventory/{self._uid_segment(uid)}")
+
+    def reissue_label(self, uid: str) -> LabelReissue:
+        """Etiketi yeniden üretir (yalnız süper kullanıcı JWT'si; yalnız stoktaki ve daireye bağlı olmayan kart, aksi 409): sunucu
+        yeni kurulum PIN'i üretir (eski etiketteki PIN geçersiz olur). Yerel anahtar DEĞİŞMEZ (sözleşme 13). PIN ve karekod
+        adresi ``SecretScrubber``'a eklenir."""
+        self._require_jwt()
+        clean_uid = (uid or "").strip().upper()
+        data = self.request("POST", f"/admin/inventory/{self._uid_segment(clean_uid)}/reissue-label")
+        stray_key = data.get("local_key")  # eski sunucu sürümü yeni anahtar dönebilir: değer kullanılmaz ama maskelenir
+        if isinstance(stray_key, str):
+            self._track(stray_key)
+        device, pin = data.get("device"), data.get("setup_pin")
+        if not isinstance(device, dict) or not isinstance(pin, str) or not PIN_PATTERN.match(pin):
+            raise ApiError(
+                "Sunucu yanıtı eksik: yeni kurulum PIN'i alınamadı. Etiket yenilenmiş olabilir; işlemi yeniden deneyin.",
+                status=200,
+                code="BAD_RESPONSE",
+            )
+        self._track(pin)
+        qr = data.get("qr_claim_url")
+        if claim_url_matches(qr, clean_uid, pin):
+            self._track(qr)
+            return LabelReissue(device, pin, qr, True)
+        built = build_claim_url(clean_uid, pin)
+        self._track(built)
+        return LabelReissue(device, pin, built, False)
 
     # ---- rol yardımcıları (İP-3.1) -------------------------------------------
     @property
@@ -1193,10 +1276,15 @@ class ServerClient:
         data = self.request("GET", f"/templates/{self._id_segment(template_id, 'şablon')}")
         return data.get("template") if isinstance(data.get("template"), dict) else data
 
-    def update_template(self, template_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        """Kaydet = yeni sürüm (gövde aynıysa sunucu sürümü artırmaz)."""
+    def update_template(self, template_id: str, body: Mapping[str, Any], base_version: Optional[int] = None) -> dict[str, Any]:
+        """Kaydet = yeni sürüm (gövde aynıysa sunucu sürümü artırmaz). ``base_version``: düzenleyicinin açtığı sürüm (atolye-13);
+        sunucudaki sürüm bundan farklıysa ve gövde farklıysa 409 ``TEMPLATE_CHANGED`` (``ApiError.data['current_version']``).
+        ``None`` = bilerek üstüne yaz."""
         self._service_jwt()
-        data = self.request("PUT", f"/templates/{self._id_segment(template_id, 'şablon')}", body={"body": dict(body)})
+        payload: dict[str, Any] = {"body": dict(body)}
+        if base_version is not None:
+            payload["base_version"] = int(base_version)
+        data = self.request("PUT", f"/templates/{self._id_segment(template_id, 'şablon')}", body=payload)
         return data.get("template") if isinstance(data.get("template"), dict) else data
 
     def delete_template(self, template_id: str) -> dict[str, Any]:
@@ -1275,8 +1363,9 @@ class DeviceRecord:
     batch_no: str = ""
     created_at: Optional[str] = None
     state: str = "registered"  # registered | init_sent | verified | wiped
-    path: str = ""             # provizyon yolu: "serial" (USB) | "wifi" (güvensiz yedek) | "" (henüz yok)
+    path: str = ""             # provizyon yolu: "serial" (USB) | "wifi" (güvensiz yedek) | "eth" (Ethernet) | "" (henüz yok)
     flat_info: str = ""        # İP-3.5: karta daire şablonu yazılınca etiket satırı ("A Blok / Daire 12 · 3+1 · Şablon v4")
+    eth_host: str = ""         # Ethernet yolunda kartın IP'si: doğrulama bu adrese gider (192.168.4.1'e DEĞİL)
 
     @property
     def ap_ssid(self) -> Optional[str]:
@@ -1314,13 +1403,16 @@ class DeviceRecord:
 @dataclass
 class ProvisionOutcome:
     initialized: bool = False        # POST /api/factory/init 200 döndü (veya cihaz zaten bu anahtarla kurulu)
-    verified: bool = False           # GET /api/auth/check X-Device-Key ile 200 döndü
-    needs_reconnect: bool = False    # init tamam; AP WPA2'ye geçti -> bilgisayar yeniden bağlanmalı
+    verified: bool = False           # Wi-Fi: auth/check 200; Ethernet: kısıtlı durum provisioned (+ lk_fp); seri: STATUS
+    needs_reconnect: bool = False    # init tamam; AP WPA2'ye geçti / bağlantı koptu -> sonra yeniden doğrulanmalı
     device_uid: Optional[str] = None
     firmware: Optional[str] = None
-    via: str = "wifi"                # "serial" (USB, önerilen) | "wifi" (açık AP + düz HTTP, güvensiz yedek)
+    via: str = "wifi"                # "serial" (USB, önerilen) | "wifi" (açık AP + düz HTTP, güvensiz yedek) | "eth"
     mac: Optional[str] = None        # seri yolda STATUS'tan okunan kart MAC'i
     ap_ssid: Optional[str] = None    # seri yolda STATUS'tan okunan kurulum ağı adı
+    key_fp_matched: Optional[bool] = None   # kartın lk_fp'si bu kaydın anahtarıyla eşleşti (None: kart bildirmedi)
+    supports_bootstrap: Optional[bool] = None  # seri STATUS'ta "Bootstrap:" satırı (v1.3.0+) var mı (None: bilinmiyor)
+    note: str = ""                   # bilgi notu (gizli değer içermez)
 
 
 def provision_urgency_notice(ssid: Optional[str] = None) -> str:
@@ -1374,6 +1466,19 @@ def provision_error_text(err: ProvisionError, ssid: Optional[str] = None) -> str
 
 
 _DEVICE_ERROR_ID = re.compile(r"[a-z0-9_]{1,40}")
+
+# Kullanıcı kararı (2026-10-08): kablolu Ethernet'ten gelen istek kartta anahtarsız yetkilidir; X-Device-Key başlığı yalnız
+# biçim gereği bu sabitle gönderilir (gizli değil; kart Ethernet yolunda doğrulamaz). Ethernet'te başlık TAM durumu ister.
+ETH_NO_KEY = "ethernet-no-key"
+
+ETH_KEY_MISMATCH_TEXT = "Kartta farklı bir yerel anahtar var; USB ile bağlayıp RESETKEY + yeniden provizyon yapın."
+ETH_UNVERIFIABLE_TEXT = (
+    "Kart zaten provizyonlu; Ethernet yolu anahtarı doğrulayamaz. USB ile bağlayıp RESETKEY + yeniden provizyon yapın."
+)
+USB_RESETKEY_HINT = (
+    "Kartı USB ile bağlayıp 3. sekmede 'Seri (USB) ile Provizyonla'ya basın; 'Kartta Eski Anahtar Var' sorusunda RESETKEY'i "
+    "onaylayın (eski anahtar kullanılamaz hale gelir)."
+)
 
 
 class DeviceClient:
@@ -1532,6 +1637,42 @@ class DeviceClient:
             hint="Firmware sürümünü kontrol edip tekrar deneyin.",
         )
 
+    def full_status(self) -> Optional[dict[str, Any]]:
+        """Kablolu Ethernet'te TAM durum: ``X-Device-Key: ETH_NO_KEY`` (kart Ethernet'te başlığın değerini doğrulamaz; başlık
+        tam durumu ister). 200 + geçerli gövde değilse None (ör. Wi-Fi IP'si girildiyse kart anahtarı doğrular -> 401)."""
+        status, payload, _headers = self._request("GET", "/api/status", key=ETH_NO_KEY)
+        if status != 200 or payload is None or not isinstance(payload.get("device"), str):
+            return None
+        return payload
+
+    def _status_evidence(self, local_key: str, state: Mapping[str, Any], *, after_init: bool) -> str:
+        """Ethernet doğrulaması (servis_kurulum-1): ``auth/check`` 200'ü KANIT SAYILMAZ (kart Ethernet'te anahtarsız yetkili).
+        Kanıt = kısıtlı durumda ``provisioned == true`` ve kart ``lk_fp`` bildiriyorsa bu kaydın anahtarıyla eşleşmesi.
+
+        Dönüş: ``"fp"`` (anahtar izi eşleşti) | ``"status"`` (iz yok; az önce bu anahtarla factory/init 200 alındı).
+        Hata: ``not_provisioned`` | ``key_mismatch`` | ``already_provisioned`` (iz yok ve init bu oturumda yapılmadı)."""
+        uid = str(state.get("device") or "").strip().upper()
+        unprovisioned = ProvisionError(
+            "not_provisioned",
+            "Cihaz hâlâ provizyonsuz görünüyor (anahtar yazılmamış).",
+            hint="'Ethernet ile Provizyonla'ya yeniden basın; sürerse USB (seri) yolunu kullanın.",
+        )
+        if state.get("provisioned") is not True:
+            raise unprovisioned
+        reported = None
+        full = self.full_status()
+        if full is not None:
+            if full.get("provisioned") is False:  # sözleşme 2: tam durumda false da provizyonsuz demektir (1.3.1)
+                raise unprovisioned
+            reported = normalize_key_fp(full.get("lk_fp"))
+        if reported is not None:
+            if reported != local_key_fingerprint(local_key, uid):
+                raise ProvisionError("key_mismatch", ETH_KEY_MISMATCH_TEXT, hint=USB_RESETKEY_HINT)
+            return "fp"
+        if after_init:
+            return "status"
+        raise ProvisionError("already_provisioned", ETH_UNVERIFIABLE_TEXT, hint=USB_RESETKEY_HINT)
+
     def verify(
         self,
         local_key: str,
@@ -1540,15 +1681,25 @@ class DeviceClient:
         delay: float = 2.0,
         progress: Optional[ProgressCallback] = None,
         cancel: Optional[threading.Event] = None,
+        trust_key_check: bool = True,
+        after_init: bool = True,
     ) -> bool:
-        """``GET /api/auth/check`` (``X-Device-Key``) 200 ise True. Ağ yoksa yeniden dener."""
+        """Wi-Fi (``trust_key_check=True``): ``GET /api/auth/check`` (``X-Device-Key``) 200 ise True.
+        Ethernet (``trust_key_check=False``): ``auth/check`` KULLANILMAZ; kısıtlı durum + ``lk_fp`` (``_status_evidence``).
+        ``after_init``: anahtar bu kayıtla yazıldı (init_sent); iz bildirmeyen eski kartta ``provisioned`` yeter. Ağ yoksa
+        yeniden dener."""
         last: Optional[ProvisionError] = None
         for attempt in range(max(1, attempts)):
             if cancel is not None and cancel.is_set():
                 raise ProvisionError("cancelled", "İşlem iptal edildi.")
             try:
+                if not trust_key_check:
+                    self._status_evidence(local_key, self.status(), after_init=after_init)
+                    return True
                 status, payload, headers = self._request("GET", "/api/auth/check", key=local_key)
             except ProvisionError as exc:
+                if exc.code != "unreachable":
+                    raise
                 last = exc
             else:
                 err = self._error_id(payload)
@@ -1572,7 +1723,7 @@ class DeviceClient:
                     raise ProvisionError(
                         "not_provisioned",
                         "Cihaz hâlâ provizyonsuz görünüyor (anahtar yazılmamış).",
-                        hint="'Provizyonu Başlat'a basarak yeniden deneyin.",
+                        hint="'Seri (USB) ile Provizyonla' ya da 'Wi-Fi ile Provizyonla' ile yeniden deneyin.",
                     )
                 raise ProvisionError(
                     "unexpected",
@@ -1597,12 +1748,18 @@ class DeviceClient:
         retry_delay: float = 2.0,
         wait_seconds: float = 0.0,
         cancel: Optional[threading.Event] = None,
+        trust_key_check: bool = True,
     ) -> ProvisionOutcome:
         """Provizyonsuz cihaza yerel anahtar + AP parolasını yazar ve doğrular (en iyi çaba).
 
         Adımlar: (1) anahtarsız durum -> provizyonsuz mu / doğru cihaz mı, (2) ``POST /api/factory/init``,
         (3) hızlı doğrulama. Init sonrası kart AP'yi WPA2'ye geçirdiği için bilgisayarın bağlantısı düşer;
         doğrulama ulaşılamazsa ``needs_reconnect=True`` döner (kullanıcı yeniden bağlanıp ``verify`` çağırır).
+
+        ``trust_key_check=False`` (Ethernet; servis_kurulum-1): kart Ethernet'ten gelen isteği anahtarsız yetkilendirdiği için
+        ``auth/check`` 200'ü kanıt sayılmaz. Zaten provizyonlu kartta kanıt ``lk_fp`` eşleşmesidir (eşleşmezse ``key_mismatch``,
+        kart iz bildirmiyorsa ``already_provisioned``); yeni yazımdan sonra kanıt kısıtlı durumdaki ``provisioned == true`` ve
+        (varsa) ``lk_fp`` eşleşmesidir.
 
         ``wait_seconds > 0`` iken (flash sonrası) cihaz ulaşılabilir olana kadar bu süre boyunca beklenir
         (kullanıcı bilgisayarı kurulum ağına bağlarken); ``cancel`` olayı beklemeyi keser.
@@ -1635,6 +1792,14 @@ class DeviceClient:
                 hint="Doğru kartın kurulum ağına ({ssid}) bağlı olduğunuzdan emin olun.",
             )
 
+        if state.get("provisioned") is True and not trust_key_check:
+            say("Kart zaten provizyonlu görünüyor; Ethernet'ten anahtar izi (lk_fp) okunuyor...")
+            self._status_evidence(local_key, state, after_init=False)  # eşleşmezse / iz yoksa hata
+            outcome.initialized = outcome.verified = True
+            outcome.key_fp_matched = True
+            outcome.note = "Kart bu kayıttaki anahtarla zaten provizyonlu (anahtar izi eşleşti)."
+            return outcome
+
         if state.get("provisioned") is True:
             say("Cihaz zaten provizyonlu görünüyor; bu kayıttaki anahtarla doğrulanıyor...")
             try:
@@ -1656,6 +1821,22 @@ class DeviceClient:
         say("Yerel anahtar ve AP parolası cihaza yazılıyor (POST /api/factory/init)...")
         self.factory_init(local_key, ap_pass)
         outcome.initialized = True
+        if not trust_key_check:
+            say("Cihaz anahtarı kabul etti; Ethernet'ten provizyon durumu ve anahtar izi okunuyor (auth/check kanıt sayılmaz)...")
+            for attempt in range(2):
+                try:
+                    evidence = self._status_evidence(local_key, self.status(), after_init=True)
+                except ProvisionError as exc:
+                    if exc.code != "unreachable":
+                        raise
+                    if attempt == 0:
+                        self._sleep(0.5)
+                    continue
+                outcome.verified = True
+                outcome.key_fp_matched = True if evidence == "fp" else None
+                return outcome
+            outcome.needs_reconnect = True
+            return outcome
         say("Cihaz anahtarı kabul etti. Kart kurulum ağını parolalı (WPA2) olarak yeniden başlatıyor...")
         try:
             self.verify(local_key, attempts=2, delay=0.5)  # AP ~1.5 sn sonra WPA2'ye döner: hızlı doğrulama bir fırsattır
@@ -1687,12 +1868,22 @@ SERIAL_INIT_TIMEOUT_S = 8.0
 SERIAL_RESET_TIMEOUT_S = 6.0
 SERIAL_PERSIST_RETRIES = 3
 SERIAL_PROBE_TIMEOUT_S = 25.0    # başka yorumlayıcıda "import serial" denemesi
+# Flash öncesi kart yoklaması (probe_board): yanıt yoksa STATUS bu süre boyunca yinelenir (port açılınca yeniden başlayan kart
+# açılıp yanıt versin); her deneme SERIAL_BOARD_PROBE_ATTEMPT_S bekler. Süre dolunca ROM yükleme kipi (SLIP SYNC) denetlenir.
+SERIAL_BOARD_PROBE_WINDOW_S = 9.0
+SERIAL_BOARD_PROBE_ATTEMPT_S = 2.5
+SERIAL_ROM_SYNC_TRIES = 3
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 _STATUS_MAC = re.compile(r"\(MAC:\s*((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\)")
 _STATUS_KEY = re.compile(r"Yerel anahtar \(local_key\):\s*(tanimli|YOK)")
 _STATUS_SSID = re.compile(r"\(SSID:\s*(AHBU-[0-9A-Fa-f]{6})")
+# v1.3.0+ (CONTRACTS §3e/§3f) STATUS'un SONUNA eklenen satırlar; 1.3.1 (sözleşme 1) "Anahtar izi" satırı Bootstrap'tan hemen sonra.
+_STATUS_BOOTSTRAP = re.compile(r"(?:^|\s)-\s*Bootstrap:\s*([a-z_]{2,20})")
+_STATUS_KEY_FP = re.compile(r"(?:^|\s)-\s*Anahtar izi:\s*([0-9A-Fa-f]{8}|yok)\b")
+_STATUS_TEMPLATE = re.compile(r"(?:^|\s)-\s*Sablon:\s*(\S{1,40})\s+v(\d{1,10})")
+_STATUS_SHUTTERS = re.compile(r"(?:^|\s)-\s*Panjurlar:")  # v1.3.0 öncesi STATUS'un son satırı
 _FACTORY_RESULT = re.compile(r"(?:^|\s)(OK factory_init|ERR [a-z_]{1,40})\s*$")
 _RESETKEY_RESULT = re.compile(r"Yerel anahtar (SILINDI|SILINEMEDI)")
 
@@ -1756,11 +1947,15 @@ def wipe_bytes(buffer: bytearray) -> None:
 
 @dataclass
 class SerialStatus:
-    """``STATUS`` çıktısından ayrıştırılan, kullanıcıya gösterilebilir alanlar."""
+    """``STATUS`` çıktısından ayrıştırılan, kullanıcıya gösterilebilir alanlar (gizli değer içermez)."""
 
     mac: Optional[str] = None
     provisioned: Optional[bool] = None
     ap_ssid: Optional[str] = None
+    key_fp: Optional[str] = None       # None: satır yok (1.3.1 öncesi) | "": "yok" | 8 küçük harf hex (sözleşme 1)
+    bootstrap: Optional[str] = None    # v1.3.0+ "Bootstrap: <durum>" satırı
+    template: Optional[tuple[Optional[str], int]] = None  # v1.3.0+ "Sablon: <id|-> v<sürüm>" (STATUS'un son satırı)
+    base_complete: bool = False        # "Panjurlar:" satırı görüldü (v1.3.0 öncesi STATUS'un son satırı)
 
     def absorb(self, line: str) -> None:
         match = _STATUS_MAC.search(line)
@@ -1772,6 +1967,24 @@ class SerialStatus:
         match = _STATUS_KEY.search(line)
         if match:
             self.provisioned = match.group(1) == "tanimli"
+        match = _STATUS_BOOTSTRAP.search(line)
+        if match:
+            self.bootstrap = match.group(1)
+        match = _STATUS_KEY_FP.search(line)
+        if match:
+            self.key_fp = "" if match.group(1) == "yok" else match.group(1).lower()
+        match = _STATUS_TEMPLATE.search(line)
+        if match:
+            self.template = (None if match.group(1) == "-" else match.group(1), int(match.group(2)))
+        if _STATUS_SHUTTERS.search(line):
+            self.base_complete = True
+
+    @property
+    def supports_bootstrap(self) -> Optional[bool]:
+        """v1.3.0+ (bulut kimliğini kendisi alır): True; STATUS tamamlandı ama satır yok: False; bilinmiyor: None."""
+        if self.bootstrap is not None or self.template is not None:
+            return True
+        return False if self.base_complete else None
 
 
 def parse_factory_init_result(line: str) -> Optional[tuple[bool, str]]:
@@ -2210,9 +2423,17 @@ _SERIAL_ERRORS: dict[str, tuple[str, str]] = {
         "Kart 'OK' dedi ama yerel anahtar STATUS çıktısında görünmüyor.",
         "Tekrar deneyin; sürerse 'Hafızayı Sil (Erase Flash)' ile firmware'i yeniden yükleyin.",
     ),
+    "key_mismatch": (
+        "Karttaki yerel anahtarın izi (STATUS 'Anahtar izi') bu kayıttaki anahtarla eşleşmiyor.",
+        "Kartta farklı bir anahtar var: 'Anahtarı sıfırla (RESETKEY) ve yeniden dene' seçilebilir; eski anahtar KULLANILAMAZ hale gelir.",
+    ),
     "reset_failed": (
         "Kart eski yerel anahtarı silemedi (RESETKEY).",
         "Kartı yeniden başlatıp tekrar deneyin; sürerse 'Hafızayı Sil (Erase Flash)' ile firmware'i yeniden yükleyin.",
+    ),
+    "download_mode": (
+        "Kart yükleme kipinde (BOOT+RESET ile açılmış): yazılımı çalışmadığı için STATUS'a yanıt vermiyor; kartın ayarları okunamadı.",
+        "BOOT'a basmadan RESET'e bir kez basın (kart normal açılsın), birkaç saniye bekleyip yeniden deneyin.",
     ),
 }
 
@@ -2237,7 +2458,7 @@ def serial_provision_error(code: str, **context: str) -> ProvisionError:
         if code == "port_not_found" and context.get("port"):
             message = f"Seri port bulunamadı ({context['port']})."
         error = ProvisionError(code, message, hint=hint)
-        if code == "already_provisioned":
+        if code in ("already_provisioned", "key_mismatch"):
             error.can_reset = True  # type: ignore[attr-defined]
         return error
     safe = code if re.fullmatch(r"[a-z_]{1,40}", code or "") else "bilinmiyor"
@@ -2252,6 +2473,34 @@ class _Retry(Exception):
     """İç akış: bağlantı denemesi yinelenecek."""
 
 
+@dataclass
+class BoardProbe:
+    """Flash/etiket öncesi kart yoklaması (seri ``STATUS`` + ``TPL STATUS``). Gizli değer içermez."""
+
+    mac: Optional[str] = None
+    provisioned: Optional[bool] = None
+    template_id: Optional[str] = None
+    template_version: int = 0
+    key_fp: Optional[str] = None
+    supports_bootstrap: Optional[bool] = None
+
+    @property
+    def uid(self) -> Optional[str]:
+        return uid_from_mac(self.mac or "")
+
+    @property
+    def has_settings(self) -> bool:
+        """Birleşik imajla silinecek bir şey var mı (yerel anahtar ya da şablon)."""
+        return bool(self.provisioned) or bool(self.template_id)
+
+
+# esptool'un SLIP SYNC çerçevesi (komut 0x08; veri 07 07 12 20 + 32 x 55). Yalnız ROM yükleme kipindeki (BOOT+RESET) kart
+# "C0 01 08" ile başlayan SLIP yanıtı verir; çalışan AHBU/Waveshare yazılımı vermez. Çerçevede CR/LF yoktur: çalışan bir
+# yazılımın seri komut satırında komut çalıştırmaz. Karta hiçbir şey yazmaz/silmez.
+_ROM_SYNC_FRAME = b"\xc0\x00\x08\x24\x00\x00\x00\x00\x00\x07\x07\x12\x20" + b"\x55" * 32 + b"\xc0"
+_ROM_SYNC_REPLY = b"\xc0\x01\x08"
+
+
 class _Session:
     """Açık seri bağlantı üzerinde satır tabanlı okuma/yazma. Hiçbir şey kaydetmez/loglamaz."""
 
@@ -2259,13 +2508,21 @@ class _Session:
         self._conn = connection
         self._clock = clock
         self._lines = _LineBuffer()
+        self.last_read_empty = False  # son okuma hiç bayt getirmedi (hat sustu)
 
     def send(self, data: Any) -> None:
         self._conn.write(data)
 
     def read_lines(self, timeout: float) -> list[str]:
         chunk = self._conn.read(4096, timeout)
+        self.last_read_empty = not chunk
         return self._lines.feed(chunk) if chunk else []
+
+    def read_raw(self, timeout: float) -> bytes:
+        """Satıra bölmeden ham baytlar (ROM yükleyicisinin SLIP yanıtında satır sonu yoktur)."""
+        chunk = self._conn.read(4096, timeout)
+        self.last_read_empty = not chunk
+        return bytes(chunk) if chunk else b""
 
     def drain(self, quiet: float = 0.3, max_total: float = 2.0) -> None:
         """Gelen bayt akışı `quiet` sn boyunca susana kadar (en çok `max_total` sn) okunup atılır."""
@@ -2310,16 +2567,22 @@ class SerialProvisioner:
             return True  # liste alınamadı: yine de doğrudan açmayı dene
 
     def _query_status(self, session: _Session, timeout: float) -> Optional[SerialStatus]:
+        """``STATUS`` gönderir; yerel anahtar satırı görülünce STATUS'un SONUNDAKİ satırlar (v1.3.0+ Bootstrap / Anahtar izi /
+        Sablon) da okunsun diye ``Sablon:`` satırına ya da hat susana kadar okumaya devam eder."""
         session.drain(quiet=0.3, max_total=1.5)
         session.send(b"\r\nSTATUS\r\n")
         deadline = self._clock() + timeout
         info = SerialStatus()
+        reads_after_base = 0  # günlük basan kartta "hat sustu" hiç gelmeyebilir: temel blok bitince en çok bir okuma daha
         while self._clock() < deadline:
             for line in session.read_lines(0.3):
                 info.absorb(line)
             if info.provisioned is not None:
-                return info
-        return None
+                if info.template is not None or session.last_read_empty or reads_after_base >= 1:
+                    return info
+                if info.base_complete:
+                    reads_after_base += 1
+        return info if info.provisioned is not None else None
 
     def _connect_and_probe(
         self,
@@ -2366,6 +2629,105 @@ class SerialProvisioner:
             if session is not None:
                 session.close()
             raise
+
+    def _read_tpl_status(
+        self, session: _Session, cancel: Optional[threading.Event], *, strict: bool = True
+    ) -> Optional[tuple[Optional[str], int, str]]:
+        """``TPL STATUS`` -> (kimlik|None, sürüm, etiket). Komutu bilmeyen (v1.3.0 öncesi) kartta ``strict`` ise
+        ``TemplateWriteError('unsupported_fw')``, değilse None."""
+        session.drain(quiet=0.2, max_total=1.0)
+        session.send(b"TPL STATUS\r\n")
+        deadline = self._clock() + SERIAL_TPL_STEP_TIMEOUT_S
+        while self._clock() < deadline:
+            self._check_cancel(cancel)
+            for line in session.read_lines(0.3):
+                if _UNKNOWN_TPL.search(line):
+                    if strict:
+                        raise TemplateWriteError("unsupported_fw")
+                    return None
+                parsed = parse_tpl_status(line)
+                if parsed is not None:
+                    return parsed
+        return None
+
+    def probe_board(
+        self,
+        port: str,
+        *,
+        timeout: float = SERIAL_BOARD_PROBE_ATTEMPT_S,
+        window: float = SERIAL_BOARD_PROBE_WINDOW_S,
+        read_template: bool = True,
+        cancel: Optional[threading.Event] = None,
+    ) -> Optional[BoardProbe]:
+        """Kart AHBU firmware'i çalıştırıyor mu, provizyonlu mu, şablonu var mı? ``STATUS`` (+ ``TPL STATUS``) okur ve portu kapatır
+        (atolye-1: birleşik imajdan önce / 'Güncelle' kipinde).
+
+        Kurulu kart "boş kart" sanılmasın diye: yanıt gelmezse ``STATUS`` ``window`` sn boyunca yinelenir (port açılınca yeniden
+        başlayan kartın açılışta kaybolan komutu), bağlantı koparsa port yeniden açılır. Süre dolunca kart esptool SLIP SYNC'ine
+        yanıt veriyorsa (ROM yükleme kipi, BOOT+RESET) ``ProvisionError('download_mode')``; hiç yanıt yoksa None (boş kart /
+        Waveshare yazılımı). Port açılamaz ya da bağlantı son denemede koparsa ``ProvisionError`` (port_not_found / port_busy /
+        port_io / serial_error)."""
+        mapping = {"not_found": "port_not_found", "busy": "port_busy", "io": "port_io"}
+        deadline = self._clock() + max(float(window), 0.0)
+        session: Optional[_Session] = None
+        failure: Optional[ProvisionError] = None
+        try:
+            while True:
+                self._check_cancel(cancel)
+                try:
+                    if session is None:
+                        session = _Session(self._backend.open(port, SERIAL_BAUD), self._clock)
+                    status = self._query_status(session, timeout)
+                    if status is not None:
+                        return self._board_probe(session, status, read_template, cancel)
+                    failure = None
+                except SerialError as exc:
+                    if session is not None:
+                        session.close()
+                        session = None
+                    failure = serial_provision_error(mapping.get(exc.kind, "serial_error"), port=port)
+                if self._clock() >= deadline:
+                    break
+                self._sleep(0.5)
+            if failure is not None:
+                raise failure
+            try:
+                in_rom = session is not None and self._rom_download_mode(session, cancel)
+            except SerialError as exc:
+                raise serial_provision_error(mapping.get(exc.kind, "port_io"), port=port) from None
+            if in_rom:
+                raise serial_provision_error("download_mode")
+            return None
+        finally:
+            if session is not None:
+                session.close()
+
+    def _board_probe(self, session: _Session, status: SerialStatus, read_template: bool,
+                     cancel: Optional[threading.Event]) -> BoardProbe:
+        probe = BoardProbe(mac=status.mac, provisioned=status.provisioned, key_fp=status.key_fp,
+                           supports_bootstrap=status.supports_bootstrap)
+        if status.template is not None:
+            probe.template_id, probe.template_version = status.template
+        if read_template:
+            tpl = self._read_tpl_status(session, cancel, strict=False)
+            if tpl is not None:
+                probe.template_id, probe.template_version = tpl[0], tpl[1]
+        return probe
+
+    def _rom_download_mode(self, session: _Session, cancel: Optional[threading.Event]) -> bool:
+        """Sessiz kart ROM yükleme kipinde mi (BOOT+RESET)? esptool'un SLIP SYNC çerçevesi gönderilir; yalnız ROM yükleyicisi
+        ``C0 01 08`` ile başlayan SLIP yanıtı verir. Karta hiçbir şey yazmaz/silmez."""
+        tail = b""
+        for _ in range(SERIAL_ROM_SYNC_TRIES):
+            self._check_cancel(cancel)
+            session.send(_ROM_SYNC_FRAME)
+            deadline = self._clock() + 0.4
+            while self._clock() < deadline:
+                data = tail + session.read_raw(0.2)
+                if _ROM_SYNC_REPLY in data:
+                    return True
+                tail = data[-(len(_ROM_SYNC_REPLY) - 1):]  # parçalara bölünmüş yanıt da yakalansın
+        return False
 
     def _reset_key(self, session: _Session, cancel: Optional[threading.Event]) -> None:
         session.drain()
@@ -2475,14 +2837,23 @@ class SerialProvisioner:
                     break
             if final is None or final.provisioned is not True:
                 raise serial_provision_error("verify_failed")
+            uid = uid_from_mac(final.mac or status.mac or "")
+            fp_matched: Optional[bool] = None
+            if final.key_fp and uid:  # firmware 1.3.1: STATUS 'Anahtar izi' (sözleşme 1); satır yoksa eski davranış
+                if final.key_fp != local_key_fingerprint(local_key, uid):
+                    raise serial_provision_error("key_mismatch")
+                fp_matched = True
+                say("Karttaki anahtar izi bu kayıttaki anahtarla eşleşti.")
             return ProvisionOutcome(
                 initialized=True,
                 verified=True,
                 needs_reconnect=False,
-                device_uid=uid_from_mac(final.mac or status.mac or ""),
+                device_uid=uid,
                 via="serial",
                 mac=final.mac or status.mac,
                 ap_ssid=final.ap_ssid or status.ap_ssid,
+                key_fp_matched=fp_matched,
+                supports_bootstrap=final.supports_bootstrap,
             )
         finally:
             session.close()
@@ -2521,6 +2892,39 @@ class TemplateWriteOutcome:
     device_uid: Optional[str] = None
     mac: Optional[str] = None
     rev: Optional[int] = None
+    safety_checked: bool = False     # atolye-6: yazımdan sonra seri SAFETY okundu (False: okunamadı ya da istenmedi)
+    latched_zones: list[int] = field(default_factory=list)  # yazımdan sonra kilitlenen (alarmdaki) güvenlik bölgeleri
+    fault_zones: list[int] = field(default_factory=list)    # vana geri bildirim arızasındaki (FAULT) bölgeler: ACK temizlemez
+
+
+# atolye-6: seri SAFETY çıktısı (main.cpp cliSafetyStatus): "[GUVENLIK] politika=..." başlığı, ardından yalnız NORMAL OLMAYAN
+# bölgeler "  - Bolge N: latched|fault|test (...)" ya da "  - Butun bolgeler NORMAL".
+_SAFETY_HEADER = re.compile(r"\[GUVENLIK\] politika=")
+_SAFETY_ZONE = re.compile(r"(?:^|\s)-\s*Bolge (\d{1,2}):\s*(latched|fault|test)\b")
+_SAFETY_ACK_REPLY = re.compile(r"Alarm onayi.{0,60}kuyruga yazildi|\[CLI-HATA\] Kullanim: SAFETY")
+
+
+@dataclass
+class SafetySummary:
+    seen: bool = False                                    # SAFETY başlığı görüldü
+    latched: list[int] = field(default_factory=list)      # kilitli (alarmdaki) bölgeler
+    faults: list[int] = field(default_factory=list)       # arızalı bölgeler
+
+
+def parse_safety_lines(lines: Iterable[str]) -> SafetySummary:
+    """Seri ``SAFETY`` çıktısından bölge durumları (başlıktan önceki satırlar sayılmaz; ham satır gösterilmez)."""
+    summary = SafetySummary()
+    for line in lines:
+        if _SAFETY_HEADER.search(line):
+            summary.seen = True
+            continue
+        match = _SAFETY_ZONE.search(line)
+        if match and summary.seen:
+            zone, state = int(match.group(1)), match.group(2)
+            target = summary.latched if state == "latched" else summary.faults if state == "fault" else None
+            if target is not None and zone not in target:
+                target.append(zone)
+    return summary
 
 
 def parse_tpl_status(line: str) -> Optional[tuple[Optional[str], int, str]]:
@@ -2563,18 +2967,51 @@ class TemplateSerialWriter(SerialProvisioner):
         return rest
 
     def _read_status(self, session: _Session, cancel: Optional[threading.Event]) -> Optional[tuple[Optional[str], int, str]]:
+        return self._read_tpl_status(session, cancel, strict=True)
+
+    def _read_safety(self, session: _Session, cancel: Optional[threading.Event], settle_s: float = 0.0) -> SafetySummary:
+        """Seri ``SAFETY`` okur (atolye-6). ``settle_s``: önce sensör onay süresi kadar beklenir (yeni şablonun NC girişi
+        kilitlenebilsin)."""
+        if settle_s > 0:
+            self._sleep(settle_s)
         session.drain(quiet=0.2, max_total=1.0)
-        session.send(b"TPL STATUS\r\n")
+        session.send(b"SAFETY\r\n")
         deadline = self._clock() + SERIAL_TPL_STEP_TIMEOUT_S
+        lines: list[str] = []
         while self._clock() < deadline:
             self._check_cancel(cancel)
-            for line in session.read_lines(0.3):
-                if _UNKNOWN_TPL.search(line):
-                    raise TemplateWriteError("unsupported_fw")
-                parsed = parse_tpl_status(line)
-                if parsed is not None:
-                    return parsed
-        return None
+            chunk = session.read_lines(0.3)
+            lines.extend(chunk)
+            if any(_SAFETY_HEADER.search(line) for line in lines) and session.last_read_empty:
+                break
+        return parse_safety_lines(lines)
+
+    def acknowledge_alarm(
+        self,
+        port: str,
+        zones: Iterable[int],
+        *,
+        settle_s: float = 1.5,
+        progress: Optional[ProgressCallback] = None,
+        cancel: Optional[threading.Event] = None,
+    ) -> SafetySummary:
+        """atolye-6: seri ``SAFETY ACK <bölge>`` gönderir (0 = bütün bölgeler) ve ``SAFETY`` ile kalan kilitli bölgeleri okur.
+        Firmware'in fail-safe davranışı değişmez: giriş kuru (normal) olmadan bölge temizlenmez."""
+        say = progress or (lambda _message: None)
+        session, _status = self._connect_and_probe(port, False, say, cancel)
+        try:
+            for zone in list(zones) or [0]:
+                session.drain(quiet=0.2, max_total=1.0)
+                session.send(f"SAFETY ACK {int(zone)}\r\n".encode("ascii"))
+                deadline = self._clock() + SERIAL_TPL_STEP_TIMEOUT_S
+                while self._clock() < deadline:
+                    self._check_cancel(cancel)
+                    if any(_SAFETY_ACK_REPLY.search(line) for line in session.read_lines(0.3)):
+                        break
+            say("Alarm onayı gönderildi; güvenlik durumu (SAFETY) okunuyor...")
+            return self._read_safety(session, cancel, settle_s)
+        finally:
+            session.close()
 
     def read_status(self, port: str, *, progress: Optional[ProgressCallback] = None,
                     cancel: Optional[threading.Event] = None) -> Optional[tuple[Optional[str], int, str]]:
@@ -2598,8 +3035,17 @@ class TemplateSerialWriter(SerialProvisioner):
         wait_for_port: bool = False,
         progress: Optional[ProgressCallback] = None,
         cancel: Optional[threading.Event] = None,
+        on_identified: Optional[Callable[[str], None]] = None,
+        read_safety: bool = False,
+        safety_settle_s: float = 2.5,
     ) -> TemplateWriteOutcome:
-        """Şablon zarfını karta yazar ve ``TPL STATUS`` ile geri okuyup doğrular. Hata -> ``TemplateWriteError``."""
+        """Şablon zarfını karta yazar ve ``TPL STATUS`` ile geri okuyup doğrular. Hata -> ``TemplateWriteError``.
+
+        ``on_identified(uid)``: kart STATUS ile tanındıktan sonra, karta HİÇBİR ``TPL`` komutu gitmeden çağrılır (atolye-10:
+        kartsız daireye yazımda kart önce daireye bağlanır). Kanca hata yükseltirse hiçbir şey yazılmaz.
+        ``read_safety``: (atolye-6) başarılı yazımdan sonra aynı oturumda ``safety_settle_s`` beklenip seri ``SAFETY`` okunur;
+        kilitlenen bölgeler ``outcome.latched_zones``'a, vana geri bildirim arızasındakiler ``outcome.fault_zones``'a yazılır.
+        Okunamazsa yazım yine başarılıdır ama ``outcome.safety_checked`` False kalır (çağıran "okunamadı" demelidir)."""
 
         def say(message: str) -> None:
             if progress:
@@ -2623,6 +3069,15 @@ class TemplateSerialWriter(SerialProvisioner):
                     message=f"Bağlı kart ({found_uid}) seçilen daireye bağlı kartla ({expected_uid.strip().upper()}) eşleşmiyor; "
                     "hiçbir şey yazılmadı. Doğru kartı bağlayın.",
                 )
+            if on_identified is not None:
+                if not found_uid:
+                    raise TemplateWriteError(
+                        "flat_link_failed",
+                        message="Bağlı kartın kimliği (MAC) okunamadı; kart daireye bağlanamadı. Hiçbir şey yazılmadı; kartı "
+                        "yeniden bağlayıp tekrar deneyin.",
+                    )
+                on_identified(found_uid)
+                self._check_cancel(cancel)
             chunks = tm.serial_chunks(envelope)
             session.drain(quiet=0.2, max_total=1.0)
             session.send(b"\r\n")
@@ -2660,7 +3115,7 @@ class TemplateSerialWriter(SerialProvisioner):
             back = self._read_status(session, cancel)
             if back is None or back[0] != template_id or back[1] != int(version):
                 raise TemplateWriteError("readback_mismatch")
-            return TemplateWriteOutcome(
+            outcome = TemplateWriteOutcome(
                 template_id=template_id,
                 version=int(version),
                 label=back[2] or label,
@@ -2668,6 +3123,16 @@ class TemplateSerialWriter(SerialProvisioner):
                 device_uid=uid_from_mac(status.mac or ""),
                 mac=status.mac,
             )
+            if read_safety:
+                say("Şablonda NC tehlike girişi var; güvenlik durumu (SAFETY) okunuyor...")
+                try:
+                    summary = self._read_safety(session, cancel, safety_settle_s)
+                except FactoryError:  # şablon yazıldı; güvenlik durumu okunamadı (bağlantı/iptal): bilinmiyor
+                    summary = SafetySummary()
+                outcome.safety_checked = summary.seen
+                outcome.latched_zones = list(summary.latched)
+                outcome.fault_zones = list(summary.faults)
+            return outcome
         except BaseException as exc:
             if isinstance(exc, TemplateWriteError) and exc.code != "mac_mismatch":
                 exc.device_uid = found_uid
@@ -2684,11 +3149,6 @@ class TemplateSerialWriter(SerialProvisioner):
 def base64_decoded_length(chunk: str) -> bytes:
     """Base64 parçasının çözülmüş baytları (yalnız uzunluk denetimi için)."""
     return binascii.a2b_base64(chunk.encode("ascii"))
-
-
-# Kullanıcı kararı (2026-10-08): kablolu Ethernet'ten gelen istek kartta anahtarsız yetkilidir; X-Device-Key başlığı yalnız
-# biçim gereği bu sabitle gönderilir (gizli değil; kart Ethernet yolunda doğrulamaz).
-ETH_NO_KEY = "ethernet-no-key"
 
 
 class TemplateLanWriter:

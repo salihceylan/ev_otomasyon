@@ -1,7 +1,14 @@
 # AHBU Ev Otomasyonu — Fabrika / Servis Aracı Kullanım Rehberi
 
-**Kimler için:** Fabrikada yeni röle/pano kartlarını hazırlayan personel. Teknik bilgi gerekmez; adımları sırayla uygulamanız yeterlidir.
+**Kimler için:** Fabrikada yeni röle/pano kartlarını hazırlayan personel (**süper kullanıcı**) ve site/şablon/karta yazım işini
+yapan **servis sorumlusu**. Teknik bilgi gerekmez; adımları sırayla uygulamanız yeterlidir.
 Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, testler) en sonda "Teknik Ek" bölümündedir.
+
+> **Güncel durum (2026-10-08):** 1. sekmede seçili firmware `version_info.json`'a göre **v1.2.1**'dir. **v1.3.0** paketi
+> (Ethernet, şablon, panonun kendi bulut kimliği) klasörde hazırdır; **v1.3.1** (yerel anahtar izi) donanım denemesi bekliyor ve
+> seçili sürüm deneme bitene kadar bilerek değiştirilmedi. Ethernet, şablon yazımı ve bireysel sahiplenme için kartta v1.3.0+ gerekir.
+> Kartta zaten v1.3.0+ çalışıyorsa araç v1.2.1 imajını sormadan yazmaz: **"Güncelle (ayarlar korunur)"** kipinde
+> **"Sürüm Düşürme Engellendi"** der (Gözat... ile `v1.3.0\app_0x10000_v1.3.0.bin`'i seçin), birleşik imajda **"Sürüm Düşürme"** diye sorar.
 
 **Aracı açmak için:** `ev_otomasyon_servis_yazilimi` klasöründeki **`ev_otomasyon_sistemi.bat`** dosyasına çift tıklayın.
 
@@ -49,7 +56,7 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 
 - Windows bilgisayar, **internet bağlantısı** olan normal ağa bağlı. (Araç IT tarafından kurulmuş olmalı — bkz. Teknik Ek.)
 - Hazırlanacak kart ve **USB-C VERİ kablosu**. (Yalnızca şarj eden kablolar çalışmaz; kart bilgisayarda "COM port" olarak görünmelidir.)
-- **Süper kullanıcı hesabı** (e-posta + parola). Yöneticiniz verir. Parolayı kimseyle paylaşmayın; araç parolanızı **hiçbir zaman kaydetmez**. İsterseniz **Beni hatırla** ile yalnızca *şifreli oturum anahtarı* bu bilgisayarda saklanır ve araç bir sonraki açılışta kendiliğinden girer (ortak bilgisayarda işareti kaldırın).
+- **Süper kullanıcı hesabı** (kart kaydı, etiket yenileme, envanter durumu) ya da **servis sorumlusu hesabı** (siteler, şablonlar, karta yazım, sunucudaki anahtarla yeniden provizyon) — e-posta + parola. Yöneticiniz verir. Parolayı kimseyle paylaşmayın; araç parolanızı **hiçbir zaman kaydetmez**. İsterseniz **Beni hatırla** ile yalnızca *şifreli oturum anahtarı* bu bilgisayarda saklanır ve araç bir sonraki açılışta kendiliğinden girer (ortak bilgisayarda işareti kaldırın).
 - İsteğe bağlı: etiket yazıcısı.
 
 #### Kurallar (7 ALTIN KURAL)
@@ -63,6 +70,7 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 7. Vardiya bitince (özellikle ortak bilgisayarda) **Oturumu Kapat**'a basın; hatırlanan oturumu da siler.
 
 > **Güncel firmware şartı:** Kartlara yalnızca **USB provizyon komutunu bilen güncel firmware** yüklenmelidir. Araç, yüklenecek imajı denetler; imajda bu komut (`FACTORYINIT`) yoksa yüklemeden önce **"Firmware Uyarısı"** gösterir. Bu uyarıyı görürseniz **Hayır** deyin ve IT'den güncel imajı isteyin (Teknik Ek E): eski imajla yüklenen kart USB ile provizyonlanamaz.
+> Aynı pencere imajda v1.3.0 özellikleri yoksa da uyarır (engellemez): **"Bu imajla USB şablon / Ethernet/LAN şablon / panonun kendi bulut kimliği çalışmaz (v1.3.0+ gerekli)."** (v1.2.1 imajında üçü de çıkar.) Kartta zaten v1.3.0+ çalışıyorsa bu uyarı "normal" değildir: araç kartı yokladıktan sonra birleşik imajda ayrıca **"Sürüm Düşürme"** diye sorar, **Güncelle (ayarlar korunur)** kipinde ise hiç yazmaz (**"Sürüm Düşürme Engellendi"**). Provizyon sırasında kartta v1.3.0'dan eski yazılım görülürse araç **"Bu yazılım buluta kendiliğinden bağlanamaz; bireysel sahiplenme için v1.3.0+ yükleyin."** der: kart çalışır ama müşterinin kendisi sahiplendiğinde servis sihirbazı olmadan buluta bağlanamaz.
 
 ---
 
@@ -83,9 +91,11 @@ Altında **5 sekme** vardır:
 | **4. Siteler** | Site ekle/düzenle/sil, daireleri toplu üret, daireye şablon ata, kartı daireye bağla, ilerleme. (Bölüm 4b) |
 | **5. Şablonlar** | Kurulum şablonu düzenleyici, sürüm geçmişi, karta yazım (USB / Ethernet), kablolama şeması PDF. (Bölüm 4b) |
 
-**Roller:** **süper kullanıcı** her şeyi yapar. **Servis sorumlusu** giriş yapabilir; şeritte **"(servis sorumlusu)"** yazar. Siteleri, şablonları ve karta yazımı kullanır, envanter listesini görür; ama **SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET**, **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri onun için kapalıdır (fabrika kaydı yalnızca süper kullanıcıya açıktır).
+**Roller:** **süper kullanıcı** her şeyi yapar. **Servis sorumlusu** giriş yapabilir (giriş penceresinin başlığı **"Sunucuya Giriş (süper kullanıcı / servis sorumlusu)"**); şeritte **"(servis sorumlusu)"** yazar. Siteleri, şablonları ve karta yazımı kullanır, envanter listesini görür, **Sunucudaki Anahtarla Yeniden Provizyon (USB)** yapabilir; ama **SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET**, **Askıya Al (Kilit)**, **Aktif Et (Stok)**, **Envanterden Sil** ve **Etiketi Yeniden Bas (USB)** düğmeleri onun için kapalıdır (fabrika kaydı ve etiket yenileme yalnızca süper kullanıcıya açıktır).
 
-**Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz **silinemez**.
+**Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz ve bir **daireye bağlı** kart **silinemez** ("Kart bir daireye bağlı; önce daireden ayırın.").
+
+**Etiketi Yeniden Bas (USB)** (yalnız süper kullanıcı): etiketi kaybolan/bozulan **stoktaki** kart USB'de takılıyken basılır. Araç kartın kimliğini seri `STATUS` ile okur, sunucuda **yeni kurulum PIN'i** üretir (eski etiketteki PIN geçersiz olur), kartın **mevcut yerel anahtarını** sunucudan alır (anahtar **değişmez**; alma işlemi kayda geçer), **yeni AP parolası** üretip karta USB'den yazar (`RESETKEY` + `FACTORYINIT`), `STATUS` ile doğrular ve iki karekodlu yeni etiketi önizlemeye koyar ("Etiket Yenilendi"). Kart stokta değilse ya da bir daireye bağlıysa sunucu reddeder ve nedeni gösterilir; karta yazma başarısız olursa **etiket basılmaz** (yeniden deneyin, yeni PIN üretilir).
 
 ---
 
@@ -104,7 +114,7 @@ Her kart için aynı 8 adımı uygulayın.
    - **Giriş Yap**'a basın.
 4. **Ne görmelisiniz?** Şeritte e-posta adresiniz ve **(süper kullanıcı)** yazar, **Sunucuya Giriş** düğmesi **Hesap Değiştir**'e dönüşür; **2. sekmedeki** tablo envanteri listeler. **Beni hatırla** işaretliyse bir sonraki açılışta giriş penceresi çıkmaz: araç kayıtlı oturumla sessizce girer (Günlükte "Kayıtlı oturum sessizce açıldı"; şeritte "hatırlanıyor"). Oturum artık geçerli değilse kayıt silinir ve eskisi gibi **Sunucuya Giriş** beklenir.
 
-> Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Kart kaydı (bu 8 adım) **süper kullanıcı** hesabı ister; servis sorumlusu hesabı yalnız siteler/şablonlar/karta yazım içindir.
+> Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Kart kaydı (bu 8 adım) **süper kullanıcı** hesabı ister; servis sorumlusu hesabı siteler/şablonlar/karta yazım ve sunucudaki anahtarla yeniden provizyon içindir.
 
 ### Adım 2 — Kartı bağlayın ve kimliğini okuyun
 
@@ -149,12 +159,16 @@ Her kart için aynı 8 adımı uygulayın.
 ### Adım 5 — Firmware'i yükleyin (provizyon otomatik başlar)
 
 1. **1. sekmeye** geçin. **COM Port**'un doğru kart olduğundan emin olun.
-2. **Yüklenecek Firmware Seçimi** bölümünde **"Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)"** işaretli olmalı. **Dosya** kutusunda `version_info.json`'un gösterdiği güncel imajın yolu yazar (şu an `...\firmware_releases\v1.1.2\firmware_combined_0x0.bin`). **➕ Versiyon Arttır** düğmesine basmayın: yalnız yeni bir sürüm hazırlayan IT içindir (Teknik Ek E); basılırsa kutudaki dosyayı yeni bir sürüm numarasıyla (ör. v1.1.3) kopyalayıp güncel sürüm yapar. (**"Fabrika Çıkış Orijinal Yazılımı"** yalnızca test/kurtarma içindir: bu yazılım AHBU provizyonu yapmaz; üretimde seçmeyin.)
+2. **Yüklenecek Firmware Seçimi** bölümünde **"Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)"** işaretli olmalı. **Dosya** kutusunda `version_info.json`'un gösterdiği güncel **birleşik** imajın yolu yazar (şu an `...\firmware_releases\v1.2.1\firmware_combined_0x0.bin`). **➕ Versiyon Arttır** düğmesine basmayın: yalnız yeni bir sürüm hazırlayan IT içindir (Teknik Ek E); basılırsa kutudaki dosyayı yeni bir sürüm numarasıyla kopyalayıp güncel sürüm yapar. (**"Fabrika Çıkış Orijinal Yazılımı"** yalnızca test/kurtarma içindir: bu yazılım AHBU provizyonu yapmaz; üretimde seçmeyin.)
    - Daha önce kullanılmış/farklı yazılımlı bir kartsa önce **Hafızayı Sil (Erase Flash)** düğmesine basıp onay sorusuna **Evet** deyin; bitince bu adıma dönün.
+   - **Birleşik imaj (0x0) yeni/boş ya da Waveshare yazılımlı kart içindir:** kartın kalıcı belleğini yeniden yazar; kartta yerel anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon ve güvenlik ayarları varsa **SİLER**. **Kurulu (provizyonlu/şablonlu) bir kartı güncellemek için** üçüncü seçenek **"Güncelle (ayarlar korunur)"**'u seçin: araç yalnız uygulama imajını (`v<sürüm>\app_0x10000_v<sürüm>.bin`) **0x10000** adresine yazar; ayarlar korunur, provizyon gerekmez, etiket geçerli kalır. Bu kip önce kartın AHBU firmware'i çalıştırdığını seri `STATUS` ile doğrular; doğrulanamazsa **"Güncelleme Yapılamadı"** der ve hiçbir şey yazmaz (kart yükleme kipinde kalmış olabilir: **BOOT'a basmadan** RESET'e bir kez basıp yeniden deneyin). Kartta v1.3.0+ çalışırken seçilen uygulama imajında v1.3.0 özellikleri yoksa (bugün `version_info.json`'un gösterdiği v1.2.1 uygulaması böyledir) araç **"Sürüm Düşürme Engellendi"** der ve yazmaz: ayarlar kalır ama Ethernet, şablon ve panonun kendi bulut kimliği giderdi. **Gözat...** ile `v1.3.0\app_0x10000_v1.3.0.bin`'i seçip FLASH'a yeniden basın. Araç kipe yanlış dosya verilmesine izin vermez: uygulama imajı 0x0'a, birleşik imaj 0x10000'a yazılamaz ("Dosya Sorunu").
 3. **FİRMWARE'İ KARTA YÜKLE (FLASH)** düğmesine basın.
+   - Araç önce kartı USB'den yoklar (`STATUS` + `TPL STATUS`; çalışan kart hemen yanıt verir, yanıt vermeyen kartta en çok ~10 sn: port açılınca yeniden başlayan kart da bu sürede yanıt verir). Kartta yerel anahtar ya da şablon varsa **"Kart Ayarları Silinecek"** sorusu çıkar: *"Yerel anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon ve güvenlik ayarları SİLİNECEK. Devam?"* **Hayır** derseniz araç **"Güncelle (ayarlar korunur)"** kipine geçer ve **seçtiğiniz birleşik imajla aynı klasördeki** uygulama imajını (`app_0x10000_v<sürüm>.bin`) seçer (**"Güncelle Kipi Seçildi"**; klasörde yoksa araç uyarır, **Gözat...** ile aynı sürümün uygulama imajını seçin); FLASH'a yeniden basın. Boş/yeni kartta soru çıkmaz.
+   - Kartın durumu okunamazsa (port/bağlantı hatası) ya da kart **yükleme kipinde** bekliyorsa (BOOT+RESET ile açılmış; `Failed to connect` çözümü kartı bu kipte bırakır, kart o zaman STATUS'a yanıt vermez) araç **"Kart Durumu Okunamadı"** diye sorar: kart kuruluysa **Hayır** deyin, kartı **BOOT'a basmadan** RESET'leyip FLASH'a yeniden basın.
+   - Kartta v1.3.0+ çalışırken seçilen birleşik imaj daha eskiyse araç ayrıca **"Sürüm Düşürme"** diye sorar; kartı bilerek eski sürüme döndürmüyorsanız **Hayır** deyin ve **Gözat...** ile v1.3.0+ imajını seçin.
    - **"Firmware Uyarısı"** çıkarsa metni okuyun. "FACTORYINIT bulunamadı / ESKİ firmware" diyorsa **Hayır** deyin ve IT'den güncel imajı isteyin (Bölüm 2 ve Teknik Ek E).
    - **İşlem Log Çıktısı** alanında satırlar akar (30–60 saniye).
-4. Yükleme bitince **"Başarılı"** penceresi çıkar. Bu kartın kaydı (Adım 3) hazırsa ve kartın MAC adresi kayıtla eşleşiyorsa araç **3. sekmeye kendiliğinden geçer** ve provizyonu başlatır. Kayıt yoksa veya MAC uyuşmuyorsa araç provizyonu **başlatmaz**; nedenini "Başarılı" penceresinde yazar.
+4. Yükleme bitince **"Başarılı"** penceresi çıkar. Bu kartın kaydı (Adım 3) hazırsa ve kartın MAC adresi kayıtla eşleşiyorsa araç **3. sekmeye kendiliğinden geçer** ve provizyonu başlatır. Bellekteki kayıt bu karta aitse ve kart daha önce provizyonlanmışsa (birleşik imaj anahtarı sildi) araç **aynı anahtar ve AP parolasıyla** yeniden provizyon yapar; etiket geçerli kalır. Bellekte kaydı olmayan ama önceden provizyonlu bir kartsa araç **Sunucudaki anahtarla yeniden provizyon** önerir (Bölüm 5c). MAC uyuşmuyorsa araç provizyonu **başlatmaz**; nedenini "Başarılı" penceresinde yazar. Kartta şablon vardıysa birleşik imaj onu da sildiği için araç şablonu yeniden yazmanızı söyler.
 
 > **Bu sırada USB kablosunu ÇIKARMAYIN ve başka kart takmayın.** Kart yeniden başlarken kısa süre **parolasız** bir Wi-Fi ağı (`AHBU-XXXXXX`) yayınlar; araç USB'den hemen provizyonu yapıp bu ağı parolalı hâle getirir.
 
@@ -171,6 +185,8 @@ Her kart için aynı 8 adımı uygulayın.
 7. **`✅ USB (seri) provizyon tamamlandı ve doğrulandı ...`** ve **"Provizyon Tamamlandı"** penceresi.
 
 **Ne görmelisiniz?** Üstte **"Durum: Provizyon doğrulandı ✔ (USB seri)"** yazar ve "Provizyon Tamamlandı" penceresi, etiketi yapıştırmadan önce telefonla kontrolü önerir (Adım 7).
+
+Firmware v1.3.1'de `STATUS` çıktısında **"Anahtar izi"** satırı da vardır (anahtarın kendisi değil, ondan türetilen 8 haneli iz): araç bu izi kayıttaki anahtarla karşılaştırır ve eşleşirse "Karttaki anahtar izi bu kayıttaki anahtarla eşleşti." yazar. Eşleşmezse kartta başka bir anahtar vardır; araç sıfırlamayı (RESETKEY) önerir. Eski firmware'de bu satır yoktur; araç eskisi gibi çalışır.
 
 - **Gizli Bilgiler** kutusunda yerel anahtar ve AP parolası noktalı (••••) görünür (**Değerleri göster** açar). Fabrikada **yazmanız/kopyalamanız gerekmez** (AP parolası etikettedir). Tek istisna: kartın web sayfası (Bölüm 11) için **yerel anahtar** gerekecekse, kaydı bellekten silmeden önce **📋 Anahtarı kopyala** ile alıp güvenli bir parola yöneticisine kaydedin (anahtar panoya kopyalanır ve 45 sn sonra panodan silinir). Anahtar etikette yazmaz, mobil uygulama da ayarlarda göstermez; **Kaydı Bellekten Sil**'den ya da aracı kapattıktan sonra bir daha gösterilmez.
 - Beklerken **Beklemeyi İptal Et** düğmesiyle işlemi durdurabilirsiniz.
@@ -226,8 +242,15 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
 2. Siteyi seçin; alttaki **Daireler** tablosu dolar. **Toplu Daire Üret**: blok (ör. `A`), ilk ve son daire no (ör. 1-24),
    isteğe bağlı daire tipi ve şablon. Var olan blok+no atlanır.
 3. Daireyi seçip **Şablon Ata** ile şablonunu, **Kart Bağla** ile kartın UID'sini (`AHBU-S3-XXXXXX`; boş = bağlantıyı kaldır) girin.
-4. "Durum" sütunu ilerlemeyi gösterir: **Planlandı → Yazıldı → Kuruldu → Teslim edildi**; "Son yazım" hangi sürümün hangi yolla
-   (USB/ETH) yazıldığını gösterir.
+   Şablon eski karta yazılmışken kart değiştirilirse araç **"Şablon yeni karta yeniden yazılmalı"** uyarır. Yalnız **stoktaki** kart
+   bağlanır; kart pano değişimiyle bu daireye takıldıysa bağlantı sunucuda otomatik taşınır, değilse süper kullanıcı bağlayabilir.
+   Başka bir daireye bağlı kart için "Kart bir daireye bağlı; önce daireden ayırın." denir.
+4. "Durum" sütunu ilerlemeyi gösterir: **Planlandı → Yazıldı → Kuruldu → Teslim edildi** (sitenin "İlerleme" sütunu da bu sayıları
+   gösterir). Daire müşteriye teslim edilince **Teslim Edildi** düğmesiyle işaretleyin. Araç önce daireye kart bağlı mı ve durum
+   **Yazıldı** ya da **Kuruldu** mu diye bakar; değilse **"Teslim Edilemez"** der ve sunucuya hiçbir şey göndermez (önce **Kart Bağla**,
+   sonra **Karta Yaz**). Durum yalnız ileri gider; geri alma yalnız süper kullanıcı. "Son yazım" hangi sürümün hangi yolla (USB/ETH) yazıldığını gösterir:
+   başarısız yazım **`⚠ vN (kod)`**, şablonun güncel sürümünden eski son başarılı yazım **"eski sürüm"**, dairenin kartından başka
+   bir karta yapılan yazım **"başka kart (UID)"** olarak ayrıca belirtilir.
 
 ### 4b.2 Şablon hazırlama (5. Şablonlar sekmesi)
 
@@ -235,8 +258,14 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
    **Çoğalt** aynı içeriği yeni adla kopyalar; **Sürüm Geçmişi** eski sürümleri listeler (eski sürümler değişmez);
    **Şablonu Sil** listeden kaldırır (sürümler ve yazım kayıtları sunucuda kalır).
 2. Düzenleyicide: şablon adı, daire tipi, **Ek modül (RS485) var** + kanal + adres (**Kanalları Uygula** tabloları büyütür/küçültür).
+   Yalnız adresi değiştirdiyseniz düğmeye basmanız gerekmez. Kutu/kanal sayısını değiştirip **Kanalları Uygula**'ya basmadan
+   kaydederseniz araç uygulamayı sorar; "Hayır" derseniz kayıt durur ("Ek modül değişikliği uygulanmadı: Kanalları Uygula
+   düğmesine basın") — değişiklik sessizce kaybolmaz.
    - **Röle Çıkışları:** ad, oda, tip (**Lamba/Priz**, **Panjur (çift)**, **Darbe**), süre, bağlanacak yük. Panjur seçilince röle
-     **çift** olarak kurulur: tek numaralı röle **Yukarı**, ardından gelen **Aşağı**, ikisinin süresi aynıdır.
+     **çift** olarak kurulur: tek numaralı röle **Yukarı**, ardından gelen **Aşağı**, ikisinin süresi aynıdır. Tip değişikliği bir
+     güvenlik cihazını (vana/siren/fan; panjur çiftinin eşindeki dahil) ya da dimmeri silecekse araç önce
+     **"Güvenlik Öğesi Silinecek"** diye sorar (ör. "R8 Ana Su Vanası (vana, su)"); "Hayır" derseniz hiçbir şey değişmez. Kaydederken düzenleyici
+     açıldığından beri güvenlik cihazı/dimmer azaldıysa son kez sorulur ("N güvenlik cihazı silindi, yine de kaydedilsin mi?").
    - Lamba satırındaki **💡** düğmesi **"Parlaklık ayarı yapılacak mı?"** diye sorar: evetse dimmer kaynağı (Modbus dimmer modülü /
      köprü), adres ve kanal girilir; pencere dimmerin **nereye** konacağını yazar (K4 yönergesi; şemada da yer alır).
    - **Girişler (DI):** ad, hedef röle, kip (**Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir**,
@@ -245,29 +274,54 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
    - **Güvenlik:** tepkiler açık/kapalı, kuruluk bekleme, bölge adları, güvenlik cihazları (vana / siren / fan; vanada kapanma kipi
      ve akışkan). Cihaz panjur ya da darbe rölesine bağlanamaz.
 3. **Doğrula** yerel denetimi yapar; **Doğrula ve Kaydet (yeni sürüm)** önce yerel, sonra sunucu doğrulamasından geçirip **yeni sürüm**
-   olarak kaydeder. Sunucu reddederse hata kodu ve alan gösterilir; düzenleyiciye dönüp düzeltebilirsiniz.
+   olarak kaydeder. Sunucu reddederse hata kodu ve alan gösterilir; düzenleyiciye dönüp düzeltebilirsiniz. Siz düzenlerken başka biri
+   aynı şablonu kaydettiyse **"Şablon Değişti"** sorusu çıkar: yeni sürümü açabilir ya da bilerek üstüne yazabilirsiniz (öteki
+   değişiklikler o zaman yeni sürümde olmaz).
 
 ### 4b.3 Şablonu karta yazma
 
 1. **Siteler** sekmesinde daireyi seçip **Karta Yaz**'a (ya da **Şablonlar** sekmesinde şablonu seçip **Karta Yaz**'a) basın.
 2. Pencerede yol seçin:
    - **USB (seri) — önerilen:** USB portunu seçin. Kart fiziksel olarak bağlı olduğu için güvenlik ayarlarını tamamen yazabilir.
-     Daireye bağlı kart varsa araç bağlı kartın o kart olduğunu denetler; değilse hiçbir şey yazmaz.
-   - **Ethernet (LAN):** kartın IP adresi (yalnız yerel ağ) ve UID'si. Kart (firmware v1.3.0) **kablolu Ethernet'ten gelen isteği
-     anahtarsız ve provizyonsuz kabul eder**: sunucudan anahtar alınmaz, kart envantere kaydedilmemiş ya da provizyonsuz olsa da yazılır.
-     IP ile UID ayrıca karşılaştırılmaz: **IP adresinin doğru karta ait olduğundan emin olun.** IP kartın Wi-Fi adresiyse kart
-     anahtar ister ve yazım reddedilir; kartın Ethernet IP'sini girin.
-3. Araç şablonu gönderir, kart **atomik** uygular (geçersizse hiçbir şey değişmez), ardından karttan **geri okur**. Sonuç
-   "Karta Yazım Sonucu" alanında görünür ve sunucuya yazım kaydı işlenir (daire **Yazıldı** olur).
-4. Firmware yükleme + USB provizyon bittikten sonra **3. sekmede** **Şablon Yaz (aynı USB portu)** düğmesi aynı porttan şablon
+     Daireye bağlı kart varsa araç bağlı kartın o kart olduğunu denetler; değilse hiçbir şey yazmaz. Dairenin kartı yoksa araç
+     takılı kartı **yazmadan önce** daireye bağlar; kart başka bir daireye bağlıysa (sunucu reddeder) **hiçbir şey yazılmaz**
+     ("Kart … başka bir daireye bağlı").
+   - **Ethernet (LAN) - kartın Ethernet IP'si; anahtar gerekmez:** kartın IP adresi (yalnız yerel ağ) ve UID'si. Kart (firmware
+     v1.3.0+) **kablolu Ethernet'ten gelen isteği anahtarsız ve provizyonsuz kabul eder** (kullanıcı kararı 2026-10-08): sunucudan
+     anahtar alınmaz, kart envantere kaydedilmemiş ya da provizyonsuz olsa da yazılır. **IP'nin doğru karta ait olduğu DENETLENMEZ,
+     yanlış IP başka karta yazar; UID yalnız yazım kaydı içindir** (pencere "Yazım kaydı için kart UID'si gerekir" der). IP kartın
+     Wi-Fi adresiyse kart anahtar ister ve yazım reddedilir; kartın Ethernet IP'sini girin.
+3. **NC tehlike girişi (atölye):** şablonda **NC** bağlı gaz, duman ya da su sensörü varsa araç yazmadan önce **"NC Tehlike Girişi"**
+   uyarısı gösterir (ör. *"D3 (Gaz) NC: atölyede giriş boşsa kart hemen alarma geçip kilitlenir (vana kapanır, siren çalar). Yazmadan
+   önce girişi DI-GND köprüleyin ya da dedektörü bağlayın."*). Atölyede girişe dedektör bağlı değilse **girişi DI ile GND arasında
+   köprüleyin** (kısa bir kablo), sonra yazın. USB yazımından sonra araç kartın güvenlik durumunu (`SAFETY`) okur; bölge kilitlendiyse
+   **"Alarm Kilitlendi (Atölye)"** penceresi çıkar: köprüleyin ve **Alarmı Onayla (USB)** düğmesine basın (araç `SAFETY ACK <bölge>`
+   gönderir; kuruluk bekleme süresi dolunca bölge normale döner). Bu, kartın bilinçli güvenli davranışıdır (fail-safe); firmware
+   değiştirilmedi. Bölge **FAULT** durumundaysa (vana arızası: geri bildirimli vana "kapalı" görülmedi; atölyede vana bağlı değilse
+   olur) onay bu bölgeyi **temizlemez**: vanayı ve kapalı-konum geri bildirim kablosunu bağlayın, vana KAPALI görülünce bölge kilitli
+   olur, sonra yeniden onaylayın. Kartın güvenlik durumu (`SAFETY`) okunamazsa araç **"Güvenlik Durumu Okunamadı"** der (durum
+   bilinmiyor, normal sayılmaz): **Alarmı Onayla (USB)** ile kontrol edin. Onaydan sonra kilitli ya da arızalı bölge kalırsa
+   **"Alarm Sürüyor"** çıkar; **"Alarm Onaylandı"** yalnız `SAFETY` okunup kilitli/arızalı bölge kalmadığında görünür.
+4. Araç şablonu gönderir, kart **atomik** uygular (geçersizse hiçbir şey değişmez), ardından karttan **geri okur**. Sonuç
+   "Karta Yazım Sonucu" alanında görünür ve sunucuya yazım kaydı işlenir (daire **Yazıldı** olur). Kayıt işlenemezse (oturum yok,
+   ağ/sunucu hatası) **kaybolmaz**: bellekte bekler, araç uyarır; giriş yapıp **Bekleyen Kayıtları Gönder**'e basın. Başarı
+   penceresi kaydın sonucunu da yazar ("Yazım kaydı: sunucuya işlendi" / "işlenemedi, bekliyor" / "sunucu reddetti"). Kart başka bir
+   daireye bağlıysa sunucu kaydı yine alır ama seçili dairenin durumunu değiştirmez; araç bunu hata penceresiyle bildirir. Sunucu
+   kaydı **kalıcı olarak reddederse** (kart envanterde kayıtlı değil — ör. Ethernet ile kayıtsız karta yazım —, şablon sürümü ya da
+   daire bulunamadı, şablon/site silinmiş, daireye başka kart bağlı, şablon başka siteye ait) yeniden göndermek işe yaramaz: kayıt
+   kuyruktan çıkarılır ve **"Yazım Kaydı Reddedildi"** penceresi kart UID'si, şablon sürümü ve kodla **bir kez** gösterilir.
+5. Firmware yükleme + USB provizyon bittikten sonra **3. sekmede** **Şablon Yaz (aynı USB portu)** düğmesi aynı porttan şablon
    yazmanızı kolaylaştırır.
-5. Kart bellekteki son kaydedilen kartsa etikete daire satırı eklenir (ör. `A Blok / Daire 12 · 3+1 · Şablon v4`); etiketi 2. sekmeden
+6. Daireye yazımdan sonra araç kablolama şemasını ve **daire etiketini** sorar: **"Daire Etiketi"** (kart UID'si + site/blok/daire +
+   şablon adı/sürümü; **PIN ve parola içermez**) PNG olarak kaydedilir; yazdırıp dairenin panosuna yapıştırın. Kart bellekteki son
+   kaydedilen kartsa ayrıca kart etiketine daire satırı eklenir (ör. `A Blok / Daire 12 · 3+1 · Şablon v4`); etiketi 2. sekmeden
    yeniden kaydedip yazdırın.
 
 ### 4b.4 Kablolama şeması (PDF)
 
 **Kablolama Şeması (PDF)** düğmesi (Şablonlar ve Siteler sekmesinde; ayrıca karta yazım sonrası araç sorar) A4 PDF üretir: başlık
-(site, blok/daire, şablon, daire tipi, sürüm, tarih), karta bakan klemens düzeni (R1-R8 üstte, D1-D8 altta; ek modül ayrı blok),
+(site, blok/daire, şablon, daire tipi, sürüm, tarih, **Kart UID** — dairenin bağlı kartı ya da yazımın yapıldığı kart; bilinmiyorsa
+`-`), karta bakan klemens düzeni (R1-R8 üstte, D1-D8 altta; ek modül ayrı blok),
 her röle → yük/oda/tip (panjur çiftlerinde yön notu ve kilit uyarısı), her giriş → kablolama notu/kip/hedef ve sensörlerde tür +
 NO/NC + bölge, dimmer yerleşimi, güvenlik cihazları ve uyarılar (gaz için **sertifikalı bağımsız gaz dedektörü** şartı, vana kapanma kipi),
 şablon kimliği + sürümü taşıyan karekod. Alt bilgide **"Bu şema şablon sürümü vN içindir"** yazar: şemayı kartla birlikte sahaya gönderin.
@@ -280,11 +334,20 @@ NO/NC + bölge, dimmer yerleşimi, güvenlik cihazları ve uyarılar (gaz için 
 | "güvenlik değişikliğini ağ üzerinden kabul etmedi" (`local_loosen_forbidden`) | Eski firmware | Firmware'i güncelleyin ya da USB ile deneyin |
 | "Kartın firmware'i şablon yazmayı desteklemiyor" (`unsupported_fw`) | Firmware v1.3.0'dan eski | Önce firmware güncelleyin |
 | "Aktarım bozuldu (CRC uyuşmadı)" (`tpl_crc`, `tpl_b64`) | USB verisi bozuldu; hiçbir şey değişmedi | Kabloyu kontrol edip yeniden deneyin |
-| "kilitli (alarmdaki) bir bölge" (`zone_latched`), "Hırsız alarmı kurulu" (`armed`) | Kart güvenlik durumunda | Alarmı onaylayın/kapatın, sonra yazın |
+| "kilitli (alarmdaki) bir bölge" (`zone_latched`), "Hırsız alarmı kurulu" (`armed`) | Kart güvenlik durumunda (atölyede çoğunlukla boş bırakılmış NC gaz/duman/su girişi) | Girişi DI-GND köprüleyin, **Alarmı Onayla (USB)**'ya basın (`SAFETY ACK <bölge>`), kuruluk süresi dolunca yeniden yazın; hırsız alarmını kapatın |
 | "Kart meşgul" (`busy`) | Panjur hareket halinde ya da bellek yetersiz | Birkaç saniye bekleyin |
 | "kalıcı belleğinde yer yok" (`storage`) | NVS dolu; uygulanmadı | Servis ekibine bildirin |
 | "Bağlı kart ... eşleşmiyor" (`mac_mismatch`) | Yanlış kart takılı ya da kartın kimliği okunamadı | Doğru kartı bağlayın |
-| "Bu kart stokta değil ... daireye bağlanamaz" (`DEVICE_NOT_IN_STOCK`, Kart Bağla) | Kart müşteriye ait ya da askıda | Doğru kartı seçin ya da ev üzerinden işlem yapın |
+| "Bu kart stokta değil ... daireye bağlanamaz" (`DEVICE_NOT_IN_STOCK`, Kart Bağla) | Kart müşteriye ait ya da askıda | Doğru kartı seçin. Kart pano değişimiyle bu daireye takıldıysa bağlantı sunucuda otomatik taşınır; değilse süper kullanıcı bağlayabilir |
+| "Kart bir daireye bağlı; önce daireden ayırın." (`DEVICE_LINKED_TO_FLAT`) | Kart başka bir daireye bağlı (silme / durum / etiket yenileme / bağlama reddedildi) | Kartı önce o dairenin **Kart Bağla** penceresinde boş UID ile ayırın |
+| "Kart … başka bir daireye bağlı; şablon yazılmadı." | Kartsız daireye USB yazımında kart başka daireye bağlı çıktı | Doğru daireyi seçin ya da kartı önce o daireden ayırın |
+| "Şablon Değişti" (`TEMPLATE_CHANGED`) | Siz düzenlerken başkası şablonu kaydetti | Yeni sürümü açın ya da bilerek üstüne yazın |
+| "Daire durumu yalnız ileri gider…" (`INVALID_STATUS_TRANSITION`, Teslim Edildi) | Geçiş geçersiz (ör. kart bağlı değil) | Önce kartı bağlayın; geri alma yalnız süper kullanıcı |
+| "Yazım kaydı işlenemedi …" | Oturum yok ya da sunucu/ağ hatası (5xx, hız sınırı); kayıt bellekte bekliyor | Giriş yapıp **Bekleyen Kayıtları Gönder**'e basın. Bekleyen kayıt varken araç kapatılırsa **"Bekleyen Yazım Kaydı"** sorusu çıkar (kapatırsanız kayıt kaybolur) |
+| "Yazım Kaydı Reddedildi": "Sunucu yazım kaydını kalıcı olarak reddetti; kayıt bekleyen kuyruktan çıkarıldı …" | Kart envanterde kayıtlı değil, şablon sürümü/daire bulunamadı, şablon ya da site silinmiş, daireye başka kart bağlı ya da şablon başka siteye ait (HTTP 400/404/409/422); kayıt yeniden gönderilmez | Penceredeki kodu giderin (ör. kartı envantere kaydedin, doğru daireyi seçin), gerekirse yeniden yazın |
+| "Güvenlik Durumu Okunamadı" | Yazımdan ya da alarm onayından sonra `SAFETY` okunamadı; bölgelerin durumu bilinmiyor | USB bağlantısını kontrol edip **Alarmı Onayla (USB)**'ya basın |
+| "Alarm Sürüyor" / "… vana ARIZASINDA (FAULT …) … temizlemez" | Bölge hâlâ kilitli ya da geri bildirimli vana "kapalı" görülmedi (FAULT; onay temizlemez) | Girişi DI-GND köprüleyin; FAULT için vanayı ve geri bildirim kablosunu bağlayın, sonra yeniden onaylayın |
+| "Teslim Edilemez" | Daireye kart bağlı değil ya da şablon henüz yazılmadı (durum Planlandı) | Önce **Kart Bağla**, sonra **Karta Yaz**; daire **Yazıldı** olunca teslim edin |
 | "provizyonu bu yoldan kabul etmedi" (`factory_ap_only`) | Eski firmware | Firmware'i güncelleyin ya da USB ile provizyon yapın |
 
 ---
@@ -314,11 +377,34 @@ Kart atölye ağına **Ethernet kablosuyla** bağlıysa provizyon USB'siz de yap
 1. Firmware'i USB'den yükleyin (otomatik USB provizyonu çalışırsa bu adıma gerek kalmaz).
 2. Kartın Ethernet IP adresini öğrenin (modem/DHCP listesi ya da seri `STATUS` çıktısındaki `Ethernet:` satırı).
 3. 3. sekmede **Ethernet ile Provizyonla**'ya basın ve IP'yi girin (yalnız yerel/özel IP kabul edilir). Araç kartın kimliğini
-   denetler, anahtarı yazar ve hemen doğrular; kart erişilebilir kaldığı için ayrıca yeniden bağlanmanız gerekmez.
+   denetler, anahtarı yazar ve doğrular; kart erişilebilir kaldığı için ayrıca yeniden bağlanmanız gerekmez.
+4. **Doğrulama nasıl yapılır?** Kart kablolu Ethernet'ten gelen isteği **anahtarsız** kabul ettiği için (kullanıcı kararı 2026-10-08)
+   "anahtar doğru mu?" sorusu Ethernet'te hiçbir şey kanıtlamaz. Araç bu yüzden kartın **provizyon durumuna** ve (firmware v1.3.1)
+   kartın bildirdiği **anahtar izine** bakar. Kart zaten provizyonluysa: iz bu kayıttaki anahtarla eşleşirse "Kart bu kayıttaki
+   anahtarla zaten provizyonlu (anahtar izi eşleşti)"; eşleşmezse
+   **"Kartta farklı bir yerel anahtar var; USB ile bağlayıp RESETKEY + yeniden provizyon yapın."**; kart iz bildirmiyorsa (v1.3.0)
+   **"Kart zaten provizyonlu; Ethernet yolu anahtarı doğrulayamaz…"**.
+   Son iki durumda araç **"Ethernet ile Doğrulanamadı"** penceresinde USB (seri) provizyonu (`RESETKEY` ile) başlatmayı önerir.
+5. Anahtar yazıldı ama doğrulama sırasında karta ulaşılamadıysa (kablo/ağ) durum **"Anahtar yazıldı (Ethernet …) - doğrulama
+   bekliyor"** olur: kabloyu kontrol edip **Ethernet ile Provizyonla**'ya yeniden basın (anahtar yeniden **yazılmaz**, yalnız Ethernet
+   IP'sinden doğrulanır) ya da **Wi-Fi ile Doğrula**'ya basın (bu kayıtta o da Ethernet IP'sine gider, `192.168.4.1`'e değil).
 
 **Bilinmesi gereken (kullanıcı kararıyla kabul edildi):** anahtar yerel ağdan düz HTTP ile gider ve aynı ağdaki başka bir
 bilgisayar da provizyonsuz kartı ilk sahiplenebilir. Kartı Ethernet'e bağladıktan sonra provizyonu **hemen** yapın; mümkünse
 yalnız atölye bilgisayarlarının olduğu ayrı bir ağ kullanın.
+
+### 5c. Sunucudaki anahtarla yeniden provizyon (bellekte kayıt yoksa)
+
+Önceden kaydedilmiş bir kartın anahtarı silindiyse (birleşik imaj yüklendi ya da **Hafızayı Sil** yapıldı) ve bu kartın kaydı
+aracın belleğinde yoksa, kartı yeniden kaydetmek **gerekmez** (yeniden kayıt sunucuda reddedilir):
+
+1. Kartı USB ile bağlayın, 1. sekmede COM portu seçin.
+2. 3. sekmede **Sunucudaki Anahtarla Yeniden Provizyon (USB)**'a basın (birleşik imajdan sonra araç bunu kendisi önerir).
+3. Araç kartın kimliğini (`STATUS`) okur, onayınızı alır, girişinizi ister (süper kullanıcı ya da servis sorumlusu) ve kartın
+   **yerel anahtarını sunucudan alır** (gösterilmez; alma işlemi sunucuda kayda geçer).
+4. Etiketteki **AP parolasını** sorulan kutuya aynen yazın (değer gösterilmez, saklanmaz).
+5. Araç `FACTORYINIT` ile yazar ve `STATUS` ile doğrular ("Yeniden Provizyon Tamamlandı"). **Etiket geçerli kalır.** Kartta şablon
+   vardıysa araç onun da silindiğini söyler: şablonu **Karta Yaz** ile yeniden yazın.
 
 ---
 
@@ -347,7 +433,7 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Gördüğünüz mesaj | Anlamı | Ne yapmalı? |
 |---|---|---|
 | E-posta veya parola hatalı. | Giriş bilgisi yanlış. | Bilgileri kontrol edin (Caps Lock?). Çok denerseniz hesap kısa süre kilitlenir. |
-| Bu araç yalnızca süper kullanıcı hesabıyla çalışır (bu hesabın rolü: …) | Hesabınız yetkili değil. | Yöneticinizden süper kullanıcı hesabı isteyin. |
+| Bu araç yalnızca süper kullanıcı veya servis sorumlusu hesabıyla çalışır (bu hesabın rolü: …) | Hesabınız yetkili değil. | Yöneticinizden süper kullanıcı (kart kaydı) ya da servis sorumlusu (site/şablon) hesabı isteyin. |
 | Çok fazla istek/deneme yapıldı… N saniye sonra tekrar deneyin. / …geçici olarak kilitlendi. | Çok sayıda deneme yapıldı. | Belirtilen süre kadar bekleyin, sonra tekrar deneyin. |
 | Hesap dondurulmuş. / Hesap henüz etkinleştirilmemiş (davet bekliyor). | Hesap kullanıma kapalı. | Sistem yöneticisine başvurun. |
 | Sunucuya ulaşılamadı… (… cihazın kurulum Wi-Fi ağına bağlıysa internet yoktur…) | İnternet yok veya bilgisayar kartın Wi-Fi'sine bağlı. | Bilgisayarı **normal internetli ağa** geri alın; tekrar deneyin. |
@@ -368,7 +454,7 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Lütfen geçerli bir MAC adresi girin… | MAC okunmadı/yanlış. | **Karttan MAC Oku**'ya basın. |
 | MAC Okunamadı: Kart zamanında yanıt vermedi. / Çipten MAC adresi okunamadı. | Kart yükleme moduna girmedi veya port/kablo sorunu. | **BOOT** düğmesini basılı tutup **RESET**'e bir kez basın, sonra BOOT'u bırakıp tekrar deneyin; portu ve kabloyu kontrol edin. |
 | UID MAC ile Uyuşmuyor | UID elle değiştirilmiş. | **Hayır** deyin; **UID Üret (MAC'ten)**'e basın. |
-| Mükerrer Cihaz Uyarısı (aynı UID/MAC zaten kayıtlı) | Kart daha önce kaydedilmiş (ör. yarıda kalan bir deneme). | PIN ve anahtar yeniden gösterilemez. Etiketi **kayıpsa**: envanter tablosunda kartı seçip (Durum `IN_STOCK` ise) **Envanterden Sil**, sonra yeniden kaydedin. |
+| Mükerrer Cihaz Uyarısı (aynı UID/MAC zaten kayıtlı) | Kart daha önce kaydedilmiş (ör. yarıda kalan bir deneme). | PIN ve anahtar yeniden gösterilemez. Etiketi **kayıpsa**: kart USB'de takılıyken **Etiketi Yeniden Bas (USB)** (yeni PIN + yeni AP parolası; anahtar değişmez). Kartın anahtarı silindiyse **Sunucudaki Anahtarla Yeniden Provizyon (USB)** (Bölüm 5c). Kaydı silip yeniden kaydederseniz yeni anahtar üretilir: kart önceden provizyonlandıysa USB ile RESETKEY gerekir. |
 | Sunucudaki ilgili özellik şu anda kullanılamıyor (yapılandırma eksik olabilir). | Sunucu ayarı eksik. | Sistem yöneticisine bildirin; kayıt yapılamaz. |
 | Sunucu yanıtı eksik: cihaz anahtarı alınamadı… | Kayıt yapıldı ama anahtar alınamadı. | Envanter listesini yenileyin; kart görünüyorsa **Envanterden Sil** ve yeniden kaydedin. |
 | Silme Onayı → "UID eşleşmedi; silme işlemi yapılmadı." | Silme için yazdığınız UID eşleşmedi. | UID'yi tablodaki gibi aynen yazın (kopyala-yapıştır). |
@@ -381,10 +467,18 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Gördüğünüz mesaj | Anlamı | Ne yapmalı? |
 |---|---|---|
 | Port Seçilmedi / Port bulunamadı (USB bağlayın) | Kart USB'de görünmüyor. | Veri destekli kablo kullanın; başka USB girişi deneyin; **Portları Yenile**. |
-| `Failed to connect to ESP32-S3` (logda) | Kart yükleme moduna girmedi. | **BOOT** düğmesini basılı tutun, **RESET**'e bir kez basıp bırakın, sonra BOOT'u bırakın; tekrar deneyin. |
+| `Failed to connect to ESP32-S3` (logda) | Kart yükleme moduna girmedi. | **BOOT** düğmesini basılı tutun, **RESET**'e bir kez basıp bırakın, sonra BOOT'u bırakın; tekrar deneyin. (Bu yöntem kartı yükleme kipinde bırakır: araç sonra kartın ayarlarını okuyamaz ve **"Kart Durumu Okunamadı"** diye sorar.) |
 | Dosya Sorunu: … | Firmware dosyası yok/bozuk. | **Gözat** ile doğru `.bin` dosyasını seçin veya "Bizim Geliştirdiğimiz Yazılım"ı yeniden seçin. |
-| Firmware Uyarısı: …BİRLEŞİK imaj gibi görünmüyor | Yanlış dosya (yalnızca uygulama imajı). | **Hayır** deyin; doğru (birleşik) dosyayı seçin. |
+| Dosya Sorunu: …BİRLEŞİK imaj değil (0x8000'de bölüm tablosu yok)… | 0x0 kipine uygulama imajı seçildi (kart açılmazdı; yazılmadı). | Birleşik imajı (`firmware_combined_0x0.bin`) seçin ya da kurulu kart için **Güncelle (ayarlar korunur)** kipini kullanın. |
+| Dosya Sorunu: …'Güncelle (ayarlar korunur)' kipinde 0x10000 adresine yazılamaz | Güncelle kipine birleşik imaj seçildi. | `app_0x10000_v<sürüm>.bin` dosyasını seçin. |
+| Kart Ayarları Silinecek | Kartta yerel anahtar ya da şablon var; birleşik imaj hepsini siler. | Kurulu kartsa **Hayır** (araç **Güncelle (ayarlar korunur)** kipine geçer ve seçtiğiniz birleşik imajla aynı klasördeki uygulama imajını seçer). Kartı bilerek sıfırlıyorsanız **Evet**. |
+| Güncelle Kipi Seçildi: … uygulama imajı (`app_0x10000_v<sürüm>.bin`) yok … | Seçtiğiniz birleşik imajın klasöründe aynı sürümün uygulama imajı yok (ya da birden çok aday var); araç başka sürüme sessizce geçmez. | **Gözat...** ile birleşik imajla aynı sürümün `app_0x10000_v<sürüm>.bin` dosyasını seçin. |
+| Kart Durumu Okunamadı | Birleşik imajdan önce kartın ayarları okunamadı: port/bağlantı hatası ya da kart **yükleme kipinde** (BOOT+RESET ile açılmış). Kart kurulu olabilir. | Kurulu kartsa **Hayır**; kartı **BOOT'a basmadan** RESET'leyip FLASH'a yeniden basın. Kartın boş/yeni olduğundan eminseniz **Evet**. |
+| Güncelleme Yapılamadı | Güncelle kipi kartta AHBU firmware'i doğrulayamadı (~10 sn STATUS yanıtı yok, kart yükleme kipinde ya da port/bağlantı hatası); hiçbir şey yazılmadı. | **BOOT'a basmadan** RESET'e bir kez basın, birkaç saniye bekleyip FLASH'a yeniden basın; kablo/portu kontrol edin. Kart gerçekten yeni/boş ya da Waveshare yazılımlıysa (ayarı yoksa) birleşik imajı kullanın. |
+| Sürüm Düşürme Engellendi | Kartta v1.3.0+ çalışıyor; Güncelle kipinde seçilen uygulama imajında v1.3.0 özellikleri yok (ör. `version_info.json`'daki v1.2.1). Yazılsaydı ayarlar kalır ama Ethernet, şablon ve panonun kendi bulut kimliği giderdi (yalnız Ethernet'le bağlı kart çevrimdışı kalırdı). | **Gözat...** ile `v1.3.0\app_0x10000_v1.3.0.bin`'i seçip FLASH'a yeniden basın. |
+| Sürüm Düşürme | Kartta v1.3.0+ çalışıyor; seçilen birleşik imaj daha eski. | Kartı bilerek eski sürüme döndürmüyorsanız **Hayır**; **Gözat...** ile v1.3.0+ birleşik imajını seçin. Kabul edip ardından "Kart Ayarları Silinecek"e **Hayır** derseniz hiçbir şey yazılmaz (eski sürüm kartın ayarları korunarak yazılamaz). |
 | Firmware Uyarısı: …USB (seri) provizyon komutu (FACTORYINIT) bulunamadı… ESKİ firmware | İmaj eski sürüm: kart USB ile provizyonlanamaz. | **Hayır** deyin; IT'den güncel imajı isteyin (Teknik Ek E). Yine de **Evet** derseniz kartı provizyonlayamazsınız. |
+| Firmware Uyarısı: Bu imajla … çalışmaz (v1.3.0+ gerekli). | İmajda USB şablon / Ethernet şablon / panonun kendi bulut kimliği yok (ör. v1.2.1). | Engellemez. Bu özellikler gerekecekse v1.3.0+ imajı kullanın. Kartta zaten v1.3.0+ varsa yoklamadan sonra **Sürüm Düşürme** sorusu çıkar (Güncelle kipinde yazılmaz). |
 | esptool Bulunamadı | Yükleme programı kurulu değil. | IT'ye bildirin. |
 | Meşgul: Kartla başka bir işlem sürüyor | Başka bir işlem bitmedi. | Bitmesini bekleyin. |
 | Zaman Aşımı: İşlem zamanında bitmedi… | Kablo/port sorunu. | Kabloyu yeniden takıp tekrar deneyin. |
@@ -402,6 +496,8 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Kartta zaten bir yerel anahtar var (provizyonlu). → "Kartta Eski Anahtar Var" sorusu | Kart daha önce provizyonlanmış. | Yeni/fabrika kartıysa **Evet** (anahtarı sıfırlayıp yeniden yazar; eski anahtar kullanılamaz olur). Müşteride/dairede kullanılmış bir kartsa **Hayır** deyip yöneticiye danışın. |
 | Kart anahtarı kalıcı belleğe yazamadı (persist_failed). | Kartın belleği yazmadı (araç 3 kez dener). | Kartı USB'den çıkarıp takın, tekrar deneyin; sürerse **Hafızayı Sil (Erase Flash)** + firmware'i yeniden yükleyin. |
 | Kart 'OK' dedi ama yerel anahtar STATUS çıktısında görünmüyor. | Doğrulama başarısız. | Tekrar deneyin; sürerse **Hafızayı Sil** + yeniden yükleyin. |
+| Karttaki yerel anahtarın izi (STATUS 'Anahtar izi') bu kayıttaki anahtarla eşleşmiyor. | Kartta başka bir anahtar var (firmware v1.3.1). | "Kartta Eski Anahtar Var" sorusuna **Evet** (RESETKEY + yeniden yazım). |
+| Bu yazılım buluta kendiliğinden bağlanamaz; bireysel sahiplenme için v1.3.0+ yükleyin. | Kartta v1.3.0'dan eski firmware var (uyarıdır; provizyon tamamlandı). | Müşteri kartı kendisi sahiplenecekse v1.3.0+ yükleyin (kurulu kartta **Güncelle (ayarlar korunur)**). |
 | Kart yerel anahtarı reddetti (invalid_local_key). / Kart AP parolasını reddetti (invalid_ap_pass). | Araç–firmware sürüm uyumsuzluğu. | Kartı yeniden kaydedin; sürerse IT'ye bildirin. |
 | Kart eski yerel anahtarı silemedi (RESETKEY). | Sıfırlama komutu işlemedi. | Kartı USB'den çıkarıp takın ve tekrar deneyin; sürerse **Hafızayı Sil (Erase Flash)** + firmware'i yeniden yükleyin. |
 | Kartın yanıtı anlaşılamadı… | Beklenmeyen firmware yanıtı. | Firmware sürümünü kontrol edin (güncel imaj), tekrar deneyin. |
@@ -453,7 +549,16 @@ Evet. 2. sekmede kaydı yapın, sonra 3. sekmede **Seri (USB) ile Provizyonla (�
 Firmware yükleme yaklaşık 30–60 sn; provizyon kartın yeniden başlamasını beklediği için birkaç on saniye sürer (kart yanıt vermezse araç en çok yaklaşık yarım dakika bekler). Süreler gerçek kartla ölçülmemiştir.
 
 **Etiketi kaybettim / bozuldu. Yeniden basabilir miyim?**
-Aynı etiketi hayır: PIN ve anahtar yalnızca bir kez gösterilir. Kart stokta ise (Durum `IN_STOCK`) envanter tablosundan **Envanterden Sil**, sonra kartı yeniden kaydedin ve yeni etiketle provizyonu tekrarlayın (kart "zaten provizyonlu" derse sıfırlama onayını verin).
+Aynı etiketi hayır: PIN yalnızca bir kez gösterilir. Kart stokta ise (Durum `IN_STOCK`) ve hiçbir daireye bağlı değilse, kart USB'de takılıyken 2. sekmede **Etiketi Yeniden Bas (USB)**'a basın (süper kullanıcı): sunucu **yeni PIN** üretir, araç karta **yeni AP parolası** yazar, kartın yerel anahtarı **değişmez**; yeni etiket iki karekodla hazırlanır. Eski etiketi imha edin.
+
+**Kurulu (provizyonlu, şablonlu) bir kartın yazılımını nasıl güncellerim?**
+Firmware Yükleyici sekmesinde **Güncelle (ayarlar korunur)** kipini seçin: yalnız uygulama imajı (`app_0x10000_v<sürüm>.bin`) yazılır; anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon ve güvenlik ayarları korunur, etiket geçerli kalır. **Birleşik imaj** bunların hepsini siler (araç önce sorar). Kartta v1.3.0 çalışıyorsa **Gözat...** ile `v1.3.0\app_0x10000_v1.3.0.bin`'i seçin: kipin varsayılan dosyası (`version_info.json`'daki v1.2.1) bu kartta sürüm düşürme olur, araç yazmaz (**"Sürüm Düşürme Engellendi"**).
+
+**Yanlışlıkla birleşik imaj yükledim / Hafızayı Sil yaptım; kartın anahtarı silindi. Ne yapmalıyım?**
+Kartın kaydı aracın belleğindeyse araç aynı anahtar ve AP parolasıyla kendisi yeniden provizyon yapar. Değilse 3. sekmede **Sunucudaki Anahtarla Yeniden Provizyon (USB)** kullanın (Bölüm 5c); kartı yeniden kaydetmeyin. Kartta şablon vardıysa yeniden yazın.
+
+**Atölyede şablon yazınca kart siren çalıp vanayı kapattı. Bozuldu mu?**
+Hayır. Şablonda NC bağlı gaz/duman/su sensörü var ve girişe henüz dedektör bağlı değil: kart bunu "kablo koptu / alarm" sayar (bilerek böyle tasarlandı). Girişi DI ile GND arasında köprüleyin, **Alarmı Onayla (USB)**'ya basın; kuruluk bekleme süresi dolunca bölge normale döner. Bir dahaki sefere köprüyü yazmadan önce takın (araç **"NC Tehlike Girişi"** penceresinde hatırlatır).
 
 **Etiketteki iki karekod ne işe yarar?**
 **1) Daireye bağla (uygulama):** müşteri/kurulum teknisyeni uygulamayla okutur; cihaz daireye bağlanır. **2) Kurulum Wi-Fi'sine bağlan (telefon kamerası):** servis teknisyeni telefonun kendi kamerasıyla okutur; telefon kartın kurulum ağına (`AHBU-XXXXXX`) tek dokunuşla bağlanır, parolayı elle yazmak gerekmez.
@@ -486,7 +591,7 @@ Waveshare **ESP32-S3-ETH-8DI-8RO** endüstriyel pano modülü (DIN-ray):
 | Yardımcı | Buzzer, WS2812 RGB LED, PCF85063 gerçek zamanlı saat (RTC), microSD yuvası |
 | Kasa | DIN-ray ABS kutu |
 
-> **Not:** AHBU firmware'i şu an **yalnızca Wi-Fi** kullanır. Ethernet (RJ45) ve Bluetooth **donanımda vardır ama bu firmware'de etkin değildir** (Ethernet ileride ayrı modül olarak eklenecek). Müşteri tarafı **mobil uygulama + bulut (MQTT)** üzerinden çalışır.
+> **Not:** AHBU firmware'i **v1.3.0'dan itibaren Ethernet (RJ45, W5500)** kullanır: kart Wi-Fi ya da kablolu Ethernet'ten buluta bağlanır; atölyede provizyon ve şablon yazımı Ethernet'ten de yapılabilir (kablolu Ethernet'ten gelen yerel istek **anahtarsız** kabul edilir — kullanıcı kararı 2026-10-08; Wi-Fi ve kurulum ağından gelenler anahtarlıdır). v1.2.x ve öncesi yalnız Wi-Fi kullanır. Bluetooth donanımda vardır ama kullanılmaz. Müşteri tarafı **mobil uygulama + bulut (MQTT)** üzerinden çalışır.
 
 ### Pin haritası
 
@@ -499,7 +604,7 @@ Waveshare **ESP32-S3-ETH-8DI-8RO** endüstriyel pano modülü (DIN-ray):
 | RGB LED | GPIO38 | Durum ışığı |
 | RTC | PCF85063 (I2C) | SCL=41, SDA=42 (röle çıkış yongasıyla aynı I2C hattı) |
 | BOOT düğmesi | GPIO0 | Yükleme/kurtarma |
-| Ethernet (W5500) | SPI | CS=16, SCLK=15, MOSI=13, MISO=14, INT=12, RST=39 (firmware'de kapalı) |
+| Ethernet (W5500) | SPI | CS=16, SCLK=15, MOSI=13, MISO=14, INT=12, RST=39 (firmware v1.3.0+ ile etkin) |
 
 ---
 
@@ -573,6 +678,8 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 
 **Gizlilik:** anahtar/AP parolası loglanmaz, ilerleme metnine yazılmaz, cihazdan gelen ham satırlar gösterilmez; gönderim tamponu kullanımdan sonra sıfırlanır; ekrandaki tüm metinler bellekteki gizli değerlere karşı maskelenir.
 
+**Flash öncesi yoklama (1. sekme):** aynı portta `STATUS` (+ `TPL STATUS`) okunur. Yanıt yoksa `STATUS` ~10 sn boyunca yinelenir (port açılınca yeniden başlayan kart; bağlantı koparsa port yeniden açılır). Süre dolunca araç esptool'un SLIP `SYNC` çerçevesini gönderir: yalnız ROM yükleme kipindeki (BOOT+RESET) kart yanıt verir (çerçevede CR/LF yoktur, çalışan yazılımda komut çalıştırmaz; karta hiçbir şey yazılmaz). Yanıt verirse kart "yükleme kipinde" sayılır (birleşik imaj önce sorar, Güncelle kipi yazmaz); hiç yanıt yoksa boş kart / Waveshare yazılımı sayılır.
+
 **pyserial bulunamazsa:** araç önce kendi Python'unda `import serial` dener; yoksa PlatformIO `penv` yorumlayıcısında arar (alt süreç röleliyle, gizli değerler komut satırına değil boruya gider); hiçbirinde yoksa **yeni paket kurmaz**, seri provizyon kapanır ve Wi-Fi yedek yolu (onayla) önerilir.
 
 #### Elle seri komutlar (terminalde)
@@ -587,20 +694,26 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 
 ### D. Kullanılan sunucu uçları
 
-`POST /api/v1/auth/login` (+ `refresh`, `logout`), `POST /api/v1/admin/inventory/register` (yanıt: `local_key` + PIN'li `qr_claim_url`, **bir kez**), `GET /api/v1/admin/inventory`, `PATCH /api/v1/admin/inventory/:uid/status`, `DELETE /api/v1/admin/inventory/:uid`. Hata biçimi `{success:false, message, code}`; ham gövde kullanıcıya gösterilmez. Süper kullanıcı JWT'si (15 dk, otomatik yenilenir) veya isteğe bağlı `x-api-key`.
+`POST /api/v1/auth/login` (+ `refresh`, `logout`), `POST /api/v1/admin/inventory/register` (yanıt: `local_key` + PIN'li `qr_claim_url`, **bir kez**), `GET /api/v1/admin/inventory`, `PATCH /api/v1/admin/inventory/:uid/status`, `DELETE /api/v1/admin/inventory/:uid`, `POST /api/v1/admin/inventory/:uid/reissue-label` (yalnız süper kullanıcı JWT'si; yanıt yeni `setup_pin` + `qr_claim_url`; `local_key` **yok**, anahtar değişmez; daireye bağlı kartta 409 `DEVICE_LINKED_TO_FLAT`), `GET /api/v1/admin/inventory/:uid/local-key` (sunucudaki anahtarla yeniden provizyon ve etiket yenileme; denetim kaydı + oran sınırı; değer maskelenir). Hata biçimi `{success:false, message, code}`; ham gövde kullanıcıya gösterilmez. Süper kullanıcı / servis sorumlusu JWT'si (15 dk, otomatik yenilenir) veya isteğe bağlı `x-api-key` (yalnız kayıt ve liste).
+
+**Yerel anahtar izi (firmware v1.3.1):** `lk_fp` = HMAC-SHA256(anahtar = yerel anahtar, ileti = `ahbu-lk-fp/1|` + büyük harfli UID) çıktısının küçük harf hex ilk 8 karakteri. Kart tam `GET /api/status`'ta (Ethernet'te `X-Device-Key` başlığı tam durumu ister) ve seri `STATUS`'ta (`- Anahtar izi: <8 hex|yok>` satırı, `Bootstrap:` satırından hemen sonra) bildirir; araç aynı formülle hesaplayıp karşılaştırır (`factory_client.local_key_fingerprint`). İz anahtarı geri vermez; yine de loglanmaz.
 
 Site / şablon (CONTRACTS §3e; süper kullanıcı + servis sorumlusu JWT'si, API anahtarı yetmez): `GET/POST /api/v1/sites`,
 `PATCH/DELETE /api/v1/sites/:id`, `GET /api/v1/sites/:id/flats`, `POST /api/v1/sites/:id/flats/bulk`, `PATCH/DELETE …/flats/:flatId`,
 `PUT …/flats/:flatId/device`, `GET/POST /api/v1/templates`, `GET/PUT/DELETE /api/v1/templates/:id`, `GET …/versions[/:v]`,
-`POST /api/v1/templates/validate` (422 `TEMPLATE_INVALID` + şablon kodu + alan yolu), `POST /api/v1/template-writes`
-(`via` usb|eth), `GET /api/v1/admin/inventory/:uid/local-key` (Ethernet yazımı; anahtar maskelenir, gösterilmez).
+`POST /api/v1/templates/validate` (422 `TEMPLATE_INVALID` + şablon kodu + alan yolu), `PUT /api/v1/templates/:id {body, base_version}`
+(eşzamanlı düzenlemede 409 `TEMPLATE_CHANGED` + `current_version`), `PATCH …/flats/:flatId {status:"handed_over"}` (Teslim Edildi;
+yalnız ileri, aksi 409 `INVALID_STATUS_TRANSITION`), `POST /api/v1/template-writes` (`via` usb|eth; yanıtta
+`warning:"DEVICE_LINKED_ELSEWHERE"` olabilir). Ethernet şablon yazımı sunucudan anahtar **istemez** (kart Ethernet'te anahtarsız).
 Karta: seri `TPL BEGIN <bayt> <crc32>` → `TPL DATA <base64 ≤150>` → `TPL COMMIT` (`OK tpl_applied <id> <sürüm>` | `ERR <kod> [yol]`)
 → `TPL STATUS`; LAN `POST /api/template/apply` (`X-Device-Key`) → `GET /api/template`. Şablon biçimi ve kodlar:
 `docs/contracts/template/README.md`; araç doğrulayıcısı `template_model.py`, PDF `wiring_pdf.py`, arayüz `site_template_ui.py`.
 
 ### E. Firmware derleme ve sürüm klasörü
 
-> **DİKKAT:** `firmware_releases` altındaki ESKİ imajlar (`v1.0.0`, `v1.0.1`; klasörlerinde `KULLANILMAZ.txt` vardır) **USB provizyon komutunu (`FACTORYINIT`) ve `RESETKEY`'i içermez** (imaj içinde bu metinler aranıp bulunamadı). Bu imajlarla yüklenen kart USB ile provizyonlanamaz; araç bu durumu yüklemeden önce "Firmware Uyarısı" ile bildirir. Güncel imaj `v1.1.2`'dir (`version_info.json` onu gösterir; araç üst şeridinde "Firmware v1.1.2" rozeti görünür; bu komutları içerir; v1.1.1'den kartın web sayfasındaki üç metin, provizyon yolu düzeltmeleri (`factory/init` / `rekey` kalıcı belleğe yazamazsa `503 storage`, provizyon tek kilit altında, yeni `RESETKEY` metni) ve sürüm numarasıyla ayrılır: Bölüm 11, Teknik Ek C, `v1.1.2/SURUM_NOTLARI.md`). Yeni bir sürüm üretilince aşağıdaki gibi sürüm klasörüne konmalıdır.
+> **DİKKAT:** `firmware_releases` altındaki ESKİ imajlar (`v1.0.0`, `v1.0.1`; klasörlerinde `KULLANILMAZ.txt` vardır) **USB provizyon komutunu (`FACTORYINIT`) ve `RESETKEY`'i içermez** (imaj içinde bu metinler aranıp bulunamadı). Bu imajlarla yüklenen kart USB ile provizyonlanamaz; araç bu durumu yüklemeden önce "Firmware Uyarısı" ile bildirir. Seçili (güncel) imaj `version_info.json`'a göre **v1.2.1**'dir (araç üst şeridinde "Firmware v1.2.1" rozeti görünür). **v1.3.0** paketi (Ethernet, USB/LAN şablon, panonun kendi bulut kimliği; `v1.3.0/SURUM_NOTLARI.md`) hazırdır ama seçili değildir; **v1.3.1** (yerel anahtar izi, gerçek `provisioned`, JSON durum konusu) donanım denemesinden sonra yayımlanacak; `version_info.json` deneme bitene kadar **bilerek değiştirilmez**. v1.2.1 imajı seçiliyken araç "Bu imajla … çalışmaz (v1.3.0+ gerekli)" uyarısını gösterir (engellemez); kartın seri `STATUS`'unda v1.3.0+ izi (Bootstrap/Sablon satırı) varsa ise bu sürüm düşürmedir: birleşik imajda ayrıca sorulur ("Sürüm Düşürme"), 'Güncelle (ayarlar korunur)' kipinde yazılmaz ("Sürüm Düşürme Engellendi"). Yeni bir sürüm üretilince aşağıdaki gibi sürüm klasörüne konmalıdır.
+>
+> **Uygulama imajı ('Güncelle (ayarlar korunur)' kipi):** her sürüm klasöründe birleşik imajın yanında `app_0x10000_v<sürüm>.bin` bulunur (v1.2.1, v1.3.0 ve sonrası; v1.3.1'de bootloader ve bölüm tablosu v1.3.0 ile bayt bayt aynıdır). Araç bu dosyayı `version_info.json`'daki isteğe bağlı `app_file` alanından, yoksa `v<current_version>/app_0x10000_v<current_version>.bin` kuralından bulur ve **0x10000**'a yazar (OTA alıcısı olmadığı için kart her zaman bu uygulamadan açılır). "Kart Ayarları Silinecek" sorusunda **Hayır** denince ise `version_info.json` kullanılmaz: seçilen birleşik imajla aynı klasördeki `app_0x10000_v<klasör sürümü>.bin` (yoksa klasördeki tek `app_0x10000_*.bin`) seçilir; bulunamazsa araç uyarır ve dosya kutusunu boş bırakır.
 
 1. Derleme (PlatformIO; makineye özel çekirdek dizini `waveshare_s3_demo\platformio_local.ini` içindedir, depoya girmez):
 
@@ -622,7 +735,7 @@ Karta: seri `TPL BEGIN <bayt> <crc32>` → `TPL DATA <base64 ≤150>` → `TPL C
 
 3. Aracı açın, 1. sekmede **Gözat...** ile `yeni_firmware.bin` dosyasını seçin ve **Versiyon Arttır**'a basın: araç dosyayı yeni sürüm klasörüne (`firmware_releases\vX.Y.Z\`) kopyalar ve "güncel sürüm" olarak `version_info.json`'a yazar. Bundan sonra "Bizim Geliştirdiğimiz Yazılım" bu imajı kullanır.
 
-Araç, yazılacak dosyayı denetler: `.bin` uzantısı, boyut, ilk bayt `0xE9`, `0x8000`'de bölüm tablosu (yoksa "birleşik imaj değil" uyarısı) ve (AHBU modunda) imajda `FACTORYINIT` komut adı (yoksa "eski firmware" uyarısı).
+Araç, yazılacak dosyayı denetler: `.bin` uzantısı, boyut, ilk bayt `0xE9`; **0x0 kipinde** `0x8000`'de bölüm tablosu ŞART (yoksa dosya reddedilir: uygulama imajı 0x0'a yazılırsa kart açılmaz), **Güncelle (0x10000) kipinde** bölüm tablosu OLMAMALI (birleşik imaj reddedilir); (AHBU modunda) imajda `FACTORYINIT` komut adı (yoksa "eski firmware" uyarısı) ve v1.3.0 özellik izleri `TPL BEGIN`, `/api/template/apply`, `devices/bootstrap` (eksikse engellemeyen uyarı). Yazmadan önce kart seri `STATUS` + `TPL STATUS` ile yoklanır (Güncelle kipi AHBU firmware'i ister; birleşik imaj provizyonlu/şablonlu kartta önce sorar).
 
 ### F. Testler
 

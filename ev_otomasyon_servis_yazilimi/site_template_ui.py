@@ -6,8 +6,8 @@ Site + kurulum şablonu sekmeleri (İP-3.2 .. İP-3.5) - servis aracının Tk ar
   ilerleme (planlandı / yazıldı / kuruldu / teslim edildi), daireye "Karta Yaz" ve kablolama şeması.
 * ``📐 5. Şablonlar``: site (ya da Genel) seç, şablon ekle/düzenle/çoğalt/sil, sürüm geçmişi; düzenleyici (röleler, girişler,
   güvenlik, dimmer sorusu); kaydetmeden önce yerel + sunucu doğrulaması; her kayıt yeni sürüm.
-* Karta yazım (İP-3.4): USB (seri ``TPL``) ya da Ethernet (yerel anahtar sunucudan, ekranda gösterilmez) -> geri okuma ->
-  ``POST /template-writes`` kaydı. Kablolama şeması PDF'i (``wiring_pdf``).
+* Karta yazım (İP-3.4): USB (seri ``TPL``) ya da Ethernet (kart kablolu Ethernet'ten gelen isteği anahtarsız kabul eder;
+  kullanıcı kararı 2026-10-08) -> geri okuma -> ``POST /template-writes`` kaydı. Kablolama şeması PDF'i (``wiring_pdf``).
 
 İş mantığı ``template_model`` (saf), ağ/seri ``factory_client``'tadır; bu modül yalnız arayüzdür. Ana pencere sınıfı
 (``EvOtomasyonServisApp``) bu karışımı (mixin) miras alır ve altyapıyı (tema, istemci, arka plan işi, iletişim kutuları) sağlar.
@@ -28,8 +28,10 @@ import wiring_pdf
 from factory_client import (
     UID_PATTERN,
     ApiError,
+    FactoryError,
     ProvisionError,
     SerialUnavailableError,
+    SessionExpiredError,
     ETH_NO_KEY,
     TemplateLanWriter,
     TemplateSerialWriter,
@@ -38,6 +40,21 @@ from factory_client import (
 )
 
 FLAT_STATUS_TEXT = {"planned": "Planlandı", "written": "Yazıldı", "installed": "Kuruldu", "handed_over": "Teslim edildi"}
+# atolye-11: sunucunun yazım kaydını (POST /template-writes) KALICI olarak reddettiği durumlar (kart envanterde yok, şablon
+# sürümü/daire yok, şablon/site silinmiş, daireye başka kart bağlı, şablon başka siteye ait, geçersiz alan): yeniden göndermek
+# sonucu değiştirmez -> kayıt kuyruktan çıkarılır, bir kez bildirilir. Ağ / 5xx / 429 / oturum (401) / yetki (403) geçicidir.
+_REJECTED_RECORD_STATUSES = frozenset({400, 404, 409, 422})
+RECORD_REJECTED_STATUS = "sunucu reddetti (kayıt kuyruktan çıkarıldı)"
+RECORD_PENDING_STATUS = "işlenemedi, bekliyor ('📤 Bekleyen Kayıtları Gönder')"
+
+
+def write_record_rejected(exc: BaseException) -> bool:
+    """Yazım kaydı kalıcı olarak mı reddedildi (kuyruktan çıkarılır)? 400/404/409/422 ve aracın yerel doğrulama hatası: evet."""
+    if isinstance(exc, SessionExpiredError):
+        return False
+    if isinstance(exc, ApiError):
+        return exc.status in _REJECTED_RECORD_STATUSES
+    return type(exc) is FactoryError  # record_template_write'ın yerel doğrulaması (geçersiz UID / yol / sonuç)
 GENERAL_SCOPE = "Genel (standart şablonlar)"
 SITE_FIELDS = (
     ("name", "Site adı *"),
@@ -96,13 +113,44 @@ def flat_display_name(flat: dict[str, Any]) -> str:
     return tm.flat_info_line(flat.get("block", ""), flat.get("number", "")) or "-"
 
 
+def _short_time(value: Any) -> str:
+    return str(value or "")[:16].replace("T", " ")
+
+
+def flat_last_write_text(flat: dict[str, Any], template: Optional[dict[str, Any]] = None) -> str:
+    """Daire listesindeki 'Son yazım' sütunu (atolye-7; sözleşme 18 ``last_write`` + ``last_ok_write``): başarısız yazım
+    ``⚠ vN (kod)``, şablonun güncel sürümünden eski son başarılı yazım 'eski sürüm', dairenin kartından başka bir karta yapılan
+    yazım 'başka kart' olarak ayrı gösterilir. Eski sunucu (``result`` alanı yok) başarılı sayılır."""
+    last = flat.get("last_write") if isinstance(flat.get("last_write"), dict) else None
+    ok = flat.get("last_ok_write") if isinstance(flat.get("last_ok_write"), dict) else None
+    shown = last or ok
+    if shown is None:
+        return ""
+    where = f"{str(shown.get('via', '')).upper()} · {_short_time(shown.get('at'))}"
+    if last is not None and last.get("result") == "error":
+        parts = [f"⚠ v{last.get('version')} ({last.get('error_code') or 'hata'}) · {where}"]
+        if ok is None:
+            parts.append("başarılı yazım yok")
+    else:
+        parts = [f"v{shown.get('version')} · {where}"]
+    current = (template or {}).get("current_version")
+    ok_version = (ok or {}).get("version")
+    if isinstance(ok_version, int) and isinstance(current, int) and ok_version < current:
+        parts.append(f"eski sürüm (son başarılı v{ok_version}, güncel v{current})")
+    flat_uid = str(flat.get("device_uuid") or "").upper()
+    written_uid = str((ok or {}).get("device_uuid") or (last or {}).get("device_uuid") or "").upper()
+    if flat_uid and written_uid and written_uid != flat_uid:
+        parts.append(f"başka kart ({written_uid})")
+    return " · ".join(parts)
+
+
 @dataclass
 class TemplateWriteRequest:
     via: str                       # "usb" | "eth"
     label: str = ""
     port: str = ""
     host: str = ""
-    device_uid: str = ""           # Ethernet: zorunlu (yerel anahtar bu karta göre alınır); USB: daireye bağlıysa denetim
+    device_uid: str = ""           # Ethernet: zorunlu (yalnız yazım kaydı için; IP<->UID denetlenmez); USB: daireye bağlıysa denetim
 
 
 # ===========================================================================
@@ -291,7 +339,7 @@ class TemplateWriteDialog(_Modal):
         elif ports:
             self.port_combo.current(0)
         self.port_combo.grid(row=2, column=1, sticky="w", pady=2)
-        theme.radio(body, text="🌐 Ethernet (LAN) - kartın IP adresi; yerel anahtar sunucudan alınır, gösterilmez",
+        theme.radio(body, text="🌐 Ethernet (LAN) - kartın Ethernet IP'si; anahtar gerekmez",
                     variable=self.via, value="eth").grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
         theme.label(body, "label.field", text="Kartın IP adresi:").grid(row=4, column=0, sticky="w", padx=(24, 0))
         self.e_host = theme.entry(body, width=24)
@@ -306,7 +354,8 @@ class TemplateWriteDialog(_Modal):
         self.e_label.grid(row=6, column=1, sticky="w", pady=(10, 0))
         theme.label(
             body, "label.note.amber",
-            text="Ethernet yolunda IP adresinin doğru karta ait olduğundan emin olun: yerel anahtar bu UID'ye göre alınır ve o IP'ye gönderilir.",
+            text="Ethernet: IP'nin doğru karta ait olduğu DENETLENMEZ, yanlış IP başka karta yazar; UID yalnız yazım kaydı içindir "
+                 "(kart kablolu Ethernet'ten gelen isteği anahtarsız kabul eder; kullanıcı kararı 2026-10-08).",
             wraplength=520, justify="left",
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         buttons = theme.frame(body, "frame.surface")
@@ -339,7 +388,7 @@ class TemplateWriteDialog(_Modal):
                 self.warn("Kartın IP adresini girin.")
                 return
             if not UID_PATTERN.match(uid):
-                self.warn("Ethernet yazımı için kartın UID'si gerekir (yerel anahtar bu karta göre alınır).")
+                self.warn("Yazım kaydı için kart UID'si gerekir (AHBU-S3-XXXXXX).")
                 return
             self.result = TemplateWriteRequest("eth", label=label, host=host, device_uid=uid)
         self.destroy()
@@ -444,6 +493,7 @@ class TemplateEditorDialog(_Modal):
     def __init__(self, parent: tk.Misc, theme: Any, template: dict[str, Any], scope_text: str = "") -> None:
         super().__init__(parent, theme, "📐 Şablon Düzenleyici")
         self.t = copy.deepcopy(template)
+        self._initial_safety = self._safety_counts(self.t)  # atolye-5: kaydetmede son savunma (silinen cihaz sayısı)
         self.geometry("1180x760")
         head_card, head = theme.card(self, f"📐 Şablon - {scope_text or 'Genel'}", accent="violet")
         head_card.pack(fill=tk.X)
@@ -567,10 +617,22 @@ class TemplateEditorDialog(_Modal):
             self.relay_rows.append(row)
 
     def on_kind(self, ch: int) -> None:
+        """Röle tipi değişimi. Değişim bir güvenlik cihazını (vana/siren/fan) ya da dimmeri silecekse önce sorulur (atolye-5);
+        'Hayır' -> model değişmez, açılır kutu eski değere döner."""
         self.collect(strict=False)
         kind = KIND_BY_LABEL.get(self.relay_rows[ch - 1]["kind"].get(), "light")
         try:
-            tm.set_relay_kind(self.t, ch, kind)
+            effects = tm.relay_kind_side_effects(self.t, ch, kind)
+            if effects and not messagebox.askyesno(
+                "Güvenlik Öğesi Silinecek",
+                "Bu değişiklik şu güvenlik öğelerini silecek: " + ", ".join(effects) + ". Devam?",
+                parent=self,
+            ):
+                self.status.config(text="Değişiklik yapılmadı (güvenlik öğeleri korundu).")
+                self.rebuild()
+                return
+            removed = tm.set_relay_kind(self.t, ch, kind)
+            self.status.config(text=("Silindi: " + ", ".join(removed)) if removed else "")
         except ValueError as exc:
             self.status.config(text="⚠ " + str(exc))
         self.rebuild()
@@ -735,12 +797,41 @@ class TemplateEditorDialog(_Modal):
         self.rebuild()
 
     # ---- modele okuma ----
+    def _collect_ext(self, strict: bool) -> Optional[str]:
+        """atolye-9: ek modül alanları modelle karşılaştırılır. Yalnız adres değiştiyse doğrudan modele yazılır; etkinlik ya da
+        kanal sayısı değiştiyse (tabloları yeniden boyutlar) ``strict`` modda 'Kanalları Uygula' onayla çalıştırılır, onay
+        verilmezse kayıt durdurulur (değişiklik sessizce kaybolmaz)."""
+        ext = self.t["ext_module"]
+        address_text = self.e_addr.get().strip()
+        error: Optional[str] = None
+        if address_text.isdigit() and 1 <= int(address_text) <= 247:
+            ext["address"] = int(address_text)
+        elif strict:
+            error = "Ek modül adresi 1-247 arasında bir sayı olmalı."
+        enabled = bool(self.var_ext.get())
+        channels = int(self.c_ext.get()) if (self.c_ext.get() or "").isdigit() else 8
+        structural = enabled != bool(ext["enabled"]) or (enabled and channels != ext["channels"])
+        if structural and strict:
+            old_n = tm.total_channels(self.t)
+            new_n = tm.BASE_CHANNELS + (channels if enabled else 0)
+            if error is None and messagebox.askyesno(
+                "Ek Modül Değişikliği",
+                f"Ek modül değişikliği henüz uygulanmadı ('Kanalları Uygula'ya basılmadı): kanal sayısı {old_n} -> {new_n}.\n\n"
+                "Şimdi uygulansın mı?" + (" Dışarıda kalan kanalların ayarları silinir." if new_n < old_n else ""),
+                parent=self,
+            ):
+                self.apply_ext()
+            else:
+                error = error or "Ek modül değişikliği uygulanmadı: Kanalları Uygula düğmesine basın"
+        return error
+
     def collect(self, strict: bool = True) -> Optional[str]:
         """Widget'ları modele (``self.t``) yazar. ``strict``: sayı alanları hatalıysa Türkçe hata metni döner."""
+        ext_error = self._collect_ext(strict)
         meta = self.t["meta"]
         meta["name"] = " ".join(self.e_name.get().split())
         meta["flat_type"] = self.e_flat.get().strip()
-        error: Optional[str] = None
+        error: Optional[str] = ext_error
         for row in self.relay_rows:
             relay = self.t["relays"][row["ch"] - 1]
             relay["name"] = row["name"].get().strip()
@@ -818,10 +909,27 @@ class TemplateEditorDialog(_Modal):
         self.status.config(text=("⚠ " + str(issue)) if issue else "✅ Şablon geçerli (yerel doğrulama). Kaydederken sunucu da doğrular.")
         return issue
 
+    @staticmethod
+    def _safety_counts(template: dict[str, Any]) -> tuple[int, int]:
+        safety = template.get("safety") or {}
+        return (len(safety.get("actuators") or []),
+                len([light for light in safety.get("lights") or [] if light.get("dimmable")]))
+
+    def _lost_safety_count(self) -> int:
+        actuators, dimmers = self._safety_counts(self.t)
+        return max(0, self._initial_safety[0] - actuators) + max(0, self._initial_safety[1] - dimmers)
+
     def _save(self) -> None:
-        if self.validate_now() is None:
-            self.result = copy.deepcopy(self.t)
-            self.destroy()
+        if self.validate_now() is not None:
+            return
+        lost = self._lost_safety_count()
+        if lost and not messagebox.askyesno(
+            "Güvenlik Cihazı Silindi", f"{lost} güvenlik cihazı silindi, yine de kaydedilsin mi?", parent=self
+        ):
+            self.status.config(text=f"⚠ Kaydedilmedi: düzenleyici açıldığından beri {lost} güvenlik cihazı/dimmer silindi.")
+            return
+        self.result = copy.deepcopy(self.t)
+        self.destroy()
 
     @classmethod
     def ask(cls, parent: tk.Misc, theme: Any, template: dict[str, Any], scope_text: str = "") -> Optional[dict[str, Any]]:
@@ -849,6 +957,12 @@ class SiteTemplateTabsMixin:
         self._tpl_preset_port: Optional[str] = None
         self._tpl_cancel = threading.Event()
         self._pdf_font_loader: Callable[..., Any] = wiring_pdf.default_font_loader
+        # atolye-11: sunucuya işlenemeyen yazım kayıtları (oturum yokluğu dahil) bellekte bekler; '📤 Bekleyen Kayıtları Gönder'.
+        self._pending_writes: list[dict[str, Any]] = []
+        self._write_seq = 0
+        self._flushing_writes = False  # gönderim sürüyor: aynı kayıt iki kez gönderilmesin
+        # atolye-6: son USB yazımında kilitlenen güvenlik bölgeleri {"port", "zones"} ('🔕 Alarmı Onayla (USB)').
+        self._last_latched: Optional[dict[str, Any]] = None
 
     # ---- sekme 4: siteler -------------------------------------------------------------------------------------
     def _build_sites_tab(self) -> None:
@@ -885,6 +999,7 @@ class SiteTemplateTabsMixin:
         theme.button(actions, role="tint.sky", size="sm", text="🔗 Kart Bağla", command=self.link_flat_device).pack(side=tk.LEFT, padx=4)
         theme.button(actions, role="primary", size="sm", text="💾 Karta Yaz", command=self.write_flat_template).pack(side=tk.LEFT, padx=4)
         theme.button(actions, role="secondary", size="sm", text="📄 Kablolama Şeması (PDF)", command=self.flat_wiring_pdf).pack(side=tk.LEFT, padx=4)
+        theme.button(actions, role="tint.emerald", size="sm", text="✅ Teslim Edildi", command=self.mark_flat_handed_over).pack(side=tk.LEFT, padx=4)
         theme.button(actions, role="danger", size="sm", text="🗑️ Daireyi Sil", command=self.delete_flat).pack(side=tk.LEFT, padx=4)
         self.flats_status = tk.StringVar(value="")
         theme.label(body, "label.status", textvariable=self.flats_status, anchor="w").pack(fill=tk.X)
@@ -936,6 +1051,14 @@ class SiteTemplateTabsMixin:
 
         card, body = theme.card(outer, "📋 Karta Yazım Sonucu", accent="emerald", padx=10, pady=8)
         card.pack(fill=tk.BOTH, expand=True)
+        result_actions = theme.frame(body, "frame.surface")
+        result_actions.pack(fill=tk.X, pady=(0, 6))
+        self.btn_send_pending = theme.button(result_actions, role="secondary", size="sm", text="📤 Bekleyen Kayıtları Gönder",
+                                             command=self.send_pending_writes)
+        self.btn_send_pending.pack(side=tk.LEFT)
+        self.btn_ack_alarm = theme.button(result_actions, role="tint.amber", size="sm", text="🔕 Alarmı Onayla (USB)",
+                                          command=self.acknowledge_safety_alarm)
+        self.btn_ack_alarm.pack(side=tk.LEFT, padx=4)
         self.tpl_log = theme.text(body, "text.log", wrap=tk.WORD, height=7, state=tk.DISABLED)
         self.tpl_log.pack(fill=tk.BOTH, expand=True)
 
@@ -968,8 +1091,12 @@ class SiteTemplateTabsMixin:
         if isinstance(err, ApiError) and err.code == "SITE_HAS_DEVICES":
             self.ui_error(title, "Bu sitenin dairelerine bağlı kartlar var; site silinemez. Önce kart bağlantılarını kaldırın.")
             return
-        if isinstance(err, ApiError) and err.code == "DEVICE_NOT_IN_STOCK":
+        if isinstance(err, ApiError) and err.code in ("DEVICE_NOT_IN_STOCK", "DEVICE_LINKED_TO_FLAT"):
             self.ui_error(title, str(err))
+            return
+        if isinstance(err, ApiError) and err.code == "INVALID_STATUS_TRANSITION":
+            self.ui_error(title, f"{err}\n\nDaire durumu yalnız ileri gider: Planlandı → Yazıldı → Kuruldu → Teslim edildi. 'Kuruldu' "
+                          "ve 'Teslim edildi' için daireye kart bağlı olmalı; geri alma yalnız süper kullanıcıya açıktır.")
             return
         if isinstance(err, ApiError) and err.code == "DEVICE_ALREADY_LINKED":
             self.ui_error(title, "Bu kart başka bir daireye bağlı. Önce o dairedeki bağlantıyı kaldırın.")
@@ -995,7 +1122,7 @@ class SiteTemplateTabsMixin:
         if not site_id:
             return "Genel"
         site = next((s for s in self._sites if s.get("id") == site_id), None)
-        return str(site.get("name")) if site else "Site"
+        return str(site.get("name")) if site else f"Site {str(site_id)[:8]}"  # site listesi yüklenmemişse kısa kimlik
 
     # ---- siteler ----
     def refresh_sites(self) -> None:
@@ -1070,10 +1197,7 @@ class SiteTemplateTabsMixin:
         for index, flat in enumerate(self._flats):
             tpl = names.get(flat.get("template_id"))
             tpl_text = f"{tpl.get('name')} (v{tpl.get('current_version')})" if tpl else ("-" if not flat.get("template_id") else "(silinmiş şablon)")
-            last = flat.get("last_write") if isinstance(flat.get("last_write"), dict) else None
-            last_text = ""
-            if last:
-                last_text = f"v{last.get('version')} · {str(last.get('via', '')).upper()} · {str(last.get('at', ''))[:16].replace('T', ' ')}"
+            last_text = flat_last_write_text(flat, tpl)
             self.flats_tree.insert("", tk.END, iid=str(index), values=(
                 flat.get("block", ""), flat.get("number", ""), flat.get("flat_type", "") or "-", tpl_text,
                 flat.get("device_uuid") or "-", FLAT_STATUS_TEXT.get(flat.get("status", ""), flat.get("status", "")), last_text,
@@ -1132,8 +1256,47 @@ class SiteTemplateTabsMixin:
         if uid and not UID_PATTERN.match(uid):
             self.ui_warn("Geçersiz UID", "Kart UID'si AHBU-S3-XXXXXX biçiminde olmalı.")
             return
-        self._call_server("Kart Bağlanamadı", lambda: self.client.link_flat_device(site["id"], flat["id"], uid),
-                          lambda _r: self.refresh_flats())
+        # atolye-7: şablon eski karta yazılmışken kart değişiyorsa yeni karta yeniden yazılmalıdır.
+        ok_write = flat.get("last_ok_write") if isinstance(flat.get("last_ok_write"), dict) else {}
+        written_uid = str(ok_write.get("device_uuid") or "").upper()
+        was_written = bool(ok_write) or flat.get("status") in ("written", "installed", "handed_over")
+        needs_rewrite = bool(uid) and was_written and (
+            (bool(current) and current.upper() != uid) or (bool(written_uid) and written_uid != uid))
+
+        def linked(_result: Any) -> None:
+            self.refresh_flats()
+            if needs_rewrite:
+                self.ui_warn("Şablon Yeniden Yazılmalı",
+                             f"Daireye bağlanan kart ({uid}) şablonun yazıldığı karttan farklı. Şablon yeni karta yeniden "
+                             "yazılmalı ('💾 Karta Yaz').")
+
+        self._call_server("Kart Bağlanamadı", lambda: self.client.link_flat_device(site["id"], flat["id"], uid), linked)
+
+    def mark_flat_handed_over(self) -> None:
+        """servis_kurulum-10: daireyi 'Teslim edildi' yapar (``PATCH .../flats/:id {status:'handed_over'}``). Araç önce dairenin
+        kartı bağlı ve şablonu yazılmış mı ('Yazıldı' ya da 'Kuruldu') diye bakar; değilse hiçbir şey göndermez. Sunucu ayrıca
+        yalnız ileri geçişe izin verir ve teslim için kart ister (aksi 409 ``INVALID_STATUS_TRANSITION``, mesaj gösterilir)."""
+        site, flat = self._selected_site(), None
+        if site is None or (flat := self._selected_flat()) is None:
+            return
+        status = flat.get("status")
+        if status == "handed_over":
+            self.ui_info("Teslim Edildi", f"{flat_display_name(flat)} zaten 'Teslim edildi' durumunda.")
+            return
+        if not flat.get("device_uuid"):
+            self.ui_warn("Teslim Edilemez", f"{flat_display_name(flat)} dairesine kart bağlı değil; teslim edilemez. Önce '🔗 Kart "
+                         "Bağla' ile kartı bağlayın ve şablonu karta yazın ('💾 Karta Yaz').")
+            return
+        if status not in ("written", "installed"):
+            self.ui_warn("Teslim Edilemez", f"{flat_display_name(flat)} '{FLAT_STATUS_TEXT.get(str(status), str(status))}' "
+                         "durumunda: şablon bu dairenin kartına henüz yazılmadı. Önce '💾 Karta Yaz' ile yazın (daire 'Yazıldı' "
+                         "olur), sonra teslim edin.")
+            return
+        if not self.ui_confirm("Teslim Edildi", f"{flat_display_name(flat)} 'Teslim edildi' olarak işaretlensin mi?\n"
+                               "(Durum geri alınamaz; geri alma yalnız süper kullanıcıya açıktır.)"):
+            return
+        self._call_server("Durum Değiştirilemedi", lambda: self.client.update_flat(site["id"], flat["id"], {"status": "handed_over"}),
+                          lambda _r: (self.refresh_flats(), self.refresh_sites()))
 
     def delete_flat(self) -> None:
         site, flat = self._selected_site(), None
@@ -1173,10 +1336,16 @@ class SiteTemplateTabsMixin:
         site = self._scope_site()
         self.tpl_status.set("⏳ Şablonlar yükleniyor...")
         self._call_server("Şablonlar Yüklenemedi", lambda: self.client.list_templates(site["id"] if site else None),
-                          self._on_templates_loaded)
+                          lambda result: self._on_templates_loaded(result, general_only=site is None))
 
-    def _on_templates_loaded(self, templates: Any) -> None:
-        self._templates = list(templates or [])
+    def _on_templates_loaded(self, templates: Any, general_only: Optional[bool] = None) -> None:
+        """atolye-14: 'Genel' kapsamında yalnız genel (``site_id`` boş) şablonlar listelenir (sunucu da yalnız geneli döndürür)."""
+        if general_only is None:
+            general_only = self._scope_site() is None
+        items = [t for t in (templates or []) if isinstance(t, dict)]
+        if general_only:
+            items = [t for t in items if not t.get("site_id")]
+        self._templates = items
         for row in self.tpl_tree.get_children():
             self.tpl_tree.delete(row)
         for index, tpl in enumerate(self._templates):
@@ -1238,12 +1407,17 @@ class SiteTemplateTabsMixin:
 
     def _edit_and_save(self, body: dict[str, Any], template_id: Optional[str], site: Optional[dict[str, Any]]) -> None:
         scope = site.get("name") if site else "Genel"
+        # atolye-13: açılan gövdenin sürümü base_version olarak gider (başkası bu arada kaydettiyse sunucu 409 TEMPLATE_CHANGED).
+        opened = (body.get("meta") or {}).get("version") if isinstance(body, dict) else None
+        base_version = opened if template_id and isinstance(opened, int) and not isinstance(opened, bool) else None
         edited = TemplateEditorDialog.ask(self, self.theme, body, scope)
         if edited is not None:
-            self._save_template(edited, template_id, edited["meta"].get("site_id"))
+            self._save_template(edited, template_id, edited["meta"].get("site_id"), base_version=base_version)
 
-    def _save_template(self, body: dict[str, Any], template_id: Optional[str], site_id: Optional[str]) -> None:
-        """Yerel doğrulama -> ``POST /templates/validate`` -> kaydet (yeni şablon ya da yeni sürüm)."""
+    def _save_template(self, body: dict[str, Any], template_id: Optional[str], site_id: Optional[str],
+                       base_version: Optional[int] = None) -> None:
+        """Yerel doğrulama -> ``POST /templates/validate`` -> kaydet (yeni şablon ya da yeni sürüm). ``base_version`` verilirse
+        eşzamanlı düzenleme sunucuda yakalanır (409 ``TEMPLATE_CHANGED``): yeni sürümü aç / yine de üstüne yaz seçimi."""
         issue = tm.validate_template(body)
         if issue is not None:
             self.ui_error("Şablon Geçersiz", str(issue))
@@ -1252,7 +1426,7 @@ class SiteTemplateTabsMixin:
         def work() -> Any:
             self.client.validate_template_remote(body)
             if template_id:
-                return self.client.update_template(template_id, body)
+                return self.client.update_template(template_id, body, base_version=base_version)
             return self.client.create_template(site_id, body)
 
         def ok(saved: Any) -> None:
@@ -1265,14 +1439,47 @@ class SiteTemplateTabsMixin:
                 if err is None:
                     ok(result)
                     return
+                if isinstance(err, ApiError) and err.status == 409 and err.code == "TEMPLATE_CHANGED" and template_id:
+                    self._on_template_changed(body, template_id, site_id, err)
+                    return
                 self._site_error("Şablon Kaydedilemedi", err)
                 if isinstance(err, ApiError) and err.status == 422 and self.ui_confirm(
                         "Düzenlemeye Dön", "Şablonu düzeltmek için düzenleyiciye dönülsün mü? (Değişiklikleriniz korunur.)"):
-                    self._edit_and_save(body, template_id, next((s for s in self._sites if s.get("id") == site_id), None))
+                    self._save_template_after_edit(body, template_id, site_id, base_version)
 
             self.run_background(work, done)
 
         self.ensure_login(run, note="Şablon kaydetmek için giriş yapın.")
+
+    def _save_template_after_edit(self, body: dict[str, Any], template_id: Optional[str], site_id: Optional[str],
+                                  base_version: Optional[int]) -> None:
+        site = next((s for s in self._sites if s.get("id") == site_id), None)
+        edited = TemplateEditorDialog.ask(self, self.theme, body, site.get("name") if site else "Genel")
+        if edited is not None:
+            self._save_template(edited, template_id, edited["meta"].get("site_id"), base_version=base_version)
+
+    def _on_template_changed(self, body: dict[str, Any], template_id: str, site_id: Optional[str], err: ApiError) -> None:
+        """atolye-13: şablon siz düzenlerken başkası kaydetti. Seçim: yeni sürümü aç (sizin değişiklikleriniz kaydedilmez) ya da
+        bilerek üstüne yaz (``base_version`` gönderilmez)."""
+        current = err.data.get("current_version")
+        label = f"v{current}" if isinstance(current, int) else "yeni bir sürüm"
+        if self.ui_confirm(
+            "Şablon Değişti",
+            f"Şablon siz düzenlerken {label} oldu (başka biri kaydetti); sizin değişiklikleriniz KAYDEDİLMEDİ.\n\n"
+            f"Yeni sürüm ({label}) düzenleyicide açılsın mı?\n'Hayır' derseniz yine de üstüne yazma seçeneği sorulur.",
+        ):
+            site = next((s for s in self._sites if s.get("id") == site_id), None)
+            self._call_server("Şablon Alınamadı", lambda: self.client.get_template(template_id),
+                              lambda full: self._edit_and_save(_body_of(full), template_id, site))
+            return
+        if self.ui_confirm(
+            "Yine de Üstüne Yaz",
+            f"Sizin değişiklikleriniz {label} üstüne yeni sürüm olarak yazılsın mı?\n"
+            f"UYARI: {label} içindeki (başkasının yaptığı) değişiklikler bu sürümde OLMAZ.",
+        ):
+            self._save_template(body, template_id, site_id, base_version=None)
+            return
+        self.ui_info("Kaydedilmedi", "Şablon kaydedilmedi; değişiklikleriniz uygulanmadı.")
 
     def write_selected_template(self) -> None:
         tpl = self._selected_template()
@@ -1291,8 +1498,10 @@ class SiteTemplateTabsMixin:
 
     # ---- PDF ----
     def save_wiring_pdf(self, body: dict[str, Any], *, site: Optional[dict[str, Any]], flat: Optional[dict[str, Any]],
-                        path: Optional[str] = None) -> Optional[str]:
+                        path: Optional[str] = None, device_uid: Optional[str] = None) -> Optional[str]:
+        """Kablolama şeması PDF'i. Başlıkta 'Kart UID' (atolye-15): yazımın yapıldığı kart ya da dairenin bağlı kartı."""
         meta = body.get("meta", {})
+        device_uid = device_uid or (flat or {}).get("device_uuid") or None
         base = f"kablolama_{meta.get('name', 'sablon')}_v{meta.get('version', 0)}"
         if flat:
             base += f"_{flat.get('block', '')}-{flat.get('number', '')}"
@@ -1305,7 +1514,7 @@ class SiteTemplateTabsMixin:
         try:
             wiring_pdf.save_wiring_pdf(path, body, site_name=(site or {}).get("name", ""),
                                        block=(flat or {}).get("block", ""), number=(flat or {}).get("number", ""),
-                                       font_loader=self._pdf_font_loader)
+                                       font_loader=self._pdf_font_loader, device_uid=device_uid)
         except ValueError as exc:
             self.ui_error("Şema Üretilemedi", str(exc))
             return None
@@ -1313,6 +1522,30 @@ class SiteTemplateTabsMixin:
             self.ui_error("Şema Kaydedilemedi", "PDF dosyası yazılamadı (yol/izin sorunu). Başka bir konum seçin.")
             return None
         self.ui_info("Kablolama Şeması Kaydedildi", f"Şema kaydedildi:\n{path}\n\nKartla birlikte sahaya gönderin.")
+        return path
+
+    def save_flat_label(self, body: dict[str, Any], *, site: Optional[dict[str, Any]], flat: dict[str, Any],
+                        device_uid: str) -> Optional[str]:
+        """atolye-15: 'Daire etiketi' (kart UID + site/blok/daire + şablon adı/sürümü; GİZLİ DEĞER İÇERMEZ) PNG olarak kaydedilir.
+        Bellekteki cihaz kaydına (aynı oturum) bağlı değildir."""
+        meta = body.get("meta", {})
+        label = wiring_pdf.build_flat_label(
+            device_uid=device_uid, site_name=(site or {}).get("name", ""), block=flat.get("block", ""),
+            number=flat.get("number", ""), template_name=str(meta.get("name") or ""), version=meta.get("version"),
+            flat_type=str(meta.get("flat_type") or ""), font_loader=self._pdf_font_loader)
+        base = f"daire_etiketi_{flat.get('block', '')}-{flat.get('number', '')}_{device_uid}"
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", base.translate(str.maketrans("İıŞşĞğÜüÖöÇç", "IiSsGgUuOoCc")))[:80]
+        path = filedialog.asksaveasfilename(parent=self, title="Daire Etiketini Kaydet", defaultextension=".png",
+                                            filetypes=[("PNG Görseli", "*.png")], initialfile=safe + ".png")
+        if not path:
+            return None
+        try:
+            label.image.save(path, "PNG", dpi=wiring_pdf.FLAT_LABEL_DPI)
+        except (OSError, ValueError):
+            self.ui_error("Etiket Kaydedilemedi", "Daire etiketi yazılamadı (yol/izin sorunu). Başka bir konum seçin.")
+            return None
+        self.ui_info("Daire Etiketi Kaydedildi", f"Daire etiketi kaydedildi (100 x 50 mm; PIN ve parola içermez):\n{path}\n\n"
+                     "Dosyayı açıp yazdırın ve dairenin panosuna yapıştırın.")
         return path
 
     # ---- karta yazım (İP-3.4) ----
@@ -1368,6 +1601,11 @@ class SiteTemplateTabsMixin:
         if template_id == tm.PLACEHOLDER_ID:
             self.ui_warn("Kaydedilmemiş Şablon", "Şablon önce sunucuya kaydedilmeli (sürüm kaydı tutulur).")
             return
+        # atolye-6: NC tehlike girişi (gaz/duman/NC su) atölyede boşsa kart yazımdan hemen sonra alarma kilitlenir (fail-safe).
+        hazards = tm.nc_hazard_inputs(body)
+        if hazards and not self.ui_confirm("NC Tehlike Girişi", tm.nc_hazard_warning(hazards) + "\n\nYazıma devam edilsin mi?"):
+            self._tpl_say("Yazım yapılmadı (NC tehlike girişi uyarısı).")
+            return
         self._tpl_busy = True
         self._tpl_cancel = cancel = threading.Event()
         if request.via == "usb":
@@ -1377,22 +1615,48 @@ class SiteTemplateTabsMixin:
                       (f"USB {request.port}" if request.via == "usb" else f"Ethernet {request.host}"))
         expected_uid = (flat or {}).get("device_uuid") or request.device_uid or None
         say = lambda message: self.post_ui(self._tpl_say, message)  # noqa: E731
+        # atolye-10: kartsız daireye USB yazımında kart, STATUS ile tanınınca ve karta hiçbir şey yazılmadan ÖNCE daireye
+        # bağlanır; sunucu reddederse (başka daireye bağlı / stokta değil) yazım iptal edilir.
+        link_target = (site, flat) if (request.via == "usb" and site and flat and flat.get("id") and not flat.get("device_uuid")) else None
+        linked: dict[str, Optional[str]] = {"uid": None}
+
+        def link_to_flat(found_uid: str) -> None:  # arka plan iş parçacığında çalışır
+            assert link_target is not None
+            target_site, target_flat = link_target
+            say(f"Kart {found_uid} tanındı; yazmadan önce {flat_display_name(target_flat)} dairesine bağlanıyor...")
+            try:
+                self.client.link_flat_device(target_site["id"], target_flat["id"], found_uid)
+            except ApiError as exc:
+                if exc.code in ("DEVICE_ALREADY_LINKED", "DEVICE_LINKED_TO_FLAT"):
+                    raise TemplateWriteError("flat_link_failed", message=(
+                        f"Kart {found_uid} başka bir daireye bağlı; şablon yazılmadı. Doğru daireyi seçin ya da kartı önce "
+                        "o daireden ayırın.")) from None
+                raise TemplateWriteError("flat_link_failed", message=(
+                    f"Kart {found_uid} bu daireye bağlanamadı: {exc} Şablon yazılmadı.")) from None
+            except FactoryError as exc:  # oturum yok / ağ hatası
+                raise TemplateWriteError("flat_link_failed", message=(
+                    f"Kart {found_uid} daireye bağlanamadı ({exc}); şablon yazılmadı. Giriş yapıp yeniden deneyin.")) from None
+            linked["uid"] = found_uid
 
         def work() -> Any:
             if request.via == "usb":
                 return self._make_template_serial_writer().write(
                     request.port, envelope, template_id=template_id, version=version, label=request.label,
-                    expected_uid=expected_uid, progress=say, cancel=cancel)
+                    expected_uid=expected_uid, progress=say, cancel=cancel,
+                    on_identified=link_to_flat if link_target is not None else None,
+                    read_safety=bool(hazards), safety_settle_s=tm.nc_hazard_settle_seconds(body))
             writer = TemplateLanWriter(request.host, transport=self._device_transport)
             # Kullanıcı kararı (2026-10-08): kart kablolu Ethernet'ten gelen isteği anahtarsız ve provizyonsuz kabul eder
             # (firmware v1.3.0, netlink::requestViaEth) -> sunucudan anahtar ALINMAZ; başlık yalnız biçim gereği gönderilir.
             return writer.write(ETH_NO_KEY, envelope, template_id=template_id, version=version, label=request.label,
                                 device_uid=request.device_uid, progress=say)
 
-        self.run_background(work, lambda outcome, err: self._on_template_written(body, request, site, flat, outcome, err))
+        self.run_background(work, lambda outcome, err: self._on_template_written(body, request, site, flat, outcome, err,
+                                                                                 linked_uid=linked["uid"]))
 
     def _on_template_written(self, body: dict[str, Any], request: TemplateWriteRequest, site: Optional[dict[str, Any]],
-                             flat: Optional[dict[str, Any]], outcome: Any, err: Optional[BaseException]) -> None:
+                             flat: Optional[dict[str, Any]], outcome: Any, err: Optional[BaseException], *,
+                             linked_uid: Optional[str] = None) -> None:
         self._tpl_busy = False
         if request.via == "usb":
             self.set_ui_state(True)
@@ -1406,43 +1670,256 @@ class SiteTemplateTabsMixin:
                 err = TemplateWriteError(err.code or "no_response", message=err.message + (f"\n{err.hint}" if err.hint else ""))
             text = self._error_text(err)
             self._tpl_say("❌ " + text)
-            if isinstance(err, TemplateWriteError) and uid and err.code not in ("cancelled", "unreachable", "mac_mismatch"):
+            if isinstance(err, TemplateWriteError) and uid and err.code not in ("cancelled", "unreachable", "mac_mismatch",
+                                                                                 "flat_link_failed"):
                 self._record_write(uid, meta, request.via, "error", flat, err.code)
             self.ui_error("Karta Yazılamadı", text)
             return
         self._tpl_say(f"✅ Şablon karta yazıldı ve geri okundu: {outcome.template_id} v{outcome.version} "
                       f"(kart {outcome.device_uid or '-'}, yol {outcome.via.upper()}).")
-        if outcome.device_uid:
-            self._record_write(outcome.device_uid, meta, outcome.via, "ok", flat, None)
+        if linked_uid:
+            self._tpl_say(f"Kart {linked_uid} {flat_display_name(flat or {})} dairesine bağlandı (yazımdan önce).")
+        if request.via == "usb" and tm.nc_hazard_inputs(body):  # atolye-6: yazımdan sonra SAFETY okundu (read_safety)
+            latched = [int(zone) for zone in (getattr(outcome, "latched_zones", None) or [])]
+            faults = [int(zone) for zone in (getattr(outcome, "fault_zones", None) or [])]
+            if not getattr(outcome, "safety_checked", False):
+                self._report_unread_safety(request.port)
+            elif latched or faults:
+                self._report_latched_alarm(request.port, latched, faults)
         info = tm.flat_info_line((flat or {}).get("block", ""), (flat or {}).get("number", ""), meta.get("flat_type", ""),
                                  meta.get("version")) if flat else ""
         if info and outcome.device_uid:
             self._apply_flat_info_to_label(outcome.device_uid, info)
-        if flat and not flat.get("device_uuid") and outcome.device_uid and site and self.ui_confirm(
-                "Kartı Daireye Bağla", f"Kart {outcome.device_uid}, {flat_display_name(flat)} dairesine bağlansın mı?"):
-            self._call_server("Kart Bağlanamadı", lambda: self.client.link_flat_device(site["id"], flat["id"], outcome.device_uid),
-                              lambda _r: self.refresh_flats())
-        if self.ui_confirm("Şablon Karta Yazıldı",
-                           f"'{meta['name']}' v{meta['version']} karta yazıldı ve doğrulandı.\n\n"
-                           "Kablolama şeması (PDF) şimdi kaydedilsin mi? Şemayı kartla birlikte sahaya gönderin."):
-            self.save_wiring_pdf(body, site=site, flat=flat)
 
-    def _record_write(self, uid: str, meta: dict[str, Any], via: str, result: str, flat: Optional[dict[str, Any]],
-                      code: Optional[str]) -> None:
+        def after_record(record_status: str) -> None:
+            if (flat and not flat.get("device_uuid") and not linked_uid and outcome.device_uid and site and self.ui_confirm(
+                    "Kartı Daireye Bağla", f"Kart {outcome.device_uid}, {flat_display_name(flat)} dairesine bağlansın mı?")):
+                self._call_server("Kart Bağlanamadı",
+                                  lambda: self.client.link_flat_device(site["id"], flat["id"], outcome.device_uid),
+                                  lambda _r: self.refresh_flats())
+            if self.ui_confirm("Şablon Karta Yazıldı",
+                               f"'{meta['name']}' v{meta['version']} karta yazıldı ve doğrulandı.\nYazım kaydı: {record_status}\n\n"
+                               "Kablolama şeması (PDF) şimdi kaydedilsin mi? Şemayı kartla birlikte sahaya gönderin."):
+                self.save_wiring_pdf(body, site=site, flat=flat, device_uid=outcome.device_uid)
+            if flat and outcome.device_uid and self.ui_confirm(
+                    "Daire Etiketi", f"{flat_display_name(flat)} için daire etiketi (kart {outcome.device_uid}, site/blok/daire, "
+                    f"şablon v{meta['version']}; PIN ve parola İÇERMEZ) kaydedilsin mi?"):
+                self.save_flat_label(body, site=site, flat=flat, device_uid=outcome.device_uid)
+
+        if outcome.device_uid:
+            self._record_write(outcome.device_uid, meta, outcome.via, "ok", flat, None, on_done=after_record)
+        else:
+            after_record("kart UID'si bilinmediği için kaydedilmedi")
+
+    # ---- atolye-6: atölyede kilitlenen güvenlik bölgesi --------------------------------------------------------------
+    @staticmethod
+    def _fault_zone_text(faults: list[int]) -> str:
+        """FAULT bölgesi (firmware: ack() onaylar ama canClear() yalnız LATCHED bölgeyi temizler)."""
+        return (f"Bölge {', '.join(str(z) for z in faults)} vana ARIZASINDA (FAULT: geri bildirimli vana 'kapalı' görülmedi): "
+                "alarm onayı (SAFETY ACK) bu bölgeyi temizlemez. Vanayı ve kapalı-konum geri bildirim kablosunu bağlayın; vana "
+                "KAPALI görülünce bölge 'kilitli' olur, sonra '🔕 Alarmı Onayla (USB)'ya yeniden basın.")
+
+    def _report_unread_safety(self, port: str) -> None:
+        """NC tehlike girişli şablon yazıldı ama SAFETY okunamadı: bölgelerin durumu BİLİNMİYOR (normal sayılmaz)."""
+        self._last_latched = {"port": port, "zones": [0]}
+        text = ("Şablon karta yazıldı ama kartın güvenlik durumu (SAFETY) okunamadı: NC tehlike girişli bölge alarma geçip "
+                "kilitlenmiş olabilir (vana kapanmış, siren çalıyor olabilir). Girişi DI-GND köprüleyin ya da dedektörü bağlayın, "
+                "sonra '🔕 Alarmı Onayla (USB)' ile kontrol edin.")
+        self._tpl_say("⚠ " + text)
+        self.ui_warn("Güvenlik Durumu Okunamadı", text)
+
+    def _report_latched_alarm(self, port: str, zones: list[int], faults: Optional[list[int]] = None) -> None:
+        faults = list(faults or [])
+        pending = sorted(set(zones) | set(faults))
+        self._last_latched = {"port": port, "zones": pending}
+        acks = " ve ".join(f"SAFETY ACK {zone}" for zone in pending)
+        parts = []
+        if zones:
+            latched_acks = " ve ".join(f"SAFETY ACK {zone}" for zone in zones)
+            parts.append(f"Kart şablonu uyguladı ama Bölge {', '.join(str(z) for z in zones)} alarma geçip KİLİTLENDİ: atölyede NC "
+                         "tehlike girişi boş (vana kapandı, siren çalıyor olabilir). Firmware bunu bilerek yapar (fail-safe).\n"
+                         f"Köprüleyin ve {latched_acks} gönderin: girişi DI-GND köprüleyin ya da dedektörü bağlayın, sonra "
+                         "'🔕 Alarmı Onayla (USB)'ya basın (kuruluk bekleme süresi dolunca bölge normale döner).")
+        if faults:
+            parts.append(self._fault_zone_text(faults))
+        text = "\n".join(parts)
+        self._tpl_say("⚠ " + text)
+        self.ui_warn("Alarm Kilitlendi (Atölye)", text)
+        if self.ui_confirm("Alarmı Onayla", f"Girişleri köprülediyseniz alarm şimdi onaylansın mı ({acks})?\n"
+                           "'Hayır' derseniz köprüledikten sonra '🔕 Alarmı Onayla (USB)' düğmesini kullanın."):
+            self.acknowledge_safety_alarm()
+
+    def acknowledge_safety_alarm(self) -> None:
+        """'🔕 Alarmı Onayla (USB)': son yazımda kilitlenen bölgelere (yoksa 0 = bütün bölgeler) seri ``SAFETY ACK`` gönderir ve
+        ``SAFETY`` ile sonucu okur. Firmware'in fail-safe davranışı değişmez (giriş kuru olmadan bölge temizlenmez)."""
+        last = self._last_latched or {}
+        port = last.get("port") or self._tpl_preset_port or self.get_selected_port()
+        zones = [int(zone) for zone in (last.get("zones") or [0])]
+        if not port:
+            self.ui_warn("Port Seçilmedi", "USB portu seçin (1. sekmede 'Portları Yenile').")
+            return
+        if self._tpl_busy or self._esptool_busy or (self._prov_busy and self._prov_mode == "serial"):
+            self.ui_info("Meşgul", "Kartla (flash/provizyon/yazım) başka bir işlem sürüyor. Bitmesini bekleyin.")
+            return
+        self._tpl_busy = True
+        self.set_ui_state(False)
+        acks = ", ".join(f"SAFETY ACK {zone}" for zone in zones)
+        self._tpl_say(f"Alarm onayı gönderiliyor ({port}: {acks})...")
+        say = lambda message: self.post_ui(self._tpl_say, message)  # noqa: E731
+
         def work() -> Any:
-            return self.client.record_template_write(device_uuid=uid, template_id=meta["template_id"], version=int(meta["version"]),
-                                                     via=via, result=result, flat_id=(flat or {}).get("id"), error_code=code)
+            return self._make_template_serial_writer().acknowledge_alarm(port, zones, progress=say)
 
-        def done(_result: Any, err: Optional[BaseException]) -> None:
+        def done(summary: Any, err: Optional[BaseException]) -> None:
+            self._tpl_busy = False
+            self.set_ui_state(True)
             if err is not None:
-                self._tpl_say("⚠ Yazım kaydı sunucuya işlenemedi: " + self._error_text(err))
-            else:
-                self._tpl_say("Yazım kaydı sunucuya işlendi (template-writes).")
-                if flat is not None and result == "ok":
-                    self.refresh_flats()
+                text = (f"{err.message}\n{err.hint}" if isinstance(err, ProvisionError) and err.hint else self._error_text(err))
+                self._tpl_say("❌ Alarm onayı gönderilemedi: " + text)
+                self.ui_error("Alarm Onaylanamadı", text)
+                return
+            if not getattr(summary, "seen", False):  # SAFETY başlığı gelmedi: durum BİLİNMİYOR, "normal" denmez
+                text = ("Alarm onayı gönderildi ama kartın güvenlik durumu (SAFETY) okunamadı: bölgelerin normale döndüğü "
+                        "DOĞRULANAMADI. USB bağlantısını kontrol edip '🔕 Alarmı Onayla (USB)'ya yeniden basın.")
+                self._tpl_say("⚠ " + text)
+                self.ui_warn("Güvenlik Durumu Okunamadı", text)
+                return
+            latched, faults = list(summary.latched), list(summary.faults)
+            if latched or faults:
+                self._last_latched = {"port": port, "zones": sorted(set(latched) | set(faults))}
+                parts = []
+                if latched:
+                    parts.append(f"Onay gönderildi ama Bölge {', '.join(str(z) for z in latched)} hâlâ kilitli. Giriş köprülü mü / "
+                                 "dedektör bağlı mı? Kuruluk bekleme süresi dolunca bölge normale döner; sonra '🔕 Alarmı Onayla "
+                                 "(USB)'ya yeniden basın.")
+                if faults:
+                    parts.append(self._fault_zone_text(faults))
+                text = "\n".join(parts)
+                self._tpl_say("⚠ " + text)
+                self.ui_warn("Alarm Sürüyor", text)
+                return
+            self._last_latched = None
+            self._tpl_say("✅ Alarm onaylandı; güvenlik bölgeleri normal (SAFETY).")
+            self.ui_info("Alarm Onaylandı", "Güvenlik bölgeleri normal (SAFETY: kilitli ya da arızalı bölge yok).")
 
-        if self.client.is_authenticated:
-            self.run_background(work, done)
+        self.run_background(work, done)
+
+    # ---- atolye-11: yazım kayıtları kaybolmaz (bekleyen kuyruk) ----------------------------------------------------
+    def _record_write(self, uid: str, meta: dict[str, Any], via: str, result: str, flat: Optional[dict[str, Any]],
+                      code: Optional[str], on_done: Optional[Callable[[str], None]] = None) -> None:
+        """Yazım kaydı önce bellekteki bekleyen kuyruğa girer, sonra gönderilir; gönderilemezse (oturum yok / ağ / sunucu)
+        kuyrukta kalır ve '📤 Bekleyen Kayıtları Gönder' ile yeniden gönderilir. ``on_done(durum metni)`` sonuçla çağrılır."""
+        self._write_seq += 1
+        self._pending_writes.append({
+            "seq": self._write_seq, "uid": uid, "template_id": meta["template_id"], "version": int(meta["version"]), "via": via,
+            "result": result, "flat_id": (flat or {}).get("id"), "error_code": code,
+        })
+        self._flush_pending_writes(on_done=on_done, focus_seq=self._write_seq)
+
+    def send_pending_writes(self) -> None:
+        """'📤 Bekleyen Kayıtları Gönder' düğmesi."""
+        if not self._pending_writes:
+            self.ui_info("Bekleyen Kayıt Yok", "Sunucuya gönderilmeyi bekleyen yazım kaydı yok.")
+            return
+        count = len(self._pending_writes)
+        self._flush_pending_writes(on_done=lambda status: self._tpl_say(f"Bekleyen {count} yazım kaydı: {status}."))
+
+    def _flush_pending_writes(self, on_done: Optional[Callable[[str], None]] = None, focus_seq: Optional[int] = None) -> None:
+        """Bekleyen yazım kayıtlarını gönderir. Kalıcı ret (``write_record_rejected``) kuyruktan çıkarılır ve bir kez bildirilir;
+        geçici hata kuyrukta kalır. ``on_done(durum)``: ``focus_seq`` verilirse o kaydın, yoksa bütün gönderimin durumu."""
+        if not self._pending_writes:
+            if on_done is not None:
+                on_done("sunucuya işlendi")
+            return
+        if not self.client.is_authenticated:
+            self.ensure_login(lambda: self._flush_pending_writes(on_done=on_done, focus_seq=focus_seq),
+                              note="Yazım kaydını sunucuya işlemek için giriş yapın (süper kullanıcı ya da servis sorumlusu).")
+            if not self.client.is_authenticated and not getattr(self, "_login_busy", False) and not getattr(self, "_restoring", False):
+                text = (f"Yazım kaydı işlenemedi: sunucu oturumu yok ({len(self._pending_writes)} kayıt bekliyor). Giriş yapıp "
+                        "'📤 Bekleyen Kayıtları Gönder'e basın.")
+                self._tpl_say("⚠ " + text)
+                self.ui_warn("Yazım Kaydı Bekliyor", text)
+                if on_done is not None:
+                    on_done("işlenemedi (oturum yok), bekliyor")
+            return
+        if self._flushing_writes:
+            if on_done is not None:
+                on_done("gönderiliyor (önceki gönderim sürüyor)")
+            return
+        self._flushing_writes = True
+        batch = list(self._pending_writes)
+
+        def work() -> Any:
+            results: list[tuple[dict[str, Any], Any, Optional[BaseException]]] = []
+            for entry in batch:
+                try:
+                    reply = self.client.record_template_write(
+                        device_uuid=entry["uid"], template_id=entry["template_id"], version=entry["version"], via=entry["via"],
+                        result=entry["result"], flat_id=entry["flat_id"], error_code=entry["error_code"])
+                except FactoryError as exc:
+                    results.append((entry, None, exc))
+                    if isinstance(exc, SessionExpiredError):
+                        break  # oturum kapandı: kalanlar kuyrukta bekler
+                else:
+                    results.append((entry, reply, None))
+            return results
+
+        def done(results: Any, err: Optional[BaseException]) -> None:
+            self._flushing_writes = False
+            if err is not None:
+                results = [(entry, None, err) for entry in batch]
+            failure: Optional[BaseException] = None
+            rejected: list[tuple[dict[str, Any], BaseException]] = []
+            state_of: dict[int, str] = {}
+            refresh = False
+            for entry, reply, exc in results or []:
+                if exc is not None:
+                    if write_record_rejected(exc):  # kalıcı ret: yeniden göndermek sonucu değiştirmez
+                        self._pending_writes = [item for item in self._pending_writes if item["seq"] != entry["seq"]]
+                        rejected.append((entry, exc))
+                        state_of[entry["seq"]] = RECORD_REJECTED_STATUS
+                    else:
+                        failure = failure or exc
+                    continue
+                state_of[entry["seq"]] = "sunucuya işlendi"
+                self._pending_writes = [item for item in self._pending_writes if item["seq"] != entry["seq"]]
+                self._tpl_say(f"Yazım kaydı sunucuya işlendi (template-writes; kart {entry['uid']}, v{entry['version']}).")
+                refresh = refresh or bool(entry["flat_id"] and entry["result"] == "ok")
+                if isinstance(reply, dict) and reply.get("warning") == "DEVICE_LINKED_ELSEWHERE":
+                    other = str(reply.get("linked_flat_id") or "?")[:8]
+                    self.ui_error("Kart Başka Daireye Bağlı",
+                                  f"Yazım kaydı işlendi ama kart {entry['uid']} başka bir daireye bağlı (daire {other}…); seçili "
+                                  "dairenin durumu DEĞİŞMEDİ. Doğru daireye yazdığınızdan emin olun; gerekirse kartı o daireden "
+                                  "ayırıp bu daireye bağlayın.")
+            if refresh:
+                self.refresh_flats()
+            status = "sunucuya işlendi"
+            if rejected:
+                lines = []
+                for entry, exc in rejected:
+                    code = getattr(exc, "code", None) or "-"
+                    http = f"HTTP {exc.status} " if isinstance(exc, ApiError) and exc.status else ""
+                    lines.append(f"• kart {entry['uid']}, şablon v{entry['version']} ({str(entry['via']).upper()}, "
+                                 f"{'başarılı' if entry['result'] == 'ok' else 'hatalı'} yazım): {http}{code} - {self._error_text(exc)}")
+                text = ("Sunucu yazım kaydını kalıcı olarak reddetti; kayıt bekleyen kuyruktan çıkarıldı (yeniden gönderilmez):\n"
+                        + "\n".join(lines))
+                self._tpl_say("❌ " + text)
+                self.ui_error("Yazım Kaydı Reddedildi", text)
+                status = RECORD_REJECTED_STATUS
+            if failure is not None:
+                if isinstance(failure, SessionExpiredError):
+                    self.update_session_bar()
+                text = (f"Yazım kaydı işlenemedi: {self._error_text(failure)}\n{len(self._pending_writes)} kayıt bekliyor; "
+                        "'📤 Bekleyen Kayıtları Gönder' ile yeniden gönderin.")
+                self._tpl_say("⚠ " + text)
+                self.ui_warn("Yazım Kaydı İşlenemedi", text)
+                status = RECORD_PENDING_STATUS
+            if focus_seq is not None:  # bu yazımın kendi kaydı (kuyruktaki eski kayıtların sonucu karıştırılmaz)
+                status = state_of.get(focus_seq, RECORD_PENDING_STATUS)
+            if on_done is not None:
+                on_done(status)
+
+        self.run_background(work, done)
 
     def template_after_provision(self) -> None:
         """Provizyon sonrası (aynı USB portu): Şablonlar sekmesine geçer; '💾 Karta Yaz' penceresinde port hazır gelir."""

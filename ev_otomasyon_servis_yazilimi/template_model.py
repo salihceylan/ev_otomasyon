@@ -541,7 +541,9 @@ ERROR_TEXTS: dict[str, str] = {
     "tpl_timeout": "Aktarım zaman aşımına uğradı (30 sn); hiçbir şey değişmedi. Yeniden deneyin.",
     "bad_json": "Kart şablonu çözümleyemedi (bozuk veri). Yeniden deneyin.",
     "local_loosen_forbidden": "Kart bu güvenlik değişikliğini ağ üzerinden kabul etmedi (eski firmware olabilir).",
-    "zone_latched": "Kartta kilitli (alarmdaki) bir bölge var; alarm onaylanıp kuruluk sağlanana kadar yazılamaz.",
+    "zone_latched": "Kartta kilitli (alarmdaki) bir bölge var; alarm onaylanıp kuruluk sağlanana kadar yazılamaz. Atölyede NC "
+                    "(normalde kapalı) gaz/duman/su girişi boş bırakıldıysa kart bu yüzden alarma geçer: girişi DI-GND köprüleyin "
+                    "ve SAFETY ACK <bölge> gönderin ('Alarmı Onayla (USB)').",
     "armed": "Hırsız alarmı kurulu; önce alarmı kapatın.",
     "busy": "Kart meşgul (panjur hareket halinde olabilir ya da bellek yetersiz). Birkaç saniye bekleyip yeniden deneyin.",
     "storage": "Kartın kalıcı belleğinde yer yok; şablon uygulanmadı (hiçbir şey değişmedi).",
@@ -656,9 +658,42 @@ def relay_kind(template: dict[str, Any], ch: int) -> str:
     return "shutter" if kind.startswith("shutter") else kind
 
 
-def set_relay_kind(template: dict[str, Any], ch: int, kind: str, *, runtime_s: int = 25, pulse_ms: int = 1000) -> None:
+def describe_actuator(act: dict[str, Any]) -> str:
+    """Güvenlik cihazının kısa adı: ``"R8 Ana Su Vanası (vana, su)"`` / ``"R15 İç Siren (siren)"`` (gizli değer içermez)."""
+    kind = str(act.get("kind", ""))
+    kind_text = ACT_KIND_TEXT.get(kind, kind or "cihaz")
+    detail = kind_text.lower()
+    if kind == "valve":
+        detail += ", " + MEDIUM_TEXT.get(str(act.get("medium", "none")), "-").lower()
+    return f"R{act.get('relay')} {act.get('name') or kind_text} ({detail})"
+
+
+def _removed_safety_items(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """``before``'da olup ``after``'da kalmayan güvenlik cihazları ve dimmerler (atolye-5: sessiz silme olmasın)."""
+    acts_after = after.get("actuators", [])
+    lights_after = after.get("lights", [])
+    removed = [describe_actuator(act) for act in before.get("actuators", []) if act not in acts_after]
+    removed += [f"R{light.get('relay')} dimmer" for light in before.get("lights", [])
+                if light.get("dimmable") and light not in lights_after]
+    return removed
+
+
+def relay_kind_side_effects(template: dict[str, Any], ch: int, kind: str) -> list[str]:
+    """``set_relay_kind(template, ch, kind)`` yapılsa SİLİNECEK güvenlik öğeleri (ör. ``"R8 Ana Su Vanası (vana, su)"``,
+    ``"R5 dimmer"``). Modeli DEĞİŞTİRMEZ (kopya üzerinde dener); geçersiz istekte ``ValueError``."""
+    return set_relay_kind(copy.deepcopy(template), ch, kind)
+
+
+def set_relay_kind(template: dict[str, Any], ch: int, kind: str, *, runtime_s: int = 25, pulse_ms: int = 1000) -> list[str]:
     """Röle tipini değiştirir. ``shutter`` daima çift kurar: (2p-1, 2p) = (yukarı, aşağı), aynı süre. Panjur çiftinden biri
-    başka tipe çevrilirse eşi de 'Lamba/Priz' olur (yetim panjur rölesi kalmaz). Eylemci/dimmer uyumsuzlukları temizlenir."""
+    başka tipe çevrilirse eşi de 'Lamba/Priz' olur (yetim panjur rölesi kalmaz). Eylemci/dimmer uyumsuzlukları temizlenir;
+    silinen güvenlik öğelerinin listesi döner (``relay_kind_side_effects`` ile önceden sorulabilir)."""
+    before = copy.deepcopy(template["safety"])
+    _apply_relay_kind(template, ch, kind, runtime_s=runtime_s, pulse_ms=pulse_ms)
+    return _removed_safety_items(before, template["safety"])
+
+
+def _apply_relay_kind(template: dict[str, Any], ch: int, kind: str, *, runtime_s: int, pulse_ms: int) -> None:
     relays = template["relays"]
     if kind == "shutter":
         up = ch if ch % 2 == 1 else ch - 1
@@ -764,6 +799,42 @@ def set_di_sensor(
 def _sensor_sort_key(sensor: dict[str, Any]) -> tuple[int, int]:
     parsed = parse_sensor_id(sensor.get("id")) or ("bridge", 99)
     return (0 if parsed[0] == "di" else 1, parsed[1])
+
+
+NC_HAZARD_TEXT = (
+    "NC: atölyede giriş boşsa kart hemen alarma geçip kilitlenir (vana kapanır, siren çalar). Yazmadan önce girişi DI-GND "
+    "köprüleyin ya da dedektörü bağlayın."
+)
+
+
+def nc_hazard_inputs(template: dict[str, Any]) -> list[tuple[int, str, int]]:
+    """atolye-6: ``active_open=1`` (NC) tehlike sensörü olan panodaki girişler: gaz, duman ya da NC su -> (kanal, tür, bölge).
+    Bu girişler atölyede boş (açık devre) kalırsa firmware fail-safe gereği bölgeyi hemen alarma kilitler."""
+    found: list[tuple[int, str, int]] = []
+    for sensor in (template.get("safety") or {}).get("sensors", []) or []:
+        parsed = parse_sensor_id(sensor.get("id"))
+        if parsed is None or parsed[0] != "di":
+            continue
+        if sensor.get("kind") in HAZARD_KINDS and _flag(sensor.get("active_open", 0)) == 1:
+            zone = sensor.get("zone")
+            found.append((parsed[1], str(sensor["kind"]), int(zone) if _is_int(zone) else 0))
+    return sorted(found)
+
+
+def nc_hazard_warning(items: list[tuple[int, str, int]]) -> str:
+    """``"D3 (Gaz) NC: atölyede giriş boşsa ..."`` (birden çok giriş virgülle)."""
+    labels = ", ".join(f"D{ch} ({SENSOR_KIND_TEXT.get(kind, kind)})" for ch, kind, _zone in items)
+    return f"{labels} {NC_HAZARD_TEXT}"
+
+
+def nc_hazard_settle_seconds(template: dict[str, Any]) -> float:
+    """Yazımdan sonra SAFETY okumadan önce beklenecek süre: NC tehlike sensörlerinin onay süresi (``confirm_ms``) + pay."""
+    longest = 0
+    for sensor in (template.get("safety") or {}).get("sensors", []) or []:
+        if sensor.get("kind") in HAZARD_KINDS and _flag(sensor.get("active_open", 0)) == 1:
+            confirm = sensor.get("confirm_ms", default_confirm_ms(str(sensor.get("kind"))))
+            longest = max(longest, confirm if _is_int(confirm) else 0)
+    return min(12.0, longest / 1000.0 + 1.5)
 
 
 def light_option(template: dict[str, Any], ch: int) -> Optional[dict[str, Any]]:

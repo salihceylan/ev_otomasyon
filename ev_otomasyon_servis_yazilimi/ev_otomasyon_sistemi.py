@@ -94,6 +94,7 @@ from factory_client import (  # noqa: E402
     device_wifi_qr_payload,
     generate_ap_pass,
     generate_setup_pin,
+    is_valid_ap_pass,
     manual_provision_instructions,
     normalize_mac,
     normalize_server_url,
@@ -130,8 +131,17 @@ VERSION_FILE = os.path.join(RELEASES_DIR, "version_info.json")
 # Cihazın sabit donanım ayarları
 DEFAULT_CHIP = "esp32s3"
 DEFAULT_BAUD = "460800"
-FLASH_OFFSET = "0x0"
+FLASH_OFFSET = "0x0"            # birleşik imaj (bootloader + bölüm tablosu + uygulama): kalıcı belleği (NVS) de yeniden yazar
+APP_FLASH_OFFSET = "0x10000"    # yalnız uygulama imajı (app0): NVS'e (anahtar, AP parolası, Wi-Fi, şablon...) dokunmaz
 DEFAULT_MODEL = "ESP32-S3-POE-ETH-8DI-8RO"
+# 1. sekme kipleri: "custom" (birleşik AHBU imajı, yeni/boş kart), "update" (uygulama imajı, ayarlar korunur), "factory" (Waveshare)
+UPDATE_MODE_LABEL = "Güncelle (ayarlar korunur)"
+ERASE_SETTINGS_WARNING = "Yerel anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon ve güvenlik ayarları SİLİNECEK. Devam?"
+# Flash öncesi yoklamada kart doğrulanamadı: BOOT+RESET ('Failed to connect' çözümü) kartı yükleme kipinde bırakır.
+RESET_WITHOUT_BOOT_HINT = (
+    "Kart yükleme kipinde (BOOT+RESET) kalmış ya da yeniden başlıyor olabilir: BOOT'a basmadan RESET'e bir kez basın, birkaç "
+    "saniye bekleyip FLASH'a yeniden basın. USB kablosunu ve portu da kontrol edin."
+)
 
 # esptool işlem zaman aşımları (sn): takılan işlem süresiz beklemez
 ESPTOOL_TIMEOUT_S = {"read_mac": 30, "chip_id": 30, "erase_flash": 240, "write_flash": 900}
@@ -182,6 +192,37 @@ def save_version_info(data: dict[str, Any]) -> None:
     with open(tmp_path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, ensure_ascii=False)
     os.replace(tmp_path, VERSION_FILE)
+
+
+def app_image_relpath(version_data: dict[str, Any]) -> str:
+    """'Güncelle (ayarlar korunur)' kipinin uygulama imajı: ``version_info.json``'da ``app_file`` varsa o, yoksa paket kuralı
+    ``v<sürüm>/app_0x10000_v<sürüm>.bin`` (v1.2.1, v1.3.0 ve sonraki paketlerde bulunur)."""
+    app = version_data.get("app_file") if isinstance(version_data, dict) else None
+    if isinstance(app, str) and app.strip():
+        return app.strip()
+    current = str((version_data or {}).get("current_version") or "1.0.0").strip()
+    return f"v{current}/app_0x10000_v{current}.bin"
+
+
+def sibling_app_image(image_path: Any) -> Optional[str]:
+    """Seçilen birleşik imajla AYNI klasördeki uygulama imajı ('Kart Ayarları Silinecek' -> 'Hayır' ile 'Güncelle (ayarlar
+    korunur)' kipine geçerken; ``version_info.json`` başka bir sürümü gösterebilir). Klasör adı ``v<sürüm>`` ise önce
+    ``app_0x10000_v<sürüm>.bin``, yoksa klasördeki TEK ``app_0x10000_*.bin``. Yoksa ya da birden çok aday varsa None (tahmin
+    edilmez)."""
+    if not isinstance(image_path, str) or not image_path.strip():
+        return None
+    folder = os.path.dirname(os.path.abspath(os.path.expanduser(image_path.strip().strip('"'))))
+    preferred = os.path.join(folder, f"app_0x10000_{os.path.basename(folder)}.bin")
+    if os.path.isfile(preferred):
+        return preferred
+    try:
+        names = sorted(
+            name for name in os.listdir(folder)
+            if name.lower().startswith("app_0x10000_") and name.lower().endswith(".bin") and os.path.isfile(os.path.join(folder, name))
+        )
+    except OSError:
+        return None
+    return os.path.join(folder, names[0]) if len(names) == 1 else None
 
 
 def increment_version_str(ver_str: str) -> str:
@@ -297,19 +338,67 @@ STALE_FIRMWARE_WARNING = (
 )
 
 
+# bireysel-1: v1.3.0 ile gelen özelliklerin imajda düz metin olarak bulunan izleri. Eksikse yazım ENGELLENMEZ, uyarılır.
+FEATURE_MARKERS = {
+    b"TPL BEGIN": "USB şablon",
+    b"/api/template/apply": "Ethernet/LAN şablon",
+    b"devices/bootstrap": "panonun kendi bulut kimliği",
+}
+CLOUD_SELF_BOOTSTRAP_MIN_FW = "1.3.0"
+OLD_FIRMWARE_CLOUD_WARNING = "Bu yazılım buluta kendiliğinden bağlanamaz; bireysel sahiplenme için v1.3.0+ yükleyin."
+
+
+def parse_firmware_version(text: Any) -> Optional[tuple[int, int, int]]:
+    """``"1.3.0"`` / ``"v1.2.1"`` -> (1, 3, 0); çözülemezse None."""
+    if not isinstance(text, str):
+        return None
+    match = re.fullmatch(r"\s*v?(\d{1,4})\.(\d{1,4})\.(\d{1,6})\s*", text)
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3))) if match else None
+
+
+def firmware_older_than(version: Any, minimum: str) -> Optional[bool]:
+    """Sürüm ``minimum``'dan eski mi? (sayısal karşılaştırma; 1.10.0 > 1.3.0). Çözülemezse None."""
+    current, floor = parse_firmware_version(version), parse_firmware_version(minimum)
+    if current is None or floor is None:
+        return None
+    return current < floor
+
+
+def outcome_firmware_warning(outcome: Any) -> str:
+    """Provizyon/doğrulamada okunan sürüm (HTTP durumundaki ``fw`` ya da seri STATUS'taki Bootstrap satırı) v1.3.0'dan
+    eskiyse bireysel sahiplenme uyarısı; değilse/bilinmiyorsa boş metin."""
+    if firmware_older_than(getattr(outcome, "firmware", None), CLOUD_SELF_BOOTSTRAP_MIN_FW) is True:
+        return OLD_FIRMWARE_CLOUD_WARNING
+    if getattr(outcome, "supports_bootstrap", None) is False:
+        return OLD_FIRMWARE_CLOUD_WARNING
+    return ""
+
+
+def downgrade_lost_features(probe: Any, missing_features: Any) -> list[str]:
+    """Sürüm düşürme: kartta v1.3.0+ çalışıyor (seri STATUS'ta Bootstrap/Sablon satırı; ``probe.supports_bootstrap``) ama
+    yazılacak imajda v1.3.0 özellikleri (``FEATURE_MARKERS``) yoksa yazımla kartın KAYBEDECEĞİ özellikler; değilse boş liste
+    (v1.3.0 öncesi kartta eski imaj sürüm düşürme değildir; kartın sürümü bilinmiyorsa da karar verilmez)."""
+    if probe is None or getattr(probe, "supports_bootstrap", None) is not True:
+        return []
+    return [str(feature) for feature in (missing_features or [])]
+
+
 @dataclass
 class FirmwareCheck:
     path: str
     size: int
     warnings: list[str] = field(default_factory=list)
     supports_serial_provisioning: Optional[bool] = None  # None: denetlenmedi
+    missing_features: list[str] = field(default_factory=list)  # v1.3.0 özellikleri (bireysel-1)
 
 
-def inspect_firmware_file(path: Any, *, expect_serial_provisioning: bool = False) -> FirmwareCheck:
-    """0x0'a yazılacak firmware dosyasını doğrular. Ölümcül sorunda ToolError; şüpheli ise uyarı listesi.
+def inspect_firmware_file(path: Any, *, expect_serial_provisioning: bool = False, offset: str = FLASH_OFFSET) -> FirmwareCheck:
+    """Yazılacak firmware dosyasını doğrular. Ölümcül sorunda ToolError; şüpheli ise uyarı listesi.
 
-    ``expect_serial_provisioning``: AHBU firmware'i yüklenecekse imajda ``FACTORYINIT`` komutunun bulunup bulunmadığı da
-    denetlenir (eski imaj uyarısı)."""
+    ``offset``: ``0x0`` (varsayılan) yalnız BİRLEŞİK imaj kabul eder (0x8000'de bölüm tablosu; uygulama imajı 0x0'a yazılırsa kart
+    açılmaz); ``0x10000`` ('Güncelle (ayarlar korunur)') yalnız UYGULAMA imajı kabul eder (birleşik imaj orada kartı bozar).
+    ``expect_serial_provisioning``: AHBU firmware'i yüklenecekse imajda ``FACTORYINIT`` komutunun bulunup bulunmadığı (eski imaj
+    uyarısı) ve v1.3.0 özelliklerinin izleri (``FEATURE_MARKERS``; eksikler yazmayı engellemeyen uyarı) de denetlenir."""
     if not isinstance(path, str) or not path.strip():
         raise ToolError("Firmware dosyası seçilmedi.")
     full = os.path.abspath(os.path.expanduser(path.strip().strip('"')))
@@ -323,6 +412,7 @@ def inspect_firmware_file(path: Any, *, expect_serial_provisioning: bool = False
             f"Firmware dosyasının boyutu beklenen aralığın dışında ({size} bayt). Yanlış dosya seçilmiş olabilir."
         )
     has_marker: Optional[bool] = None
+    missing: list[str] = []
     try:
         with open(full, "rb") as handle:
             head = handle.read(1)
@@ -330,20 +420,30 @@ def inspect_firmware_file(path: Any, *, expect_serial_provisioning: bool = False
             partition_magic = handle.read(2)
             if expect_serial_provisioning and head == b"\xe9":
                 handle.seek(0)
-                has_marker = SERIAL_PROVISION_MARKER in handle.read(MAX_FIRMWARE_BYTES)
+                image = handle.read(MAX_FIRMWARE_BYTES)
+                has_marker = SERIAL_PROVISION_MARKER in image
+                missing = [feature for marker, feature in FEATURE_MARKERS.items() if marker not in image]
     except OSError as exc:
         raise ToolError("Firmware dosyası okunamadı (izin veya disk sorunu).") from exc
     if head != b"\xe9":
         raise ToolError("Dosya geçerli bir ESP32 imajı değil (ilk bayt 0xE9 olmalı). Yanlış dosya seçilmiş olabilir.")
-    warnings: list[str] = []
-    if partition_magic != b"\xaa\x50":
-        warnings.append(
-            "Bu dosya bootloader + bölüm tablosu + uygulama içeren BİRLEŞİK imaj gibi görünmüyor "
-            "(0x8000'de bölüm tablosu yok). 0x0 adresine yazılırsa kart açılmayabilir."
+    merged = partition_magic == b"\xaa\x50"
+    if offset == APP_FLASH_OFFSET and merged:
+        raise ToolError(
+            "Bu dosya BİRLEŞİK imaj (bootloader + bölüm tablosu + uygulama); 'Güncelle (ayarlar korunur)' kipinde 0x10000 adresine "
+            "yazılamaz. Sürüm klasöründeki uygulama imajını (app_0x10000_v<sürüm>.bin) seçin."
         )
+    if offset != APP_FLASH_OFFSET and not merged:
+        raise ToolError(
+            "Bu dosya bootloader + bölüm tablosu + uygulama içeren BİRLEŞİK imaj değil (0x8000'de bölüm tablosu yok; yalnız "
+            "uygulama imajı olabilir): 0x0 adresine yazılırsa kart açılmaz. Ayarları koruyarak güncellemek için "
+            "'Güncelle (ayarlar korunur)' kipini seçin; yeni/boş kart için birleşik imajı (firmware_combined_0x0.bin) seçin."
+        )
+    warnings: list[str] = []
     if has_marker is False:
         warnings.append(STALE_FIRMWARE_WARNING)
-    return FirmwareCheck(full, size, warnings, has_marker)
+    warnings.extend(f"Bu imajla {feature} çalışmaz (v1.3.0+ gerekli)." for feature in missing)
+    return FirmwareCheck(full, size, warnings, has_marker, missing)
 
 
 # ===========================================================================
@@ -579,7 +679,7 @@ class LoginRequest:
 
 
 class ServerLoginDialog(tk.Toplevel):
-    """Süper kullanıcı e-posta + parola (veya ADMIN_API_KEY ortam değişkeni) soran modal diyalog.
+    """Süper kullanıcı / servis sorumlusu e-posta + parola (veya ADMIN_API_KEY ortam değişkeni) soran modal diyalog.
 
     Parola yalnızca bu diyalogda tutulur; diske/loga yazılmaz. "Beni hatırla" işaretliyse yalnızca ŞİFRELİ oturum anahtarı
     (DPAPI, bu Windows kullanıcısına bağlı) ve kimlik (sunucu adresi + e-posta) saklanır."""
@@ -606,9 +706,10 @@ class ServerLoginDialog(tk.Toplevel):
         self.result: Optional[LoginRequest] = None
         self._parent = parent
 
-        card, body = theme.card(self, "🔐 Süper Kullanıcı Girişi", accent="cyan", padx=16, pady=14)
+        card, body = theme.card(self, "🔐 Sunucuya Giriş (süper kullanıcı / servis sorumlusu)", accent="cyan", padx=16, pady=14)
         card.pack(fill=tk.BOTH, expand=True)
-        intro = note or "Cihazı sunucu envanterine kaydetmek için süper kullanıcı hesabıyla giriş yapın."
+        intro = note or ("Süper kullanıcı ya da servis sorumlusu hesabıyla giriş yapın (envantere kayıt ve etiket yenileme yalnız "
+                         "süper kullanıcı).")
         theme.label(
             body,
             "label.muted",
@@ -802,6 +903,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self._prov_cancel = threading.Event()
         self._prov_mode = ""  # "" | "serial" | "wifi": süren provizyonun yolu
         self._flash_port: Optional[str] = None
+        self._last_probe: Optional[Any] = None  # flash öncesi seri yoklama (BoardProbe): MAC, provizyon, şablon
         self._serial_backend = serial_backend
         self._serial_backend_error: Optional[str] = None
         self._serial_backend_lock = threading.Lock()
@@ -1037,9 +1139,13 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         for widget in (self.btn_register_device, self.btn_suspend, self.btn_activate, self.btn_delete_device):
             if not (widget is self.btn_register_device and self._register_busy):
                 widget.config(state=state)
+        # Etiket yenileme yalnız süper kullanıcı JWT'siyle (sunucu API anahtarını ve servis sorumlusunu reddeder).
+        reissue_allowed = not self.client.is_authenticated or self.client.user_role == "super_user"
+        self.btn_reissue_label.config(state=tk.NORMAL if reissue_allowed else tk.DISABLED)
         self.inv_role_note.set(
-            "" if allowed else "ℹ️ Servis sorumlusu olarak giriş yaptınız: fabrika kaydı (envantere kaydet), askıya alma, aktif etme ve "
-            "silme yalnızca süper kullanıcıya açıktır. Envanter listesini görebilir; siteler, şablonlar ve karta yazım kullanılabilir."
+            "" if allowed else "ℹ️ Servis sorumlusu olarak giriş yaptınız: fabrika kaydı (envantere kaydet), askıya alma, aktif etme, "
+            "silme ve etiket yenileme yalnızca süper kullanıcıya açıktır. Envanter listesini görebilir; siteler, şablonlar, karta yazım "
+            "ve sunucudaki anahtarla yeniden provizyon kullanılabilir."
         )
 
     # =========================================================================
@@ -1091,6 +1197,17 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         )
         self.ver_label.pack(side=tk.RIGHT, padx=5)
 
+        r_update_frame = theme.frame(fw_frame, "frame.surface")
+        r_update_frame.pack(fill=tk.X, pady=(2, 4))
+        self.r_update = theme.radio(
+            r_update_frame,
+            text=f"🔄 {UPDATE_MODE_LABEL} - yalnız uygulama imajı (0x10000); AHBU firmware'li, provizyonlu/şablonlu kart",
+            variable=self.mode_var,
+            value="update",
+            command=self.apply_mode_selection,
+        )
+        self.r_update.pack(side=tk.LEFT)
+
         r2_frame = theme.frame(fw_frame, "frame.surface")
         r2_frame.pack(fill=tk.X, pady=(2, 6))
         self.r_factory = theme.radio(
@@ -1109,6 +1226,14 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         self.browse_btn = theme.button(path_frame, role="secondary", size="sm", text="📁 Gözat...", command=self.browse_custom_file)
         self.browse_btn.pack(side=tk.RIGHT)
+        theme.label(
+            fw_frame,
+            "label.note.amber",
+            text="⚠ Birleşik imaj (0x0) yeni/boş ya da Waveshare yazılımlı kart içindir: kartın yerel anahtarını, AP parolasını, "
+            f"Wi-Fi'sini, bulut kimliğini, şablonunu ve güvenlik ayarlarını SİLER. Kurulu kartı güncellemek için '{UPDATE_MODE_LABEL}'.",
+            justify="left",
+            wraplength=900,
+        ).pack(fill=tk.X, pady=(6, 0))
 
         btn_frame = theme.frame(content_frame, "frame.bg")
         btn_frame.pack(fill=tk.X, pady=(0, 10))
@@ -1221,6 +1346,11 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.btn_activate.pack(side=tk.LEFT, padx=4)
         self.btn_delete_device = theme.button(table_action_row, role="danger", size="sm", text="🗑️ Envanterden Sil", command=self.delete_selected_device)
         self.btn_delete_device.pack(side=tk.LEFT, padx=4)
+        # atolye-2: USB'ye takılı stok kartın etiketini yeniden basar (yeni PIN + yeni AP parolası; yerel anahtar DEĞİŞMEZ).
+        self.btn_reissue_label = theme.button(
+            table_action_row, role="tint.cyan", size="sm", text="🏷️ Etiketi Yeniden Bas (USB)", command=self.reissue_label_via_usb
+        )
+        self.btn_reissue_label.pack(side=tk.LEFT, padx=4)
 
         self.inv_status_var = tk.StringVar(value="")
         theme.label(table_frame, "label.status", textvariable=self.inv_status_var, anchor="w", justify="left").pack(fill=tk.X, pady=(0, 6))
@@ -1334,6 +1464,16 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         )
         self.btn_prov_eth.pack(side=tk.LEFT, padx=6)
 
+        # atolye-1: bellekte kaydı olmayan (ya da birleşik imaj / Hafızayı Sil ile anahtarı silinmiş) kayıtlı kart için.
+        recover = theme.frame(outer, "frame.bg")
+        recover.pack(fill=tk.X, pady=(0, 8))
+        theme.label(recover, "label.accent_bg.amber", text="Kayıt bellekte yoksa:", weight="bold").pack(side=tk.LEFT, padx=(0, 8))
+        self.btn_prov_server_key = theme.button(
+            recover, role="tint.violet", size="sm", text="🔑 Sunucudaki Anahtarla Yeniden Provizyon (USB)",
+            command=self.reprovision_with_server_key,
+        )
+        self.btn_prov_server_key.pack(side=tk.LEFT, padx=(0, 6))
+
         result_card, result_frame = theme.card(outer, "📋 Sonuç", accent="emerald", padx=10, pady=10)
         result_card.pack(fill=tk.BOTH, expand=True)
         self.prov_log = theme.text(result_frame, "text.log", wrap=tk.WORD, height=6, state=tk.DISABLED)
@@ -1384,7 +1524,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             ssid = rec.ap_ssid or "AHBU-XXXXXX"
             state_text = {
                 "registered": "Provizyon bekliyor",
-                "init_sent": "Anahtar yazıldı (Wi-Fi) - doğrulama bekliyor",
+                "init_sent": (f"Anahtar yazıldı (Ethernet {rec.eth_host}) - doğrulama bekliyor" if rec.path == "eth"
+                              else "Anahtar yazıldı (Wi-Fi) - doğrulama bekliyor"),
                 "verified": "Provizyon doğrulandı ✔" + {"serial": " (USB seri)", "wifi": " (Wi-Fi)", "eth": " (Ethernet)"}.get(rec.path, ""),
             }.get(rec.state, rec.state)
             self.prov_device_var.set(
@@ -1419,9 +1560,11 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.btn_prov_serial.config(state=tk.NORMAL if can_serial else tk.DISABLED)
         self.btn_prov_start.config(state=tk.NORMAL if can_wifi else tk.DISABLED)
         self.btn_prov_verify.config(state=tk.NORMAL if can_verify else tk.DISABLED)
-        self.btn_prov_eth.config(state=tk.NORMAL if can_wifi else tk.DISABLED)
+        # Ethernet: kayıtlıyken provizyon; anahtar yazılıp doğrulanamadıysa (init_sent) Ethernet'ten yeniden doğrulama.
+        self.btn_prov_eth.config(state=tk.NORMAL if can_verify else tk.DISABLED)
         self.btn_prov_cancel.config(state=tk.NORMAL if busy else tk.DISABLED)
         self.btn_prov_manual.config(state=tk.NORMAL)
+        self.btn_prov_server_key.config(state=tk.DISABLED if (busy or self._esptool_busy) else tk.NORMAL)
         self.btn_prov_forget.config(state=tk.NORMAL if (rec is not None and not busy) else tk.DISABLED)
         self.btn_prov_template.config(state=tk.DISABLED if (busy or self._esptool_busy or self._tpl_busy) else tk.NORMAL)
 
@@ -1528,17 +1671,18 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             rec.state = "verified"
             rec.path = "serial"
             self._prov_say("✅ USB (seri) provizyon tamamlandı ve doğrulandı (STATUS: yerel anahtar tanımlı). Anahtar kablosuz ağdan geçmedi.")
+            fw_warning = self._say_firmware_warning(outcome)
             self.ui_info(
                 "Provizyon Tamamlandı",
                 "Cihaz USB (seri) üzerinden provizyonlandı ve STATUS ile doğrulandı.\n" + LABEL_PHONE_CHECK_HINT
-                + "\nSonra etiketi cihaza yapıştırabilirsiniz.\n" + TEMPLATE_AFTER_PROVISION_HINT,
+                + "\nSonra etiketi cihaza yapıştırabilirsiniz.\n" + TEMPLATE_AFTER_PROVISION_HINT + fw_warning,
             )
         elif isinstance(err, ProvisionError) and err.code == "cancelled":
             self._prov_say("İşlem iptal edildi. Hazır olunca 'Seri (USB) ile Provizyonla'ya basın.")
         elif isinstance(err, ProvisionError):
             text = provision_error_text(err, rec.ap_ssid)
             self._prov_say("❌ " + text)
-            if err.code == "already_provisioned" and getattr(err, "can_reset", False):
+            if err.code in ("already_provisioned", "key_mismatch") and getattr(err, "can_reset", False):
                 if self.ui_confirm(
                     "Kartta Eski Anahtar Var",
                     "Kartta zaten bir yerel anahtar var (daha önce provizyonlanmış).\n\n"
@@ -1574,6 +1718,148 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             self._prov_say("Yedek Wi-Fi yolu seçilmedi. USB bağlantısını düzeltip 'Seri (USB) ile Provizyonla'ya tekrar basın.")
             self.ui_error("USB (Seri) Provizyon Başarısız", reason)
 
+    # ---- atolye-1: sunucudaki anahtarla yeniden provizyon (bellekte kayıt yokken) ------------------------------------
+    def reprovision_with_server_key(
+        self,
+        *,
+        port: Optional[str] = None,
+        mac: Optional[str] = None,
+        probe: Any = None,
+        wait_for_port: bool = False,
+        after_flash: bool = False,
+    ) -> None:
+        """Kayıtlı ama bellekte kaydı olmayan kartı (birleşik imaj / 'Hafızayı Sil' anahtarını sildiyse) SUNUCUDAKİ yerel anahtarla
+        yeniden provizyonlar: kart MAC'i (seri STATUS) -> UID -> ``GET /admin/inventory/:uid/local-key`` (karar 3; denetim kaydı)
+        -> etiketteki AP parolası (kullanıcıdan, maskeli) -> ``FACTORYINIT`` -> STATUS doğrulaması (varsa anahtar izi).
+        Etiket geçerli kalır; PIN bilinmediği için bellekte yeni kayıt OLUŞTURULMAZ. Gizli değerler gösterilmez/loglanmaz."""
+        if self._prov_busy:
+            return
+        chosen = port or self._selected_port_or_warn()
+        if not chosen:
+            return
+        busy = self._serial_port_busy_reason()
+        if busy:
+            self.ui_info("Meşgul", busy)
+            return
+        if not mac:
+            self._prov_busy, self._prov_mode = True, "serial"
+            self.set_ui_state(False)
+            self._prov_clear_log()
+            self._prov_say(f"Kart yoklanıyor ({chosen}: STATUS)...")
+
+            def work() -> Any:
+                return self._make_serial_provisioner().probe_board(chosen)
+
+            def found(result: Any, err: Optional[BaseException]) -> None:
+                self._prov_busy, self._prov_mode = False, ""
+                self.set_ui_state(True)
+                if err is not None or result is None or not result.mac:
+                    text = (provision_error_text(err) if isinstance(err, ProvisionError) else str(err) if isinstance(err, FactoryError)
+                            else "Kart seri komutlara yanıt vermedi (kartta AHBU firmware'i yüklü mü? Önce 1. sekmeden yükleyin).")
+                    self._prov_say("❌ " + text)
+                    self.ui_error("Yeniden Provizyon", text)
+                    return
+                self.reprovision_with_server_key(port=chosen, mac=result.mac, probe=result)
+
+            self.run_background(work, found)
+            return
+        uid = uid_from_mac(mac) or "?"
+        if after_flash:
+            intro = (f"Yüklenen kart ({uid}) önceden provizyonluydu; birleşik imaj yerel anahtarını, AP parolasını, Wi-Fi'sini, bulut "
+                     "kimliğini, şablonunu ve güvenlik ayarlarını sildi. Bu kart için bellekte kayıt yok.")
+        else:
+            intro = f"Kart {uid} (MAC {mac}) sunucudaki yerel anahtarla yeniden provizyonlanacak."
+        if not self.ui_confirm(
+            "Sunucudaki Anahtarla Yeniden Provizyon",
+            intro + "\n\nSunucudaki anahtarla yeniden provizyon yapılsın mı? Etiketteki AP parolası sorulur; etiket geçerli kalır "
+            "(anahtar alınması sunucuda kayda geçer).",
+        ):
+            self._prov_say("Sunucudaki anahtarla yeniden provizyon yapılmadı.")
+            return
+        self.ensure_login(
+            lambda: self._fetch_key_for_reprovision(chosen, uid, mac, probe, wait_for_port),
+            note="Sunucudaki yerel anahtarı almak için giriş yapın (süper kullanıcı ya da servis sorumlusu).",
+        )
+
+    def _fetch_key_for_reprovision(self, port: str, uid: str, mac: str, probe: Any, wait_for_port: bool) -> None:
+        self._prov_say(f"Sunucudan {uid} kartının yerel anahtarı alınıyor (gösterilmez, loglanmaz)...")
+
+        def done(server_key: Any, err: Optional[BaseException]) -> None:
+            if err is not None:
+                self._prov_say("❌ Yerel anahtar sunucudan alınamadı: " + self._error_text(err))
+                self._handle_error("Anahtar Alınamadı", err)
+                return
+            label_value = simpledialog.askstring(
+                "Etiketteki AP Parolası",
+                f"{uid} kartının etiketindeki 'AĞ PAROLASI (AP)' değerini aynen girin (8-32 karakter).\n"
+                "Değer gösterilmez ve saklanmaz; karta USB ile yazılır.",
+                show="•",
+                parent=self,
+            )
+            if not label_value:
+                self._prov_say("AP parolası girilmedi; yeniden provizyon yapılmadı.")
+                return
+            if not is_valid_ap_pass(label_value) or label_value != label_value.strip():
+                self._prov_say("❌ AP parolası geçersiz; karta hiçbir şey yazılmadı.")
+                self.ui_warn("Geçersiz AP Parolası", "AP parolası 8-32 karakter olmalı (başında/sonunda boşluk olmadan). "
+                             "Etiketteki 'AĞ PAROLASI (AP)' değerini aynen girin.")
+                return
+            self.scrubber.add(label_value)
+            self._start_keyed_serial_provision(port, server_key, label_value, uid=uid, mac=mac, probe=probe,
+                                               wait_for_port=wait_for_port)
+
+        self.run_background(lambda: self.client.fetch_local_key(uid), done)
+
+    def _start_keyed_serial_provision(
+        self, port: str, server_key: str, label_value: str, *, uid: str, mac: str, probe: Any, wait_for_port: bool,
+        reset_existing: bool = False,
+    ) -> None:
+        self._prov_busy, self._prov_mode = True, "serial"
+        self._prov_cancel = cancel = threading.Event()
+        self.set_ui_state(False)
+        self._prov_say(f"USB (seri) yeniden provizyon başlıyor ({port}): sunucudaki anahtar + etiketteki AP parolası (gizli)...")
+        template_note = self._template_lost_note(probe)
+
+        def work() -> Any:
+            return self._make_serial_provisioner().provision(
+                port, server_key, label_value, expected_mac=mac, reset_existing=reset_existing, wait_for_port=wait_for_port,
+                progress=lambda message: self.post_ui(self._prov_say, message), cancel=cancel,
+            )
+
+        def done(outcome: Any, err: Optional[BaseException]) -> None:
+            self._prov_busy, self._prov_mode = False, ""
+            self.set_ui_state(True)
+            if err is None:
+                proof = " (anahtar izi eşleşti)" if outcome.key_fp_matched else ""
+                self._prov_say(f"✅ Sunucudaki anahtarla yeniden provizyon tamamlandı ve STATUS ile doğrulandı{proof}.")
+                fw_warning = self._say_firmware_warning(outcome)
+                self.ui_info("Yeniden Provizyon Tamamlandı",
+                             f"Kart {uid} sunucudaki yerel anahtar ve etiketteki AP parolasıyla yeniden provizyonlandı{proof}. "
+                             "Etiket geçerli." + template_note + fw_warning)
+            elif isinstance(err, ProvisionError) and err.code == "cancelled":
+                self._prov_say("İşlem iptal edildi.")
+            elif (isinstance(err, ProvisionError) and err.code in ("already_provisioned", "key_mismatch")
+                  and getattr(err, "can_reset", False) and not reset_existing):
+                self._prov_say("❌ " + provision_error_text(err))
+                if self.ui_confirm(
+                    "Kartta Eski Anahtar Var",
+                    "Kartta başka bir yerel anahtar var.\n\nAnahtar SIFIRLANIP (RESETKEY) sunucudaki anahtarla yeniden yazılsın mı?\n"
+                    "UYARI: Karttaki eski anahtar KULLANILAMAZ hale gelir.",
+                ):
+                    self._start_keyed_serial_provision(port, server_key, label_value, uid=uid, mac=mac, probe=probe,
+                                                       wait_for_port=False, reset_existing=True)
+                    return
+            elif isinstance(err, (ProvisionError, SerialUnavailableError)):
+                text = provision_error_text(err) if isinstance(err, ProvisionError) else str(err)
+                self._prov_say("❌ " + text)
+                self.ui_error("Yeniden Provizyon Başarısız", text)
+            else:
+                self._prov_say("❌ Yeniden provizyon sırasında beklenmeyen bir hata oluştu.")
+                self.ui_error("Yeniden Provizyon Başarısız", self._error_text(err))
+            self._refresh_provision_tab()
+
+        self.run_background(work, done)
+
     def provision_via_wifi_clicked(self) -> None:
         """'Wi-Fi ile Provizyonla (güvensiz yedek yol)' düğmesi: önce riski açıkça söyler."""
         if self._alive_record() is None:
@@ -1588,32 +1874,43 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         ):
             self.start_provision()
 
+    def _make_device_client(self, host: str) -> DeviceClient:
+        """Kullanıcının girdiği (Ethernet) IP için cihaz istemcisi: aynı taşıma ve bekleme (test kancası) kullanılır."""
+        return DeviceClient(host, transport=self._device_transport, env={}, sleep=self.device._sleep)
+
     def provision_via_ethernet_clicked(self) -> None:
         """'Ethernet ile Provizyonla': kart atölye ağına kabloyla bağlıyken IP'sine POST /api/factory/init (v1.3.0+).
 
         Anahtar yerel ağdan düz HTTP ile gider; ağdaki başka bir bilgisayar da yeni kartı ilk sahiplenebilir (kullanıcı bu
-        riski 2026-10-08'de kabul etti). Yalnız özel (yerel) IP kabul edilir."""
+        riski 2026-10-08'de kabul etti). Yalnız özel (yerel) IP kabul edilir. Kart Ethernet'te anahtar doğrulamadığı için
+        ``auth/check`` 200'ü kanıt sayılmaz: kanıt kısıtlı durum + (varsa) anahtar izi (servis_kurulum-1). Anahtar yazılıp
+        doğrulanamadıysa (init_sent) düğme anahtarı YENİDEN YAZMAZ, yalnız Ethernet'ten doğrular."""
         rec = self._alive_record()
         if rec is None:
             self.ui_warn("Kayıt Yok", "Önce 2. sekmede cihazı sunucu envanterine kaydedin.")
             return
         if self._prov_busy:
             return
-        if rec.state != "registered":
-            self.ui_info("Provizyon", "Bu cihazın anahtarı zaten yazıldı.")
+        if rec.state not in ("registered", "init_sent"):
+            self.ui_info("Provizyon", "Bu cihazın provizyonu zaten doğrulandı.")
             return
         raw = simpledialog.askstring(
             "Ethernet ile Provizyon",
             "Kartın Ethernet IP adresi (yerel ağ, ör. 192.168.1.57):\n"
             "Kartın IP'sini modem/DHCP listesinden ya da seri STATUS 'Ethernet:' satırından alabilirsiniz.",
+            initialvalue=rec.eth_host or "",
             parent=self,
         )
         if not raw or not raw.strip():
             return
         try:
-            device = DeviceClient(raw.strip(), transport=self._device_transport)
+            device = self._make_device_client(raw.strip())
         except ValueError:
             self.ui_error("Geçersiz Adres", "Yalnız yerel ağ (özel) IP adresi kabul edilir, ör. 192.168.1.57.")
+            return
+        rec.eth_host = device.host
+        if rec.state == "init_sent":
+            self._start_verify(rec, device, path="eth")
             return
         self._run_provision(rec, device, mode="eth", wait=0.0, intro=f"Ethernet yolu: cihaza bağlanılıyor ({device.base_url})...")
 
@@ -1634,6 +1931,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
                 progress=lambda message: self.post_ui(self._prov_say, message),
                 wait_seconds=wait,
                 cancel=cancel,
+                trust_key_check=mode != "eth",  # Ethernet'te auth/check 200 kanıt değildir (servis_kurulum-1)
             )
 
         self.run_background(work, lambda outcome, err: self._on_provision_done(rec, outcome, err, path=mode))
@@ -1676,6 +1974,9 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             if isinstance(err, ProvisionError):
                 text = provision_error_text(err, ssid)
                 self._prov_say("❌ " + text)
+                if path == "eth" and err.code in ("already_provisioned", "key_mismatch"):
+                    self._offer_usb_resetkey(text)
+                    return
                 self.ui_error("Provizyon Başarısız", text + "\n\nİsterseniz 'Elle Provizyon Talimatı' düğmesine bakın.")
             else:
                 self._prov_say("❌ Provizyon sırasında beklenmeyen bir hata oluştu.")
@@ -1683,41 +1984,94 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         elif outcome.verified:
             rec.state = "verified"
             rec.path = path
-            self._prov_say("✅ Provizyon tamamlandı ve doğrulandı (GET /api/auth/check = 200).")
-            self.ui_info("Provizyon Tamamlandı", "Cihaz anahtarı doğrulandı.\n" + LABEL_PHONE_CHECK_HINT + "\nSonra etiketi cihaza yapıştırabilirsiniz.")
+            if path == "eth":
+                proof = "anahtar izi eşleşti" if outcome.key_fp_matched else "kart durumu: provizyonlu"
+                self._prov_say(f"✅ Provizyon tamamlandı ve doğrulandı (Ethernet: {proof}; auth/check kanıt sayılmadı).")
+            else:
+                self._prov_say("✅ Provizyon tamamlandı ve doğrulandı (GET /api/auth/check = 200).")
+            if outcome.note:
+                self._prov_say(outcome.note)
+            fw_warning = self._say_firmware_warning(outcome)
+            self.ui_info("Provizyon Tamamlandı", "Cihaz anahtarı doğrulandı.\n" + LABEL_PHONE_CHECK_HINT
+                         + "\nSonra etiketi cihaza yapıştırabilirsiniz." + fw_warning)
         else:
             rec.state = "init_sent"
-            text = (
-                "Cihaz anahtarı yazıldı. Kart kurulum ağını parolalı (WPA2) olarak yeniden başlattı ve bağlantınız koptu.\n"
-                f"Bilgisayarın Wi-Fi'sini '{ssid}' ağına etiketteki AP PAROLASI ile yeniden bağlayın, ardından 'Wi-Fi ile Doğrula'ya basın."
-            )
+            rec.path = path
+            if path == "eth":
+                text = (
+                    f"Cihaz anahtarı yazıldı ama doğrulama için karta Ethernet'ten ({rec.eth_host}) ulaşılamadı.\n"
+                    "Kabloyu ve IP'yi kontrol edip 'Ethernet ile Provizyonla'ya yeniden basın (anahtar yeniden YAZILMAZ, yalnız "
+                    "Ethernet'ten doğrulanır) ya da 'Wi-Fi ile Doğrula'yı kullanın (bu kayıtta o da Ethernet IP'sine gider)."
+                )
+            else:
+                text = (
+                    "Cihaz anahtarı yazıldı. Kart kurulum ağını parolalı (WPA2) olarak yeniden başlattı ve bağlantınız koptu.\n"
+                    f"Bilgisayarın Wi-Fi'sini '{ssid}' ağına etiketteki AP PAROLASI ile yeniden bağlayın, ardından 'Wi-Fi ile Doğrula'ya basın."
+                )
             self._prov_say("✅ " + text)
-            self.ui_info("Anahtar Yazıldı - Doğrulama Gerekli", text)
+            self.ui_info("Anahtar Yazıldı - Doğrulama Gerekli", text + self._say_firmware_warning(outcome))
         self._refresh_provision_tab()
 
+    def _say_firmware_warning(self, outcome: Any) -> str:
+        """bireysel-1: okunan sürüm v1.3.0'dan eskiyse uyarı sonuç alanına yazılır; iletişim kutusuna eklenecek metni döndürür."""
+        warning = outcome_firmware_warning(outcome)
+        if not warning:
+            return ""
+        self._prov_say("⚠ " + warning)
+        return "\n\n⚠ " + warning
+
+    def _offer_usb_resetkey(self, reason: str) -> None:
+        """Ethernet yolu karttaki anahtarı doğrulayamadı / farklı anahtar gördü: USB (seri) RESETKEY + yeniden provizyon önerilir."""
+        self._refresh_provision_tab()
+        if self.ui_confirm(
+            "Ethernet ile Doğrulanamadı",
+            f"{reason}\n\nKartı USB ile bağlayıp 'Seri (USB) ile Provizyonla (RESETKEY)' şimdi başlatılsın mı?\n"
+            "(Kartta eski anahtar varsa RESETKEY ile sıfırlanması ayrıca sorulur; 1. sekmedeki COM port seçili olmalı.)",
+        ):
+            self.start_serial_provision()
+
     def verify_provision(self) -> None:
-        """GET /api/auth/check (X-Device-Key) ile anahtarın cihazda geçerli olduğunu doğrular (Wi-Fi yolu)."""
+        """Wi-Fi yolu: GET /api/auth/check (X-Device-Key) ile anahtarın cihazda geçerli olduğunu doğrular (kurulum AP'si,
+        192.168.4.1). Anahtar Ethernet'ten yazıldıysa (``rec.path == 'eth'``) doğrulama kartın Ethernet IP'sine gider ve
+        auth/check DEĞİL kısıtlı durum + anahtar izi kullanılır (servis_kurulum-1)."""
         rec = self._alive_record()
         if rec is None:
             self.ui_warn("Kayıt Yok", "Önce 2. sekmede cihazı sunucu envanterine kaydedin.")
             return
         if self._prov_busy:
             return
+        if rec.path == "eth" and rec.eth_host:
+            try:
+                device = self._make_device_client(rec.eth_host)
+            except ValueError:
+                self.ui_error("Geçersiz Adres", "Kayıttaki Ethernet IP adresi kullanılamıyor; 'Ethernet ile Provizyonla'ya basın.")
+                return
+            self._start_verify(rec, device, path="eth")
+            return
+        self._start_verify(rec, self.device, path="wifi")
+
+    def _start_verify(self, rec: DeviceRecord, device: DeviceClient, *, path: str) -> None:
+        ethernet = path == "eth"
         self._prov_busy = True
-        self._prov_mode = "wifi"
+        self._prov_mode = path
         self._prov_cancel = cancel = threading.Event()
         self._update_provision_buttons()
-        self._prov_say(f"Doğrulanıyor ({self.device.base_url}/api/auth/check)...")
+        if ethernet:
+            self._prov_say(f"Ethernet'ten doğrulanıyor ({device.base_url}/api/status: provizyon durumu + anahtar izi)...")
+        else:
+            self._prov_say(f"Doğrulanıyor ({device.base_url}/api/auth/check)...")
         local_key = rec.local_key
+        after_init = rec.state == "init_sent"  # anahtar bu kayıtla yazıldı: iz bildirmeyen kartta provizyon durumu yeter
 
         def work() -> Any:
-            return self.device.verify(
-                local_key, attempts=6, delay=2.0, progress=lambda message: self.post_ui(self._prov_say, message), cancel=cancel
+            return device.verify(
+                local_key, attempts=6, delay=2.0, progress=lambda message: self.post_ui(self._prov_say, message), cancel=cancel,
+                trust_key_check=not ethernet, after_init=after_init,
             )
 
-        self.run_background(work, lambda ok, err: self._on_verify_done(rec, ok, err))
+        self.run_background(work, lambda ok, err: self._on_verify_done(rec, ok, err, path=path))
 
-    def _on_verify_done(self, rec: DeviceRecord, ok: Any, err: Optional[BaseException]) -> None:
+    def _on_verify_done(self, rec: DeviceRecord, ok: Any, err: Optional[BaseException], *, path: str = "wifi") -> None:
         self._prov_busy = False
         self._prov_mode = ""
         if rec.state == "wiped":
@@ -1725,8 +2079,9 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             return
         if err is None and ok:
             rec.state = "verified"
-            rec.path = "wifi"
-            self._prov_say("✅ Doğrulama başarılı: cihaz bu kayıttaki yerel anahtarı kabul ediyor.")
+            rec.path = rec.path if rec.path in ("eth", "wifi") else path
+            self._prov_say("✅ Doğrulama başarılı: cihaz bu kayıttaki yerel anahtarla provizyonlu"
+                           + (" (Ethernet: kart durumu / anahtar izi)." if path == "eth" else "."))
             self.ui_info("Doğrulandı", "Cihaz anahtarı doğrulandı.\n" + LABEL_PHONE_CHECK_HINT + "\nSonra etiketi cihaza yapıştırabilirsiniz.")
         elif isinstance(err, ProvisionError) and err.code == "cancelled":
             self._prov_say("Doğrulama iptal edildi.")
@@ -1735,6 +2090,9 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
                 rec.state = "registered"  # anahtar kalıcı yazılmamış: yeniden başlatılabilir
             text = provision_error_text(err, rec.ap_ssid)
             self._prov_say("❌ " + text)
+            if path == "eth" and err.code in ("already_provisioned", "key_mismatch"):
+                self._offer_usb_resetkey(text)
+                return
             self.ui_error("Doğrulama Başarısız", text)
         elif err is not None:
             self._prov_say("❌ Doğrulama sırasında beklenmeyen bir hata oluştu.")
@@ -2045,7 +2403,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             f"{pending.uid} cihazının provizyonu tamamlanmadı.\nYeni kayıtla önceki cihazın yerel anahtarı/PIN'i bellekten silinir ve bir daha GÖSTERİLEMEZ.\n\nDevam edilsin mi?",
         ):
             return
-        self.ensure_login(lambda: self._start_registration(form), note="Cihazı sunucu envanterine kaydetmek için giriş yapın.")
+        self.ensure_login(lambda: self._start_registration(form),
+                          note="Cihazı sunucu envanterine kaydetmek için süper kullanıcı hesabıyla giriş yapın.")
 
     def _start_registration(self, form: dict[str, str]) -> None:
         if self._register_busy:
@@ -2066,7 +2425,9 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
                     self.ui_error(
                         "Mükerrer Cihaz Uyarısı",
                         f"{err}\n\nBu cihaz daha önce kaydedilmiş olabilir (ör. yarıda kalan bir deneme). PIN ve yerel anahtar "
-                        "yeniden gösterilemez; gerekirse envanter tablosundan 'Stokta' durumundaki kaydı silip yeniden kaydedin.",
+                        "yeniden gösterilemez; gerekirse envanter tablosundan 'Stokta' durumundaki kaydı silip yeniden kaydedin. "
+                        "Yeniden kayıtta yeni anahtar üretilir: kart önceden provizyonlandıysa USB ile RESETKEY gerekir "
+                        "(3. sekmede 'Seri (USB) ile Provizyonla' bunu sorar).",
                     )
                 else:
                     self._handle_error("Kayıt Başarısız", err)
@@ -2170,6 +2531,144 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             return
         self.ui_info("Yazıcıya Gönderildi", f"Etiket yazdırma sırasına gönderildi.\n{LABEL_PRINT_NOTE}")
 
+    # ---- atolye-2: etiketi USB ile yeniden basma ----------------------------------------------------------------
+    def reissue_label_via_usb(self) -> None:
+        """'Etiketi Yeniden Bas (USB)': seri STATUS'tan UID -> ``POST reissue-label`` (yeni PIN; yerel anahtar DEĞİŞMEZ, yanıtta
+        yok) -> ``fetch_local_key`` (mevcut anahtar; karar 3) -> yeni AP parolası -> seri RESETKEY + FACTORYINIT <mevcut anahtar>
+        <yeni AP parolası> -> STATUS doğrulaması ('tanimli'; varsa anahtar izi) -> iki karekodlu yeni etiket. Kart stokta değilse ya
+        da daireye bağlıysa sunucu 409 döner (mesaj gösterilir). FACTORYINIT başarısızsa etiket BASILMAZ."""
+        if self._prov_busy or self._register_busy:
+            return
+        port = self._selected_port_or_warn()
+        if not port:
+            return
+        busy = self._serial_port_busy_reason()
+        if busy:
+            self.ui_info("Meşgul", busy)
+            return
+        pending = self._alive_record()
+        if pending is not None and not pending.provisioned and not self.ui_confirm(
+            "Önceki Cihaz Tamamlanmadı",
+            f"{pending.uid} cihazının provizyonu tamamlanmadı.\nEtiket yenilenirse önceki cihazın yerel anahtarı/PIN'i bellekten "
+            "silinir ve bir daha GÖSTERİLEMEZ.\n\nDevam edilsin mi?",
+        ):
+            return
+        self.ensure_login(lambda: self._reissue_probe(port), note="Etiket yenilemek için süper kullanıcı hesabıyla giriş yapın.")
+
+    def _set_reissue_busy(self, busy: bool) -> None:
+        self._prov_busy = busy
+        self._prov_mode = "serial" if busy else ""
+        self.set_ui_state(not busy)
+        self.btn_reissue_label.config(state=tk.DISABLED if busy else tk.NORMAL)
+        if not busy:
+            self._apply_role_permissions()
+
+    def _reissue_probe(self, port: str) -> None:
+        if self.client.user_role != "super_user":
+            self.ui_error("Yetki Yok", "Etiket yenileme yalnız süper kullanıcı hesabıyla (e-posta + parola) yapılır.")
+            return
+        self._set_reissue_busy(True)
+        self._prov_clear_log()
+        self.inv_status_var.set("⏳ Etiket yenileme: kart USB'den okunuyor (STATUS)...")
+        self._prov_say(f"Etiket yenileme: kart yoklanıyor ({port}: STATUS)...")
+
+        def work() -> Any:
+            return self._make_serial_provisioner().probe_board(port)
+
+        def done(probe: Any, err: Optional[BaseException]) -> None:
+            self._set_reissue_busy(False)
+            if err is not None or probe is None or not probe.uid:
+                text = (provision_error_text(err) if isinstance(err, ProvisionError) else str(err) if isinstance(err, FactoryError)
+                        else "Kart seri komutlara yanıt vermedi (kartta AHBU firmware'i yüklü mü? USB bağlantısını kontrol edin).")
+                self.inv_status_var.set("⚠ Etiket yenilenemedi.")
+                self._prov_say("❌ " + text)
+                self.ui_error("Etiket Yenilenemedi", text)
+                return
+            uid = probe.uid
+            if not self.ui_confirm(
+                "Etiketi Yeniden Bas",
+                f"Takılı kart: {uid} (MAC {probe.mac}).\n\n"
+                "• Sunucuda YENİ kurulum PIN'i üretilir: eski etiketteki PIN ve AP parolası geçersiz olur.\n"
+                "• Kartın yerel anahtarı DEĞİŞMEZ (sunucudan alınır; anahtar alımı kayda geçer).\n"
+                "• Yeni AP parolası üretilip karta USB ile yazılır (RESETKEY + FACTORYINIT).\n"
+                "• Yeni etiket iki karekodla hazırlanır (sahiplenme + kurulum Wi-Fi'si).\n\n"
+                "Kart yalnız stoktaysa (IN_STOCK) ve hiçbir daireye bağlı değilse yenilenebilir. Devam edilsin mi?",
+            ):
+                self.inv_status_var.set("Etiket yenileme iptal edildi.")
+                return
+            self._reissue_run(port, uid, probe.mac)
+
+        self.run_background(work, done)
+
+    def _reissue_run(self, port: str, uid: str, mac: str) -> None:
+        self._set_reissue_busy(True)
+        self._prov_cancel = cancel = threading.Event()
+        self.inv_status_var.set(f"⏳ {uid}: etiket yenileniyor (sunucu + USB)...")
+        stage = {"reissued": False}
+        say = lambda message: self.post_ui(self._prov_say, message)  # noqa: E731
+
+        def work() -> Any:
+            say(f"Sunucuda {uid} için yeni kurulum PIN'i üretiliyor (reissue-label)...")
+            reissue = self.client.reissue_label(uid)
+            stage["reissued"] = True
+            say("Kartın mevcut yerel anahtarı sunucudan alınıyor (değişmez; gösterilmez)...")
+            server_key = self.client.fetch_local_key(uid)
+            fresh_ap = generate_ap_pass()
+            self.scrubber.add(fresh_ap)
+            say("Yeni AP parolası karta USB ile yazılıyor (RESETKEY + FACTORYINIT; parametreler gizli)...")
+            outcome = self._make_serial_provisioner().provision(
+                port, server_key, fresh_ap, expected_mac=mac, reset_existing=True, progress=say, cancel=cancel)
+            return reissue, server_key, fresh_ap, outcome
+
+        def done(result: Any, err: Optional[BaseException]) -> None:
+            self._set_reissue_busy(False)
+            if err is not None:
+                text = provision_error_text(err) if isinstance(err, ProvisionError) else self._error_text(err)
+                if stage["reissued"]:
+                    text += ("\n\nSunucuda yeni PIN üretildi: eski etiket artık geçersiz. 'Etiketi Yeniden Bas (USB)'yu yeniden "
+                             "deneyin (yeni PIN üretilir); kart provizyonsuz kaldıysa yeniden yazılır.")
+                self.inv_status_var.set("⚠ Etiket yenilenemedi.")
+                self._prov_say("❌ " + text)
+                if isinstance(err, SessionExpiredError):
+                    self._handle_error("Etiket Yenilenemedi", err)
+                else:
+                    self.ui_error("Etiket Yenilenemedi", text)
+                self._refresh_provision_tab()
+                return
+            reissue, server_key, fresh_ap, outcome = result
+            self._discard_record()
+            device = reissue.device
+            record = DeviceRecord(
+                uid=uid,
+                mac=normalize_mac(device.get("mac_address")) or normalize_mac(mac) or mac,
+                pin=reissue.setup_pin,
+                local_key=server_key,
+                ap_pass=fresh_ap,
+                qr_claim_url=reissue.qr_claim_url,
+                serial_no=device.get("serial_no"),
+                model=str(device.get("model") or DEFAULT_MODEL),
+                batch_no=str(device.get("batch_no") or ""),
+                created_at=next((device.get(k) for k in ("label_reissued_at", "created_at") if isinstance(device.get(k), str)), None),
+                state="verified",
+                path="serial",
+            )
+            self.current_record = record
+            self.scrubber.add(*record.secret_values())
+            self._display_label_preview(build_label_image(record))
+            self._refresh_provision_tab()
+            proof = " (anahtar izi eşleşti)" if outcome.key_fp_matched else ""
+            self._prov_say(f"✅ Etiket yenilendi: yeni AP parolası karta yazıldı ve STATUS ile doğrulandı{proof}.")
+            self.inv_status_var.set(f"✅ {uid}: yeni etiket hazır.")
+            self.ui_info(
+                "Etiket Yenilendi",
+                f"{uid} için yeni etiket hazır (önizlemede): '{LABEL_HEADING_CLAIM}' ve '{LABEL_HEADING_WIFI}'.\n"
+                "Eski etiketi imha edin: PIN'i ve AP parolası artık geçersiz. Kartın yerel anahtarı değişmedi.\n"
+                "'Etiketi Kaydet (PNG)' / 'Yazdır' ile alın; etiket GİZLİDİR (PIN + kurulum parolası)." + self._say_firmware_warning(outcome),
+            )
+            self.refresh_inventory_list()
+
+        self.run_background(work, done)
+
     # ---- Envanter listesi ------------------------------------------------------
     def _set_inventory_placeholder(self, text: str) -> None:
         for row in self.inv_tree.get_children():
@@ -2179,7 +2678,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
     def refresh_inventory_list(self) -> None:
         """Sunucudan envanter listesini çeker (giriş gerekir) ve tabloya doldurur."""
         if not self.client.is_authenticated:
-            self.ensure_login(self.refresh_inventory_list, note="Envanteri görmek için süper kullanıcı hesabıyla giriş yapın.")
+            self.ensure_login(self.refresh_inventory_list,
+                              note="Envanteri görmek için giriş yapın (süper kullanıcı ya da servis sorumlusu).")
             return
         self.inv_status_var.set("⏳ Envanter yükleniyor...")
         self.run_background(lambda: self.client.list_inventory(limit=100), self._on_inventory_loaded)
@@ -2342,6 +2842,11 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             self.file_entry.insert(0, target_path)
             self.inc_ver_btn.config(state=tk.NORMAL)
             self.browse_btn.config(state=tk.NORMAL)
+        elif mode == "update":
+            self.file_entry.delete(0, tk.END)
+            self.file_entry.insert(0, os.path.normpath(os.path.join(RELEASES_DIR, app_image_relpath(self.version_data))))
+            self.inc_ver_btn.config(state=tk.DISABLED)
+            self.browse_btn.config(state=tk.NORMAL)
         elif mode == "factory":
             self.file_entry.delete(0, tk.END)
             self.file_entry.insert(0, os.path.normpath(FACTORY_BIN))
@@ -2388,7 +2893,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
 
     def set_ui_state(self, enabled: bool = True) -> None:
         state = tk.NORMAL if enabled else tk.DISABLED
-        for widget in (self.btn_flash, self.btn_read_info, self.btn_erase, self.btn_read_mac, self.r_custom, self.r_factory):
+        for widget in (self.btn_flash, self.btn_read_info, self.btn_erase, self.btn_read_mac, self.r_custom, self.r_update,
+                       self.r_factory):
             widget.config(state=state)
         self.is_flashing = not enabled
         self._update_provision_buttons()
@@ -2525,25 +3031,147 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
 
         return self._launch_esptool(cmd_args, timeout=timeout, on_line=on_line, on_finish=on_finish)
 
+    def _serial_port_busy_reason(self) -> str:
+        """Seri port tek işleme açıktır: süren esptool/yoklama ya da USB provizyonu varsa kullanıcıya söylenecek metin."""
+        if self._esptool_busy:
+            return "Kartla (flash/MAC okuma/yoklama) başka bir işlem sürüyor. Bitmesini bekleyin."
+        if self._prov_busy and self._prov_mode == "serial":
+            return "USB (seri) provizyon sürüyor. Bitmesini bekleyin veya iptal edin."
+        return ""
+
     def start_flash(self) -> None:
         port = self._selected_port_or_warn()
         if not port:
             return
+        busy = self._serial_port_busy_reason()
+        if busy:
+            self.ui_info("Meşgul", busy)
+            return
+        mode = self.mode_var.get()
+        offset = APP_FLASH_OFFSET if mode == "update" else FLASH_OFFSET
         try:
-            # AHBU firmware'i için imajda USB (seri) provizyon komutu da aranır; Waveshare fabrika yazılımı için aranmaz.
-            check = inspect_firmware_file(self.file_entry.get(), expect_serial_provisioning=self.mode_var.get() != "factory")
+            # AHBU firmware'i için imajda USB (seri) provizyon komutu ve v1.3.0 özellikleri de aranır; Waveshare yazılımı için aranmaz.
+            check = inspect_firmware_file(self.file_entry.get(), expect_serial_provisioning=mode != "factory", offset=offset)
         except ToolError as exc:
             self.ui_warn("Dosya Sorunu", str(exc))
             return
         if check.warnings and not self.ui_confirm("Firmware Uyarısı", "\n\n".join(check.warnings) + "\n\nYine de yazılsın mı?"):
             return
         try:
-            cmd = self.build_esptool_cmd(["--chip", DEFAULT_CHIP, "--port", port, "--baud", DEFAULT_BAUD, "write_flash", FLASH_OFFSET, check.path])
+            cmd = self.build_esptool_cmd(["--chip", DEFAULT_CHIP, "--port", port, "--baud", DEFAULT_BAUD, "write_flash", offset, check.path])
         except ToolError as exc:
             self.ui_error("esptool Bulunamadı", str(exc))
             return
         self._flash_port = port  # provizyon aynı USB/COM portundan yapılır
-        if self.mode_var.get() == "factory":  # Waveshare orijinal yazılımı: AHBU kurulum ağı/provizyonu yoktur
+        self._last_probe = None
+        # atolye-1: yazmadan önce kart seri STATUS (+ TPL STATUS) ile yoklanır: 'Güncelle' kipi AHBU firmware'i ister; birleşik
+        # imaj provizyonlu/şablonlu kartın ayarlarını SİLECEĞİ için önce sorulur.
+        self._esptool_busy = True
+        self.set_ui_state(False)
+        self.log(f"[KART] Yazımdan önce kart yoklanıyor ({port}: STATUS + TPL STATUS; yanıt vermeyen kartta en çok ~10 sn)...")
+
+        def work() -> Any:
+            return self._make_serial_provisioner().probe_board(port)
+
+        def done(probe: Any, err: Optional[BaseException]) -> None:
+            self._esptool_busy = False
+            self.set_ui_state(True)
+            self._continue_flash(mode, cmd, probe, err, check)
+
+        self.run_background(work, done)
+
+    @staticmethod
+    def _probe_settings_text(probe: Any) -> str:
+        parts = []
+        if probe.provisioned:
+            parts.append("yerel anahtar tanımlı")
+        if probe.template_id:
+            parts.append(f"şablon {probe.template_id} v{probe.template_version}")
+        return ", ".join(parts) or "ayar"
+
+    @staticmethod
+    def _downgrade_text(lost: list[str], *, update: bool) -> str:
+        head = (
+            f"Kartta v{CLOUD_SELF_BOOTSTRAP_MIN_FW}+ firmware çalışıyor (seri STATUS'ta Bootstrap satırı var); seçilen imajda şu "
+            f"özellikler YOK: {', '.join(lost)}. Bu imaj yazılırsa kart bu özellikleri kaybeder (v{CLOUD_SELF_BOOTSTRAP_MIN_FW} "
+            "öncesi yazılımda Ethernet bağlantısı da yoktur: yalnız Ethernet'le bağlı kart çevrimdışı kalır)."
+        )
+        if update:
+            return head + (
+                f"\n\nKartın ayarları korunurken eski uygulama yazılmaz; hiçbir şey yazılmadı. 'Gözat...' ile "
+                f"v{CLOUD_SELF_BOOTSTRAP_MIN_FW}+ uygulama imajını (ör. v{CLOUD_SELF_BOOTSTRAP_MIN_FW}\\app_0x10000_"
+                f"v{CLOUD_SELF_BOOTSTRAP_MIN_FW}.bin) seçip FLASH'a yeniden basın."
+            )
+        return head + (
+            f"\n\nKartı bilerek eski sürüme döndürmüyorsanız 'Hayır' deyin ve 'Gözat...' ile v{CLOUD_SELF_BOOTSTRAP_MIN_FW}+ imajını "
+            "seçin. Yine de eski imaj yazılsın mı?"
+        )
+
+    def _continue_flash(self, mode: str, cmd: list[str], probe: Any, err: Optional[BaseException],
+                        check: Optional[FirmwareCheck] = None) -> None:
+        """Yoklama sonucuna göre yazıma devam eder (arayüz iş parçacığında).
+
+        Kurulu kart korunur: yoklama hata verdiyse birleşik imaj önce sorar ('Kart Durumu Okunamadı'); 'Güncelle' kipi kartı
+        doğrulayamazsa yazmaz. Kartta v1.3.0+ çalışırken v1.3.0 özelliklerini taşımayan imaj (``check.missing_features``) sürüm
+        düşürmedir: 'Güncelle' kipinde engellenir (ayarlar kalır, özellikler gider), birleşik imajda ayrıca sorulur."""
+        if self._closing:
+            return
+        reason = str(err) if isinstance(err, FactoryError) else ("Kart STATUS'a yanıt vermedi" if err is None else type(err).__name__)
+        if probe is not None:
+            self._last_probe = probe
+            self.log(f"[KART] AHBU firmware'i yanıt verdi (MAC {probe.mac or '?'}; "
+                     f"{'provizyonlu' if probe.provisioned else 'provizyonsuz'}; şablon: {probe.template_id or 'yok'}).")
+        elif err is not None:
+            self.log(f"[KART] Kartın durumu okunamadı: {reason}")
+        lost = downgrade_lost_features(probe, check.missing_features if check is not None else [])
+        if mode == "update":
+            if probe is None:
+                self.ui_error(
+                    "Güncelleme Yapılamadı",
+                    f"'{UPDATE_MODE_LABEL}' kipi yalnız AHBU firmware'i çalışan kartta kullanılır; kart doğrulanamadı, hiçbir şey "
+                    f"yazılmadı.\nNeden: {reason}\n\n{RESET_WITHOUT_BOOT_HINT}",
+                )
+                return
+            if lost:
+                self.log(f"[KART] Sürüm düşürme engellendi: kart v{CLOUD_SELF_BOOTSTRAP_MIN_FW}+, imajda yok: {', '.join(lost)}.")
+                self.ui_error("Sürüm Düşürme Engellendi", self._downgrade_text(lost, update=True))
+                return
+            self.run_command(
+                cmd,
+                timeout=ESPTOOL_TIMEOUT_S["write_flash"],
+                success_text="Uygulama imajı yazıldı (0x10000).",
+                on_success=self._after_update_flash_success,
+            )
+            return
+        if lost and not self.ui_confirm("Sürüm Düşürme", self._downgrade_text(lost, update=False)):
+            self.log("[KART] Yazım yapılmadı (sürüm düşürme onaylanmadı).")
+            return
+        if probe is not None and probe.has_settings:
+            if lost:  # eski sürüm + ayarları koru = 'Güncelle' kipinde sürüm düşürme (engellenir): o kip önerilmez
+                keep = (f"'Hayır' derseniz hiçbir şey yazılmaz: eski sürüm kartın ayarları korunarak yazılamaz (ayarları korumak "
+                        f"için 'Gözat...' ile v{CLOUD_SELF_BOOTSTRAP_MIN_FW}+ imajını seçin).")
+            else:
+                keep = (f"'Hayır' derseniz '{UPDATE_MODE_LABEL}' kipi seçilir (yalnız uygulama imajı yazılır, ayarlar korunur).")
+            if not self.ui_confirm(
+                "Kart Ayarları Silinecek",
+                f"Bu kartta {self._probe_settings_text(probe)} var. Birleşik imaj (0x0) kartın kalıcı belleğini yeniden yazar:\n\n"
+                f"{ERASE_SETTINGS_WARNING}\n\n{keep}",
+            ):
+                if lost:
+                    self.log("[KART] Yazım yapılmadı (kartın ayarları korunacak; eski sürüm ayarlar korunarak yazılamaz).")
+                    return
+                self._switch_to_update_mode(check.path if check is not None else cmd[-1])
+                return
+        elif probe is None and err is not None:
+            # Yoklama hatası (port/bağlantı, yükleme kipindeki kart, pyserial yok): kart kurulu olabilir, sormadan silinmez.
+            if not self.ui_confirm(
+                "Kart Durumu Okunamadı",
+                f"Kartın durumu USB seri ile okunamadı: {reason}\nKart kuruluysa (yerel anahtar / şablon) birleşik imaj "
+                "ayarlarını SİLER. Kurulu kartta 'Hayır' deyin; kartı BOOT'a basmadan RESET'leyip FLASH'a yeniden basın.\n\n"
+                f"{ERASE_SETTINGS_WARNING}",
+            ):
+                return
+        if mode == "factory":  # Waveshare orijinal yazılımı: AHBU kurulum ağı/provizyonu yoktur
             self.run_command(
                 cmd,
                 timeout=ESPTOOL_TIMEOUT_S["write_flash"],
@@ -2558,31 +3186,90 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             on_success=self._after_flash_success,
         )
 
+    def _switch_to_update_mode(self, merged_path: str) -> None:
+        """'Kart Ayarları Silinecek' -> 'Hayır': 'Güncelle (ayarlar korunur)' kipine geçer ve SEÇİLEN birleşik imajla aynı
+        klasördeki uygulama imajını seçer. ``version_info.json``'daki imaja (başka sürüm olabilir) sessizce geçilmez."""
+        app = sibling_app_image(merged_path)
+        self.mode_var.set("update")
+        self.apply_mode_selection()
+        self.file_entry.delete(0, tk.END)
+        if app:
+            path = os.path.normpath(app)
+            self.file_entry.insert(0, path)
+            self.log(f"[BİLGİ] '{UPDATE_MODE_LABEL}' kipi seçildi: {path}")
+            self.ui_info("Güncelle Kipi Seçildi", f"Kartın ayarlarını korumak için '{UPDATE_MODE_LABEL}' kipi seçildi.\n"
+                         f"Dosya (seçtiğiniz birleşik imajla aynı klasörden): {path}\n\nYazmak için FLASH düğmesine yeniden basın.")
+            return
+        folder = os.path.dirname(os.path.abspath(merged_path)) if isinstance(merged_path, str) and merged_path.strip() else "?"
+        self.log(f"[UYARI] '{UPDATE_MODE_LABEL}' kipi seçildi ama birleşik imajın klasöründe uygulama imajı bulunamadı: {folder}")
+        self.ui_warn("Güncelle Kipi Seçildi",
+                     f"Kartın ayarlarını korumak için '{UPDATE_MODE_LABEL}' kipi seçildi ama seçtiğiniz birleşik imajın klasöründe "
+                     f"({folder}) aynı sürümün uygulama imajı (app_0x10000_v<sürüm>.bin) yok ya da birden çok aday var.\n"
+                     "'Gözat...' ile birleşik imajla AYNI sürümün uygulama imajını seçip FLASH düğmesine yeniden basın.")
+
+    def _after_update_flash_success(self, flashed_mac: Optional[str]) -> str:
+        """'Güncelle (ayarlar korunur)': yalnız uygulama değişti; NVS (anahtar, AP parolası, Wi-Fi, şablon, güvenlik) yerinde."""
+        return (
+            "Kartın ayarları (yerel anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon, güvenlik) korundu; provizyon GEREKMEZ ve "
+            "etiket geçerlidir. Kart yeni yazılımla yeniden başlıyor."
+        )
+
+    @staticmethod
+    def _template_lost_note(probe: Any) -> str:
+        if probe is None or not probe.template_id:
+            return ""
+        return (f"\nKartta şablon vardı ({probe.template_id} v{probe.template_version}); birleşik imaj sildi: 4. Siteler / "
+                "5. Şablonlar sekmesinden '💾 Karta Yaz' ile yeniden yazın.")
+
     def _after_flash_success(self, flashed_mac: Optional[str]) -> str:
         """Flash sonrası: açık kurulum ağı riski nedeniyle provizyon HEMEN başlatılır (CONTRACTS §3b/§3c). Tercih edilen yol
         USB (seri) FACTORYINIT'tir: aynı port, kablosuz ağ gerekmez. Yüklenen kartın MAC'i bekleyen kayıtla eşleşiyorsa (veya
-        MAC görülemediyse) provizyon otomatik başlar; kart/MAC uyuşmazlığı seri STATUS ile ayrıca denetlenir."""
+        MAC görülemediyse) provizyon otomatik başlar; kart/MAC uyuşmazlığı seri STATUS ile ayrıca denetlenir.
+
+        atolye-1: birleşik imaj kalıcı belleği (NVS) siler. Bellekteki kayıt bu kartınsa (MAC eşleşir) ve kart önceden
+        provizyonlandıysa kayıt yeniden 'registered' yapılıp AYNI anahtar + AP parolasıyla yeniden provizyonlanır (etiket geçerli
+        kalır). Bellekte kaydı olmayan provizyonlu kart için sunucudaki anahtarla yeniden provizyon önerilir."""
         rec = self._alive_record()
-        ssid = rec.ap_ssid if rec else (ap_ssid_from_mac(flashed_mac) if flashed_mac else None)
+        probe = self._last_probe
+        mac = normalize_mac(flashed_mac) or (probe.mac if probe is not None else None)
+        ssid = rec.ap_ssid if rec else (ap_ssid_from_mac(mac) if mac else None)
         urgency = provision_urgency_notice(ssid)
-        if rec is None or rec.state != "registered":
+        template_note = self._template_lost_note(probe)
+        if rec is not None and mac == rec.mac and rec.state in ("verified", "init_sent"):
+            rec.state, rec.path = "registered", ""  # kartta artık anahtar yok: aynı kayıtla (anahtar + AP parolası) yeniden yazılır
+            self._refresh_provision_tab()
+            self.notebook.select(self.tab_provision)
+            self.start_serial_provision(port=self._flash_port, wait_for_port=True, auto=True)
             return (
-                urgency
-                + "\n\nCihaz henüz sunucu envanterine kaydedilmediyse önce 2. sekmede kaydedin, sonra 3. sekmede "
-                "'Seri (USB) ile Provizyonla'ya basın."
+                "Birleşik imaj kartın kalıcı belleğini sildi; bellekteki kayıt bu kartın: aynı yerel anahtar ve AP parolasıyla "
+                "USB (seri) üzerinden OTOMATİK yeniden provizyon başlatıldı (etiket geçerli kalır). Kartı ve USB kablosunu "
+                "ÇIKARMAYIN." + template_note
             )
-        if flashed_mac and flashed_mac != rec.mac:
+        if rec is not None and rec.state == "registered":
+            if flashed_mac and normalize_mac(flashed_mac) != rec.mac:
+                return (
+                    f"⚠ Yüklenen kartın MAC adresi ({flashed_mac}) bekleyen kayıtla ({rec.mac}) eşleşmiyor; provizyon "
+                    "otomatik başlatılmadı. Doğru kartı/kaydı kullandığınızdan emin olun.\n\n" + urgency
+                )
+            self.notebook.select(self.tab_provision)
+            self.start_serial_provision(port=self._flash_port, wait_for_port=True, auto=True)
             return (
-                f"⚠ Yüklenen kartın MAC adresi ({flashed_mac}) bekleyen kayıtla ({rec.mac}) eşleşmiyor; provizyon "
-                "otomatik başlatılmadı. Doğru kartı/kaydı kullandığınızdan emin olun.\n\n" + urgency
+                "Provizyon USB (seri) üzerinden OTOMATİK başlatıldı: kartı ve USB kablosunu ÇIKARMAYIN. Yerel anahtar kablosuz "
+                "ağdan geçmez; bilgisayarı Wi-Fi'ye bağlamanız GEREKMEZ.\n"
+                f"Kart yeniden başlarken kısa süre PAROLASIZ kurulum ağı ('{ssid}') yayınlar; USB provizyon bitince ağ parolalı olur. "
+                "Sonucu 3. sekmeden izleyebilir veya iptal edebilirsiniz." + template_note
             )
-        self.notebook.select(self.tab_provision)
-        self.start_serial_provision(port=self._flash_port, wait_for_port=True, auto=True)
+        if probe is not None and probe.provisioned and mac:
+            self.notebook.select(self.tab_provision)
+            self.reprovision_with_server_key(port=self._flash_port, mac=mac, probe=probe, wait_for_port=True, after_flash=True)
+            return (
+                f"Bu kart ({uid_from_mac(mac)}) için bellekte kayıt yok; kart önceden provizyonluydu ve birleşik imaj yerel anahtarını "
+                "sildi. 'Sunucudaki anahtarla yeniden provizyon' önerildi (sonuç 3. sekmede)." + template_note + "\n\n" + urgency
+            )
         return (
-            "Provizyon USB (seri) üzerinden OTOMATİK başlatıldı: kartı ve USB kablosunu ÇIKARMAYIN. Yerel anahtar kablosuz "
-            "ağdan geçmez; bilgisayarı Wi-Fi'ye bağlamanız GEREKMEZ.\n"
-            f"Kart yeniden başlarken kısa süre PAROLASIZ kurulum ağı ('{ssid}') yayınlar; USB provizyon bitince ağ parolalı olur. "
-            "Sonucu 3. sekmeden izleyebilir veya iptal edebilirsiniz."
+            urgency + "\n\nBu kart için bellekte kayıt yok. Yeni bir kartsa 2. sekmede sunucu envanterine kaydedin: kayıt bitince "
+            "provizyon 3. sekmede USB (seri) ile yapılır (firmware'i yeniden yüklemeniz gerekmez). Kart önceden kayıtlıysa 3. sekmedeki "
+            "'Sunucudaki Anahtarla Yeniden Provizyon' düğmesini kullanın (etiketteki AP parolası sorulur)." + template_note
         )
 
     def start_read_info(self) -> None:
@@ -2615,6 +3302,13 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
     def on_close(self) -> None:
         """Pencere kapanırken: süren işlem ve provizyonu tamamlanmamış kayıt için uyarır; sırları siler."""
         if self._esptool_busy and not self.ui_confirm("İşlem Sürüyor", "Kartla bir işlem sürüyor. Şimdi kapatmak kartı yarım bırakabilir.\n\nYine de kapatılsın mı?"):
+            return
+        unsent = len(self._pending_writes)  # atolye-11: bellekteki bekleyen yazım kayıtları kapanışta kaybolur
+        if unsent and not self.ui_confirm(
+            "Bekleyen Yazım Kaydı",
+            f"Sunucuya işlenmemiş {unsent} yazım kaydı var; kapatırsanız kaybolur. '📤 Bekleyen Kayıtları Gönder' ile "
+            "gönderebilirsiniz.\n\nYine de kapatılsın mı?",
+        ):
             return
         rec = self._alive_record()
         if rec is not None and not rec.provisioned and not self.ui_confirm(

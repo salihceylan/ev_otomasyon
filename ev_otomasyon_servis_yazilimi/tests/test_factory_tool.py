@@ -19,6 +19,8 @@ esptool çalıştırılmaz. Test çıktısı cp1254 konsollarda bozulmasın diye
 
 import ast
 import gc
+import hashlib
+import hmac
 import http.server
 import io
 import ipaddress
@@ -241,16 +243,31 @@ class FakeApi:
         return ["%s %s" % (c.method, c.path) for c in self.calls]
 
 
-class FakeDevice:
-    """Sahte cihaz (firmware yerel API'si, CONTRACTS §3). Ağ kesintisi `fail_network` ile simüle edilir."""
+def reference_key_fp(local_key, uid):
+    """Sözleşme 1 ``lk_fp`` formülünün testteki BAĞIMSIZ eşi (sahte kart/firmware bunu kullanır)."""
+    message = ("ahbu-lk-fp/1|" + uid.strip().upper()).encode("ascii")
+    return hmac.new(local_key.encode("ascii"), message, hashlib.sha256).hexdigest()[:8]
 
-    def __init__(self, uid=UID, provisioned=False, accept_key=None):
+
+class FakeDevice:
+    """Sahte cihaz (firmware yerel API'si, CONTRACTS §3). Ağ kesintisi `fail_network` ile simüle edilir.
+
+    ``eth=True``: kablolu Ethernet'ten gelen istek (kullanıcı kararı 2026-10-08): kart anahtar doğrulamaz, ``auth/check`` HER
+    ZAMAN 200 döner (kanıt değildir). ``report_fp=True``: firmware 1.3.1 (tam durumda gerçek ``provisioned`` + ``lk_fp``).
+    ``ignore_init``: factory/init 200 der ama anahtarı yazmaz (bozuk kart benzetimi)."""
+
+    def __init__(self, uid=UID, provisioned=False, accept_key=None, *, fw="1.1.0", eth=False, report_fp=False, ignore_init=False):
         self.calls = []
         self.uid = uid
         self.provisioned = provisioned
         self.key = accept_key
+        self.fw = fw
+        self.eth = eth
+        self.report_fp = report_fp
+        self.ignore_init = ignore_init
         self.fail_network = set()  # örn. {"/api/auth/check"}
         self.fail_all = False
+        self.fail_after_init = False  # factory/init'ten sonraki her istek ağ hatası (bağlantı koptu)
         self.init_error = None
 
     def __call__(self, method, url, headers, body, timeout):
@@ -263,23 +280,38 @@ class FakeDevice:
         self.calls.append(call)
         if self.fail_all or parts.path in self.fail_network:
             raise fc.NetworkError("ag yok")
+        if self.fail_after_init and any(c.path == "/api/factory/init" for c in self.calls[:-1]):
+            raise fc.NetworkError("ag yok")
 
         def reply(status, payload):
             return fc.TransportResponse(status, {}, json.dumps(payload).encode("utf-8"))
 
+        key_header = call.headers.get("x-device-key")
         if parts.path == "/api/status":
-            return reply(200, {"device": self.uid, "name": "AHBU", "fw": "1.1.0", "provisioned": self.provisioned, "wifi_connected": False})
+            if key_header is None:  # anahtarsız: KISITLI özet (provisioned her sürümde gerçek değer)
+                return reply(200, {"device": self.uid, "name": "AHBU", "fw": self.fw, "provisioned": self.provisioned,
+                                   "wifi_connected": False})
+            if not self.eth and (not self.provisioned or key_header != self.key):
+                return reply(401, {"error": "unauthorized"})
+            full = {"device": self.uid, "name": "AHBU", "fw": self.fw, "provisioned": self.provisioned if self.report_fp else True,
+                    "wifi_connected": False, "net_if": "eth" if self.eth else "wifi"}
+            if self.report_fp and self.provisioned and self.key:
+                full["lk_fp"] = reference_key_fp(self.key, self.uid)
+            return reply(200, full)
         if parts.path == "/api/factory/init" and method == "POST":
             if self.init_error:
                 return reply(*self.init_error)
             if self.provisioned:
                 return reply(403, {"error": "already_provisioned"})
-            self.provisioned, self.key = True, call.body["local_key"]
+            if not self.ignore_init:
+                self.provisioned, self.key = True, call.body["local_key"]
             return reply(200, {"status": "ok"})
         if parts.path == "/api/auth/check":
+            if self.eth:
+                return reply(200, {"status": "ok"})  # Ethernet: anahtarsız yetkili -> 200 HİÇBİR ŞEYİ kanıtlamaz
             if not self.provisioned:
                 return reply(403, {"error": "unprovisioned"})
-            if call.headers.get("x-device-key") != self.key:
+            if key_header != self.key:
                 return reply(401, {"error": "unauthorized"})
             return reply(200, {"status": "ok"})
         return reply(404, {"error": "not_found"})
@@ -1009,6 +1041,10 @@ class DeviceProvisionTests(unittest.TestCase):
         with self.assertRaises(fc.ProvisionError) as ctx:
             client.verify(FAKE_LOCAL_KEY)
         self.assertEqual(ctx.exception.code, "not_provisioned")
+        # atolye-16: var olmayan 'Provizyonu Başlat' düğmesi değil, gerçek düğmeler önerilir
+        self.assertNotIn("Provizyonu Başlat", ctx.exception.hint)
+        self.assertIn("'Seri (USB) ile Provizyonla'", ctx.exception.hint)
+        self.assertIn("'Wi-Fi ile Provizyonla'", ctx.exception.hint)
 
     def test_verify_locked_reports_wait(self):
         device = FakeDevice(provisioned=True, accept_key=FAKE_LOCAL_KEY)
@@ -1173,6 +1209,180 @@ class DeviceProvisionTests(unittest.TestCase):
         self.assertIn("75 saniye", ctx.exception.hint)
 
 
+NEW_PIN = "654321"
+
+
+def reissue_route(status=200, payload=None):
+    """``POST /admin/inventory/:uuid/reissue-label`` (sözleşme 13): yeni PIN + karekod; ``local_key`` YOK."""
+    def handler(call):
+        if payload is not None:
+            return status, payload, {}
+        uid = call.path.split("/")[-2]
+        return 200, {"success": True, "message": "Etiket yeniden üretildi.", "data": {
+            "device": {"device_uuid": uid, "mac_address": MAC, "serial_no": 7, "model": "M", "batch_no": "B",
+                       "status": "IN_STOCK", "label_reissued_at": "2026-10-08T12:00:00Z"},
+            "setup_pin": NEW_PIN,
+            "qr_claim_url": "https://evotomasyon.gudeteknoloji.com.tr/claim?uid=%s&pin=%s" % (uid, NEW_PIN),
+            "message": "Yeni etiket hazır."}}, {}
+    return handler
+
+
+class LabelReissueClientTests(unittest.TestCase):
+    def test_reissue_returns_the_new_pin_and_no_local_key(self):
+        scrubber = fc.SecretScrubber()
+        client, api = make_client(scrubber=scrubber)
+        api.routes["POST /api/v1/admin/inventory/%s/reissue-label" % UID] = reissue_route()
+        client.login("a@example.com", FAKE_PASSWORD)
+        result = client.reissue_label(UID.lower())
+        self.assertEqual(result.setup_pin, NEW_PIN)
+        self.assertTrue(fc.claim_url_matches(result.qr_claim_url, UID, NEW_PIN))
+        self.assertFalse(hasattr(result, "local_key"))
+        self.assertNotIn(NEW_PIN, repr(result))
+        self.assertEqual(scrubber.scrub("pin " + NEW_PIN), "pin ***")
+        self.assertEqual(api.calls[-1].path, "/api/v1/admin/inventory/%s/reissue-label" % UID)
+
+    def test_reissue_needs_a_super_user_session_and_a_valid_reply(self):
+        client, api = make_client(env={fc.ENV_API_KEY: "k" * 40})
+        client.use_api_key()
+        with self.assertRaises(fc.ApiError) as ctx:
+            client.reissue_label(UID)
+        self.assertEqual(ctx.exception.status, 403)
+        client, api = make_client()
+        api.routes["POST /api/v1/admin/inventory/%s/reissue-label" % UID] = reissue_route(
+            200, {"success": True, "data": {"device": {}, "setup_pin": "12"}})
+        client.login("a@example.com", FAKE_PASSWORD)
+        with self.assertRaises(fc.ApiError):
+            client.reissue_label(UID)
+
+    def test_linked_card_conflict_has_a_clear_turkish_message(self):
+        client, api = make_client()
+        api.routes["POST /api/v1/admin/inventory/%s/reissue-label" % UID] = reissue_route(
+            409, {"success": False, "code": "DEVICE_LINKED_TO_FLAT", "message": "x"})
+        client.login("a@example.com", FAKE_PASSWORD)
+        with self.assertRaises(fc.ApiError) as ctx:
+            client.reissue_label(UID)
+        self.assertEqual(str(ctx.exception), "Kart bir daireye bağlı; önce daireden ayırın.")
+
+
+class KeyFingerprintTests(unittest.TestCase):
+    """Sözleşme 1: lk_fp = HMAC-SHA256(local_key, 'ahbu-lk-fp/1|' + büyük harfli UID) hex'inin ilk 8 karakteri."""
+
+    def test_contract_vectors(self):
+        self.assertEqual(fc.local_key_fingerprint("ABCDEFGH23456789", "AHBU-S3-DD8754"), "c7076562")
+        self.assertEqual(fc.local_key_fingerprint("k3yTEST-9999", "AHBU-S3-0A1B2C"), "9814f286")
+        self.assertEqual(fc.local_key_fingerprint("k3yTEST-9999", "ahbu-s3-0a1b2c"), "9814f286")  # UID büyük harfe çevrilir
+        self.assertEqual(reference_key_fp("k3yTEST-9999", "AHBU-S3-0A1B2C"), "9814f286")  # testin bağımsız eşi de aynı
+
+    def test_reported_fingerprint_must_be_exactly_eight_lowercase_hex(self):
+        self.assertEqual(fc.normalize_key_fp("c7076562"), "c7076562")
+        for bad in ("C7076562", "c707656", "c70765622", "yok", "", None, 7, "c707656g"):
+            with self.subTest(deger=bad):
+                self.assertIsNone(fc.normalize_key_fp(bad))
+
+
+class EthernetProvisionTests(unittest.TestCase):
+    """servis_kurulum-1: Ethernet'te auth/check 200 KANIT DEĞİLDİR (kart anahtarsız yetkili). Kanıt: kısıtlı durumda
+    provisioned + (varsa) lk_fp eşleşmesi."""
+
+    AP_PASS = "AP-TEST-12"
+    HOST = "192.168.10.57"
+
+    def make(self, **kwargs):
+        kwargs.setdefault("eth", True)
+        device = FakeDevice(**kwargs)
+        sleeps = []
+        client = fc.DeviceClient(self.HOST, transport=device, env={}, sleep=sleeps.append)
+        return client, device, sleeps
+
+    def paths(self, device):
+        return [(c.method, c.path, "x-device-key" in c.headers) for c in device.calls]
+
+    def test_provisioned_board_with_matching_fingerprint_is_verified_without_writing(self):
+        client, device, _ = self.make(provisioned=True, accept_key=FAKE_LOCAL_KEY, fw="1.3.1", report_fp=True)
+        outcome = client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID, trust_key_check=False)
+        self.assertTrue(outcome.verified)
+        self.assertTrue(outcome.key_fp_matched)
+        self.assertIn("anahtar izi eşleşti", outcome.note)
+        self.assertNotIn("/api/factory/init", [c.path for c in device.calls])
+        self.assertNotIn("/api/auth/check", [c.path for c in device.calls])
+        full = [c for c in device.calls if "x-device-key" in c.headers]
+        self.assertEqual([c.headers["x-device-key"] for c in full], [fc.ETH_NO_KEY])  # gerçek anahtar gönderilmez
+
+    def test_provisioned_board_with_other_key_is_key_mismatch_even_though_auth_check_says_200(self):
+        client, device, _ = self.make(provisioned=True, accept_key="BASKA-ANAHTAR-99", fw="1.3.1", report_fp=True)
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID, trust_key_check=False)
+        self.assertEqual(ctx.exception.code, "key_mismatch")
+        self.assertEqual(ctx.exception.message,
+                         "Kartta farklı bir yerel anahtar var; USB ile bağlayıp RESETKEY + yeniden provizyon yapın.")
+        self.assertNotIn("/api/factory/init", [c.path for c in device.calls])
+
+    def test_old_firmware_without_fingerprint_cannot_be_verified_over_ethernet(self):
+        client, device, _ = self.make(provisioned=True, accept_key=FAKE_LOCAL_KEY, fw="1.3.0")
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID, trust_key_check=False)
+        self.assertEqual(ctx.exception.code, "already_provisioned")
+        self.assertEqual(ctx.exception.message, "Kart zaten provizyonlu; Ethernet yolu anahtarı doğrulayamaz. "
+                                                "USB ile bağlayıp RESETKEY + yeniden provizyon yapın.")
+        self.assertIn("RESETKEY", ctx.exception.hint)
+
+    def test_unprovisioned_board_is_proven_by_status_and_fingerprint_after_init(self):
+        for fw, report_fp in (("1.3.1", True), ("1.3.0", False)):
+            with self.subTest(fw=fw):
+                client, device, _ = self.make(fw=fw, report_fp=report_fp)
+                outcome = client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID, trust_key_check=False)
+                self.assertTrue(outcome.initialized and outcome.verified)
+                self.assertIs(outcome.key_fp_matched, True if report_fp else None)
+                self.assertEqual(self.paths(device), [("GET", "/api/status", False), ("POST", "/api/factory/init", False),
+                                                      ("GET", "/api/status", False), ("GET", "/api/status", True)])
+                self.assertEqual(outcome.firmware, fw)
+
+    def test_init_reply_without_a_stored_key_is_not_verified(self):
+        client, device, _ = self.make(ignore_init=True, fw="1.3.1", report_fp=True)
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID, trust_key_check=False)
+        self.assertEqual(ctx.exception.code, "not_provisioned")
+
+    def test_lost_connection_after_init_asks_for_a_later_ethernet_check(self):
+        client, device, _ = self.make(fw="1.3.1", report_fp=True)
+        device.fail_after_init = True
+        outcome = client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID, trust_key_check=False)
+        self.assertTrue(outcome.initialized)
+        self.assertFalse(outcome.verified)
+        self.assertTrue(outcome.needs_reconnect)
+        device.fail_after_init = False
+        self.assertTrue(client.verify(FAKE_LOCAL_KEY, trust_key_check=False))
+
+    def test_verify_over_ethernet_never_counts_auth_check(self):
+        client, device, _ = self.make(provisioned=True, accept_key="BASKA-ANAHTAR-99", fw="1.3.1", report_fp=True)
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.verify(FAKE_LOCAL_KEY, trust_key_check=False)
+        self.assertEqual(ctx.exception.code, "key_mismatch")
+        self.assertNotIn("/api/auth/check", [c.path for c in device.calls])
+        client, device, _ = self.make(provisioned=False)
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.verify(FAKE_LOCAL_KEY, trust_key_check=False)
+        self.assertEqual(ctx.exception.code, "not_provisioned")
+
+    def test_full_status_saying_unprovisioned_is_not_verified(self):
+        # Sözleşme 2: tam durumda provisioned:false da provizyonsuz demektir (1.3.1 gerçek değer yazar).
+        def device(method, url, headers, body, timeout):
+            keyed = any(k.lower() == "x-device-key" for k in headers)
+            payload = {"device": UID, "fw": "1.3.1", "provisioned": not keyed}
+            return fc.TransportResponse(200, {}, json.dumps(payload).encode("utf-8"))
+
+        client = fc.DeviceClient(self.HOST, transport=device, env={}, sleep=lambda s: None)
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.verify(FAKE_LOCAL_KEY, trust_key_check=False)
+        self.assertEqual(ctx.exception.code, "not_provisioned")
+
+    def test_wifi_path_still_uses_auth_check(self):
+        client, device, _ = self.make(eth=False, provisioned=True, accept_key=FAKE_LOCAL_KEY)
+        outcome = client.provision(FAKE_LOCAL_KEY, self.AP_PASS, expected_uid=UID)
+        self.assertTrue(outcome.verified)
+        self.assertIn("/api/auth/check", [c.path for c in device.calls])
+
+
 class LoopbackTransportTests(unittest.TestCase):
     """Varsayılan (urllib) taşıma katmanı gerçek HTTP ile: başlıklar/gövde/yönlendirme/zaman aşımı."""
 
@@ -1301,9 +1511,11 @@ class FlashHelperTests(unittest.TestCase):
             good = tool.inspect_firmware_file(self._image(tmp))
             self.assertEqual(good.warnings, [])
             self.assertTrue(os.path.isabs(good.path))
-            app_only = tool.inspect_firmware_file(self._image(tmp, "app.bin", merged=False))
-            self.assertEqual(len(app_only.warnings), 1)
-            self.assertIn("BİRLEŞİK", app_only.warnings[0])
+            # atolye-1: yalnız uygulama imajı 0x0'a YAZILAMAZ (kart açılmaz); 'Güncelle (ayarlar korunur)' kipi önerilir
+            with self.assertRaises(tool.ToolError) as ctx:
+                tool.inspect_firmware_file(self._image(tmp, "app.bin", merged=False))
+            self.assertIn("BİRLEŞİK", str(ctx.exception))
+            self.assertIn("Güncelle (ayarlar korunur)", str(ctx.exception))
             for bad in (
                 os.path.join(tmp, "yok.bin"),
                 self._image(tmp, "kucuk.bin", size=1000),
@@ -1316,28 +1528,123 @@ class FlashHelperTests(unittest.TestCase):
                     tool.inspect_firmware_file(bad)
 
     def test_firmware_inspection_detects_images_without_the_serial_provisioning_command(self):
-        marker = tool.SERIAL_PROVISION_MARKER
         with tempfile.TemporaryDirectory() as tmp:
             stale = self._image(tmp, "eski.bin")  # birleşik ama FACTORYINIT yok: eski firmware
-            fresh = self._image(tmp, "yeni.bin")
-            with open(fresh, "r+b") as handle:
-                handle.seek(0x9000)
-                handle.write(marker)
+            fresh = self._ahbu_image(tmp, "yeni.bin", self.FEATURE_MARKERS)  # güncel: FACTORYINIT + v1.3.0 özellikleri
             # varsayılan çağrı (Waveshare fabrika yazılımı gibi): komut aranmaz
             self.assertIsNone(tool.inspect_firmware_file(stale).supports_serial_provisioning)
             self.assertEqual(tool.inspect_firmware_file(stale).warnings, [])
-            # AHBU firmware'i bekleniyorsa
+            # AHBU firmware'i bekleniyorsa: eski imaj uyarısı (+ eksik v1.3.0 özellikleri, bireysel-1)
             old = tool.inspect_firmware_file(stale, expect_serial_provisioning=True)
             self.assertIs(old.supports_serial_provisioning, False)
-            self.assertEqual(len(old.warnings), 1)
+            self.assertEqual(old.warnings[0], tool.STALE_FIRMWARE_WARNING)
             self.assertIn("FACTORYINIT", old.warnings[0])
             self.assertIn("ESKİ", old.warnings[0])
+            self.assertEqual(len(old.missing_features), 3)
             new = tool.inspect_firmware_file(fresh, expect_serial_provisioning=True)
             self.assertIs(new.supports_serial_provisioning, True)
             self.assertEqual(new.warnings, [])
-            # uygulama-only + eski imaj: iki ayrı uyarı
-            both = tool.inspect_firmware_file(self._image(tmp, "ikisi.bin", merged=False), expect_serial_provisioning=True)
-            self.assertEqual(len(both.warnings), 2)
+
+    FEATURE_MARKERS = (b"TPL BEGIN", b"/api/template/apply", b"devices/bootstrap")
+
+    def _ahbu_image(self, directory, name, markers, merged=True):
+        path = self._image(directory, name, merged=merged)
+        with open(path, "r+b") as handle:
+            handle.seek(0x9000)
+            for marker in (tool.SERIAL_PROVISION_MARKER,) + tuple(markers):
+                handle.write(marker + b"\x00")
+        return path
+
+    def test_missing_v13_features_give_non_blocking_warnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = tool.inspect_firmware_file(self._ahbu_image(tmp, "eski.bin", ()), expect_serial_provisioning=True)
+            self.assertEqual(len(old.warnings), 3)
+            for feature, warning in zip(("USB şablon", "Ethernet/LAN şablon", "panonun kendi bulut kimliği"), old.warnings):
+                self.assertEqual(warning, f"Bu imajla {feature} çalışmaz (v1.3.0+ gerekli).")
+            new = tool.inspect_firmware_file(self._ahbu_image(tmp, "yeni.bin", self.FEATURE_MARKERS), expect_serial_provisioning=True)
+            self.assertEqual(new.warnings, [])
+            # Waveshare fabrika yazılımı (AHBU değil): özellik aranmaz
+            self.assertEqual(tool.inspect_firmware_file(self._ahbu_image(tmp, "ws.bin", ())).warnings, [])
+
+    def test_real_release_images_v121_warns_and_v130_does_not(self):
+        releases = os.path.join(TOOL_DIR, "waveshare_s3_demo", "firmware_releases")
+        old = os.path.join(releases, "v1.2.1", "firmware_combined_0x0.bin")
+        new = os.path.join(releases, "v1.3.0", "firmware_combined_0x0.bin")
+        if not (os.path.isfile(old) and os.path.isfile(new)):
+            self.skipTest("sürüm paketleri yok")
+        self.assertEqual(len(tool.inspect_firmware_file(old, expect_serial_provisioning=True).warnings), 3)
+        self.assertEqual(tool.inspect_firmware_file(new, expect_serial_provisioning=True).warnings, [])
+
+    def test_update_mode_accepts_only_application_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = self._ahbu_image(tmp, "app_0x10000_v1.3.1.bin", self.FEATURE_MARKERS, merged=False)
+            merged = self._ahbu_image(tmp, "firmware_combined_0x0.bin", self.FEATURE_MARKERS)
+            check = tool.inspect_firmware_file(app, expect_serial_provisioning=True, offset=tool.APP_FLASH_OFFSET)
+            self.assertEqual(check.warnings, [])
+            with self.assertRaises(tool.ToolError) as ctx:
+                tool.inspect_firmware_file(merged, expect_serial_provisioning=True, offset=tool.APP_FLASH_OFFSET)
+            self.assertIn("0x10000", str(ctx.exception))
+            self.assertIn("app_0x10000", str(ctx.exception))
+            with self.assertRaises(tool.ToolError):
+                tool.inspect_firmware_file(app, expect_serial_provisioning=True)  # 0x0 kipinde uygulama imajı reddedilir
+        self.assertEqual(tool.APP_FLASH_OFFSET, "0x10000")
+
+    def test_application_image_path_comes_from_version_info(self):
+        self.assertEqual(tool.app_image_relpath({"current_version": "1.3.1"}), "v1.3.1/app_0x10000_v1.3.1.bin")
+        self.assertEqual(tool.app_image_relpath({"current_version": "1.2.1", "firmware_file": "v1.2.1/firmware_combined_0x0.bin"}),
+                         "v1.2.1/app_0x10000_v1.2.1.bin")
+        self.assertEqual(tool.app_image_relpath({"current_version": "1.3.1", "app_file": "v1.3.1/ozel_app.bin"}), "v1.3.1/ozel_app.bin")
+        releases = os.path.join(TOOL_DIR, "waveshare_s3_demo", "firmware_releases")
+        for version in ("1.2.1", "1.3.0"):  # gerçek paketlerde dosya kuralla aynı adı taşır
+            path = os.path.join(releases, tool.app_image_relpath({"current_version": version}))
+            if os.path.isdir(os.path.join(releases, "v" + version)):
+                self.assertTrue(os.path.isfile(path), path)
+
+    def test_application_image_beside_a_merged_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "v1.3.0")
+            os.makedirs(folder)
+            merged = self._image(folder, "firmware_combined_0x0.bin")
+            self.assertIsNone(tool.sibling_app_image(merged))  # klasörde uygulama imajı yok
+            single = self._image(folder, "app_0x10000_ozel.bin", merged=False)
+            self.assertEqual(tool.sibling_app_image(merged), single)  # tek aday
+            named = self._image(folder, "app_0x10000_v1.3.0.bin", merged=False)
+            self.assertEqual(tool.sibling_app_image(merged), named)  # klasör adıyla eşleşen önce gelir
+            other = os.path.join(tmp, "indirilen")
+            os.makedirs(other)
+            self._image(other, "app_0x10000_a.bin", merged=False)
+            self._image(other, "app_0x10000_b.bin", merged=False)
+            self.assertIsNone(tool.sibling_app_image(os.path.join(other, "fw.bin")))  # belirsiz: tahmin edilmez
+            for bad in ("", None, os.path.join(tmp, "yok", "fw.bin")):
+                self.assertIsNone(tool.sibling_app_image(bad))
+        releases = os.path.join(TOOL_DIR, "waveshare_s3_demo", "firmware_releases")
+        real = os.path.join(releases, "v1.3.0", "firmware_combined_0x0.bin")
+        if os.path.isfile(real):
+            self.assertEqual(tool.sibling_app_image(real), os.path.join(releases, "v1.3.0", "app_0x10000_v1.3.0.bin"))
+
+    def test_downgrade_is_only_reported_for_a_board_known_to_run_v130(self):
+        lost = ["USB şablon", "Ethernet/LAN şablon"]
+        self.assertEqual(tool.downgrade_lost_features(fc.BoardProbe(supports_bootstrap=True), lost), lost)
+        self.assertEqual(tool.downgrade_lost_features(fc.BoardProbe(supports_bootstrap=True), []), [])
+        for probe in (fc.BoardProbe(supports_bootstrap=False), fc.BoardProbe(supports_bootstrap=None), None):
+            self.assertEqual(tool.downgrade_lost_features(probe, lost), [], probe)
+
+    def test_real_v121_application_image_would_downgrade_a_v130_board(self):
+        # 'Güncelle (ayarlar korunur)' bugün version_info.json'dan v1.2.1 uygulamasını seçer: v1.3.0 kartta sürüm düşürmedir.
+        app = os.path.join(TOOL_DIR, "waveshare_s3_demo", "firmware_releases", "v1.2.1", "app_0x10000_v1.2.1.bin")
+        if not os.path.isfile(app):
+            self.skipTest("v1.2.1 paketi yok")
+        check = tool.inspect_firmware_file(app, expect_serial_provisioning=True, offset=tool.APP_FLASH_OFFSET)
+        self.assertEqual(len(tool.downgrade_lost_features(fc.BoardProbe(supports_bootstrap=True), check.missing_features)), 3)
+
+    def test_firmware_version_comparison(self):
+        self.assertIs(tool.firmware_older_than("1.2.1", "1.3.0"), True)
+        self.assertIs(tool.firmware_older_than("1.3.0", "1.3.0"), False)
+        self.assertIs(tool.firmware_older_than("1.3.1", "1.3.0"), False)
+        self.assertIs(tool.firmware_older_than("1.10.0", "1.3.0"), False)
+        self.assertIs(tool.firmware_older_than("v1.1.0", "1.3.0"), True)
+        for bad in (None, "", "bilinmiyor", "1.x"):
+            self.assertIsNone(tool.firmware_older_than(bad, "1.3.0"), bad)
 
     def test_esptool_discovery_validates_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1640,6 +1947,7 @@ class DialogRecorder:
     def __init__(self):
         self.calls = []
         self.confirm = True
+        self.answers = []  # sıradaki onay kutularına sırayla verilecek yanıtlar; boşsa ``confirm``
 
     def _record(self, kind, title, text):
         self.calls.append((kind, str(title), str(text)))
@@ -1656,7 +1964,7 @@ class DialogRecorder:
 
     def askyesno(self, title=None, message=None, **kw):
         self._record("confirm", title, message)
-        return self.confirm
+        return self.answers.pop(0) if self.answers else self.confirm
 
     def of(self, kind):
         return [c for c in self.calls if c[0] == kind]
@@ -1671,6 +1979,7 @@ class FakePopen:
     instances = []
     lines = ["esptool v4.5.1", "Chip is ESP32-S3", "MAC: e8:f6:0a:dd:87:54", "Hard resetting via RTS pin..."]
     returncode_value = 0
+    on_start = None  # test kancası: esptool "çalışınca" (ör. birleşik imaj kartın kalıcı belleğini siler)
 
     def __init__(self, args, **kwargs):
         self.args = list(args)
@@ -1679,6 +1988,8 @@ class FakePopen:
         self.returncode = type(self).returncode_value
         self.killed = False
         type(self).instances.append(self)
+        if type(self).on_start is not None:
+            type(self).on_start(self.args)
 
     def wait(self, timeout=None):
         return self.returncode
@@ -1708,6 +2019,7 @@ class AppSmokeTests(unittest.TestCase):
         FakePopen.instances = []
         FakePopen.lines = ["esptool v4.5.1", "Chip is ESP32-S3", "MAC: e8:f6:0a:dd:87:54", "Hard resetting via RTS pin..."]
         FakePopen.returncode_value = 0
+        FakePopen.on_start = None
 
         # Gerçek sürüm dosyaları/dizinleri bozulmasın: geçici dizine yönlendirilir
         releases = os.path.join(self.tmp.name, "firmware_releases")
@@ -1775,14 +2087,16 @@ class AppSmokeTests(unittest.TestCase):
         gc.collect()
 
     @staticmethod
-    def _merged_image(path, serial_cmd=True):
-        """Birleşik (0x0) sahte imaj. ``serial_cmd``: güncel firmware gibi FACTORYINIT komut adını içerir."""
+    def _merged_image(path, serial_cmd=True, features=True):
+        """Birleşik (0x0) sahte imaj. ``serial_cmd``: güncel firmware gibi FACTORYINIT komut adını, ``features`` ise ayrıca v1.3.0
+        özellik izlerini (bireysel-1: TPL BEGIN, /api/template/apply, devices/bootstrap) içerir (``features=False``: v1.2.1 gibi)."""
         data = bytearray(90_000)
         data[0] = 0xE9
         data[0x8000:0x8002] = b"\xaa\x50"
         if serial_cmd:
-            marker = tool.SERIAL_PROVISION_MARKER
-            data[0x9000:0x9000 + len(marker)] = marker
+            blob = b"\x00".join((tool.SERIAL_PROVISION_MARKER,) + (tuple(tool.FEATURE_MARKERS) if features else ()))
+            data[0x9000:0x9000 + len(blob)] = blob
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as handle:
             handle.write(bytes(data))
         return path
@@ -1924,21 +2238,375 @@ class AppSmokeTests(unittest.TestCase):
         self.assertEqual(FakePopen.instances, [])
         self.assertEqual(len(self.dialogs.of("warning")), 1)
 
-    def test_flash_warns_about_non_merged_image(self):
-        data = bytearray(90_000)
-        data[0] = 0xE9
-        app_only = os.path.join(self.tmp.name, "app.bin")
-        with open(app_only, "wb") as handle:
-            handle.write(bytes(data))
+    def test_flash_refuses_an_application_image_at_0x0(self):
+        # atolye-1: yalnız uygulama imajı 0x0'a yazılırsa kart açılmaz -> reddedilir, 'Güncelle (ayarlar korunur)' önerilir
+        app_only = self._app_image(os.path.join(self.tmp.name, "app.bin"))
         self.app.file_entry.delete(0, "end")
         self.app.file_entry.insert(0, app_only)
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        warning = self.dialogs.of("warning")[-1]
+        self.assertEqual(warning[1], "Dosya Sorunu")
+        self.assertIn("BİRLEŞİK", warning[2])
+        self.assertIn("Güncelle (ayarlar korunur)", warning[2])
+        self.assertEqual(self.serial_backend.opened, [])  # dosya reddedilince kart yoklanmaz bile
+
+    @staticmethod
+    def _app_image(path, features=True):
+        """Yalnız uygulama (0x10000) sahte imajı: 0xE9 ile başlar, 0x8000'de bölüm tablosu YOK; FACTORYINIT ve (``features``)
+        v1.3.0 özellik izleri var (``features=False``: v1.2.1 uygulaması gibi)."""
+        data = bytearray(90_000)
+        data[0] = 0xE9
+        blob = b"\x00".join((tool.SERIAL_PROVISION_MARKER,) + (tuple(tool.FEATURE_MARKERS) if features else ()))
+        data[0x9000:0x9000 + len(blob)] = blob
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(bytes(data))
+        return path
+
+    def _wipe_board_on_merged_flash(self):
+        """Gerçek birleşik imaj (0x0) yazımı kartın kalıcı belleğini (NVS: anahtar, AP parolası, şablon...) siler."""
+        def hook(args):
+            if "write_flash" in args and args[args.index("write_flash") + 1] == "0x0":
+                self.firmware.provisioned = False
+                self.firmware.local_key = self.firmware.ap_pass = ""
+                self.firmware.tpl_id, self.firmware.tpl_ver = None, 0
+
+        FakePopen.on_start = hook
+        self.addCleanup(setattr, FakePopen, "on_start", None)
+
+    TID = "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd"
+
+    def test_update_mode_writes_the_application_image_to_0x10000_and_keeps_settings(self):
+        app = self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"))
+        self.firmware.provisioned, self.firmware.local_key = True, FAKE_LOCAL_KEY
+        self.app.mode_var.set("update")
+        self.app.apply_mode_selection()
+        self.assertEqual(self.app.file_entry.get(), os.path.normpath(app))
+        self.app.start_flash()
+        self.assertEqual(len(FakePopen.instances), 1)
+        self.assertEqual(FakePopen.instances[0].args[-3:], ["write_flash", "0x10000", os.path.abspath(app)])
+        self.assertEqual(self.firmware.commands[0], "STATUS")  # önce kartın AHBU firmware'i çalıştırdığı doğrulandı
+        self.assertNotIn("FACTORYINIT", self.firmware.commands)
+        self.assertNotIn("RESETKEY", self.firmware.commands)
+        self.assertEqual(self.firmware.local_key, FAKE_LOCAL_KEY)
+        info = [c for c in self.dialogs.of("info") if c[1] == "Başarılı"][0]
+        self.assertIn("korundu", info[2])
+        self.assertEqual(self.dialogs.of("confirm"), [])
+        self.assert_no_callback_errors()
+
+    def test_update_mode_requires_a_board_running_ahbu_firmware(self):
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"))
+        self.firmware.unresponsive = True  # STATUS'a yanıt yok (boş kart ya da yükleme kipinde/yeniden başlayan kurulu kart)
+        self.app.mode_var.set("update")
+        self.app.apply_mode_selection()
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        error = self.dialogs.of("error")[-1]
+        self.assertEqual(error[1], "Güncelleme Yapılamadı")
+        self.assertIn("AHBU firmware", error[2])
+        self.assertIn("BOOT'a basmadan RESET", error[2])  # yükleme kipinden normal RESET ile çıkılır
+        self.assertNotIn("birleşik imaj", error[2])  # kurulu kartın ayarlarını silen yol önerilmez
+        self.assertFalse(self.app._esptool_busy)
+        self.assertEqual(str(self.app.btn_flash.cget("state")), "normal")
+        # ROM yükleme kipinde (BOOT+RESET) bekleyen kart: neden açıkça söylenir
+        self.firmware.unresponsive, self.firmware.download_mode = False, True
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        error = self.dialogs.of("error")[-1]
+        self.assertEqual(error[1], "Güncelleme Yapılamadı")
+        self.assertIn("yükleme kipinde", error[2])
+
+    # ---- sürüm düşürme: version_info.json bilerek v1.2.1'de; kartta v1.3.0+ (STATUS'ta Bootstrap satırı) çalışabilir ----
+    def test_update_mode_refuses_to_put_an_older_application_on_a_board_running_v130(self):
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"), features=False)
+        self.firmware.provisioned, self.firmware.local_key = True, FAKE_LOCAL_KEY  # sahte kart v1.3.0+ (tpl_supported)
+        self.app.mode_var.set("update")
+        self.app.apply_mode_selection()
+        self.app.start_flash()  # "Firmware Uyarısı" (v1.3.0 özellikleri yok) -> evet; yoklama -> sürüm düşürme
+        self.assertEqual(FakePopen.instances, [])
+        self.assertEqual(self.firmware.commands[0], "STATUS")
+        error = self.dialogs.of("error")[-1]
+        self.assertEqual(error[1], "Sürüm Düşürme Engellendi")
+        for needle in ("v1.3.0", "USB şablon", "Ethernet/LAN şablon", "panonun kendi bulut kimliği", "Gözat", "app_0x10000"):
+            self.assertIn(needle, error[2])
+        self.assertNotIn("Başarılı", [c[1] for c in self.dialogs.calls])
+        self.assertEqual(self.firmware.local_key, FAKE_LOCAL_KEY)
+        self.assert_no_callback_errors()
+
+    def test_update_mode_with_an_older_application_on_an_older_board_is_not_a_downgrade(self):
+        app = self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"), features=False)
+        self.firmware.provisioned, self.firmware.tpl_supported = True, False  # v1.3.0 öncesi kart: Bootstrap/Sablon satırı yok
+        self.app.mode_var.set("update")
+        self.app.apply_mode_selection()
+        self.app.start_flash()
+        self.assertEqual(len(FakePopen.instances), 1)
+        self.assertEqual(FakePopen.instances[0].args[-3:], ["write_flash", "0x10000", os.path.abspath(app)])
+        self.assertNotIn("Sürüm Düşürme Engellendi", [c[1] for c in self.dialogs.calls])
+
+    def test_merged_image_older_than_the_board_needs_its_own_downgrade_confirmation(self):
+        old = self._merged_image(os.path.join(self.tmp.name, "eski", "firmware_combined_0x0.bin"), features=False)
+        self.app.file_entry.delete(0, "end")
+        self.app.file_entry.insert(0, old)
+        self.dialogs.answers = [True, False]  # Firmware Uyarısı: evet; Sürüm Düşürme: hayır
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        confirms = self.dialogs.of("confirm")
+        self.assertEqual([c[1] for c in confirms], ["Firmware Uyarısı", "Sürüm Düşürme"])
+        self.assertIn("v1.3.0", confirms[-1][2])
+        self.assertIn("USB şablon", confirms[-1][2])
+        self.dialogs.answers = [True, True]  # bilerek eski sürüme dönüş: engellenmez
+        self.app.start_flash()
+        self.assertEqual(len(FakePopen.instances), 1)
+        self.assertEqual(FakePopen.instances[0].args[-2], "0x0")
+
+    def test_downgrade_that_keeps_the_settings_is_not_offered_through_the_update_mode(self):
+        # Eski sürüme dönüş + ayarları koru = 'Güncelle' kipinde sürüm düşürme (engellenir): o kipe geçilmez, hiçbir şey yazılmaz.
+        old = self._merged_image(os.path.join(tool.RELEASES_DIR, "v1.2.1", "firmware_combined_0x0.bin"), features=False)
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.2.1", "app_0x10000_v1.2.1.bin"), features=False)
+        self.firmware.provisioned = True
+        self.app.file_entry.delete(0, "end")
+        self.app.file_entry.insert(0, old)
+        self.dialogs.answers = [True, True, False]  # Firmware Uyarısı: evet; Sürüm Düşürme: evet; Kart Ayarları Silinecek: hayır
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        confirms = self.dialogs.of("confirm")
+        self.assertEqual([c[1] for c in confirms], ["Firmware Uyarısı", "Sürüm Düşürme", "Kart Ayarları Silinecek"])
+        self.assertIn("hiçbir şey yazılmaz", confirms[-1][2])
+        self.assertNotIn(tool.UPDATE_MODE_LABEL + "' kipi seçilir", confirms[-1][2])
+        self.assertEqual(self.app.mode_var.get(), "custom")  # 'Güncelle' kipine geçilmedi
+        self.assertEqual(self.app.file_entry.get(), old)
+
+    def test_keeping_the_settings_uses_the_application_image_beside_the_chosen_merged_image(self):
+        # Gözat ile v1.3.0 birleşik imajı seçildi; version_info.json (testte v1.0.1) başka bir sürümü gösteriyor.
+        merged = self._merged_image(os.path.join(tool.RELEASES_DIR, "v1.3.0", "firmware_combined_0x0.bin"))
+        app = self._app_image(os.path.join(tool.RELEASES_DIR, "v1.3.0", "app_0x10000_v1.3.0.bin"))
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"))
+        self.firmware.provisioned = True
+        self.app.file_entry.delete(0, "end")
+        self.app.file_entry.insert(0, merged)
+        self.dialogs.confirm = False  # "Kart Ayarları Silinecek" -> hayır: ayarları koru
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        self.assertEqual(self.app.mode_var.get(), "update")
+        self.assertEqual(self.app.file_entry.get(), os.path.normpath(app))
+        self.assertIn("app_0x10000_v1.3.0.bin", self.dialogs.of("info")[-1][2])
+
+    def test_keeping_the_settings_without_an_application_image_beside_the_merged_image_warns(self):
+        merged = self._merged_image(os.path.join(self.tmp.name, "indirilen", "firmware_combined_0x0.bin"))
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"))
+        self.firmware.provisioned = True
+        self.app.file_entry.delete(0, "end")
+        self.app.file_entry.insert(0, merged)
+        self.dialogs.confirm = False
+        self.app.start_flash()
+        self.assertEqual(self.app.mode_var.get(), "update")
+        self.assertEqual(self.app.file_entry.get(), "")  # version_info'daki (başka sürüm) imaja SESSİZCE geçilmez
+        warning = self.dialogs.of("warning")[-1]
+        self.assertIn("app_0x10000", warning[2])
+        self.assertIn("Gözat", warning[2])
+
+    def test_merged_flash_on_a_board_with_settings_asks_first_and_offers_the_update_mode(self):
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"))
+        self.firmware.provisioned = True
+        self.firmware.tpl_id, self.firmware.tpl_ver = self.TID, 4
+        self.dialogs.confirm = False
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])  # "hayır": hiçbir şey yazılmadı
+        confirm = self.dialogs.of("confirm")[0][2]
+        self.assertIn(tool.ERASE_SETTINGS_WARNING, confirm)
+        self.assertIn("Yerel anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon ve güvenlik ayarları SİLİNECEK. Devam?", confirm)
+        self.assertIn("v4", confirm)  # kartta görülen şablon
+        self.assertIn("TPL STATUS", self.firmware.received)
+        self.assertEqual(self.app.mode_var.get(), "update")  # varsayılan: ayarları koruyan kip
+        self.assertTrue(self.app.file_entry.get().endswith("app_0x10000_v1.0.1.bin"))
+        self.dialogs.confirm = True
+        self.app.mode_var.set("custom")
+        self.app.apply_mode_selection()
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances[-1].args[-2], "0x0")
+
+    def test_merged_flash_on_a_blank_board_needs_no_extra_confirmation(self):
+        self.firmware.unresponsive = True  # boş kart / Waveshare yazılımı: ~10 sn boyunca hiç yanıt yok, SYNC'e de yanıt yok
+        self.app.start_flash()
+        self.assertEqual(len(FakePopen.instances), 1)
+        self.assertEqual(self.dialogs.of("confirm"), [])
+        # ROM yükleme kipinde (BOOT+RESET) bekleyen KURULU kart da STATUS'a yanıt vermez ama boş kart SAYILMAZ: önce sorulur.
+        self.firmware.unresponsive, self.firmware.download_mode, self.firmware.provisioned = False, True, True
+        self.dialogs.confirm = False
+        self.app.start_flash()
+        self.assertEqual(len(FakePopen.instances), 1)  # "hayır": hiçbir şey yazılmadı
+        confirm = self.dialogs.of("confirm")[-1]
+        self.assertEqual(confirm[1], "Kart Durumu Okunamadı")
+        self.assertIn("yükleme kipinde", confirm[2])
+        self.assertIn("BOOT'a basmadan RESET", confirm[2])
+        self.assertIn(tool.ERASE_SETTINGS_WARNING, confirm[2])
+
+    def test_merged_flash_asks_first_when_the_board_could_not_be_probed(self):
+        self.serial_backend.open_errors = [fc.SerialError("koptu", kind="io") for _ in range(200)]
         self.dialogs.confirm = False
         self.app.start_flash()
         self.assertEqual(FakePopen.instances, [])
-        self.assertIn("BİRLEŞİK", self.dialogs.of("confirm")[0][2])
-        self.dialogs.confirm = True
+        confirm = self.dialogs.of("confirm")[-1]
+        self.assertEqual(confirm[1], "Kart Durumu Okunamadı")
+        self.assertIn("Seri bağlantı koptu", confirm[2])
+        self.assertIn(tool.ERASE_SETTINGS_WARNING, confirm[2])
+
+    def test_merged_flash_sees_the_settings_of_a_board_that_restarts_when_the_port_opens(self):
+        self.firmware.provisioned = True
+        self.firmware.tpl_id, self.firmware.tpl_ver = self.TID, 4
+        self.firmware.booted, self.firmware.boot_ticks, self.firmware.boot_drops_input = False, 12, True  # rst:0x15
+        self.dialogs.confirm = False
         self.app.start_flash()
-        self.assertEqual(len(FakePopen.instances), 1)
+        self.assertEqual(FakePopen.instances, [])
+        self.assertEqual(self.dialogs.of("confirm")[0][1], "Kart Ayarları Silinecek")
+        self.assertIn("v4", self.dialogs.of("confirm")[0][2])
+
+    def test_merged_flash_of_a_verified_record_reprovisions_it_with_the_same_key_and_ap_pass(self):
+        record = self.register()
+        self.app.start_serial_provision()
+        self.assertEqual(record.state, "verified")
+        ap_before, label_before = record.ap_pass, self.app.current_label_img
+        self._wipe_board_on_merged_flash()
+        self.dialogs.calls.clear()
+        self.app.start_flash()  # kart provizyonlu: önce silme onayı (evet)
+        self.assertIn(tool.ERASE_SETTINGS_WARNING, self.dialogs.of("confirm")[0][2])
+        self.assertEqual(record.state, "verified")  # NVS silindi -> aynı anahtar + AP parolasıyla yeniden provizyonlandı
+        self.assertEqual(record.path, "serial")
+        self.assertEqual((self.firmware.local_key, self.firmware.ap_pass), (FAKE_LOCAL_KEY, ap_before))
+        self.assertEqual(self.firmware.commands.count("FACTORYINIT"), 2)
+        self.assertIs(self.app.current_label_img, label_before)  # etiket geçerli kalır
+        flash_info = [c for c in self.dialogs.of("info") if c[1] == "Başarılı"][0][2]
+        self.assertIn("etiket geçerli", flash_info)
+        self.assert_no_secrets_shown()
+        self.assert_no_callback_errors()
+
+    def test_merged_flash_of_an_unknown_provisioned_board_reprovisions_with_the_server_key(self):
+        label_ap = "Etiket-AP-123"
+        self.api.login_role = "service_user"
+        self.patch_login()
+        self.api.routes["GET /api/v1/admin/inventory/%s/local-key" % UID] = lambda call: (
+            200, {"success": True, "data": {"local_key": FAKE_LOCAL_KEY}}, {})
+        self.firmware.provisioned, self.firmware.local_key = True, FAKE_LOCAL_KEY
+        self.firmware.tpl_id, self.firmware.tpl_ver = self.TID, 4
+        self.firmware.key_fp_supported = True
+        self.firmware.watch = [FAKE_LOCAL_KEY, label_ap]
+        self._wipe_board_on_merged_flash()
+        with mock.patch.object(tool.simpledialog, "askstring", return_value=label_ap) as ask:
+            self.app.start_flash()
+        self.assertEqual((self.firmware.local_key, self.firmware.ap_pass), (FAKE_LOCAL_KEY, label_ap))
+        self.assertIn("GET /api/v1/admin/inventory/%s/local-key" % UID, self.api.paths())
+        self.assertEqual(ask.call_args.kwargs.get("show"), "•")  # AP parolası maskeli sorulur
+        shown = self.dialogs.all_text() + self.app.prov_log.get("1.0", "end") + self.app.log_text.get("1.0", "end")
+        self.assertIn("Sunucudaki anahtarla yeniden provizyon", shown)
+        self.assertIn("v4", shown)  # kartta şablon vardı: yeniden yazılması gerektiği söylenir
+        self.assertIn("yeniden yazın", shown)
+        self.assertNotIn("'Seri (USB) ile Provizyonla'ya basın", shown)  # pasif düğme önerilmez
+        self.assertNotIn(FAKE_LOCAL_KEY, shown)
+        self.assertNotIn(label_ap, shown)
+        self.assertEqual(self.firmware.leaks, [])
+        self.assertIsNone(self.app.current_record)  # PIN'siz bellek kaydı oluşturulmaz
+        self.assertFalse(self.app._prov_busy)
+        self.assert_no_callback_errors()
+
+    # ---- atolye-2: USB ile etiketi yeniden basma (yeni PIN + yeni AP parolası; yerel anahtar DEĞİŞMEZ) --------------
+    NEW_AP = "YeniAP-Parola9"
+
+    def _prepare_reissue(self, *, reissue=None):
+        self.patch_login()
+        self.api.routes["POST /api/v1/admin/inventory/%s/reissue-label" % UID] = reissue or reissue_route()
+        self.api.routes["GET /api/v1/admin/inventory/%s/local-key" % UID] = lambda call: (
+            200, {"success": True, "data": {"local_key": FAKE_LOCAL_KEY}}, {})
+        self.firmware.provisioned, self.firmware.local_key, self.firmware.ap_pass = True, FAKE_LOCAL_KEY, "ESKI-AP-PAROLA"
+        self.firmware.key_fp_supported = True
+        self.firmware.watch = [FAKE_LOCAL_KEY, self.NEW_AP]
+        patcher = mock.patch.object(tool, "generate_ap_pass", return_value=self.NEW_AP)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_usb_label_reissue_keeps_the_key_writes_a_new_ap_pass_and_builds_a_two_qr_label(self):
+        self._prepare_reissue()
+        self.app.btn_reissue_label.invoke()
+        paths = self.api.paths()
+        reissue = "POST /api/v1/admin/inventory/%s/reissue-label" % UID
+        key = "GET /api/v1/admin/inventory/%s/local-key" % UID
+        self.assertLess(paths.index(reissue), paths.index(key))  # akış sırası: yeni PIN -> mevcut anahtar
+        commands = self.firmware.commands
+        self.assertEqual(commands[0], "STATUS")  # UID karttan (seri STATUS) okundu
+        self.assertLess(commands.index("RESETKEY"), commands.index("FACTORYINIT"))
+        self.assertEqual((self.firmware.local_key, self.firmware.ap_pass), (FAKE_LOCAL_KEY, self.NEW_AP))
+        record = self.app.current_record
+        self.assertIsNotNone(record)
+        self.assertEqual((record.uid, record.pin, record.state, record.path), (UID, NEW_PIN, "verified", "serial"))
+        self.assertEqual((record.local_key, record.ap_pass), (FAKE_LOCAL_KEY, self.NEW_AP))
+        claim, wifi = self.decode_current_label()
+        self.assertEqual(fc.parse_claim_url(claim), (UID, NEW_PIN))
+        self.assertEqual(wifi, fc.device_wifi_qr_payload(MAC, self.NEW_AP))
+        self.secret_values = [value for value in record.secret_values() if value]
+        self.assert_no_secrets_shown()
+        self.assertEqual(self.firmware.leaks, [])
+        self.assertIn("Etiket Yenilendi", [c[1] for c in self.dialogs.calls])
+        self.assert_no_callback_errors()
+
+    def test_usb_label_reissue_does_not_build_a_label_when_factoryinit_fails(self):
+        self._prepare_reissue()
+        self.firmware.force_error = "persist_failed"
+        self.app.btn_reissue_label.invoke()
+        self.assertIsNone(self.app.current_record)
+        self.assertIsNone(self.app.current_label_img)
+        error = self.dialogs.of("error")[-1]
+        self.assertIn("kalıcı belleğe yazamadı", error[2])
+        self.assertIn("eski etiket", error[2])  # sunucuda PIN değişti: kullanıcıya söylenir
+        self.assertNotIn(NEW_PIN, self.dialogs.all_text())
+        self.assertFalse(self.app._prov_busy)
+
+    def test_usb_label_reissue_shows_the_server_conflict_and_touches_nothing(self):
+        self._prepare_reissue(reissue=reissue_route(409, {"success": False, "code": "DEVICE_LINKED_TO_FLAT", "message": "x"}))
+        self.app.btn_reissue_label.invoke()
+        self.assertIn("Kart bir daireye bağlı; önce daireden ayırın.", self.dialogs.of("error")[-1][2])
+        self.assertNotIn("GET /api/v1/admin/inventory/%s/local-key" % UID, self.api.paths())
+        self.assertNotIn("RESETKEY", self.firmware.commands)
+        self.assertNotIn("FACTORYINIT", self.firmware.commands)
+        self.assertIsNone(self.app.current_record)
+
+    def test_usb_probe_of_a_board_in_download_mode_says_how_to_leave_it(self):
+        # Etiket yenileme ve sunucu anahtarıyla yeniden provizyon da kartı yoklar: yükleme kipindeki kartta çözüm söylenir.
+        self._prepare_reissue()
+        self.firmware.download_mode = True
+        self.app.btn_reissue_label.invoke()
+        error = self.dialogs.of("error")[-1]
+        self.assertEqual(error[1], "Etiket Yenilenemedi")
+        self.assertIn("yükleme kipinde", error[2])
+        self.assertIn("BOOT'a basmadan", error[2])
+        self.assertNotIn("POST /api/v1/admin/inventory/%s/reissue-label" % UID, self.api.paths())
+        self.app.btn_prov_server_key.invoke()
+        error = self.dialogs.of("error")[-1]
+        self.assertEqual(error[1], "Yeniden Provizyon")
+        self.assertIn("BOOT'a basmadan", error[2])
+        self.assertNotIn("GET /api/v1/admin/inventory/%s/local-key" % UID, self.api.paths())
+
+    def test_usb_label_reissue_is_only_for_the_super_user(self):
+        self.api.login_role = "service_user"
+        self.patch_login()
+        self.app.login_clicked()
+        self.assertEqual(str(self.app.btn_reissue_label.cget("state")), "disabled")
+
+    def test_server_key_reprovision_button_works_without_a_record(self):
+        label_ap = "Etiket-AP-123"
+        self.patch_login()
+        self.api.routes["GET /api/v1/admin/inventory/%s/local-key" % UID] = lambda call: (
+            200, {"success": True, "data": {"local_key": FAKE_LOCAL_KEY}}, {})
+        self.assertEqual(str(self.app.btn_prov_server_key.cget("state")), "normal")
+        with mock.patch.object(tool.simpledialog, "askstring", return_value=label_ap):
+            self.app.btn_prov_server_key.invoke()
+        self.assertEqual((self.firmware.local_key, self.firmware.ap_pass), (FAKE_LOCAL_KEY, label_ap))
+        self.assertIn("tamamlandı", self.app.prov_log.get("1.0", "end"))
+        # Geçersiz AP parolası: karta hiçbir şey yazılmaz
+        self.firmware.provisioned, self.firmware.local_key, self.firmware.ap_pass = False, "", ""
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="kisa"):
+            self.app.btn_prov_server_key.invoke()
+        self.assertFalse(self.firmware.provisioned)
+        self.assert_no_callback_errors()
 
     def test_flash_warns_when_image_lacks_the_serial_provisioning_command(self):
         stale = self._merged_image(os.path.join(self.tmp.name, "eski.bin"), serial_cmd=False)
@@ -1990,7 +2658,8 @@ class AppSmokeTests(unittest.TestCase):
         self.app.start_flash()
         self.assertEqual(record.state, "registered")
         self.assertEqual(self.device.calls, [])
-        self.assertEqual(self.serial_backend.opened, [])  # USB-seri de başlatılmadı
+        self.assertEqual(len(self.serial_backend.opened), 1)  # yalnız flash öncesi yoklama (STATUS); provizyon başlatılmadı
+        self.assertNotIn("FACTORYINIT", self.firmware.commands)
         flash_info = [c for c in self.dialogs.of("info") if c[1] == "Başarılı"][0]
         self.assertIn("eşleşmiyor", flash_info[2])
         self.assertIn("AA:BB:CC:00:11:22", flash_info[2])
@@ -1998,12 +2667,13 @@ class AppSmokeTests(unittest.TestCase):
     def test_flash_without_pending_record_only_warns(self):
         self.app.start_flash()
         self.assertEqual(self.device.calls, [])
-        self.assertEqual(self.serial_backend.opened, [])
+        self.assertNotIn("FACTORYINIT", self.firmware.commands)
         info = self.dialogs.of("info")[0]
         self.assertIn("PAROLASIZ", info[2])
         self.assertIn("AHBU-DD8754", info[2])  # SSID, esptool çıktısındaki MAC'ten türetildi
-        self.assertIn("kaydedilmediyse", info[2])
-        self.assertIn("Seri (USB) ile Provizyonla", info[2])
+        self.assertIn("bellekte kayıt yok", info[2])
+        self.assertIn("2. sekmede", info[2])
+        self.assertNotIn("'Seri (USB) ile Provizyonla'ya basın", info[2])  # kayıt yokken pasif olan düğme önerilmez
 
     def test_flash_without_visible_mac_still_checks_the_board_over_serial(self):
         record = self.register()
@@ -2234,6 +2904,7 @@ class AppSmokeTests(unittest.TestCase):
         text = self.dialogs.of("error")[0][2]
         self.assertIn("yeniden gösterilemez", text)
         self.assertIn("Stokta", text)
+        self.assertIn("kart önceden provizyonlandıysa USB ile RESETKEY gerekir", text)
 
     def test_timeout_kills_process(self):
         class SlowPopen(FakePopen):
@@ -2754,19 +3425,105 @@ class AppSmokeTests(unittest.TestCase):
 
     def test_ethernet_provision_uses_the_entered_ip_and_marks_record_verified(self):
         # Kullanıcı kararı (2026-10-08): provizyon Ethernet'ten de yapılabilir (firmware v1.3.0 factory/init'i LAN'dan kabul eder).
+        # servis_kurulum-1: Ethernet'te auth/check 200 kanıt değildir -> kanıt kısıtlı durum (+ varsa lk_fp).
         record = self.register()
+        self.device.eth = True
         with mock.patch.object(tool.simpledialog, "askstring", return_value="192.168.10.57"):
             self.app.provision_via_ethernet_clicked()
         self.assertEqual(record.state, "verified")
         self.assertEqual(record.path, "eth")
-        self.assertEqual([(c.method, c.host, c.path) for c in self.device.calls],
-                         [("GET", "192.168.10.57", "/api/status"), ("POST", "192.168.10.57", "/api/factory/init"),
-                          ("GET", "192.168.10.57", "/api/auth/check")])
+        self.assertEqual(record.eth_host, "192.168.10.57")
+        self.assertEqual([(c.method, c.host, c.path, "x-device-key" in c.headers) for c in self.device.calls],
+                         [("GET", "192.168.10.57", "/api/status", False), ("POST", "192.168.10.57", "/api/factory/init", False),
+                          ("GET", "192.168.10.57", "/api/status", False), ("GET", "192.168.10.57", "/api/status", True)])
         self.assertIn("Ethernet", self.app.prov_device_var.get())
         shown = self.dialogs.all_text() + self.app.prov_log.get("1.0", "end")
         self.assertNotIn(FAKE_LOCAL_KEY, shown)
         self.assertNotIn(record.ap_pass, shown)
         self.assert_no_callback_errors()
+
+    def test_ethernet_init_sent_is_verified_again_over_the_ethernet_ip_not_the_setup_ap(self):
+        record = self.register()
+        self.device.eth, self.device.fw, self.device.report_fp = True, "1.3.1", True
+        self.device.fail_after_init = True  # anahtar yazıldı, sonra kablo/ağ koptu
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="192.168.10.57"):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(record.state, "init_sent")
+        self.assertEqual((record.path, record.eth_host), ("eth", "192.168.10.57"))
+        self.assertIn("Ethernet", self.app.prov_device_var.get())
+        info = self.dialogs.of("info")[-1]
+        self.assertNotIn("WPA2", info[2])  # Wi-Fi metni değil
+        self.assertIn("Ethernet", info[2])
+        self.assertEqual(str(self.app.btn_prov_eth.cget("state")), "normal")  # Ethernet doğrulaması init_sent'te de açık
+        self.device.fail_after_init = False
+        self.device.calls.clear()
+        self.app.verify_provision()
+        self.assertEqual(record.state, "verified")
+        self.assertEqual(record.path, "eth")
+        self.assertEqual({c.host for c in self.device.calls}, {"192.168.10.57"})  # 192.168.4.1'e gitmedi
+        self.assertNotIn("/api/auth/check", [c.path for c in self.device.calls])
+        self.assert_no_callback_errors()
+
+    def test_ethernet_on_a_board_with_another_key_suggests_usb_resetkey(self):
+        record = self.register()
+        self.device.eth, self.device.fw, self.device.report_fp = True, "1.3.1", True
+        self.device.provisioned, self.device.key = True, "BASKA-ANAHTAR-99"
+        self.dialogs.confirm = False
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="192.168.10.57"):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(record.state, "registered")
+        offer = self.dialogs.of("confirm")[-1][2]
+        for needle in ("farklı bir yerel anahtar", "Seri (USB) ile Provizyonla", "RESETKEY"):
+            self.assertIn(needle, offer)
+        self.assertEqual(self.serial_backend.opened, [])  # "hayır": USB yolu başlamadı
+        self.dialogs.confirm = True
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="192.168.10.57"):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(record.state, "verified")  # "evet": USB (seri) provizyon başladı ve bitti
+        self.assertEqual(record.path, "serial")
+        self.assert_no_secrets_shown()
+
+    def test_old_firmware_on_ethernet_cannot_be_verified_and_is_not_marked_verified(self):
+        record = self.register()
+        self.device.eth, self.device.fw = True, "1.3.0"
+        self.device.provisioned, self.device.key = True, FAKE_LOCAL_KEY  # aynı anahtar bile olsa Ethernet KANITLAYAMAZ
+        self.dialogs.confirm = False
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="192.168.10.57"):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(record.state, "registered")
+        self.assertIn("Ethernet yolu anahtarı doğrulayamaz", self.dialogs.of("confirm")[-1][2])
+
+    def test_old_firmware_read_while_provisioning_warns_about_self_bootstrap(self):
+        warning = "Bu yazılım buluta kendiliğinden bağlanamaz; bireysel sahiplenme için v1.3.0+ yükleyin."
+        self.assertEqual(tool.OLD_FIRMWARE_CLOUD_WARNING, warning)
+        record = self.register()  # FakeDevice: fw 1.1.0
+        self.app.start_provision()
+        self.assertEqual(record.state, "verified")  # uyarı provizyonu engellemez
+        self.assertIn(warning, self.app.prov_log.get("1.0", "end"))
+        self.assertIn(warning, self.dialogs.of("info")[-1][2])
+
+    def test_serial_provisioning_warns_only_when_status_has_no_bootstrap_line(self):
+        warning = tool.OLD_FIRMWARE_CLOUD_WARNING
+        record = self.register()
+        self.firmware.tpl_supported = False  # v1.2.x: STATUS'un sonunda Bootstrap/Sablon satırı yok
+        self.app.start_serial_provision()
+        self.assertEqual(record.state, "verified")
+        self.assertIn(warning, self.dialogs.of("info")[-1][2])
+
+    def test_serial_provisioning_of_current_firmware_has_no_old_firmware_warning(self):
+        record = self.register()
+        self.app.start_serial_provision()
+        self.assertEqual(record.state, "verified")
+        self.assertNotIn(tool.OLD_FIRMWARE_CLOUD_WARNING, self.dialogs.all_text() + self.app.prov_log.get("1.0", "end"))
+
+    def test_serial_fingerprint_mismatch_offers_resetkey(self):
+        record = self.register()
+        self.firmware.key_fp_supported, self.firmware.fp_override = True, "00000000"
+        self.dialogs.confirm = False
+        self.app.start_serial_provision()
+        self.assertEqual(record.state, "registered")
+        self.assertIn("SIFIRLAYIP", self.dialogs.of("confirm")[-1][2])
+        self.assertIn("eşleşmiyor", self.app.prov_log.get("1.0", "end"))
 
     def test_ethernet_provision_rejects_public_ip_and_cancel(self):
         record = self.register()
@@ -2988,13 +3745,7 @@ class ThreadedAppTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         image = os.path.join(tmp.name, "fw.bin")
-        data = bytearray(90_000)
-        data[0] = 0xE9
-        data[0x8000:0x8002] = b"\xaa\x50"
-        data[0x9000:0x9000 + len(tool.SERIAL_PROVISION_MARKER)] = tool.SERIAL_PROVISION_MARKER  # güncel firmware
-        with open(image, "wb") as handle:
-            handle.write(bytes(data))
-        self.image = image
+        self.image = AppSmokeTests._merged_image(image)  # güncel firmware (FACTORYINIT + v1.3.0 özellik izleri)
         patches = [
             mock.patch.object(tool, "messagebox", self.dialogs),
             mock.patch.object(tool.subprocess, "Popen", ThreadRecordingPopen),

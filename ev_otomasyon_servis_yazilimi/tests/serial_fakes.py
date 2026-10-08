@@ -43,6 +43,14 @@ class FakeFirmwareCli:
         tpl_error=None,
         tpl_drop_data=0,
         tpl_mute_commit=False,
+        key_fp_supported=False,
+        fp_override=None,
+        latch_nc_hazards=False,
+        inputs_bridged=False,
+        boot_drops_input=False,
+        download_mode=False,
+        safety_silent=False,
+        fault_zones=None,
     ):
         self.mac = mac.upper()
         self.provisioned = provisioned
@@ -65,6 +73,25 @@ class FakeFirmwareCli:
         self.tpl_error = tpl_error
         self.tpl_drop_data = tpl_drop_data
         self.tpl_mute_commit = tpl_mute_commit    # COMMIT yanıtı kaybolur (kart yine uygular/uygulamaz)
+        # Firmware 1.3.1 (sözleşme 1): STATUS'ta "Bootstrap:" satırından hemen sonra "  - Anahtar izi: <8 hex|yok>".
+        # fp_override: kart başka bir iz bildirir (yanlış anahtar benzetimi).
+        self.key_fp_supported = key_fp_supported
+        self.fp_override = fp_override
+        # Güvenlik (SAFETY): latch_nc_hazards = uygulanan şablondaki NC tehlike girişi boşsa bölge kilitlenir (atölye);
+        # inputs_bridged = girişler köprülendi (SAFETY ACK bölgeyi temizler).
+        self.latch_nc_hazards = latch_nc_hazards
+        self.inputs_bridged = inputs_bridged
+        self.latched_zones = []
+        # fault_zones: vana geri bildirim arızası (FAULT) olan bölgeler; firmware ack() onları onaylar ama canClear() yalnız
+        # LATCHED bölgeyi temizler -> SAFETY ACK FAULT bölgesini TEMİZLEMEZ. safety_silent: SAFETY çıktısı gelmez (okunamaz).
+        self.fault_zones = list(fault_zones or [])
+        self.safety_silent = safety_silent
+        # boot_drops_input: açılış sürerken gelen baytlar KAYBOLUR (gerçek kart; port açılınca yeniden başlayan kart).
+        # download_mode: ROM yükleme kipi (BOOT+RESET): metin komutları yok sayılır, yalnız esptool SLIP SYNC'e yanıt verilir.
+        self.boot_drops_input = boot_drops_input
+        self.download_mode = download_mode
+        self.rom_syncs = 0                        # TEST DENETİMİ: yanıtlanan SYNC çerçevesi sayısı
+        self._rom_in = bytearray()
         self.tpl_id = None
         self.tpl_ver = 0
         self.tpl_label = ""
@@ -82,12 +109,26 @@ class FakeFirmwareCli:
 
     # ---- bayt arayüzü ----
     def feed(self, data):
+        if self.download_mode:
+            self._rom_feed(data)
+            return
         if self.unresponsive:
             return
         if not self.booted:
-            self._input.extend(data)
+            if not self.boot_drops_input:
+                self._input.extend(data)
             return
         self._consume(data)
+
+    def _rom_feed(self, data):
+        """ESP32-S3 ROM yükleyicisi: SLIP SYNC (C0 00 08 ...) çerçevesine SLIP yanıtı (C0 01 08 ...); başka hiçbir şeye yanıt yok."""
+        self._rom_in.extend(data)
+        if b"\xc0\x00\x08" in bytes(self._rom_in):
+            self._rom_in = bytearray()
+            self.rom_syncs += 1
+            self._out.extend(b"\xc0\x01\x08\x04\x00\x07\x07\x12\x20\x00\x00\x00\x00\xc0")
+        elif len(self._rom_in) > 4096:
+            del self._rom_in[:-16]
 
     def tick(self):
         if self.booted:
@@ -176,6 +217,8 @@ class FakeFirmwareCli:
                 self._say(reply % "SILINDI")
         elif upper == "TPL" and self.tpl_supported:
             self._tpl_command(words[1:])
+        elif upper == "SAFETY":
+            self._safety_command(words[1:])
         elif upper in ("HELP", "?"):
             self._say("[CLI] Komutlar: STATUS, MQTT, ... FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY, REBOOT")
         else:
@@ -247,10 +290,41 @@ class FakeFirmwareCli:
             self.tpl_applied.append(envelope)
             self.tpl_id, self.tpl_ver = meta["template_id"], int(meta["version"])
             self.tpl_label = envelope.get("label") or meta.get("name", "")[:31]
+            if self.latch_nc_hazards and not self.inputs_bridged:  # atölye: NC tehlike girişi boş -> bölge kilitlenir
+                for sensor in (envelope["template"].get("safety") or {}).get("sensors", []):
+                    if (str(sensor.get("id", "")).startswith("d") and sensor.get("kind") in ("water", "gas", "smoke")
+                            and sensor.get("active_open") and sensor.get("zone") not in self.latched_zones):
+                        self.latched_zones.append(sensor.get("zone"))
             if not self.tpl_mute_commit:
                 self._say("OK tpl_applied %s %d" % (self.tpl_id, self.tpl_ver))
         else:
             self._say("ERR bad_cmd")
+
+    def _safety_command(self, args):
+        """main.cpp cliSafety benzeri: SAFETY [STATUS] | SAFETY ACK [0-4]."""
+        sub = args[0].upper() if args else "STATUS"
+        if sub == "STATUS":
+            if self.safety_silent:
+                return  # çıktı kayboldu (USB gürültüsü / kart meşgul): başlık hiç gelmez
+            self._say("[GUVENLIK] politika=ACIK kip=normal rev=1 acilis=1 bn=00000000")
+            for zone in sorted(set(self.latched_zones) | set(self.fault_zones)):
+                state = "fault" if zone in self.fault_zones else "latched"
+                self._say("  - Bolge %d: %s (aid 0001, 2 sn once, caliyor)" % (zone, state))
+            if not self.latched_zones and not self.fault_zones:
+                self._say("  - Butun bolgeler NORMAL")
+        elif sub == "ACK":
+            try:
+                zone = int(args[1]) if len(args) > 1 else 0
+            except ValueError:
+                zone = -1
+            if zone < 0 or zone > 4:
+                self._say("[CLI-HATA] Kullanim: SAFETY ACK [0-4] [FORCE]")
+                return
+            if self.inputs_bridged:  # kuruluk sağlandı: onay bölgeyi temizler (0 = bütün bölgeler)
+                self.latched_zones = [z for z in self.latched_zones if zone not in (0, z)]
+            self._say("[CLI-SONUC] Alarm onayi kuyruga yazildi (bolge %d)." % zone)
+        else:
+            self._say("[CLI-HATA] Kullanim: SAFETY [STATUS] | SAFETY ACK [0-4] [FORCE]")
 
     def _status(self):
         ssid = "AHBU-" + self.mac.replace(":", "")[-6:]
@@ -268,11 +342,24 @@ class FakeFirmwareCli:
             "  - Yerel Girisler (8DI): [D1:0 D2:0 D3:0 D4:0 D5:0 D6:0 D7:0 D8:0]",
             "  - Panjurlar: []",
         ]
-        if self.tpl_supported:  # v1.3.0+: CONTRACTS §3e yeni STATUS satırları (eski satırlar aynen kalır)
-            lines += ["  - Ethernet: yok -", "  - Sablon: %s v%d" % (self.tpl_id or "-", self.tpl_ver)]
+        if self.tpl_supported:  # v1.3.0+: CONTRACTS §3e/§3f yeni STATUS satırları (eski satırlar aynen kalır)
+            lines += ["  - Ethernet: yok -", "  - Bootstrap: idle"]
+            if self.key_fp_supported:  # v1.3.1 (sözleşme 1): Bootstrap satırından hemen sonra
+                lines.append("  - Anahtar izi: %s" % (self._key_fp() if self.provisioned else "yok"))
+            lines.append("  - Sablon: %s v%d" % (self.tpl_id or "-", self.tpl_ver))
         for text in lines:
             self._say(text)
             self._noise("[WiFiManager] kesintili gunluk")
+
+    def _key_fp(self):
+        """Sözleşme 1: HMAC-SHA256(local_key, 'ahbu-lk-fp/1|' + UID) hex ilk 8 (UID = AHBU-S3-<MAC son 6>)."""
+        import hashlib
+        import hmac
+
+        if self.fp_override:
+            return self.fp_override
+        uid = "AHBU-S3-" + self.mac.replace(":", "")[-6:].upper()
+        return hmac.new(self.local_key.encode("latin-1"), ("ahbu-lk-fp/1|" + uid).encode("ascii"), hashlib.sha256).hexdigest()[:8]
 
     @staticmethod
     def _parse(cmd):
