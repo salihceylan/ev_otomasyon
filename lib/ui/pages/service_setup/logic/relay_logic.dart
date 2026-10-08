@@ -172,9 +172,14 @@ class RelayLogic extends SetupLogic {
   /// Panoda yüklü kurulum şablonu (durumdaki `tpl`; firmware v1.3.0+, şablon yoksa `null`).
   TemplateRef? get boardTemplate => _boardTemplate;
 
-  /// Şablon panoya uygulandı (İP-4.3): bu adımın test ilerlemesi ve kayıttaki atamalar bırakılır; sonraki [load]
-  /// röle adlarını, türlerini ve güvenlik atamalarını panonun (şablonun) yeni değerlerinden okur.
-  void resetForTemplate() {
+  /// Şablon panoya uygulandı (İP-4.3): bu adımın test ilerlemesi, kayıttaki atamalar ve bulut yazım durumu bırakılır;
+  /// sonraki [load] röle adlarını, türlerini ve güvenlik atamalarını panonun (şablonun) yeni değerlerinden okur.
+  /// Dönüş: sunucu kuyruğunda bekleyen güvenlik değişikliği vardı (çağıran [dropQueuedSafetyQuietly] ile siler; şablon
+  /// güvenlik tablosunu tamamen değiştirdiği için eski yamalar sonradan üstüne uygulanmamalı).
+  bool resetForTemplate() {
+    final hadQueued = _queued != null;
+    _queued = null;
+    _preferCloud = false;
     _relays = const <RelayCheck>[];
     _shutterRelays = const <RelayItem>[];
     _loaded = false;
@@ -189,6 +194,19 @@ class RelayLogic extends SetupLogic {
     _unconfirmed = false;
     _testResults = const <SafetyTestResult>[];
     clearProblem();
+    return hadQueued;
+  }
+
+  /// Sunucu kuyruğundaki bekleyen güvenlik yamalarını siler (`DELETE …/safety-config/pending`); en iyi çaba: hedef yoksa
+  /// ya da istek başarısızsa sessizce geçilir.
+  Future<void> dropQueuedSafetyQuietly() async {
+    final t = ctx.target;
+    if (t == null) return;
+    try {
+      await ctx.cloud.clearSafetyConfigPending(t.homeId, t.deviceUuid);
+    } on Exception {
+      // Kuyruk silinemedi: pano yeni şablonla çalışır; kurulumcu gerekirse "Kuyruğu iptal et" ile sürdürür.
+    }
   }
 
   List<RelayItem> _shutterRelays = const <RelayItem>[];

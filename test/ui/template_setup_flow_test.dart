@@ -87,6 +87,100 @@ void main() {
       expect(c.shutters.shutters.first.name, contains('Oda 1'));
     });
 
+    test('yanıt kaybolur ama pano şablonu yazmış: geri okunur, başarı sayılır (yeniden yükleme + "lan" ok kaydı)', () async {
+      await atRelays();
+      await toPreview();
+      env.device.templateApplyNetworkFailOnce = 'applied';
+      expect(await drive(env, c.template.apply()), isTrue);
+      expect(c.template.problem, isNull);
+      expect(env.device.api.count('GET', '/api/template'), greaterThanOrEqualTo(2), reason: 'açılışta + geri okuma');
+      expect(env.device.templateApplies, hasLength(1), reason: 'yeniden yazılmadı');
+      await waitUntil(env, () => c.relays.loaded && !c.isBusy);
+      expect(c.relays.relays.first.name, 'Şablon Lamba 1');
+      expect(c.template.applied?.id, kTplId);
+      expect(env.cloud.templateWrites.single, containsPair('result', 'ok'));
+      expect(env.cloud.templateWrites.single, containsPair('via', 'lan'));
+    });
+
+    test('istek panoya ulaşmadı (ağ hatası, panoda başka/eski şablon): hata gösterilir, kayıt yok', () async {
+      env = await serviceHarness();
+      env.device
+        ..templateCaps = true
+        ..tplId = kGlobalTplId
+        ..tplVer = 2;
+      c = await reachStep(env, SetupSteps.relays);
+      await waitUntil(env, () => c.relays.loaded && !c.isBusy);
+      await toPreview();
+      env.device.templateApplyNetworkFailOnce = 'dropped';
+      expect(await drive(env, c.template.apply()), isFalse);
+      expect(c.template.problem?.kind, SetupProblemKind.deviceNetwork);
+      expect(c.template.applied, isNull);
+      expect(env.device.tplId, kGlobalTplId);
+      expect(env.cloud.templateWrites, isEmpty, reason: 'sonucu belirsiz yazım kaydedilmez');
+      expect(c.relays.relays.first.name, isNot('Şablon Lamba 1'));
+    });
+
+    test('202 pending: GET /api/template yoklanır, şablon görününce başarı (yeniden yükleme + kayıt)', () async {
+      await atRelays();
+      await toPreview();
+      env.device.templatePendingOnce = const Duration(seconds: 5);
+      expect(await drive(env, c.template.apply()), isTrue);
+      expect(c.template.problem, isNull);
+      expect(c.template.awaitingBoard, isFalse);
+      expect(env.device.templateApplies, hasLength(1));
+      await waitUntil(env, () => c.relays.loaded && !c.isBusy);
+      expect(c.relays.relays.first.name, 'Şablon Lamba 1');
+      expect(env.cloud.templateWrites.single, containsPair('result', 'ok'));
+    });
+
+    test('202 pending ~20 sn içinde bitmez: "Pano yazmayı sürdürüyor"; "Tekrar dene" yeniden GÖNDERMEZ, yalnız denetler',
+        () async {
+      await atRelays();
+      await toPreview();
+      env.device.templatePendingOnce = const Duration(seconds: 40);
+      expect(await drive(env, c.template.apply()), isFalse);
+      final problem = c.template.problem!;
+      expect(problem.why, contains('Pano yazmayı sürdürüyor; birkaç saniye sonra yeniden kontrol edin'));
+      expect(problem.retryable, isTrue);
+      expect(c.template.awaitingBoard, isTrue);
+      expect(env.cloud.templateWrites, isEmpty);
+      expect(c.template.canRetry, isTrue);
+      await drive(env, c.template.retry());
+      expect(c.template.problem, isNull);
+      expect(env.device.templateApplies, hasLength(1), reason: 'şablon yeniden gönderilmedi');
+      expect(c.template.applied?.id, kTplId);
+      expect(env.cloud.templateWrites.single, containsPair('result', 'ok'));
+    });
+
+    test('evin adı boşsa etiket gönderilmez (pano meta.name kullanır)', () async {
+      await atRelays();
+      c.ctx.target = c.ctx.target!.copyWith(homeName: '');
+      await toPreview();
+      expect(await drive(env, c.template.apply()), isTrue);
+      expect(env.device.templateApplies.single.containsKey('label'), isFalse);
+    });
+
+    test('bulut kuyruğunda bekleyen güvenlik değişikliği şablondan sonra silinir; bulut önerisi/durumları sıfırlanır', () async {
+      await atRelays();
+      c.relays.restore(<String, dynamic>{'safety_queued': true});
+      expect(c.relays.queued, isNotNull);
+      await toPreview();
+      expect(await drive(env, c.template.apply()), isTrue);
+      await waitUntil(env, () => c.relays.loaded && !c.isBusy);
+      expect(env.cloud.calls, contains('clearSafetyConfigPending:$kDeviceUid'));
+      expect(c.relays.queued, isNull);
+      expect(c.relays.cloudOffer, isFalse);
+      expect(c.relays.unconfirmed, isFalse);
+      expect(c.relays.snapshot().containsKey('safety_queued'), isFalse);
+    });
+
+    test('kuyruk yoksa silme isteği gönderilmez', () async {
+      await atRelays();
+      await toPreview();
+      expect(await drive(env, c.template.apply()), isTrue);
+      expect(env.cloud.calls.where((x) => x.startsWith('clearSafetyConfigPending')), isEmpty);
+    });
+
     test('"Genel" seçilince yalnız genel şablonlar listelenir', () async {
       await atRelays();
       await toPreview(global: true);

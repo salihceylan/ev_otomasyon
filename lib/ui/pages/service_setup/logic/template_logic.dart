@@ -109,6 +109,7 @@ class TemplateLogic extends SetupLogic {
 
   /// Kartı kapatır (seçim bırakılır; uygulanan şablon bilgisi kalır).
   void close() {
+    _pendingWrite = null;
     _stage = TemplateStage.closed;
     _selected = null;
     _templates = const <InstallTemplateSummary>[];
@@ -122,6 +123,7 @@ class TemplateLogic extends SetupLogic {
   void back() {
     switch (_stage) {
       case TemplateStage.preview:
+        _pendingWrite = null;
         _selected = null;
         _stage = TemplateStage.template;
       case TemplateStage.template:
@@ -178,15 +180,31 @@ class TemplateLogic extends SetupLogic {
           'template': template.body,
           if (label.isNotEmpty) 'label': label,
         };
-        try {
-          await ctx.deviceCall((api) => api.applyTemplate(envelope));
-        } on LocalApiException catch (e) {
-          // Pano isteği gerçekten değerlendirip reddettiyse (ağ / anahtar / iptal hariç) ret de kaydedilir.
-          if (!e.isNetwork && !e.isUnauthorized && !e.isCancelled && !e.isLocked && e.code != 'not_configured') {
-            await _record(template, ok: false, errorCode: e.code ?? 'http_${e.statusCode}');
+        if (identical(_pendingWrite, template)) {
+          // Pano önceki isteği hâlâ yazıyordu (202): şablon YENİDEN gönderilmez, yalnız panodaki sonuç denetlenir.
+          if (!await _awaitBoard(template)) throw const SetupProblemException(stillWritingProblem);
+        } else {
+          TemplateApplyResult? result;
+          try {
+            result = await ctx.deviceCall((api) => api.applyTemplate(envelope));
+          } on LocalApiException catch (e) {
+            // Yanıt kayboldu (ağ / zaman aşımı): yazım panoda gerçekleşmiş olabilir. Panodan geri okunur; aynı şablon ve
+            // sürüm yüklüyse başarı sayılır (kullanıcı gereksiz yere yeniden yazmaz, kayıt ve yeniden yükleme yapılır).
+            if (!((e.isNetwork || e.code == 'timeout') && await _boardHas(template))) {
+              // Pano isteği gerçekten değerlendirip reddettiyse (ağ / anahtar / iptal hariç) ret de kaydedilir.
+              if (!e.isNetwork && !e.isUnauthorized && !e.isCancelled && !e.isLocked && e.code != 'not_configured') {
+                await _record(template, ok: false, errorCode: e.code ?? 'http_${e.statusCode}');
+              }
+              throw SetupProblemException(applyProblem(e));
+            }
           }
-          throw SetupProblemException(applyProblem(e));
+          if (result != null && result.pending) {
+            // 202 {pending:true}: pano yazmayı sürdürüyor; sonuç `GET /api/template` ile beklenir.
+            _pendingWrite = template;
+            if (!await _awaitBoard(template)) throw const SetupProblemException(stillWritingProblem);
+          }
         }
+        _pendingWrite = null;
         ctx.ensureActive();
         _applied = template;
         _board = BoardTemplateInfo(templateId: template.templateId, version: template.version, label: label);
@@ -199,6 +217,48 @@ class TemplateLogic extends SetupLogic {
         ctx.ensureActive();
         await onApplied?.call();
       });
+
+  /// Panonun 202 `pending` ile sürdürdüğü yazım (yeniden denemede şablon yeniden gönderilmez, yalnız denetlenir).
+  InstallTemplate? _pendingWrite;
+
+  /// Pano yazmayı sürdürüyor (202 sonrası bekleme süresi doldu): "Tekrar dene" yalnız panoyu yeniden denetler.
+  bool get awaitingBoard => _pendingWrite != null;
+
+  /// 202 sonrası yoklama aralığı ve üst sınırı.
+  static const Duration pendingPollInterval = Duration(seconds: 1);
+  static const Duration pendingPollTimeout = Duration(seconds: 20);
+
+  /// Panoda [template] görünene kadar [pendingPollInterval] aralıkla yoklar (en çok [pendingPollTimeout]).
+  Future<bool> _awaitBoard(InstallTemplate template) async {
+    final deadline = ctx.clock.now().add(pendingPollTimeout);
+    while (true) {
+      await ctx.delay(pendingPollInterval);
+      ctx.ensureActive();
+      if (await _boardHas(template)) return true;
+      if (!ctx.clock.now().isBefore(deadline)) return false;
+    }
+  }
+
+  /// 202 sonrası pano zamanında bitirmedi.
+  static const SetupProblem stillWritingProblem = SetupProblem(
+    kind: SetupProblemKind.timeout,
+    title: 'Pano yazmayı sürdürüyor',
+    why: 'Pano yazmayı sürdürüyor; birkaç saniye sonra yeniden kontrol edin.',
+    todo: '"Tekrar dene" panodaki şablonu yeniden kontrol eder (şablon yeniden gönderilmez).',
+  );
+
+  /// Panoda [template]'in kimliği ve sürümü yüklü mü (`GET /api/template`); okunamazsa `false`.
+  Future<bool> _boardHas(InstallTemplate template) async {
+    try {
+      ctx.ensureActive();
+      final info = await ctx.deviceCall((api) => api.fetchTemplate());
+      return info.templateId == template.templateId && info.version == template.version;
+    } on LocalApiException {
+      return false;
+    } on SetupProblemException {
+      return false;
+    }
+  }
 
   /// Yazım kaydı (`POST /template-writes`, `via: "lan"`): en iyi çaba; başarısızlık yazımı geri almaz.
   Future<void> _record(InstallTemplate template, {required bool ok, String? errorCode}) async {

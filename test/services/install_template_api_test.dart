@@ -145,6 +145,12 @@ void main() {
       expect(result.rev, 9);
     });
 
+    test('202 {pending:true} hata değildir: pending işaretlenir', () async {
+      mock.on('POST', '/api/template/apply', (r) => jsonResponse(<String, dynamic>{'pending': true}, status: 202));
+      final result = await api.applyTemplate(<String, dynamic>{'template': <String, dynamic>{}});
+      expect(result.pending, isTrue);
+    });
+
     for (final c in <(int, String, String?)>[
       (403, 'local_loosen_forbidden', null),
       (409, 'zone_latched', null),

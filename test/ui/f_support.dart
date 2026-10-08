@@ -253,6 +253,17 @@ class FakeDevice {
   /// Bir sonraki `POST /api/template/apply` bu hatayla reddedilir: `(status, error, path)` (tek seferlik).
   (int, String, String?)? templateRejectOnce;
 
+  /// Bir sonraki uygulama: `applied` = pano şablonu yazar ama yanıt kaybolur; `dropped` = istek panoya ulaşmaz.
+  /// İkisinde de istemci ağ hatası görür (tek seferlik).
+  String? templateApplyNetworkFailOnce;
+
+  /// Atanırsa bir sonraki uygulama 202 `{"pending":true}` döner ve şablon `GET /api/template`'te ancak bu süre (sanal
+  /// saat) sonra görünür (tek seferlik).
+  Duration? templatePendingOnce;
+  DateTime? _tplVisibleAt;
+  String? _tplPrevId;
+  int _tplPrevVer = 0;
+
   /// Gelen uygulama zarfları.
   final List<Map<String, dynamic>> templateApplies = <Map<String, dynamic>>[];
 
@@ -807,6 +818,10 @@ class FakeDevice {
     final denied = _auth(r);
     if (denied != null) return denied;
     if (!templateCaps) return _err(404, 'not_found');
+    final visibleAt = _tplVisibleAt;
+    if (visibleAt != null && clock.now().isBefore(visibleAt)) {
+      return _json(<String, dynamic>{'template_id': _tplPrevId, 'version': _tplPrevVer, 'label': ''});
+    }
     return _json(<String, dynamic>{
       'template_id': tplId,
       'version': tplVer,
@@ -822,6 +837,9 @@ class FakeDevice {
     if (denied != null) return denied;
     if (!templateCaps) return _err(404, 'not_found');
     final body = r.json ?? const <String, dynamic>{};
+    final netFail = templateApplyNetworkFailOnce;
+    templateApplyNetworkFailOnce = null;
+    if (netFail == 'dropped') throw const SocketException('Bağlantı koptu');
     templateApplies.add(Map<String, dynamic>.of(body));
     final reject = templateRejectOnce;
     if (reject != null) {
@@ -848,10 +866,19 @@ class FakeDevice {
         for (final raw in tpl['dis'] as List)
           SimDi((raw as Map)['ch'] as int, raw['name'] as String),
       ]);
+    _tplPrevId = tplId;
+    _tplPrevVer = tplVer;
     tplId = meta['template_id'] as String;
     tplVer = meta['version'] as int;
     tplLabel = (body['label'] as String?) ?? '';
     safetyRev++;
+    if (netFail == 'applied') throw const SocketException('Yanıt kayboldu');
+    final pending = templatePendingOnce;
+    if (pending != null) {
+      templatePendingOnce = null;
+      _tplVisibleAt = clock.now().add(pending);
+      return _json(<String, dynamic>{'pending': true}, status: 202);
+    }
     return _json(<String, dynamic>{'ok': true, 'template_id': tplId, 'version': tplVer, 'rev': safetyRev});
   }
 

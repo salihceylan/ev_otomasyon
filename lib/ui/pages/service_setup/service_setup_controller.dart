@@ -320,11 +320,12 @@ class ServiceSetupController extends ChangeNotifier {
   /// kendiliğinden "tamam" sayılmaz: yalnız test kalır (K-Ş10).
   Future<void> _onTemplateApplied() async {
     if (_disposed) return;
-    relays.resetForTemplate();
+    final hadQueued = relays.resetForTemplate();
     shutters.resetForTemplate();
     buttons.resetForTemplate();
     _notify();
     _schedulePersist();
+    if (hadQueued) await relays.dropQueuedSafetyQuietly();
     if (ctx.target != null) await relays.load();
   }
 

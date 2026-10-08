@@ -235,15 +235,19 @@ class TemplatePreview {
 /// Şablon uygulama sonucu (`POST /api/template/apply` 200): `{ok, template_id, version, rev}`.
 @immutable
 class TemplateApplyResult {
-  const TemplateApplyResult({this.templateId, this.version = 0, this.rev});
+  const TemplateApplyResult({this.templateId, this.version = 0, this.rev, this.pending = false});
 
   final String? templateId;
   final int version;
   final int? rev;
 
+  /// 202 `{"pending":true}`: pano yazmayı sürdürüyor; sonuç `GET /api/template` ile denetlenir.
+  final bool pending;
+
   factory TemplateApplyResult.fromJson(Map<String, dynamic> json) => TemplateApplyResult(
         templateId: asNonEmptyString(json['template_id']),
         version: asInt(json['version']) ?? 0,
         rev: asInt(json['rev']),
+        pending: asBool(json['pending']) == true,
       );
 }
