@@ -12,6 +12,8 @@
 //   - servis PIN'i: accounts.json'daki PIN sunucuda hala "active" ise yenisi uretilmez (kullanilmis/suresi dolmus/
 //     15 dk'dan az kalmis ise yenilenir)
 //   - cihaz simulatoru: zaten bulutta cevrimiciyse MQTT kimligi yeniden uretilmez
+//   - yerel anahtar: sunucu dondurduyse (pano-6) accounts.json'daki anahtar sunucunun guncel anahtarina esitlenir;
+//     bekleyen dondurme ayni adimda tamamlanana kadar beklenir (sonraki tohum yine bos islem)
 //
 // Uretilenler (hepsi .runtime/accounts.json'a yazilir, repoya DEGIL):
 //   super_user (SQL, bcrypt)          : qa.super@example.com
@@ -441,25 +443,53 @@ export async function runSeed({ rt, dbUrl, apiBase = `http://127.0.0.1:${PORTS.a
     const port = info.http_port;
     const home = acc.homes.home1;
     const did = [];
+    const keyNotes = []; // yalniz accounts.json'u esitleyen isler (simulator durumu degismez: bulut kimligi yeniden uretilmez)
+    // pano-6: sunucu yerel anahtari kendisi DONDURUR (uye cikarma, servis oturumu bitisi, devir...); accounts.json'daki
+    // anahtar eskimis olabilir. Guncel anahtar sahibin GET local-key ucundan okunur (her okuma denetim kaydi yazar:
+    // bos islemde CAGRILMAZ).
+    const readServerKey = async () => {
+      const res = await api.request('GET', `/homes/${home.id}/devices/${encodeURIComponent(info.uid)}/local-key`, { token: tok('owner1') });
+      return first(dataOf(res), 'local_key');
+    };
+    const keyWorks = async (key) => !!key && (await simCall(port, 'GET', '/api/auth/check', { key })).status === 200;
     // sunucudaki yerel anahtar: envanter yanitindan, yoksa sahibin GET local-key ucundan
     let serverKey = info.local_key;
-    if (!serverKey) {
-      const res = await api.request('GET', `/homes/${home.id}/devices/${encodeURIComponent(info.uid)}/local-key`, { token: tok('owner1') });
-      serverKey = first(dataOf(res), 'local_key');
-    }
+    if (!serverKey) serverKey = await readServerKey();
     if (!serverKey) throw new SeedError('sunucunun yerel anahtari alinamadi');
-    info.local_key = serverKey;
     const st = (await simCall(port, 'GET', '/api/status')).json;
     if (!st) throw new SeedError(`simulator ${port} cevap vermiyor`);
     if (st.provisioned === false) {
       const r = await simCall(port, 'POST', '/api/factory/init', { body: { local_key: serverKey, ap_pass: `ap-${serverKey}`.slice(0, 32) } });
       if (r.status !== 200) throw new SeedError(`factory/init HTTP ${r.status}`);
       did.push('provizyonlandi');
-    } else if ((await simCall(port, 'GET', '/api/auth/check', { key: serverKey })).status !== 200) {
-      const r = await simCall(port, 'POST', '/api/auth/rekey', { key: info.bootstrap_local_key, body: { new_key: serverKey } });
-      if (r.status !== 200) throw new SeedError(`rekey HTTP ${r.status} (bootstrap anahtari uyusmuyor olabilir: reset)`);
-      did.push('yerel anahtar sunucununkiyle degistirildi');
+    } else if (!(await keyWorks(serverKey))) {
+      const fresh = await readServerKey();
+      if (fresh && fresh !== serverKey && (await keyWorks(fresh))) {
+        serverKey = fresh;
+        keyNotes.push('yerel anahtar sunucudan tazelendi (sunucu dondurmus)');
+      } else {
+        serverKey = fresh || serverKey;
+        const r = await simCall(port, 'POST', '/api/auth/rekey', { key: info.bootstrap_local_key, body: { new_key: serverKey } });
+        if (r.status !== 200) throw new SeedError(`rekey HTTP ${r.status} (bootstrap anahtari uyusmuyor olabilir: reset)`);
+        did.push('yerel anahtar sunucununkiyle degistirildi');
+      }
     }
+    info.local_key = serverKey;
+    // Bekleyen dondurme (devices.local_key_pending_enc) varsa kopru uzlastiricisi simulator bulutta iken yeni anahtari
+    // `set_local_key` ile iletir ve lk_fp ile dogrulayinca takas eder: tamamlanmasi BU adimda beklenir, sonra accounts.json
+    // sunucunun guncel anahtarina esitlenir (aksi halde takas tohumdan sonra olur ve sonraki tohum bos islem olmaz).
+    const settleRotation = async () => {
+      const pending = async () => (await withDb((c) => c.query(
+        'SELECT local_key_pending_enc IS NOT NULL AS p FROM devices WHERE UPPER(device_uuid) = UPPER($1)', [info.uid],
+      ))).rows.some((x) => x.p);
+      if (!(await pending())) return;
+      await waitFor(async () => !(await pending()), { timeoutMs: 45000, intervalMs: 500, label: 'yerel anahtar dondurmesi' }).catch(() => null);
+      const fresh = await readServerKey();
+      if (!fresh || fresh === serverKey || !(await keyWorks(fresh))) return;
+      serverKey = fresh;
+      info.local_key = fresh;
+      keyNotes.push('bekleyen yerel anahtar dondurmesi tamamlandi; anahtar tazelendi');
+    };
 
     // bulut kimligi: simulator ZATEN bu evin konusuna bagli ve cevrimiciyse yeniden URETILMEZ (eski kimlik silinir, cihaz atilir)
     if (!did.length && !home1Cred && home.mqtt_topic_id) {
@@ -473,7 +503,11 @@ export async function runSeed({ rt, dbUrl, apiBase = `http://127.0.0.1:${PORTS.a
         if (!m.connected) {
           await waitFor(async () => { m = await mqttOf(); return !!(m && m.connected); }, { timeoutMs: 10000, intervalMs: 500, label: 'simulator bulut baglantisi' }).catch(() => null);
         }
-        if (m && m.connected) return unchanged('simulator zaten provizyonlu ve bulutta cevrimici (bulut kimligi yeniden uretilmedi)');
+        if (m && m.connected) {
+          await settleRotation();
+          const msg = 'simulator zaten provizyonlu ve bulutta cevrimici (bulut kimligi yeniden uretilmedi)';
+          return keyNotes.length ? applied(`${keyNotes.join('; ')}; ${msg}`) : unchanged(msg);
+        }
       }
     }
     // bulut kimligi (claim yaniti tek seferliktir; yoksa mevcut kimlik yeniden uretilir)
@@ -489,7 +523,9 @@ export async function runSeed({ rt, dbUrl, apiBase = `http://127.0.0.1:${PORTS.a
     });
     if (r.status !== 200) throw new SeedError(`mqtt/config HTTP ${r.status}`);
     home.mqtt_topic_id = first(cred, 'topic_id');
-    return applied(`${did.length ? `${did.join(', ')}; ` : ''}simulator bulut kimligi yazildi`);
+    await settleRotation();
+    const done = [...did, ...keyNotes];
+    return applied(`${done.length ? `${done.join(', ')}; ` : ''}simulator bulut kimligi yazildi`);
   }, { needs: ['claim_home1'] });
 
   // ---------------------------------------------------------------- 7) aile uyesi ve misafirler (davet)

@@ -1,5 +1,6 @@
 // Uctan uca "duman testi" (run.js smoke): calisan QA yiginini (sunucu + broker + simulator) GERCEK REST/MQTT
-// uzerinden dener. Tohumlanmis hesaplari kullanir; yan etkileri geri alinir (servis PIN'i yenilenir, uye geri eklenir).
+// uzerinden dener. Tohumlanmis hesaplari kullanir; yan etkileri geri alinir (servis PIN'i yenilenir, uye geri eklenir,
+// uye cikarmanin dondurdugu yerel anahtar accounts.json'a yazilir).
 // Amac: yiginin "tum sistem calisiyor" iddiasini somut denetimle desteklemek ve sunucu/firmware sozlesme
 // sapmalarini erken yakalamak. Basarisiz denetimler gercek bulgudur (QA yigini degil, sunucu/sozlesme olabilir).
 import mqtt from 'mqtt';
@@ -62,6 +63,24 @@ export async function runSmoke({ rt, apiBase = `http://127.0.0.1:${PORTS.api}/ap
   const sim = (method, path, o = {}) => fetchJson(`${simBase}${path}`, { method, headers: o.key ? { 'X-Device-Key': o.key } : {}, body: o.body, timeoutMs: 8000 });
   const simState = async () => (await sim('GET', '/__sim/state')).json;
   const cmd = (who, command, extra = {}) => raw('POST', `/devices/${uid}/command`, { token: tokens[who], body: { home_id: homeId, command, ...extra } });
+  // pano-6: uye cikarma tek panolu evde yerel anahtari DONDURUR (bekleyen -> `set_local_key` -> pano lk_fp'siyle takas).
+  // Pano eski anahtari birakinca sunucunun guncel anahtari panoda dogrulanir ve accounts.json'a yazilir (tohum durumu).
+  async function syncRotatedLocalKey() {
+    const info = acc.devices.home1;
+    const old = info.local_key;
+    expect(old, 'accounts.json home1 yerel anahtari yok');
+    const status = async (key) => (await sim('GET', '/api/auth/check', { key })).status;
+    await waitFor(async () => (await status(old)) === 401, { timeoutMs: 45000, intervalMs: 500, label: 'uye cikarma yerel anahtari dondurmedi (pano-6)' });
+    let fresh = null;
+    await waitFor(async () => {
+      const k = first(dataOf(await api.request('GET', `/homes/${homeId}/devices/${encodeURIComponent(uid)}/local-key`, { token: tokens.owner1 })), 'local_key');
+      if (!k || k === old || (await status(k)) !== 200) return false;
+      fresh = k;
+      return true;
+    }, { timeoutMs: 20000, intervalMs: 700, label: 'sunucu panonun yeni yerel anahtarini kesinlestirmedi' });
+    info.local_key = fresh;
+    writeAccounts(rt, acc);
+  }
 
   try {
     // ---------------------------------------------------------------- oturumlar
@@ -245,6 +264,7 @@ export async function runSmoke({ rt, apiBase = `http://127.0.0.1:${PORTS.api}/ap
       // geri ekle (tohum durumunu koru)
       const inv = dataOf(await api.request('POST', `/homes/${homeId}/invitations`, { token: tokens.owner1, body: { role: 'resident' } }));
       await api.request('POST', '/homes/join', { token: tokens.resident, body: { code: first(inv, 'code', 'invite_code') } });
+      await syncRotatedLocalKey();
     });
 
     // ---------------------------------------------------------------- servis PIN
