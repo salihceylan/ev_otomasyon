@@ -5,8 +5,9 @@ Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, test
 
 **Aracı açmak için:** `ev_otomasyon_servis_yazilimi` klasöründeki **`ev_otomasyon_sistemi.bat`** dosyasına çift tıklayın.
 
-> **Rehberin kapsamı:** Waveshare **ESP32-S3-ETH-8DI-8RO** pano kartı + AHBU firmware'i. Araç üç sekmeden oluşur:
-> **1. Firmware Yükleyici**, **2. Karekod Üret & Etiket Bas (Envanter)**, **3. Cihaz Provizyonu (USB / Wi-Fi)**.
+> **Rehberin kapsamı:** Waveshare **ESP32-S3-ETH-8DI-8RO** pano kartı + AHBU firmware'i. Araç beş sekmeden oluşur:
+> **1. Firmware Yükleyici**, **2. Karekod Üret & Etiket Bas (Envanter)**, **3. Cihaz Provizyonu (USB / Wi-Fi)**,
+> **4. Siteler** ve **5. Şablonlar** (toplu site kurulumu: site/daire, kurulum şablonu, karta yazım, kablolama şeması — Bölüm 4b).
 >
 > **Tek bakışta akış:** Giriş yap → karttan MAC oku → sunucuya kaydet (PIN + etiket) → etiketi kaydet/yazdır → firmware yükle (provizyon USB'den **otomatik** başlar) → **"Provizyon doğrulandı"** görününce → (önerilir) **etiketteki 2. karekodu telefon kamerasıyla okutup ağa bağlan** → etiketi karta yapıştır.
 
@@ -16,7 +17,7 @@ Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, test
 
 Bir kartı müşteriye gönderilecek hâle getirmek için beş iş yapar:
 
-1. **Sunucuya giriş** yapar (yalnızca yetkili "süper kullanıcı" hesabıyla).
+1. **Sunucuya giriş** yapar (yetkili "süper kullanıcı" ya da "servis sorumlusu" hesabıyla; fabrika kaydı yalnız süper kullanıcı).
 2. Kartı sunucudaki **envantere kaydeder**; kartın seri numarasını, 6 haneli **PIN**'ini ve gizli anahtarını üretir.
 3. Kartın **etiketini** hazırlar. Etiketin üzerinde **iki karekod** vardır: **1) Daireye bağla (uygulama)** ve **2) Kurulum Wi-Fi'sine bağlan (telefon kamerası)**.
 4. Kartın içine **yazılımı (firmware)** yükler.
@@ -72,13 +73,17 @@ Pencerenin en üstünde iki şerit vardır:
 - **Lacivert başlık:** "AHBU AKILLI EV SİSTEMLERİ"; sağında yüklü firmware sürümü rozeti ve **Koyu tema / Açık tema** anahtarı (görünümü değiştirir; seçiminiz bir sonraki açılış için hatırlanır, iş akışı değişmez).
 - **Oturum şeridi:** solda sunucu adresi, ortada kim girişli olduğu ("Giriş yapılmadı" veya e-posta adresiniz), sağda **Sunucuya Giriş** ve **Oturumu Kapat** düğmeleri. Oturum hatırlanıyorsa rozette **"(süper kullanıcı, hatırlanıyor)"** yazar.
 
-Altında **3 sekme** vardır:
+Altında **5 sekme** vardır:
 
 | Sekme | Ne için? |
 |---|---|
 | **1. Firmware Yükleyici (Flasher)** | COM port seçimi, firmware'i karta yükleme, çip bilgisi okuma, hafıza silme. |
 | **2. Karekod Üret & Etiket Bas (Envanter)** | Kartı sunucuya kaydetme, etiket üretme/kaydetme/yazdırma, envanter listesi. |
 | **3. Cihaz Provizyonu (USB / Wi-Fi)** | Kartın gizli anahtarını yazma ve doğrulama; sonuçların izlenmesi. |
+| **4. Siteler** | Site ekle/düzenle/sil, daireleri toplu üret, daireye şablon ata, kartı daireye bağla, ilerleme. (Bölüm 4b) |
+| **5. Şablonlar** | Kurulum şablonu düzenleyici, sürüm geçmişi, karta yazım (USB / Ethernet), kablolama şeması PDF. (Bölüm 4b) |
+
+**Roller:** **süper kullanıcı** her şeyi yapar. **Servis sorumlusu** giriş yapabilir; şeritte **"(servis sorumlusu)"** yazar. Siteleri, şablonları ve karta yazımı kullanır, envanter listesini görür; ama **SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET**, **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri onun için kapalıdır (fabrika kaydı yalnızca süper kullanıcıya açıktır).
 
 **Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz **silinemez**.
 
@@ -99,7 +104,7 @@ Her kart için aynı 8 adımı uygulayın.
    - **Giriş Yap**'a basın.
 4. **Ne görmelisiniz?** Şeritte e-posta adresiniz ve **(süper kullanıcı)** yazar, **Sunucuya Giriş** düğmesi **Hesap Değiştir**'e dönüşür; **2. sekmedeki** tablo envanteri listeler. **Beni hatırla** işaretliyse bir sonraki açılışta giriş penceresi çıkmaz: araç kayıtlı oturumla sessizce girer (Günlükte "Kayıtlı oturum sessizce açıldı"; şeritte "hatırlanıyor"). Oturum artık geçerli değilse kayıt silinir ve eskisi gibi **Sunucuya Giriş** beklenir.
 
-> Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Araç yalnızca **süper kullanıcı** hesabıyla çalışır.
+> Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Kart kaydı (bu 8 adım) **süper kullanıcı** hesabı ister; servis sorumlusu hesabı yalnız siteler/şablonlar/karta yazım içindir.
 
 ### Adım 2 — Kartı bağlayın ve kimliğini okuyun
 
@@ -204,6 +209,79 @@ Provizyon bittikten sonra kartın kurulum ağı (`AHBU-XXXXXX`, parolalı) yakla
 - [ ] (Önerilir) 2. karekod telefon kamerasıyla okutuldu, telefon kartın ağına bağlandı
 - [ ] Etiket karta yapıştırıldı
 - [ ] "Kaydı Bellekten Sil / Yeni Cihaz" yapıldı
+
+---
+
+## 4b. Siteler ve kurulum şablonları (toplu kurulum)
+
+Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **daire tipi şablonu** hazırlanır; atölyede şablon karta
+**USB** ya da **Ethernet** ile yazılır; kartla birlikte **kablolama şeması (PDF)** sahaya gider. Bu bölüm **süper kullanıcı** ve
+**servis sorumlusu** içindir. Tek daire kurulumunda da aynı şablonlar kullanılabilir (sitesi olmayan **Genel** şablonlar).
+
+### 4b.1 Site oluşturma (4. Siteler sekmesi)
+
+1. **Siteleri Yenile** ile listeyi alın; **Site Ekle** ile yeni site açın: site adı (zorunlu), adres, il, ilçe, sorumlu adı,
+   sorumlu telefonu, e-posta, blok sayısı, daire sayısı, not. **Siteyi Düzenle** / **Siteyi Sil** seçili site içindir
+   (dairesine kart bağlı site silinemez; silme "yumuşaktır", şablon sürümleri ve yazım kayıtları kalır).
+2. Siteyi seçin; alttaki **Daireler** tablosu dolar. **Toplu Daire Üret**: blok (ör. `A`), ilk ve son daire no (ör. 1-24),
+   isteğe bağlı daire tipi ve şablon. Var olan blok+no atlanır.
+3. Daireyi seçip **Şablon Ata** ile şablonunu, **Kart Bağla** ile kartın UID'sini (`AHBU-S3-XXXXXX`; boş = bağlantıyı kaldır) girin.
+4. "Durum" sütunu ilerlemeyi gösterir: **Planlandı → Yazıldı → Kuruldu → Teslim edildi**; "Son yazım" hangi sürümün hangi yolla
+   (USB/ETH) yazıldığını gösterir.
+
+### 4b.2 Şablon hazırlama (5. Şablonlar sekmesi)
+
+1. Üstten **Site**'yi (ya da **Genel**) seçip **Şablonları Yenile**'ye basın. **Yeni Şablon** / **Şablonu Düzenle** düzenleyiciyi açar;
+   **Çoğalt** aynı içeriği yeni adla kopyalar; **Sürüm Geçmişi** eski sürümleri listeler (eski sürümler değişmez);
+   **Şablonu Sil** listeden kaldırır (sürümler ve yazım kayıtları sunucuda kalır).
+2. Düzenleyicide: şablon adı, daire tipi, **Ek modül (RS485) var** + kanal + adres (**Kanalları Uygula** tabloları büyütür/küçültür).
+   - **Röle Çıkışları:** ad, oda, tip (**Lamba/Priz**, **Panjur (çift)**, **Darbe**), süre, bağlanacak yük. Panjur seçilince röle
+     **çift** olarak kurulur: tek numaralı röle **Yukarı**, ardından gelen **Aşağı**, ikisinin süresi aynıdır.
+   - Lamba satırındaki **💡** düğmesi **"Parlaklık ayarı yapılacak mı?"** diye sorar: evetse dimmer kaynağı (Modbus dimmer modülü /
+     köprü), adres ve kanal girilir; pencere dimmerin **nereye** konacağını yazar (K4 yönergesi; şemada da yer alır).
+   - **Girişler (DI):** ad, hedef röle, kip, kablolama notu ve **güvenlik rolü** (su, gaz, duman, kapı, pencere, hareket...) +
+     kontak **NO/NC** + bölge. Gaz/duman dedektörü her zaman **NC** bağlanır; sensör olan girişin hedef rölesi "Boşta" olur.
+   - **Güvenlik:** tepkiler açık/kapalı, kuruluk bekleme, bölge adları, güvenlik cihazları (vana / siren / fan; vanada kapanma kipi
+     ve akışkan). Cihaz panjur ya da darbe rölesine bağlanamaz.
+3. **Doğrula** yerel denetimi yapar; **Doğrula ve Kaydet (yeni sürüm)** önce yerel, sonra sunucu doğrulamasından geçirip **yeni sürüm**
+   olarak kaydeder. Sunucu reddederse hata kodu ve alan gösterilir; düzenleyiciye dönüp düzeltebilirsiniz.
+
+### 4b.3 Şablonu karta yazma
+
+1. **Siteler** sekmesinde daireyi seçip **Karta Yaz**'a (ya da **Şablonlar** sekmesinde şablonu seçip **Karta Yaz**'a) basın.
+2. Pencerede yol seçin:
+   - **USB (seri) — önerilen:** USB portunu seçin. Kart fiziksel olarak bağlı olduğu için güvenlik ayarlarını tamamen yazabilir.
+     Daireye bağlı kart varsa araç bağlı kartın o kart olduğunu denetler; değilse hiçbir şey yazmaz.
+   - **Ethernet (LAN):** kartın IP adresi (yalnız yerel ağ) ve UID'si. Kartın yerel anahtarı sunucudan alınır (denetim kaydı tutulur)
+     ve **ekranda gösterilmez**. Kart "**USB ile yazın**" derse güvenlik ayarları gevşiyordur: USB'yi seçin. Kart "**Önce FACTORYINIT
+     (provizyon) yapın ya da USB ile yazın**" derse kart henüz provizyonsuzdur (sıra: flash → FACTORYINIT → şablon).
+3. Araç şablonu gönderir, kart **atomik** uygular (geçersizse hiçbir şey değişmez), ardından karttan **geri okur**. Sonuç
+   "Karta Yazım Sonucu" alanında görünür ve sunucuya yazım kaydı işlenir (daire **Yazıldı** olur).
+4. Firmware yükleme + USB provizyon bittikten sonra **3. sekmede** **Şablon Yaz (aynı USB portu)** düğmesi aynı porttan şablon
+   yazmanızı kolaylaştırır.
+5. Kart bellekteki son kaydedilen kartsa etikete daire satırı eklenir (ör. `A Blok / Daire 12 · 3+1 · Şablon v4`); etiketi 2. sekmeden
+   yeniden kaydedip yazdırın.
+
+### 4b.4 Kablolama şeması (PDF)
+
+**Kablolama Şeması (PDF)** düğmesi (Şablonlar ve Siteler sekmesinde; ayrıca karta yazım sonrası araç sorar) A4 PDF üretir: başlık
+(site, blok/daire, şablon, daire tipi, sürüm, tarih), karta bakan klemens düzeni (R1-R8 üstte, D1-D8 altta; ek modül ayrı blok),
+her röle → yük/oda/tip (panjur çiftlerinde yön notu ve kilit uyarısı), her giriş → kablolama notu/kip/hedef ve sensörlerde tür +
+NO/NC + bölge, dimmer yerleşimi, güvenlik cihazları ve uyarılar (gaz için **sertifikalı bağımsız gaz dedektörü** şartı, vana kapanma kipi),
+şablon kimliği + sürümü taşıyan karekod. Alt bilgide **"Bu şema şablon sürümü vN içindir"** yazar: şemayı kartla birlikte sahaya gönderin.
+
+### 4b.5 Karta yazım hataları
+
+| Mesaj (kısaltılmış) | Anlamı | Ne yapmalı? |
+|---|---|---|
+| "USB ile yazın" (`local_loosen_forbidden`) | Ethernet'ten güvenlik gevşetilemez | USB yolunu seçin |
+| "Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın" (`unprovisioned`) | Kart provizyonsuz | 3. sekmede provizyon, sonra yeniden yazın |
+| "Kartın firmware'i şablon yazmayı desteklemiyor" (`unsupported_fw`) | Firmware v1.3.0'dan eski | Önce firmware güncelleyin |
+| "Aktarım bozuldu (CRC uyuşmadı)" (`tpl_crc`, `tpl_b64`) | USB verisi bozuldu; hiçbir şey değişmedi | Kabloyu kontrol edip yeniden deneyin |
+| "kilitli (alarmdaki) bir bölge" (`zone_latched`), "Hırsız alarmı kurulu" (`armed`) | Kart güvenlik durumunda | Alarmı onaylayın/kapatın, sonra yazın |
+| "Kart meşgul" (`busy`) | Panjur hareket halinde ya da bellek yetersiz | Birkaç saniye bekleyin |
+| "kalıcı belleğinde yer yok" (`storage`) | NVS dolu; uygulanmadı | Servis ekibine bildirin |
+| "Bağlı kart ... eşleşmiyor" (`mac_mismatch`) | Yanlış kart takılı | Doğru kartı bağlayın |
 
 ---
 
@@ -492,6 +570,15 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 ### D. Kullanılan sunucu uçları
 
 `POST /api/v1/auth/login` (+ `refresh`, `logout`), `POST /api/v1/admin/inventory/register` (yanıt: `local_key` + PIN'li `qr_claim_url`, **bir kez**), `GET /api/v1/admin/inventory`, `PATCH /api/v1/admin/inventory/:uid/status`, `DELETE /api/v1/admin/inventory/:uid`. Hata biçimi `{success:false, message, code}`; ham gövde kullanıcıya gösterilmez. Süper kullanıcı JWT'si (15 dk, otomatik yenilenir) veya isteğe bağlı `x-api-key`.
+
+Site / şablon (CONTRACTS §3e; süper kullanıcı + servis sorumlusu JWT'si, API anahtarı yetmez): `GET/POST /api/v1/sites`,
+`PATCH/DELETE /api/v1/sites/:id`, `GET /api/v1/sites/:id/flats`, `POST /api/v1/sites/:id/flats/bulk`, `PATCH/DELETE …/flats/:flatId`,
+`PUT …/flats/:flatId/device`, `GET/POST /api/v1/templates`, `GET/PUT/DELETE /api/v1/templates/:id`, `GET …/versions[/:v]`,
+`POST /api/v1/templates/validate` (422 `TEMPLATE_INVALID` + şablon kodu + alan yolu), `POST /api/v1/template-writes`
+(`via` usb|eth), `GET /api/v1/admin/inventory/:uid/local-key` (Ethernet yazımı; anahtar maskelenir, gösterilmez).
+Karta: seri `TPL BEGIN <bayt> <crc32>` → `TPL DATA <base64 ≤150>` → `TPL COMMIT` (`OK tpl_applied <id> <sürüm>` | `ERR <kod> [yol]`)
+→ `TPL STATUS`; LAN `POST /api/template/apply` (`X-Device-Key`) → `GET /api/template`. Şablon biçimi ve kodlar:
+`docs/contracts/template/README.md`; araç doğrulayıcısı `template_model.py`, PDF `wiring_pdf.py`, arayüz `site_template_ui.py`.
 
 ### E. Firmware derleme ve sürüm klasörü
 

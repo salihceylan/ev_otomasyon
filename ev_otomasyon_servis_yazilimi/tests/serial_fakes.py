@@ -39,6 +39,9 @@ class FakeFirmwareCli:
         reset_fails=False,
         drop_factoryinit=False,
         inject_garbage=False,
+        tpl_supported=True,
+        tpl_error=None,
+        tpl_drop_data=0,
     ):
         self.mac = mac.upper()
         self.provisioned = provisioned
@@ -55,6 +58,16 @@ class FakeFirmwareCli:
         self.drop_factoryinit = drop_factoryinit  # FACTORYINIT satırı hiç işlenmez (yanıt da yok)
         self.inject_garbage = inject_garbage      # ilk STATUS'tan sonra satır tamponuna çöp bırakır (USB gürültüsü)
         self._garbage_pending = False
+        # Şablon (TPL, README "Seri protokol"): v1.3.0+ firmware'i. tpl_error: COMMIT'te "ERR <kod> [yol]" (örn.
+        # "zone_latched"); tpl_drop_data: ilk N DATA parçası kaybolur (CRC uyuşmazlığı benzetimi).
+        self.tpl_supported = tpl_supported
+        self.tpl_error = tpl_error
+        self.tpl_drop_data = tpl_drop_data
+        self.tpl_id = None
+        self.tpl_ver = 0
+        self.tpl_label = ""
+        self.tpl_applied = []                     # TEST DENETİMİ: uygulanan zarflar (dict)
+        self._tpl = None                          # {"len", "crc", "buf"} aktarım sürerken
         self.booted = boot_ticks <= 0
         self.received = []                        # TEST DENETİMİ: cihazın aldığı (kırpılmış) komut satırları
         self.commands = []                        # ilk sözcükler (STATUS, FACTORYINIT, ...)
@@ -132,6 +145,8 @@ class FakeFirmwareCli:
         self.commands.append(upper)
         if upper == "FACTORYINIT":
             pass  # yankı YOK
+        elif upper == "TPL" and self.tpl_supported and (words + [""])[1].upper() == "DATA":
+            pass  # README: TPL DATA satırları yankılanmaz
         elif upper == "WIFI" and (words + ["", ""])[1].upper() != "CLEAR":
             self._say("")
             self._say("[CLI] Komut alindi: WIFI <ssid> <gizli>")
@@ -157,10 +172,81 @@ class FakeFirmwareCli:
                 self.provisioned = False
                 self.local_key = ""
                 self._say(reply % "SILINDI")
+        elif upper == "TPL" and self.tpl_supported:
+            self._tpl_command(words[1:])
         elif upper in ("HELP", "?"):
             self._say("[CLI] Komutlar: STATUS, MQTT, ... FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY, REBOOT")
         else:
             self._say("[CLI] Bilinmeyen komut: '%s'. (HELP yazin)" % first)
+
+    def _tpl_command(self, args):
+        """README: TPL BEGIN <bayt> <crc32-hex8> | DATA <base64> | COMMIT | ABORT | STATUS (sınıf kendi içinde: stub paket)."""
+        import base64
+        import binascii
+        import json
+        import zlib
+
+        sub = (args[0].upper() if args else "")
+        if sub == "STATUS":
+            line = "TPL %s %d %s" % (self.tpl_id or "-", self.tpl_ver, self.tpl_label)
+            self._out.extend((line.rstrip() + "\r\n").encode("utf-8"))  # firmware UTF-8 yazar (etiket Türkçe olabilir)
+        elif sub == "ABORT":
+            self._tpl = None
+            self._say("OK tpl_abort")
+        elif sub == "BEGIN":
+            try:
+                size, crc = int(args[1]), args[2].lower()
+            except (IndexError, ValueError):
+                self._say("ERR tpl_size")
+                return
+            if size <= 0 or size > 24576 or len(crc) != 8:
+                self._say("ERR tpl_size")
+                return
+            self._tpl = {"len": size, "crc": crc, "buf": bytearray()}
+            self._say("OK tpl_begin")
+        elif sub == "DATA":
+            if self._tpl is None:
+                self._say("ERR tpl_no_begin")
+                return
+            try:
+                chunk = base64.b64decode((args + [""])[1], validate=True)
+            except (binascii.Error, ValueError):
+                self._tpl = None
+                self._say("ERR tpl_b64")
+                return
+            if self.tpl_drop_data > 0:
+                self.tpl_drop_data -= 1
+                chunk = b"\x00" * len(chunk)  # bozulan parça: CRC tutmaz
+            self._tpl["buf"].extend(chunk)
+            if len(self._tpl["buf"]) > self._tpl["len"]:
+                self._tpl = None
+                self._say("ERR tpl_overflow")
+                return
+            self._say("OK tpl_data %d" % len(self._tpl["buf"]))
+        elif sub == "COMMIT":
+            state, self._tpl = self._tpl, None
+            if state is None:
+                self._say("ERR tpl_no_begin")
+                return
+            data = bytes(state["buf"])
+            if len(data) != state["len"] or ("%08x" % (zlib.crc32(data) & 0xFFFFFFFF)) != state["crc"]:
+                self._say("ERR tpl_crc")
+                return
+            try:
+                envelope = json.loads(data.decode("utf-8"))
+                meta = envelope["template"]["meta"]
+            except (ValueError, KeyError, TypeError):
+                self._say("ERR bad_json")
+                return
+            if self.tpl_error:
+                self._say("ERR " + self.tpl_error)
+                return
+            self.tpl_applied.append(envelope)
+            self.tpl_id, self.tpl_ver = meta["template_id"], int(meta["version"])
+            self.tpl_label = envelope.get("label") or meta.get("name", "")[:31]
+            self._say("OK tpl_applied %s %d" % (self.tpl_id, self.tpl_ver))
+        else:
+            self._say("ERR bad_cmd")
 
     def _status(self):
         ssid = "AHBU-" + self.mac.replace(":", "")[-6:]
@@ -178,6 +264,8 @@ class FakeFirmwareCli:
             "  - Yerel Girisler (8DI): [D1:0 D2:0 D3:0 D4:0 D5:0 D6:0 D7:0 D8:0]",
             "  - Panjurlar: []",
         ]
+        if self.tpl_supported:  # v1.3.0+: CONTRACTS §3e yeni STATUS satırları (eski satırlar aynen kalır)
+            lines += ["  - Ethernet: yok -", "  - Sablon: %s v%d" % (self.tpl_id or "-", self.tpl_ver)]
         for text in lines:
             self._say(text)
             self._noise("[WiFiManager] kesintili gunluk")

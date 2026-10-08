@@ -60,7 +60,11 @@ except Exception as _exc:  # noqa: BLE001 - ortam sorunu: arayüz testleri atlan
 SOURCE_FILES = [
     os.path.join(TOOL_DIR, "ev_otomasyon_sistemi.py"),
     os.path.join(TOOL_DIR, "factory_client.py"),
-    os.path.join(TOOL_DIR, "tool_theme.py"),  # görsel tema modülü de sır/kabuk/TLS taramasından geçer    os.path.join(TOOL_DIR, "session_store.py"),  # oturum deposu (DPAPI) de sır/kabuk/TLS taramasından geçer
+    os.path.join(TOOL_DIR, "tool_theme.py"),  # görsel tema modülü de sır/kabuk/TLS taramasından geçer
+    os.path.join(TOOL_DIR, "session_store.py"),  # oturum deposu (DPAPI) de sır/kabuk/TLS taramasından geçer
+    os.path.join(TOOL_DIR, "template_model.py"),  # Faz 3: şablon modeli, site/şablon arayüzü, PDF şeması
+    os.path.join(TOOL_DIR, "site_template_ui.py"),
+    os.path.join(TOOL_DIR, "wiring_pdf.py"),
 ]
 
 def _fake_protect(data):
@@ -652,8 +656,9 @@ class ServerClientTests(unittest.TestCase):
         self.assertEqual(api.calls, [])
 
     def test_non_super_user_is_rejected_and_session_revoked(self):
+        # İP-3.1: servis sorumlusu (service_user) artık girebilir (bkz. test_site_template); diğer roller reddedilir.
         client, api = make_client()
-        api.login_role = "service_user"
+        api.login_role = "user"
         with self.assertRaises(fc.ApiError) as ctx:
             client.login("a@example.com", FAKE_PASSWORD)
         self.assertEqual(ctx.exception.status, 403)
@@ -1721,6 +1726,12 @@ class AppSmokeTests(unittest.TestCase):
             mock.patch.object(tool.filedialog, "askopenfilename", return_value=""),
             mock.patch.object(tool.ServerLoginDialog, "ask", return_value=None),
         ]
+        # 4./5. sekmenin modal pencereleri (site/şablon/karta yazım) testte açılmaz: "İptal" gibi davranır
+        import site_template_ui  # noqa: PLC0415
+
+        for dialog in ("SiteDialog", "BulkFlatsDialog", "ChoiceDialog", "TemplateEditorDialog", "TemplateWriteDialog", "DimmerDialog"):
+            patches.append(mock.patch.object(getattr(site_template_ui, dialog), "ask", return_value=None))
+        patches.append(mock.patch.object(site_template_ui, "messagebox", self.dialogs))
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -1821,9 +1832,9 @@ class AppSmokeTests(unittest.TestCase):
             self.assertNotIn(secret, shown)
 
     # ---- iskelet --------------------------------------------------------------------------------------------
-    def test_window_has_three_tabs_and_no_callback_errors(self):
+    def test_window_has_five_tabs_and_no_callback_errors(self):
         titles = [self.app.notebook.tab(i, "text") for i in range(self.app.notebook.index("end"))]
-        self.assertEqual(len(titles), 3)
+        self.assertEqual(len(titles), 5)  # İP-3.2/3.3: 4. Siteler, 5. Şablonlar
         self.assertIn("Provizyon", titles[2])
         self.assertIn("Giriş yapılmadı", self.app.lbl_session.cget("text"))
         self.assertEqual(str(self.app.btn_logout.cget("state")), "disabled")

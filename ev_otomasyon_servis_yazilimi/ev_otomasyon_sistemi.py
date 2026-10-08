@@ -8,6 +8,8 @@ AHBU Ev Otomasyon Sistemi - Servis ve Üretim (Fabrika) Aracı
    ``WIFI:T:WPA;S:<AP SSID>;P:<ap_pass>;;``, telefon kamerası okur; ap_pass yalnızca metinde ve bu karekodda)
 3. Cihaz provizyonu (flash sonrası): TERCİHEN USB (seri) `FACTORYINIT` (anahtar kablosuz ağdan geçmez);
    YEDEK (güvensiz): kartın açık kurulum ağı üzerinden POST /api/factory/init
+4. Siteler (site/daire, toplu daire üretimi, kart bağlama) ve 5. Şablonlar (kurulum şablonu düzenleyici, sürümler, karta
+   yazım USB/Ethernet, kablolama şeması PDF) - ``site_template_ui.py`` (servis sorumlusu + süper kullanıcı)
 
 Güvenlik ilkeleri (docs/CONTRACTS.md):
 * Kodda sabit API anahtarı / parola YOKTUR. Sunucu kimlik bilgisi yalnızca çalışma anında diyalogdan
@@ -109,6 +111,7 @@ from tool_theme import (  # noqa: E402 - görsel tema: belirteçler/ttk stili/wi
     log_line_tag,
     theme_of,
 )
+from site_template_ui import SiteTemplateTabsMixin  # noqa: E402 - 4. Siteler / 5. Şablonlar sekmeleri (İP-3.2..3.5)
 from session_store import (  # noqa: E402 - "Beni hatırla": DPAPI şifreli refresh token + kimlik (parola ASLA saklanmaz)
     EXPIRED as RESTORE_EXPIRED,
     FORBIDDEN as RESTORE_FORBIDDEN,
@@ -135,6 +138,9 @@ ESPTOOL_TIMEOUT_S = {"read_mac": 30, "chip_id": 30, "erase_flash": 240, "write_f
 MIN_FIRMWARE_BYTES = 64 * 1024
 MAX_FIRMWARE_BYTES = 16 * 1024 * 1024
 LABEL_PRINT_NOTE = "Etiket PIN ve AP parolası içerir (2. karekod da parolayı taşır); yazdırdıktan sonra dosyayı silin."
+TEMPLATE_AFTER_PROVISION_HINT = (
+    "İsteğe bağlı: '📐 Şablon Yaz (aynı USB portu)' ile aynı porttan bu karta kurulum şablonu yazabilirsiniz."
+)
 LABEL_PLACEHOLDER_TEXT = "Henüz etiket üretilmedi.\nSoldaki formdan 'SUNUCU ENVANTERİNE KAYDET' düğmesine basın."
 # Provizyon bekleme süreleri (sn): flash sonrası kullanıcı bilgisayarı kurulum ağına bağlarken
 PROVISION_WAIT_AFTER_FLASH_S = 180
@@ -552,6 +558,9 @@ def build_label_image(record: DeviceRecord):
     draw.text((18, band_top + 6), tr(LABEL_SECURITY_NOTE), fill="#991b1b", font=note_font)
 
     draw.line([(10, height - 36), (width - 10, height - 36)], fill="#cbd5e1", width=1)
+    if record.flat_info:  # İP-3.5: karta şablon yazılınca daire bilgisi ("A Blok / Daire 12 · 3+1 · Şablon v4")
+        flat_font, _ok = _load_font(_BOLD_FONTS, 12)
+        centered(record.flat_info, width / 2, height - 30, flat_font, "#0f172a")
     draw.text((15, height - 28), tr(f"Model: {record.model or DEFAULT_MODEL}"), fill="#64748b", font=small_font)
     draw.text((width - 175, height - 28), tr(f"Kayıt: {_label_date(record.created_at)}"), fill="#64748b", font=small_font)
     return img
@@ -716,7 +725,7 @@ class ServerLoginDialog(tk.Toplevel):
 # ===========================================================================
 # Ana uygulama
 # ===========================================================================
-class EvOtomasyonServisApp(tk.Tk):
+class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
     """Servis ve üretim konsolu.
 
     Test/QA kancaları: ``transport`` / ``device_transport`` (sahte HTTP), ``serial_backend`` / ``serial_clock``
@@ -765,7 +774,7 @@ class EvOtomasyonServisApp(tk.Tk):
             self.device = DeviceClient(DEFAULT_DEVICE_HOST, transport=device_transport)
 
         self.title("AHBU - Ev Otomasyon Sistemi | Servis & Üretim Konsolu")
-        self.geometry("1024x860")  # kartlar (rim + iç boşluk) ve 10 punto yazıyla üç sekme de kırpılmadan sığar
+        self.geometry("1180x860")  # kartlar (rim + iç boşluk) ve 10 punto yazıyla beş sekme de kırpılmadan sığar
         self.minsize(900, 720)
 
         # Görsel tema ("Neon Glass"): tüm renk belirteçleri ve ttk stili tool_theme.py'dedir; tercih (koyu/açık)
@@ -796,6 +805,9 @@ class EvOtomasyonServisApp(tk.Tk):
         self._serial_backend_error: Optional[str] = None
         self._serial_backend_lock = threading.Lock()
         self._serial_clock = serial_clock
+        self._device_transport = device_transport  # Ethernet şablon yazımı (yerel ağ) için de aynı taşıma
+        self._init_site_template_state()
+        self._pdf_font_loader = _load_font  # kablolama şeması PDF'i aracın Türkçe yazı tipi yükleyicisiyle çizilir
 
         self.mode_var = tk.StringVar(value="custom")
         self.version_data = load_version_info()
@@ -964,10 +976,16 @@ class EvOtomasyonServisApp(tk.Tk):
         self.notebook.add(self.tab_inventory, text="🏷️ 2. Karekod Üret & Etiket Bas (Envanter)")
         self.tab_provision = theme.frame(self.notebook, "frame.bg")
         self.notebook.add(self.tab_provision, text="📡 3. Cihaz Provizyonu (USB / Wi-Fi)")
+        self.tab_sites = theme.frame(self.notebook, "frame.bg")
+        self.notebook.add(self.tab_sites, text="🏢 4. Siteler")
+        self.tab_templates = theme.frame(self.notebook, "frame.bg")
+        self.notebook.add(self.tab_templates, text="📐 5. Şablonlar")
 
         self._build_flasher_tab()
         self._build_inventory_tab()
         self._build_provision_tab()
+        self._build_sites_tab()
+        self._build_templates_tab()
 
     def _update_theme_switch_text(self) -> None:
         self._theme_label_var.set("🌙 Koyu tema" if self.theme.is_dark else "☀️ Açık tema")
@@ -997,7 +1015,7 @@ class EvOtomasyonServisApp(tk.Tk):
         self.theme.restyle(self.lbl_server, "label.session.accent.amber" if custom else "label.session.text", size=9)
         if self.client.is_authenticated:
             who = self.client.user_email or "oturum açık"
-            how = "API anahtarı" if self.client.auth_mode == "api_key" else "süper kullanıcı"
+            how = self.client.role_text  # "süper kullanıcı" | "servis sorumlusu" | "API anahtarı"
             if self.keeper.remembered and self.client.auth_mode == "jwt":
                 how += ", hatırlanıyor"  # şifreli oturum anahtarı bu bilgisayarda saklı ('Oturumu Kapat' siler)
             self.lbl_session.config(text=f"👤 {who} ({how})")
@@ -1009,6 +1027,19 @@ class EvOtomasyonServisApp(tk.Tk):
             self.theme.restyle(self.lbl_session, "label.badge.amber", size=9, weight="bold")
             self.btn_login.config(text="🔐 Sunucuya Giriş", state=tk.NORMAL)
             self.btn_logout.config(state=tk.DISABLED)
+        self._apply_role_permissions()
+
+    def _apply_role_permissions(self) -> None:
+        """İP-3.1: servis sorumlusu envanter kaydı / durum değiştirme / silme YAPAMAZ (sunucu da reddeder); düğmeler kapanır."""
+        allowed = not self.client.is_authenticated or self.client.can_manage_inventory
+        state = tk.NORMAL if allowed else tk.DISABLED
+        for widget in (self.btn_register_device, self.btn_suspend, self.btn_activate, self.btn_delete_device):
+            if not (widget is self.btn_register_device and self._register_busy):
+                widget.config(state=state)
+        self.inv_role_note.set(
+            "" if allowed else "ℹ️ Servis sorumlusu olarak giriş yaptınız: fabrika kaydı (envantere kaydet), askıya alma, aktif etme ve "
+            "silme yalnızca süper kullanıcıya açıktır. Envanter listesini görebilir; siteler, şablonlar ve karta yazım kullanılabilir."
+        )
 
     # =========================================================================
     # SEKME 1: FİRMWARE YÜKLEYİCİ (FLASHER)
@@ -1192,6 +1223,8 @@ class EvOtomasyonServisApp(tk.Tk):
 
         self.inv_status_var = tk.StringVar(value="")
         theme.label(table_frame, "label.status", textvariable=self.inv_status_var, anchor="w", justify="left").pack(fill=tk.X, pady=(0, 6))
+        self.inv_role_note = tk.StringVar(value="")
+        theme.label(table_frame, "label.note.amber", textvariable=self.inv_role_note, anchor="w", justify="left", wraplength=900).pack(fill=tk.X)
 
         columns = ("serial_no", "device_uuid", "mac_address", "model", "status", "created_at", "claimed_at")
         self.inv_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=6, selectmode="browse")
@@ -1278,6 +1311,10 @@ class EvOtomasyonServisApp(tk.Tk):
         self.btn_prov_cancel.pack(side=tk.LEFT, padx=6)
         self.btn_prov_manual = theme.button(buttons, role="secondary", size="md", text="📖 Elle Provizyon Talimatı", command=self.show_manual_provision_help)
         self.btn_prov_manual.pack(side=tk.LEFT, padx=6)
+        self.btn_prov_template = theme.button(
+            buttons, role="tint.violet", size="md", text="📐 Şablon Yaz (aynı USB portu)", command=self.template_after_provision
+        )
+        self.btn_prov_template.pack(side=tk.LEFT, padx=6)
         self.btn_prov_forget = theme.button(buttons, role="danger", size="md", text="🧹 Kaydı Bellekten Sil / Yeni Cihaz", command=self.forget_record)
         self.btn_prov_forget.pack(side=tk.RIGHT)
 
@@ -1379,6 +1416,16 @@ class EvOtomasyonServisApp(tk.Tk):
         self.btn_prov_cancel.config(state=tk.NORMAL if busy else tk.DISABLED)
         self.btn_prov_manual.config(state=tk.NORMAL)
         self.btn_prov_forget.config(state=tk.NORMAL if (rec is not None and not busy) else tk.DISABLED)
+        self.btn_prov_template.config(state=tk.DISABLED if (busy or self._esptool_busy or self._tpl_busy) else tk.NORMAL)
+
+    def _apply_flat_info_to_label(self, uid: str, info: str) -> None:
+        """Karta daire şablonu yazıldı: bellekteki kayıt bu kartsa etikete daire satırı eklenir ve önizleme yenilenir."""
+        rec = self._alive_record()
+        if rec is None or rec.uid.upper() != (uid or "").upper():
+            return
+        rec.flat_info = info
+        self._display_label_preview(build_label_image(rec))
+        self._tpl_say(f"Etikete daire bilgisi eklendi: {info} (2. sekmeden yeniden kaydedip yazdırın).")
 
     # ---- Seri (USB) provizyon: TERCİH EDİLEN YOL (CONTRACTS §3c) --------------------------------------------
     def _get_serial_backend(self) -> Any:
@@ -1477,7 +1524,7 @@ class EvOtomasyonServisApp(tk.Tk):
             self.ui_info(
                 "Provizyon Tamamlandı",
                 "Cihaz USB (seri) üzerinden provizyonlandı ve STATUS ile doğrulandı.\n" + LABEL_PHONE_CHECK_HINT
-                + "\nSonra etiketi cihaza yapıştırabilirsiniz.",
+                + "\nSonra etiketi cihaza yapıştırabilirsiniz.\n" + TEMPLATE_AFTER_PROVISION_HINT,
             )
         elif isinstance(err, ProvisionError) and err.code == "cancelled":
             self._prov_say("İşlem iptal edildi. Hazır olunca 'Seri (USB) ile Provizyonla'ya basın.")

@@ -47,6 +47,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+import template_model as tm
+
 # ---------------------------------------------------------------------------
 # Sabitler
 # ---------------------------------------------------------------------------
@@ -79,6 +81,13 @@ PIN_PATTERN = re.compile(r"^\d{6}$")
 LABEL_TEXT_PATTERN = re.compile(r"^[A-Za-z0-9 ._\-/]{1,64}$")
 _API_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
 _ERROR_REF_PATTERN = re.compile(r"^[0-9a-f]{6,24}$")
+_DETAIL_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+_FIELD_PATH_PATTERN = re.compile(r"^[A-Za-z0-9_.\[\]]{1,64}$")
+_RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+# Aracı kullanabilen roller (İP-3.1): süper kullanıcı (her şey) ve servis sorumlusu (site/şablon/karta yazım; envanter kaydı,
+# durum değiştirme ve silme YOK - sunucu da reddeder).
+TOOL_ROLES = ("super_user", "service_user")
+ROLE_TEXT = {"super_user": "süper kullanıcı", "service_user": "servis sorumlusu", "api_key": "API anahtarı"}
 
 ProgressCallback = Callable[[str], None]
 
@@ -109,10 +118,14 @@ class ApiError(FactoryError):
         status: int = 0,
         code: Optional[str] = None,
         retry_after: Optional[int] = None,
+        detail: Optional[str] = None,
+        path: Optional[str] = None,
     ) -> None:
         super().__init__(message, code=code)
         self.status = status
         self.retry_after = retry_after
+        self.detail = detail  # ör. şablon doğrulama kodu (422 TEMPLATE_INVALID -> "invalid_runtime"); yalnız güvenli biçimde
+        self.path = path      # ör. "relays[3].runtime_s"
 
 
 class SessionExpiredError(ApiError):
@@ -495,9 +508,10 @@ def friendly_api_error(
             "ACCOUNT_DISABLED": "Hesap dondurulmuş. Sistem yöneticisine başvurun.",
             "ACCOUNT_PENDING": "Hesap henüz etkinleştirilmemiş (davet bekliyor). Önce hesabı etkinleştirin.",
             "REAUTH_REQUIRED": "Bu hassas işlem için parola ile yeniden doğrulama gerekiyor.",
+            "SERVICE_SESSION_FORBIDDEN": "Servis PIN oturumu bu işlem için yeterli değil; e-posta + parola ile giriş yapın.",
         }.get(
             code or "",
-            "Bu işlem için yetkiniz yok. Bu araç yalnızca süper kullanıcı hesabıyla çalışır.",
+            "Bu işlem için yetkiniz yok (envanter kaydı, durum değiştirme ve silme yalnızca süper kullanıcıya açıktır).",
         )
 
     if status == 423:
@@ -656,6 +670,13 @@ class RegistrationResult:
         return f"RegistrationResult(device_uuid={self.device.get('device_uuid')!r}, <gizli alanlar gizlendi>)"
 
 
+def _role_rejection(role: str) -> str:
+    return (
+        "Bu araç yalnızca süper kullanıcı veya servis sorumlusu hesabıyla çalışır "
+        f"(bu hesabın rolü: {role or 'bilinmiyor'})."
+    )
+
+
 class ServerClient:
     """AHBU sunucusu için kimlik doğrulamalı istemci (Bearer veya ``x-api-key``)."""
 
@@ -749,7 +770,7 @@ class ServerClient:
         self._track(key)
 
     def login(self, email: str, password: str) -> dict[str, Any]:
-        """Süper kullanıcı e-posta + parola ile giriş. Parola saklanmaz; rol ``super_user`` değilse reddedilir."""
+        """E-posta + parola ile giriş. Parola saklanmaz; rol ``super_user`` ya da ``service_user`` değilse reddedilir."""
         email = (email or "").strip()
         if not email or not password:
             raise FactoryError("E-posta ve parola zorunludur.")
@@ -760,15 +781,10 @@ class ServerClient:
         if not isinstance(access, str) or not access or not isinstance(refresh, str) or not refresh:
             raise ApiError("Sunucu yanıtı beklenen oturum bilgisini içermiyor.", status=200, code="BAD_RESPONSE")
         role = str(user.get("role") or "")
-        if role != "super_user":
+        if role not in TOOL_ROLES:
             # Yetkisiz hesap: açılan oturum hemen iptal edilir, belirteçler tutulmaz.
             self._revoke_quietly(refresh)
-            raise ApiError(
-                "Bu araç yalnızca süper kullanıcı hesabıyla çalışır "
-                f"(bu hesabın rolü: {role or 'bilinmiyor'}).",
-                status=403,
-                code="FORBIDDEN",
-            )
+            raise ApiError(_role_rejection(role), status=403, code="FORBIDDEN")
         self._clear_session()
         with self._lock:
             self._access_token, self._refresh_token = access, refresh
@@ -820,7 +836,7 @@ class ServerClient:
 
         1) ``POST /auth/refresh``: yeni access + refresh (rotasyon). Yeni refresh token hemen ``session_listener``'a
            verilir (sunucu eskisini kullanılmış saydığı için depo GÜNCELLENMELİDİR).
-        2) ``GET /auth/me``: rol denetimi; ``super_user`` değilse yeni oturum sunucuda iptal edilir ve
+        2) ``GET /auth/me``: rol denetimi; ``super_user``/``service_user`` değilse yeni oturum sunucuda iptal edilir ve
            ``ApiError(403, FORBIDDEN)`` yükselir (login ile aynı kural).
 
         Hata: refresh 400/401/403 veya /me 401/403 -> ``SessionExpiredError`` (çağıran kayıtlı tokeni SİLER); ağ/5xx
@@ -857,15 +873,10 @@ class ServerClient:
             raise
         user = profile.get("user") if isinstance(profile.get("user"), dict) else profile
         role = str(user.get("role") or "")
-        if role != "super_user":
+        if role not in TOOL_ROLES:
             self._clear_session()
             self._revoke_quietly(new_refresh)  # yetkisiz hesap: açılan oturum hemen iptal edilir, token tutulmaz
-            raise ApiError(
-                "Bu araç yalnızca süper kullanıcı hesabıyla çalışır "
-                f"(bu hesabın rolü: {role or 'bilinmiyor'}).",
-                status=403,
-                code="FORBIDDEN",
-            )
+            raise ApiError(_role_rejection(role), status=403, code="FORBIDDEN")
         with self._lock:
             self._user = {"email": str(user.get("email") or ""), "role": role, "name": str(user.get("full_name") or "")}
             self.must_change_password = self.must_change_password or bool(user.get("must_change_password"))
@@ -923,11 +934,15 @@ class ServerClient:
         code = code if isinstance(code, str) and _API_CODE_PATTERN.match(code) else None
         retry_after = _parse_retry_after(payload, response.headers)
         ref = response.headers.get("x-error-ref") if response.status >= 500 else None
+        detail = payload.get("error") if payload else None
+        path = payload.get("path") if payload else None
         raise ApiError(
             friendly_api_error(response.status, code, payload.get("message") if payload else None, retry_after, ref),
             status=response.status,
             code=code,
             retry_after=retry_after,
+            detail=detail if isinstance(detail, str) and _DETAIL_CODE_PATTERN.match(detail) else None,
+            path=path if isinstance(path, str) and _FIELD_PATH_PATTERN.match(path) else None,
         )
 
     def _refresh_session(self, stale_access: Optional[str]) -> None:
@@ -1049,6 +1064,190 @@ class ServerClient:
         self._require_jwt()
         return self.request("DELETE", f"/admin/inventory/{self._uid_segment(uid)}")
 
+    # ---- rol yardımcıları (İP-3.1) -------------------------------------------
+    @property
+    def role_text(self) -> str:
+        """Oturum çubuğunda gösterilen rol adı (süper kullanıcı / servis sorumlusu / API anahtarı)."""
+        return ROLE_TEXT.get(self.user_role, self.user_role or "bilinmiyor")
+
+    @property
+    def can_manage_inventory(self) -> bool:
+        """Envanter kaydı / durum / silme yalnız süper kullanıcı (ve kayıt için API anahtarı); servis sorumlusu YAPAMAZ."""
+        return self.user_role in ("super_user", "api_key")
+
+    # ---- site / daire / şablon uçları (CONTRACTS §3e; requireServiceManager) ----
+    @staticmethod
+    def _id_segment(value: Any, what: str = "kayıt") -> str:
+        text = str(value or "").strip()
+        if not _RESOURCE_ID_PATTERN.match(text):
+            raise FactoryError(f"Geçersiz {what} kimliği.")
+        return urllib.parse.quote(text, safe="")
+
+    @staticmethod
+    def _items(data: Mapping[str, Any], *keys: str) -> list[dict[str, Any]]:
+        """Liste yanıtı: ``data`` bir dizi ise (``{"value": [...]}``) ya da ``{items|<anahtar>: [...]}``."""
+        for key in ("value", "items") + keys:
+            value = data.get(key) if isinstance(data, Mapping) else None
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    def _service_jwt(self) -> None:
+        if self._api_key:
+            raise ApiError(
+                "Site ve şablon işlemleri e-posta + parola ile giriş gerektirir (API anahtarı yetmez).",
+                status=403,
+                code="FORBIDDEN",
+            )
+
+    def list_sites(self) -> list[dict[str, Any]]:
+        self._service_jwt()
+        return self._items(self.request("GET", "/sites"), "sites")
+
+    def create_site(self, fields: Mapping[str, Any]) -> dict[str, Any]:
+        self._service_jwt()
+        data = self.request("POST", "/sites", body=dict(fields))
+        return data.get("site") if isinstance(data.get("site"), dict) else data
+
+    def get_site(self, site_id: str) -> dict[str, Any]:
+        self._service_jwt()
+        data = self.request("GET", f"/sites/{self._id_segment(site_id, 'site')}")
+        return data.get("site") if isinstance(data.get("site"), dict) else data
+
+    def update_site(self, site_id: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+        self._service_jwt()
+        data = self.request("PATCH", f"/sites/{self._id_segment(site_id, 'site')}", body=dict(fields))
+        return data.get("site") if isinstance(data.get("site"), dict) else data
+
+    def delete_site(self, site_id: str) -> dict[str, Any]:
+        self._service_jwt()
+        return self.request("DELETE", f"/sites/{self._id_segment(site_id, 'site')}")
+
+    def list_flats(self, site_id: str) -> list[dict[str, Any]]:
+        self._service_jwt()
+        return self._items(self.request("GET", f"/sites/{self._id_segment(site_id, 'site')}/flats"), "flats")
+
+    def bulk_create_flats(
+        self,
+        site_id: str,
+        *,
+        block: str,
+        start: int,
+        end: int,
+        flat_type: Optional[str] = None,
+        template_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """``POST /sites/:id/flats/bulk {block, from, to, flat_type?, template_id?}`` (var olan blok+no atlanır)."""
+        self._service_jwt()
+        body: dict[str, Any] = {"block": block, "from": int(start), "to": int(end)}
+        if flat_type:
+            body["flat_type"] = flat_type
+        if template_id:
+            body["template_id"] = template_id
+        data = self.request("POST", f"/sites/{self._id_segment(site_id, 'site')}/flats/bulk", body=body)
+        return self._items(data, "flats", "created")
+
+    def update_flat(self, site_id: str, flat_id: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+        self._service_jwt()
+        path = f"/sites/{self._id_segment(site_id, 'site')}/flats/{self._id_segment(flat_id, 'daire')}"
+        data = self.request("PATCH", path, body=dict(fields))
+        return data.get("flat") if isinstance(data.get("flat"), dict) else data
+
+    def delete_flat(self, site_id: str, flat_id: str) -> dict[str, Any]:
+        self._service_jwt()
+        return self.request("DELETE", f"/sites/{self._id_segment(site_id, 'site')}/flats/{self._id_segment(flat_id, 'daire')}")
+
+    def link_flat_device(self, site_id: str, flat_id: str, device_uuid: Optional[str]) -> dict[str, Any]:
+        """``PUT /sites/:id/flats/:flatId/device {device_uuid}``; ``None`` bağlantıyı kaldırır."""
+        self._service_jwt()
+        uid = None
+        if device_uuid:
+            uid = device_uuid.strip().upper()
+            if not UID_PATTERN.match(uid):
+                raise FactoryError("Geçersiz cihaz UID'si (AHBU-S3-XXXXXX biçiminde olmalı).")
+        path = f"/sites/{self._id_segment(site_id, 'site')}/flats/{self._id_segment(flat_id, 'daire')}/device"
+        return self.request("PUT", path, body={"device_uuid": uid})
+
+    def list_templates(self, site_id: Optional[str] = None, *, include_global: bool = True) -> list[dict[str, Any]]:
+        """``GET /templates?site_id=&include_global=1``; ``site_id`` yoksa yalnız genel (standart) şablonlar."""
+        self._service_jwt()
+        query: dict[str, Any] = {"include_global": 1 if include_global else 0}
+        if site_id:
+            query["site_id"] = self._id_segment(site_id, "site")
+        return self._items(self.request("GET", "/templates", query=query), "templates")
+
+    def create_template(self, site_id: Optional[str], body: Mapping[str, Any]) -> dict[str, Any]:
+        self._service_jwt()
+        data = self.request("POST", "/templates", body={"site_id": site_id or None, "body": dict(body)})
+        return data.get("template") if isinstance(data.get("template"), dict) else data
+
+    def get_template(self, template_id: str) -> dict[str, Any]:
+        self._service_jwt()
+        data = self.request("GET", f"/templates/{self._id_segment(template_id, 'şablon')}")
+        return data.get("template") if isinstance(data.get("template"), dict) else data
+
+    def update_template(self, template_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        """Kaydet = yeni sürüm (gövde aynıysa sunucu sürümü artırmaz)."""
+        self._service_jwt()
+        data = self.request("PUT", f"/templates/{self._id_segment(template_id, 'şablon')}", body={"body": dict(body)})
+        return data.get("template") if isinstance(data.get("template"), dict) else data
+
+    def delete_template(self, template_id: str) -> dict[str, Any]:
+        self._service_jwt()
+        return self.request("DELETE", f"/templates/{self._id_segment(template_id, 'şablon')}")
+
+    def list_template_versions(self, template_id: str) -> list[dict[str, Any]]:
+        self._service_jwt()
+        return self._items(self.request("GET", f"/templates/{self._id_segment(template_id, 'şablon')}/versions"), "versions")
+
+    def get_template_version(self, template_id: str, version: int) -> dict[str, Any]:
+        self._service_jwt()
+        path = f"/templates/{self._id_segment(template_id, 'şablon')}/versions/{int(version)}"
+        data = self.request("GET", path)
+        return data.get("version") if isinstance(data.get("version"), dict) else data
+
+    def validate_template_remote(self, body: Mapping[str, Any]) -> None:
+        """``POST /templates/validate``: geçerliyse döner; 422 ``TEMPLATE_INVALID`` -> ``ApiError`` (``detail`` = şablon kodu,
+        ``path`` = alan yolu)."""
+        self._service_jwt()
+        self.request("POST", "/templates/validate", body={"body": dict(body)})
+
+    def record_template_write(
+        self,
+        *,
+        device_uuid: str,
+        template_id: str,
+        version: int,
+        via: str,
+        result: str,
+        flat_id: Optional[str] = None,
+        error_code: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """``POST /template-writes`` (K-Ş6): ``via`` usb|eth, ``result`` ok|error. ``ok`` ise daire ``written`` olur."""
+        self._service_jwt()
+        if via not in ("usb", "eth", "lan") or result not in ("ok", "error"):
+            raise FactoryError("Yazım kaydı geçersiz.")
+        uid = (device_uuid or "").strip().upper()
+        if not UID_PATTERN.match(uid):
+            raise FactoryError("Geçersiz cihaz UID'si.")
+        body: dict[str, Any] = {"device_uuid": uid, "template_id": template_id, "version": int(version), "via": via, "result": result}
+        if flat_id:
+            body["flat_id"] = flat_id
+        if error_code:
+            body["error_code"] = error_code if _DETAIL_CODE_PATTERN.match(error_code) else "unknown"
+        return self.request("POST", "/template-writes", body=body)
+
+    def fetch_local_key(self, uid: str) -> str:
+        """Ethernet yazımı için kartın yerel anahtarı (``GET /admin/inventory/:uuid/local-key``; denetim kaydı + oran sınırı).
+        Değer maskelenmek üzere ``SecretScrubber``'a eklenir; ekranda/günlükte GÖSTERİLMEZ."""
+        self._service_jwt()
+        data = self.request("GET", f"/admin/inventory/{self._uid_segment(uid)}/local-key")
+        key = data.get("local_key")
+        if not is_valid_local_key(key):
+            raise ApiError("Sunucu kartın yerel anahtarını vermedi.", status=200, code="BAD_RESPONSE")
+        self._track(key)
+        return key
+
 
 # ---------------------------------------------------------------------------
 # Cihaz kaydı (bellekte tutulan tek-seferlik değerler)
@@ -1070,6 +1269,7 @@ class DeviceRecord:
     created_at: Optional[str] = None
     state: str = "registered"  # registered | init_sent | verified | wiped
     path: str = ""             # provizyon yolu: "serial" (USB) | "wifi" (güvensiz yedek) | "" (henüz yok)
+    flat_info: str = ""        # İP-3.5: karta daire şablonu yazılınca etiket satırı ("A Blok / Daire 12 · 3+1 · Şablon v4")
 
     @property
     def ap_ssid(self) -> Optional[str]:
@@ -1198,12 +1398,16 @@ class DeviceClient:
         *,
         key: Optional[str] = None,
         json_body: Optional[Mapping[str, Any]] = None,
+        raw_json: Optional[bytes] = None,
     ) -> tuple[int, Optional[dict[str, Any]], Mapping[str, str]]:
         headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
         data: Optional[bytes] = None
         if json_body is not None:
             data = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        elif raw_json is not None:  # hazır UTF-8 JSON (şablon zarfı: Türkçe karakterler kaçışsız, 24 KB sınırı korunur)
+            data = bytes(raw_json)
+            headers["Content-Type"] = "application/json; charset=utf-8"
         if key:
             headers["X-Device-Key"] = key
         send = self._transport or default_transport
@@ -2269,3 +2473,272 @@ class SerialProvisioner:
             )
         finally:
             session.close()
+
+
+# ---------------------------------------------------------------------------
+# Kurulum şablonunu karta yazma (İP-3.4; docs/contracts/template/README.md)
+#
+# USB (seri, fiziksel erişim = yetki, K-Ş4): ``TPL BEGIN <bayt> <crc32>`` -> ``TPL DATA <base64>`` satırları -> ``TPL COMMIT``
+# -> ``TPL STATUS`` ile geri okuma. Ethernet (LAN): ``POST /api/template/apply`` (X-Device-Key) -> ``GET /api/template``.
+# Gövde (şablon) günlüğe/ilerleme metnine yazılmaz; yerel anahtar ekranda gösterilmez (yalnız başlıkta gider).
+# ---------------------------------------------------------------------------
+SERIAL_TPL_STEP_TIMEOUT_S = 5.0
+SERIAL_TPL_COMMIT_TIMEOUT_S = 20.0
+_TPL_REPLY = re.compile(r"(?:^|\s)(OK tpl_[a-z_]{1,20}(?: [^\r\n]{0,80})?|ERR [a-z_]{1,40}(?: [A-Za-z0-9_.\[\]]{1,64})?)\s*$")
+_TPL_STATUS = re.compile(r"^TPL (\S{1,40}) (\d{1,10})(?: (.{0,40}))?$")
+_UNKNOWN_TPL = re.compile(r"Bilinmeyen komut: 'TPL'", re.IGNORECASE)
+
+
+class TemplateWriteError(FactoryError):
+    """Şablon yazımı hatası: ``code`` README/kart kodu (``tpl_crc``, ``local_loosen_forbidden``...), ``path`` alan yolu."""
+
+    def __init__(self, code: str, path: str = "", *, message: Optional[str] = None) -> None:
+        safe = code if re.fullmatch(r"[a-z0-9_]{1,40}", code or "") else "unknown"
+        super().__init__(message or tm.describe_error(safe, path), code=safe)
+        self.path = path if re.fullmatch(r"[A-Za-z0-9_.\[\]]{1,64}", path or "") else ""
+        self.device_uid: Optional[str] = None  # USB yolunda STATUS'tan bilinen kart (yazım kaydı için)
+
+    @property
+    def use_usb(self) -> bool:
+        """LAN gevşetme yasağı: araç 'USB ile yazın' der."""
+        return self.code == "local_loosen_forbidden"
+
+
+@dataclass
+class TemplateWriteOutcome:
+    template_id: str
+    version: int
+    label: str = ""
+    via: str = "usb"                 # "usb" | "eth" (template-writes ``via``)
+    device_uid: Optional[str] = None
+    mac: Optional[str] = None
+    rev: Optional[int] = None
+
+
+def parse_tpl_status(line: str) -> Optional[tuple[Optional[str], int, str]]:
+    """``TPL <id|-> <sürüm> <etiket>`` -> (kimlik ya da None, sürüm, etiket)."""
+    match = _TPL_STATUS.match(line.strip())
+    if not match:
+        return None
+    template_id = None if match.group(1) == "-" else match.group(1)
+    return template_id, int(match.group(2)), (match.group(3) or "").strip()
+
+
+class TemplateSerialWriter(SerialProvisioner):
+    """USB-seri şablon yazıcı: aynı bağlantı/arka uç altyapısı (``_Session``, ``STATUS`` yoklaması) kullanılır."""
+
+    def _wait_tpl(self, session: _Session, timeout: float, cancel: Optional[threading.Event]) -> tuple[bool, str, str]:
+        """(başarılı mı, kod, kalan) - ``OK tpl_<kod> <kalan>`` ya da ``ERR <kod> [yol]``."""
+        deadline = self._clock() + timeout
+        while self._clock() < deadline:
+            self._check_cancel(cancel)
+            for line in session.read_lines(0.3):
+                if _UNKNOWN_TPL.search(line):
+                    raise TemplateWriteError("unsupported_fw")
+                match = _TPL_REPLY.search(line)
+                if not match:
+                    continue
+                token = match.group(1)
+                if token.startswith("OK "):
+                    head, _sep, rest = token[3:].partition(" ")
+                    return True, head[4:], rest.strip()
+                code, _sep, path = token[4:].partition(" ")
+                return False, code, path.strip()
+        raise TemplateWriteError("no_response", message="Kart şablon komutuna zamanında yanıt vermedi (USB bağlantısını ve firmware sürümünü kontrol edin).")
+
+    def _expect(self, session: _Session, step: str, timeout: float, cancel: Optional[threading.Event]) -> str:
+        ok, code, rest = self._wait_tpl(session, timeout, cancel)
+        if not ok:
+            raise TemplateWriteError(code, rest)
+        if code != step:
+            raise TemplateWriteError("unexpected", message=f"Kartın yanıtı beklenen adıma uymuyor (tpl_{code}).")
+        return rest
+
+    def _read_status(self, session: _Session, cancel: Optional[threading.Event]) -> Optional[tuple[Optional[str], int, str]]:
+        session.drain(quiet=0.2, max_total=1.0)
+        session.send(b"TPL STATUS\r\n")
+        deadline = self._clock() + SERIAL_TPL_STEP_TIMEOUT_S
+        while self._clock() < deadline:
+            self._check_cancel(cancel)
+            for line in session.read_lines(0.3):
+                if _UNKNOWN_TPL.search(line):
+                    raise TemplateWriteError("unsupported_fw")
+                parsed = parse_tpl_status(line)
+                if parsed is not None:
+                    return parsed
+        return None
+
+    def read_status(self, port: str, *, progress: Optional[ProgressCallback] = None,
+                    cancel: Optional[threading.Event] = None) -> Optional[tuple[Optional[str], int, str]]:
+        """Karttaki şablonu (``TPL STATUS``) okur: (kimlik|None, sürüm, etiket)."""
+        say = progress or (lambda _message: None)
+        session, _status = self._connect_and_probe(port, False, say, cancel)
+        try:
+            return self._read_status(session, cancel)
+        finally:
+            session.close()
+
+    def write(
+        self,
+        port: str,
+        envelope: bytes,
+        *,
+        template_id: str,
+        version: int,
+        label: str = "",
+        expected_uid: Optional[str] = None,
+        wait_for_port: bool = False,
+        progress: Optional[ProgressCallback] = None,
+        cancel: Optional[threading.Event] = None,
+    ) -> TemplateWriteOutcome:
+        """Şablon zarfını karta yazar ve ``TPL STATUS`` ile geri okuyup doğrular. Hata -> ``TemplateWriteError``."""
+
+        def say(message: str) -> None:
+            if progress:
+                progress(message)
+
+        if not envelope or len(envelope) > tm.MAX_ENVELOPE_BYTES:
+            raise TemplateWriteError("tpl_size")
+        session, status = self._connect_and_probe(port, wait_for_port, say, cancel)
+        begun = False
+        found_uid = uid_from_mac(status.mac or "")
+        try:
+            if expected_uid and found_uid and found_uid != expected_uid.strip().upper():
+                raise TemplateWriteError(
+                    "mac_mismatch",
+                    message=f"Bağlı kart ({found_uid}) seçilen daireye bağlı kartla ({expected_uid.strip().upper()}) eşleşmiyor; "
+                    "hiçbir şey yazılmadı. Doğru kartı bağlayın.",
+                )
+            chunks = tm.serial_chunks(envelope)
+            session.drain(quiet=0.2, max_total=1.0)
+            session.send(b"\r\n")
+            say(f"Şablon USB ile gönderiliyor ({len(envelope)} bayt, {len(chunks)} parça)...")
+            session.send(f"TPL BEGIN {len(envelope)} {tm.crc32_hex(envelope)}\r\n".encode("ascii"))
+            begun = True
+            self._expect(session, "begin", SERIAL_TPL_STEP_TIMEOUT_S, cancel)
+            sent = 0
+            for index, chunk in enumerate(chunks):
+                session.send(f"TPL DATA {chunk}\r\n".encode("ascii"))
+                sent += len(base64_decoded_length(chunk))
+                received = self._expect(session, "data", SERIAL_TPL_STEP_TIMEOUT_S, cancel)
+                if received.isdigit() and int(received) != sent:
+                    raise TemplateWriteError("tpl_overflow")
+                if progress and (index + 1) % 20 == 0:
+                    say(f"  ... {index + 1}/{len(chunks)} parça gönderildi")
+            say("Tüm parçalar gönderildi; kart şablonu doğrulayıp uyguluyor (TPL COMMIT)...")
+            session.send(b"TPL COMMIT\r\n")
+            rest = self._expect(session, "applied", SERIAL_TPL_COMMIT_TIMEOUT_S, cancel)
+            begun = False
+            parts = rest.split()
+            if len(parts) < 2 or parts[0] != template_id or not parts[1].isdigit() or int(parts[1]) != int(version):
+                raise TemplateWriteError("readback_mismatch")
+            say("Kart şablonu uyguladı; TPL STATUS ile geri okunuyor...")
+            back = self._read_status(session, cancel)
+            if back is None or back[0] != template_id or back[1] != int(version):
+                raise TemplateWriteError("readback_mismatch")
+            return TemplateWriteOutcome(
+                template_id=template_id,
+                version=int(version),
+                label=back[2] or label,
+                via="usb",
+                device_uid=uid_from_mac(status.mac or ""),
+                mac=status.mac,
+            )
+        except BaseException as exc:
+            if isinstance(exc, TemplateWriteError) and exc.code != "mac_mismatch":
+                exc.device_uid = found_uid
+            if begun:  # yarım aktarım kartta silinsin (en iyi çaba)
+                try:
+                    session.send(b"TPL ABORT\r\n")
+                except FactoryError:
+                    pass
+            raise
+        finally:
+            session.close()
+
+
+def base64_decoded_length(chunk: str) -> bytes:
+    """Base64 parçasının çözülmüş baytları (yalnız uzunluk denetimi için)."""
+    return binascii.a2b_base64(chunk.encode("ascii"))
+
+
+class TemplateLanWriter:
+    """Ethernet/LAN üzerinden şablon yazımı (yerel anahtarla; yalnız özel/yerel IP)."""
+
+    def __init__(self, host: str, *, transport: Optional[Transport] = None, timeout: float = 15.0) -> None:
+        if not (host or "").strip():
+            raise ValueError("Kartın IP adresini girin.")
+        self._device = DeviceClient(host, transport=transport, env={}, timeout=timeout)
+
+    @property
+    def host(self) -> str:
+        return self._device.host
+
+    def _send(self, method: str, path: str, key: str, raw: Optional[bytes] = None) -> tuple[int, Optional[dict[str, Any]], Mapping[str, str]]:
+        try:
+            return self._device._request(method, path, key=key, raw_json=raw)
+        except ProvisionError:
+            raise TemplateWriteError("unreachable") from None
+
+    @staticmethod
+    def _error(status: int, payload: Optional[dict[str, Any]]) -> TemplateWriteError:
+        err = DeviceClient._error_id(payload)
+        path = payload.get("path") if payload and isinstance(payload.get("path"), str) else ""
+        if status == 401:
+            return TemplateWriteError("key_mismatch")
+        if status == 423:
+            return TemplateWriteError("locked")
+        if status == 404 or err == "not_found":
+            return TemplateWriteError("unsupported_fw")
+        if status == 507:
+            return TemplateWriteError("storage")
+        if status == 413:
+            return TemplateWriteError("tpl_size")
+        if err == "cfg_invalid":  # 409 {"error":"cfg_invalid","detail":"<CfgErr metni>"}
+            detail = payload.get("detail") if payload else None
+            if isinstance(detail, str) and _DETAIL_CODE_PATTERN.match(detail):
+                return TemplateWriteError("cfg_invalid", message=tm.describe_error("cfg_invalid") + " Ayrıntı: "
+                                          + tm.describe_error(detail, path))
+            return TemplateWriteError("cfg_invalid", path)
+        if err:
+            return TemplateWriteError(err, path)
+        if status in (409, 503):
+            return TemplateWriteError("busy")
+        return TemplateWriteError("unexpected", message=f"Karttan beklenmeyen yanıt alındı (HTTP {status}).")
+
+    def apply(self, local_key: str, envelope: bytes) -> dict[str, Any]:
+        """``POST /api/template/apply`` -> ``{"ok":true,"template_id","version","rev"}``."""
+        if not is_valid_local_key(local_key):
+            raise TemplateWriteError("key_mismatch")
+        status, payload, _headers = self._send("POST", "/api/template/apply", local_key, envelope)
+        if status == 200 and payload is not None and payload.get("ok") is True:
+            return payload
+        raise self._error(status, payload)
+
+    def read(self, local_key: str) -> dict[str, Any]:
+        """``GET /api/template`` -> ``{"template_id","version","label","applied_at_uptime_s"}``."""
+        status, payload, _headers = self._send("GET", "/api/template", local_key)
+        if status == 200 and payload is not None:
+            return payload
+        raise self._error(status, payload)
+
+    def write(self, local_key: str, envelope: bytes, *, template_id: str, version: int, label: str = "",
+              device_uid: Optional[str] = None, progress: Optional[ProgressCallback] = None) -> TemplateWriteOutcome:
+        say = progress or (lambda _message: None)
+        say(f"Şablon Ethernet ile gönderiliyor (http://{self.host}/api/template/apply, yerel anahtar gizli)...")
+        reply = self.apply(local_key, envelope)
+        if reply.get("template_id") not in (None, template_id) or reply.get("version") not in (None, int(version)):
+            raise TemplateWriteError("readback_mismatch")
+        say("Kart şablonu uyguladı; GET /api/template ile geri okunuyor...")
+        back = self.read(local_key)
+        if back.get("template_id") != template_id or back.get("version") != int(version):
+            raise TemplateWriteError("readback_mismatch")
+        rev = reply.get("rev")
+        return TemplateWriteOutcome(
+            template_id=template_id,
+            version=int(version),
+            label=str(back.get("label") or label),
+            via="eth",
+            device_uid=device_uid,
+            rev=rev if isinstance(rev, int) and not isinstance(rev, bool) else None,
+        )

@@ -22,7 +22,10 @@ class GuideConsistencyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.guide = _read("EV_OTOMASYON_KULLANIM_REHBERI.md")
-        cls.source = _read("ev_otomasyon_sistemi.py") + "\n" + _read("factory_client.py")
+        cls.source = "\n".join(
+            _read(name)
+            for name in ("ev_otomasyon_sistemi.py", "factory_client.py", "site_template_ui.py", "template_model.py", "wiring_pdf.py")
+        )
 
     # Rehberde kalın yazılan düğme/sekme adları (emoji önekleri hariç) aracın kaynağında aynen bulunmalıdır.
     BUTTONS = (
@@ -57,6 +60,46 @@ class GuideConsistencyTests(unittest.TestCase):
         "1. Firmware Yükleyici",
         "2. Karekod Üret & Etiket Bas (Envanter)",
         "3. Cihaz Provizyonu (USB / Wi-Fi)",
+        # Faz 3: siteler ve kurulum şablonları (Bölüm 4b)
+        "4. Siteler",
+        "5. Şablonlar",
+        "Siteleri Yenile",
+        "Site Ekle",
+        "Siteyi Düzenle",
+        "Siteyi Sil",
+        "Toplu Daire Üret",
+        "Şablon Ata",
+        "Kart Bağla",
+        "Karta Yaz",
+        "Kablolama Şeması (PDF)",
+        "Şablonları Yenile",
+        "Yeni Şablon",
+        "Şablonu Düzenle",
+        "Çoğalt",
+        "Sürüm Geçmişi",
+        "Şablonu Sil",
+        "Doğrula ve Kaydet (yeni sürüm)",
+        "Kanalları Uygula",
+        "Şablon Yaz (aynı USB portu)",
+        "Lamba/Priz",
+        "Panjur (çift)",
+        "Parlaklık ayarı yapılacak mı?",
+        "Ek modül (RS485) var",
+    )
+
+    # Bölüm 4b'nin alıntıladığı kart/araç mesajları (template_model.ERROR_TEXTS ve PDF).
+    TEMPLATE_TEXTS = (
+        "USB ile yazın",
+        "Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın",
+        "Kartın firmware'i şablon yazmayı desteklemiyor",
+        "Aktarım bozuldu (CRC uyuşmadı)",
+        "Bu şema şablon sürümü v",
+        "servis sorumlusu",
+        "local_loosen_forbidden",
+        "unprovisioned",
+        "tpl_crc",
+        "tpl_b64",
+        "zone_latched",
     )
 
     # Rehberin alıntıladığı pencere başlıkları.
@@ -128,6 +171,9 @@ class GuideConsistencyTests(unittest.TestCase):
 
     def test_progress_lines_listed_in_the_guide_exist_in_the_tool(self):
         self._assert_in_guide_and_tool(self.PROGRESS_LINES, "satir")
+
+    def test_template_texts_quoted_in_the_guide_exist_in_the_tool(self):
+        self._assert_in_guide_and_tool(self.TEMPLATE_TEXTS, "sablon")
 
     def test_label_texts_quoted_in_the_guide_exist_in_the_tool(self):
         self._assert_in_guide_and_tool(self.LABEL_TEXTS, "etiket")
