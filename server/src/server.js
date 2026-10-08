@@ -135,6 +135,7 @@ function createApp(deps = {}) {
   const invitationRoutes = require('./routes/invitation_routes');
   const transferRoutes = require('./routes/transfer_routes');
   const siteTemplateRoutes = require('./routes/site_template_routes');
+  const deviceBootstrapRoutes = require('./routes/device_bootstrap_routes');
   const authService = require('./services/auth_service');
 
   // WP-B / WP-C rotalari (dosya yoksa mount atlanir).
@@ -256,6 +257,9 @@ function createApp(deps = {}) {
   if (safetyRoutes) {
     for (const p of mountsOf(safetyRoutes)) app.use(p, safetyRoutes);
   }
+  // --- CONTRACTS 3f: pano bootstrap (POST /devices/bootstrap; JWT YOK, imzali). device_routes'tan ONCE baglanir.
+  app.use('/api/v1', deviceBootstrapRoutes);
+  app.use('/api', deviceBootstrapRoutes);
   if (deviceRoutes) {
     app.use('/api/v1/devices', deviceRoutes);
     app.use('/api/devices', deviceRoutes);

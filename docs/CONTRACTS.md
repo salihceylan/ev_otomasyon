@@ -802,6 +802,35 @@ sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas al�
   gevşetmesi serbest, seri CLI ile eşit). Wi-Fi STA / SoftAP'ten gelenler anahtarlı kalır. Kullanıcı kararı 2026-10-08.
 - Ethernet bağlıyken kurtarma AP'si kendiliğinden açılmaz; MQTT ve SNTP Wi-Fi ya da Ethernet'ten çalışır; UID Wi-Fi MAC'ten.
 
+## 3f. Panonun bulut kimliğini kendisi alması (bootstrap, 2026-10-08)
+
+Amaç: ev sahibinin kendi sahiplendiği (ya da yalnız Ethernet'le bağlı) pano, servis sihirbazının 6. adımı olmadan buluta
+bağlansın. Pano yerel anahtarıyla imzalı istekle kendini kanıtlar; sunucu sahiplenilmiş panoya MQTT kimliği verir.
+
+**İstek** (pano → sunucu, HTTPS 443, MQTT sunucusuyla aynı alan adı; JWT YOK):
+`POST /api/v1/devices/bootstrap`
+```json
+{"device_uuid":"AHBU-S3-DD8754","ts":1791460000,"nonce":"<32 hex>","fw":"1.3.0","sig":"<64 hex>"}
+```
+`sig = hex(HMAC-SHA256(local_key, "ahbu-bootstrap/1|" + device_uuid + "|" + ts + "|" + nonce))` (ts = UNIX saniye, nonce
+16 rastgele bayt). Sunucu anahtar olarak `devices.local_key_enc`, yoksa `device_inventory.local_key_enc`, ayrıca varsa
+`devices.local_key_pending_enc`'i dener (sabit zamanlı karşılaştırma).
+
+**Yanıtlar:**
+- `200 {"status":"ok","mqtt":{"host","port","username","password"}}` — pano sahiplenilmiş (bir eve bağlı) ve kimlik doğru:
+  sunucu cihaz MQTT kimliğini yeniden üretir (sihirbazın `mqtt-credential` ucuyla aynı mantık), denetim kaydı
+  `device_bootstrap`. Pending yerel anahtarla doğrulandıysa o anahtar asıl anahtar olarak işaretlenir.
+- `202 {"status":"pending"}` — imza doğru ama pano henüz sahiplenilmemiş (stokta): pano daha sonra yeniden dener.
+- `401 {"code":"BOOTSTRAP_DENIED"}` — bilinmeyen kart / imza yanlış / `|now-ts| > 300` / nonce tekrarı / askıda-iptal kart.
+  (Hangi nedenin olduğu söylenmez.)
+- `429` — oran sınırı (kart başına saatte 6, IP başına saatte 60).
+
+**Pano davranışı (v1.3.0):** provizyonlu + ağ (Wi-Fi ya da Ethernet) var + saat senkron + (MQTT kimliği yok **ya da** broker
+art arda 3 kez `not authorized` döndü) ise bootstrap çağrılır. 200 → kimlik NVS'e yazılır (`/api/mqtt/config` ile aynı yol)
+ve MQTT bağlanır. Bekleme: 202 → 10 dk, 401 → 60 dk, 429/ağ hatası → 30 dk (her başarısızlıkta en çok 60 dk). Sertifika
+doğrulaması MQTT ile aynı kök sertifikalarla (ISRG). Provizyonsuz pano (yerel anahtar yok) bootstrap yapamaz.
+Durum alanı: tam `/api/status` ve seri `STATUS`'ta `bootstrap: idle|waiting_claim|ok|denied|error`.
+
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 
 `src/DeviceCommand.h` içinde tanımlıdır. Her görev (MQTT, Web, CLI, DI) röle/panjur durumunu **doğrudan değiştirmez**;
