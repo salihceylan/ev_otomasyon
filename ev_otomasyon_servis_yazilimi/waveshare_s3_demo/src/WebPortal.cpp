@@ -928,7 +928,12 @@ void WebPortal::sendRestrictedStatus(bool provisioned) {
   doc["name"] = (const char*)name;
   doc["fw"] = FW_VERSION;
   doc["provisioned"] = provisioned;
-  doc["wifi_connected"] = WiFiManager::instance().isConnected();
+  const bool staConnected = WiFiManager::instance().isConnected();
+  doc["wifi_connected"] = staConnected;
+  // v1.3.0: ag turu bilgisi gizli degil; servis sihirbazi Ethernet'li panoyu anahtarsiz tanir (eth_ip yalniz tam durumda).
+  const bool ethUp = netlink::ethUp(NetLink::eth());
+  doc["eth_connected"] = ethUp;
+  doc["net_if"] = netlink::netIfName(netlink::activeIf(staConnected, ethUp));
   String out;
   serializeJson(doc, out);
   sendJson(200, out);

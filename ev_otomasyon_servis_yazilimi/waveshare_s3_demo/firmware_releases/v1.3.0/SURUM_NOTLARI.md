@@ -18,8 +18,8 @@ Plan: `docs/superpowers/plans/2026-10-08-site-sablon-kurulum.md` Faz 2 (İP-2.1.
 | `app_0x10000_v1.3.0.bin` | 1342080 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
 | `SHA256SUMS.txt` | - | `sha256sum -c SHA256SUMS.txt` ile doğrulayın. |
 
-SHA-256 (ana imaj): `644d4f372cbab1f6008cbe624db07067576d63083e82b5d2bdc8af72dfdb981b`
-SHA-256 (yalnız uygulama): `1e38dac3106fc087e6529d4ecd6ff0d93d87cac7998333b8141cb91b8fb881b8`
+SHA-256 (ana imaj): `87975bf6dc7fe0d4a9989a0f0776361970d1c6f65d80fe5027d7d3cb9a15ff43`
+SHA-256 (yalnız uygulama): `7779089e84de9b875b9649f85a878ac4776d461dbc47a0cff87eb98fd7a2aeb1`
 ELF SHA-256: `a8d906ec708c61969e59e70e20cdc411bf924e8c74a19c65db08723ffc0fcf03`
 
 Derleme: PlatformIO espressif32@7.1.3 (Arduino-ESP32 2.0.17 / IDF 4.4, çekirdek DEĞİŞMEDİ), esptool 4.11.0 `merge_bin`
@@ -170,3 +170,8 @@ Kullanıcı, riskler anlatıldıktan sonra açıkça seçti ("Yalnız Ethernet't
 - **Bilinen sonuç:** pano modeme kabloyla bağlıysa, modem üzerinden gelen her istek (Wi-Fi'deki telefonlar dahil) Ethernet'ten gelmiş
   sayılır; ev ağındaki herkes anahtarsız tam yetkilidir. Kullanıcı bunu kabul etti.
 - Test: `test_net_link` +1 (`requestViaEth`); 23 grup / 396 test, 0 hata. 0x0-0xFFFF bölgesi v1.2.1 ile aynı.
+
+
+## Ek (2026-10-08): kısa durumda ağ türü
+`GET /api/status` anahtarsız kısa yanıtına `eth_connected` ve `net_if` eklendi (gizli değil; servis sihirbazı Ethernet'li panoyu
+anahtarsız tanır). `eth_ip` yalnız tam durumda. Önceki özetler (`644d4f37…` / `1e38dac3…`) GEÇERSİZ. 24 grup / 406 test, 0 hata.
