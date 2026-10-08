@@ -11,7 +11,7 @@
 1. **Panoyu kendiniz sahiplenince pano buluta kendiliğinden bağlanıyor.** Pano internete bağlıysa birkaç dakika içinde
    bulut kimliğini sunucudan kendisi alır; servis çağırmanız gerekmez.
 2. **Yanlış kurulum PIN'inde** artık "Geçersiz kurulum PIN kodu. Kalan deneme hakkı: N" görünüyor.
-3. **Telefona alarm bildirimi (yalnız Android, isteğe bağlı):** bkz. Bölüm 7.6 (bu belge yazılırken tamamlanıyordu).
+3. **Telefona alarm bildirimi (yalnız Android, isteğe bağlı):** ayarlarda "Arka planda alarm bildirimi"; bkz. Bölüm 7.6.
 
 ---
 
@@ -162,10 +162,22 @@ Pano alarmı, vanayı ve sireni internetsiz yönetir; bulut yalnız kayıt ve uz
 Işık/panjur kullanır, vana kapatır; alarm onaylayamaz, vana açamaz, alarm kuramaz, alarm bildirimi almaz.
 
 ### 7.6 Telefona alarm bildirimi
-1. **Android:** ayarlarda isteğe bağlı "Arka planda alarm bildirimi" (bu belge yazılırken tamamlanıyordu; ayrıntılar
-   tamamlanınca eklenecek). Açılınca bildirim çubuğunda kalıcı bir simge durur ve biraz pil kullanır; bazı markalarda
-   pil optimizasyonundan muaf tutmanız istenir.
-2. **iOS:** bu sürümde telefona bildirim yok; uyarılar uygulama açılınca görünür. Siren takılması önerilir.
+1. **Android:** "Cihaz & Sistem Ayarları" → Güvenlik → **"Arka planda alarm bildirimi"** (varsayılan kapalı; yalnız ev
+   sahibi ve ev üyesi görür).
+   1. Açınca bildirim izni ve pil kısıtlamasını kaldırma istenir. Kart şunu söyler: "Uygulama kapalıyken de su baskını, gaz,
+      duman, hırsız alarmı ve vana arızası telefonunuza bildirilir. Açıkken durum çubuğunda kalıcı bir bildirim simgesi
+      durur ve telefon biraz daha fazla pil kullanır."
+   2. Uygulama arka planda her eviniz için bulut bağlantısını açık tutar; uygulamayı kaydırıp kapatsanız ve telefon yeniden
+      başlasa da sürer.
+   3. Bildirimler "Güvenlik alarmları" kanalından sesli ve titreşimli gelir, ör. "Su baskını: Mutfak Su — Evim",
+      "Vana kapanmadı (arıza) — Evim", "Pano güvenli kipe girdi — Evim". Dokununca uygulama o evde açılır. Alarm kalkınca
+      bildirim kendiliğinden silinir; aynı alarm iki kez çalmaz.
+   4. Çıkış yaparsanız ya da hesabınızda ev sahibi/üye olduğunuz ev kalmazsa takip durur.
+   5. Bazı markalar (Xiaomi, Huawei, Oppo) arka plandaki uygulamayı yine de kapatabilir; telefonun pil ayarlarında uygulamayı
+      "kısıtlama yok" yapın. "Rahatsız Etme" kipini aşmaz.
+2. **iOS:** bu sürümde telefona bildirim yok ("Bu özellik yalnız Android'de"); uyarılar uygulama açılınca görünür.
+   Siren takılması önerilir.
+3. Gece huzur hatırlatması telefona gönderilmez; uygulama açılınca bant olarak görünür.
 
 ---
 
@@ -207,3 +219,7 @@ Açık servis oturumları listelenir; "Servis erişimini kapat" hepsini sonland�
 3. **Provizyonsuz pano buluta kendiliğinden bağlanamaz;** pano atölyede provizyon görmediyse servis gerekir.
 4. **Pano modeme kabloyla bağlıysa** evin ağındaki herkes panoya anahtarsız erişebilir (kararınız; bilgi için).
 5. **Gece hatırlatması ve alarm, iOS'ta** yalnız uygulama açılınca görünür.
+6. **Uygulama içi güvenlik olay listesi "alarm kalktı" olayını üretmiyor olabilir** (pano normal bölgeleri durumda
+   göndermiyor; arka plan bildirimi bunu ayrıca çözüyor). İncelemede bulundu, elle denenmedi.
+7. **Arka plan bildirimi cihazda denenmedi:** servisin başlaması, kaydırıp kapatınca sürmesi, yeniden başlatmada açılması,
+   pil davranışı ve bildirim sesi ancak telefonda doğrulanır.

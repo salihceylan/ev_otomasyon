@@ -14,7 +14,9 @@
 3. **Sihirbaz Ethernet'li panoyu tanıyor.** 5. adımda "Pano kabloyla (Ethernet) bağlı" seçeneği var; teslimde ağ satırı
    "Pano ev ağına Ethernet ile bağlı (IP x)".
 4. **Ethernet'li panoda kurulum ağı artık açılıp kapanmıyor** (provizyonlu panoda kablo bağlıyken kurulum ağı kapalı kalır).
-5. **Telefona alarm bildirimi (Android):** bkz. Bölüm 9 sonu (bu belge yazılırken tamamlanıyordu).
+5. **Telefona alarm bildirimi (Android, Firebase'siz):** ev sahibi/üye ayarlarda "Arka planda alarm bildirimi"ni açarsa
+   uygulama kapalıyken de alarm bildirimi alır (iOS'ta yok). Teslimde müşteriye gösterin; siren önerisi sürüyor.
+6. **Sihirbaz 6. adım:** pano kimliğini kendisi aldıysa ve çevrimiçiyse sihirbaz kimliğe dokunmadan adımı tamamlar.
 
 ---
 
@@ -157,7 +159,8 @@
    "Bitti" → "Kaydet ve Panoda Doğrula" (süre buluttan yazılır; pano çevrimiçi olmalı).
 9. **Duvar Butonları:** "Dinlemeyi Başlat" → her butona basın → "Algılandı" ya da "Bu girişte buton yok".
 10. **Teslim:** kontrol listesi (ağ satırı Wi-Fi ya da Ethernet), not, teslim alan, "Müşteriye kurulumu gösterdim…" →
-    "Devreye Almayı Tamamla" → kurulum raporu ("Raporu Kopyala / Paylaş").
+    "Devreye Almayı Tamamla" → kurulum raporu ("Raporu Kopyala / Paylaş"). Ekrandaki not Android müşteriye
+    "Arka planda alarm bildirimi" ayarını hatırlatır; siren önerisi kalır.
 
 ---
 
@@ -217,4 +220,4 @@
 7. **Şablon düzenleyicide ek modül** "Kanalları Uygula"ya basılmadan kaydedilirse işlenmiyor.
 8. **Ethernet provizyonunda hızlı doğrulama başarısız olursa** yeniden doğrulama düğmesi kurulum ağı adresine gidiyor.
 9. **Giriş yapılmadan karta yazılırsa** yazım kaydı sunucuya düşmüyor ve uyarı çıkmıyor.
-10. **Telefon alarm bildirimi (Android, Firebase'siz):** bu belge yazılırken tamamlanıyordu; durumu ayrıca bildirilecek.
+10. **Telefon alarm bildirimi** yalnız Android'de ve cihazda henüz denenmedi; iOS'ta yok.
