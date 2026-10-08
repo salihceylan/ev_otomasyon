@@ -1,0 +1,150 @@
+{
+  "schema": "ahbu-template/1",
+  "meta": {
+    "template_id": "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd",
+    "version": 1,
+    "name": "Standart 2+1",
+    "flat_type": "2+1",
+    "site_id": null
+  },
+  "ext_module": {
+    "enabled": false,
+    "channels": 0,
+    "address": 1
+  },
+  "relays": [
+    {
+      "ch": 1,
+      "name": "Salon Panjur Yukarı",
+      "room": "Salon",
+      "type": "shutter_up",
+      "runtime_s": 25,
+      "load": "Salon panjur motoru (yukarı)"
+    },
+    {
+      "ch": 2,
+      "name": "Salon Panjur Aşağı",
+      "room": "Salon",
+      "type": "shutter_down",
+      "runtime_s": 25,
+      "load": "Salon panjur motoru (aşağı)"
+    },
+    {
+      "ch": 3,
+      "name": "Oda Panjur Yukarı",
+      "room": "Oda",
+      "type": "shutter_up",
+      "runtime_s": 30,
+      "load": "Oda panjur motoru (yukarı)"
+    },
+    {
+      "ch": 4,
+      "name": "Oda Panjur Aşağı",
+      "room": "Oda",
+      "type": "shutter_down",
+      "runtime_s": 30,
+      "load": "Oda panjur motoru (aşağı)"
+    },
+    {
+      "ch": 5,
+      "name": "Salon Aydınlatma",
+      "room": "Salon",
+      "type": "light",
+      "load": "Salon Aydınlatma lamba hattı"
+    },
+    {
+      "ch": 6,
+      "name": "Mutfak Aydınlatma",
+      "room": "Mutfak",
+      "type": "light",
+      "load": "Mutfak Aydınlatma lamba hattı"
+    },
+    {
+      "ch": 7,
+      "name": "Koridor Aydınlatma",
+      "room": "Koridor",
+      "type": "light",
+      "load": "Koridor Aydınlatma lamba hattı"
+    },
+    {
+      "ch": 8,
+      "name": "Balkon Aydınlatma",
+      "room": "Balkon",
+      "type": "light",
+      "load": "Balkon Aydınlatma lamba hattı"
+    }
+  ],
+  "dis": [
+    {
+      "ch": 1,
+      "name": "Salon Panjur Butonu",
+      "target_relay": 1,
+      "mode": "shutter_step",
+      "wiring": ""
+    },
+    {
+      "ch": 2,
+      "name": "Boşta",
+      "target_relay": 0,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 3,
+      "name": "Oda Panjur Butonu",
+      "target_relay": 3,
+      "mode": "shutter_step",
+      "wiring": ""
+    },
+    {
+      "ch": 4,
+      "name": "Boşta",
+      "target_relay": 0,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 5,
+      "name": "Salon Anahtar",
+      "target_relay": 5,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 6,
+      "name": "Mutfak Anahtar",
+      "target_relay": 6,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 7,
+      "name": "Koridor Anahtar",
+      "target_relay": 7,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 8,
+      "name": "Balkon Anahtar",
+      "target_relay": 8,
+      "mode": "toggle",
+      "wiring": ""
+    }
+  ],
+  "safety": {
+    "policy": {
+      "on": true,
+      "dry_hold_ms": 10000
+    },
+    "zones": [
+      {
+        "id": 1,
+        "name": "Ev"
+      }
+    ],
+    "sensors": [],
+    "actuators": [],
+    "lights": []
+  }
+}

@@ -1,6 +1,7 @@
 # Site + Kurulum Şablonu + Ethernet — İş Planı
 
-> Durum: **ONAY BEKLİYOR** (2026-10-08). Onaydan sonra fazlar sırayla uygulanır; her iş paketi (İP) kendi testleriyle
+> Durum: **ONAYLANDI** (2026-10-08, kullanıcı: "şimdi plana başlayabilirsin onaylıyorum"; ek istek: bitince kullanım
+> kitapçığı → İP-5.5). Onaydan sonra fazlar sırayla uygulanır; her iş paketi (İP) kendi testleriyle
 > kapanır, tamamlanan maddeler `[x]` ile işaretlenir.
 
 **Amaç:** Toplu (site) kurulumlarda servis sorumlusunun sahadaki işini en aza indirmek. Ofiste site ve daire tipi
@@ -95,11 +96,11 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
 ## Fazlar ve iş paketleri
 
 ### Faz 0 — Sözleşme
-- [ ] **İP-0.1** `docs/contracts/template/README.md`: `ahbu-template/1` alan alan tanım, sınırlar (40 röle/40 DI, ad
+- [x] **İP-0.1** `docs/contracts/template/README.md`: `ahbu-template/1` alan alan tanım, sınırlar (40 röle/40 DI, ad
   ≤31 bayt UTF-8, süre aralıkları, panjur çifti kuralı, güvenlik alanları firmware'deki `SafetyConfig` ile birebir).
-- [ ] **İP-0.2** Örnek dosyalar: `ok_1+1.json`, `ok_2+1.json`, `ok_3+1_vana_dimmer.json`, `ok_ekmodul_16.json`,
+- [x] **İP-0.2** Örnek dosyalar: `ok_1+1.json`, `ok_2+1.json`, `ok_3+1_vana_dimmer.json`, `ok_ekmodul_16.json`,
   `bad_*.json` (bozuk panjur çifti, eylemci röle panjur, sınır dışı süre, bilinmeyen alan…), her birinin beklenen hata kodu.
-- [ ] **İP-0.3** `docs/CONTRACTS.md` güncellemesi: yeni REST uçları, `POST /api/template/apply`, `GET /api/template`,
+- [x] **İP-0.3** `docs/CONTRACTS.md` güncellemesi: yeni REST uçları, `POST /api/template/apply`, `GET /api/template`,
   seri `TPL *`, durum/state `tpl`, `eth_*` alanları.
 
 ### Faz 1 — Sunucu (`server/`, migration 035)
@@ -166,6 +167,8 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
 - [ ] **İP-5.1** Bağımsız kod incelemesi (sunucu+firmware+araç) ve bulguların düzeltilmesi.
 - [ ] **İP-5.2** Canlı: DB yedeği → migration 035 → ev-api dağıtımı (dizin takası) → duman testi.
 - [ ] **İP-5.3** Firmware v1.3.0 yayımı (onayınızla karta yazılır); servis yazılımı kullanım rehberi; CONTRACTS.
+- [ ] **İP-5.5** Kullanım kitapçığı (PDF + Markdown): servis sorumlusu (site/şablon/karta yazma), atölye (flash +
+  şablon USB/Ethernet + etiket + PDF şema), saha ekibi (şemaya göre kablolama + kablolama testi), sorun giderme.
 - [ ] **İP-5.4** Sizin denemeniz: Ethernet kablosuyla şablon yazma, USB ile şablon yazma, PDF çıktısı, claim sonrası
   uygulamada adların gelmesi.
 

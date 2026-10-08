@@ -763,6 +763,43 @@ Etiketteki 2. karekod (`WIFI:T:WPA;S:AHBU-<MAC6>;P:<ap_pass>;;`) **telefon kamer
 
 **Doğrulanamayanlar (cihazda denenmedi):** gerçek SoftAP istemcisinde `remoteIP()`/alt ağ kararı ve STA+AP birlikteyken ağ yönlendirmesi; SoftAP kanal değişiminde telefon davranışı; iOS/Android tarayıcılarında arayüz; `BarcodeDetector` kullanılabilirliği. Karar mantığı (`test/test_ap_access`), hız sınırı, `WiFiManager` AP-kipi bayrağı, GERÇEK `WebPortal.cpp` yol/yetki/JSON akışı (sahte WebServer + Wi-Fi sürücüsüyle wasm32 glue testi), yol tablosu ve sayfa betiği (sahte DOM + gerçek Chrome) sentetik testlerle doğrulandı (ayrıntı: WP-W1 raporu).
 
+## 3e. Site, kurulum şablonu ve Ethernet (2026-10-08; plan `2026-10-08-site-sablon-kurulum.md`)
+
+Şablon biçimi, kart uygulama zarfı, hata kodları ve seri `TPL` protokolü: **`docs/contracts/template/README.md`**
+(ortak örnekler `docs/contracts/template/fixtures/`). Burada yalnız uçlar ve alanlar listelenir.
+
+**REST (sunucu, `/api/v1`; hepsi `requireServiceManager`: `service_user` + `super_user`; servis PIN oturumu 403).**
+Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message, path?}`.
+
+| Uç | Gövde / sonuç |
+|---|---|
+| `GET /sites` · `POST /sites` | Site: `id, name, address, city, district, contact_name, contact_phone, contact_email, block_count, flat_count, notes, created_at, updated_at` (+ liste satırında `flat_stats {planned, written, installed, handed_over}`) |
+| `GET/PATCH/DELETE /sites/:siteId` | DELETE yumuşak (`deleted_at`); dairesine kart bağlı site silinemez (409 `SITE_HAS_DEVICES`) |
+| `GET /sites/:siteId/flats` | Daire: `id, site_id, block, number, flat_type, template_id, device_uuid, status (planned\|written\|installed\|handed_over), last_write {template_id, version, via, at}` |
+| `POST /sites/:siteId/flats/bulk` | `{block, from, to, flat_type?, template_id?}` → oluşturulanlar (var olan blok+no atlanır) |
+| `PATCH/DELETE /sites/:siteId/flats/:flatId` | `flat_type, template_id, status, block, number` |
+| `PUT /sites/:siteId/flats/:flatId/device` | `{device_uuid}` ya da `{device_uuid:null}`; kart envanterde olmalı ve başka daireye bağlı olmamalı (409 `DEVICE_ALREADY_LINKED`) |
+| `GET /templates?site_id=&include_global=1` | Şablon: `id, site_id, name, flat_type, current_version, updated_at, created_by` |
+| `POST /templates` | `{site_id, body}` → şablon + sürüm 1 (`body.meta.template_id/version` sunucuca doldurulur) |
+| `GET /templates/:id` | güncel sürüm `{..., body}` |
+| `PUT /templates/:id` | `{body}` → yeni sürüm (gövde aynıysa sürüm artmaz, mevcut döner) |
+| `DELETE /templates/:id` | yumuşak; sürümler ve yazım kayıtları kalır |
+| `GET /templates/:id/versions` · `GET /templates/:id/versions/:version` | sürüm listesi (`version, sha256, created_at, created_by`) · gövde |
+| `POST /templates/validate` | `{body}` → `{ok:true}` ya da 422 `{code:"TEMPLATE_INVALID", error:"<şablon kodu>", path}` |
+| `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth", result:"ok"\|"error", error_code?}`; `ok` ise daire `written` |
+| `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; denetim kaydı + oran sınırı (K-Ş4) |
+
+Claim (K-Ş8): kart bir daireye bağlıysa ev adı `"<site adı> <blok>-<no>"`, uç noktalar karta son yazılan şablon
+sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas alır. Daire durumu `installed`'a geçer.
+
+**Firmware (v1.3.0+).**
+- `POST /api/template/apply` (KEYED), `GET /api/template` (KEYED) — README.md.
+- Tam `/api/status` ve MQTT state yeni alanlar: `"tpl":{"id","ver"}` (yalnız şablon yüklüyse), `"eth_connected"`,
+  `"eth_ip"`, `"net_if":"wifi"|"eth"|"none"`. Mevcut alanlar değişmez; `ip` etkin arayüzün IP'sidir.
+- Seri: `TPL BEGIN|DATA|COMMIT|ABORT|STATUS`; `STATUS` çıktısına yeni satırlar `Ethernet: <bagli|yok> <ip>` ve
+  `Sablon: <id|-> v<ver>` eklenir, eski satırlar aynen kalır (fabrika aracı ayrıştırması).
+- Ethernet bağlıyken kurtarma AP'si kendiliğinden açılmaz; MQTT ve SNTP Wi-Fi ya da Ethernet'ten çalışır; UID Wi-Fi MAC'ten.
+
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 
 `src/DeviceCommand.h` içinde tanımlıdır. Her görev (MQTT, Web, CLI, DI) röle/panjur durumunu **doğrudan değiştirmez**;

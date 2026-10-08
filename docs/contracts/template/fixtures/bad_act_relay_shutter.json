@@ -1,0 +1,187 @@
+{
+  "expect": "act_relay_shutter",
+  "template": {
+    "schema": "ahbu-template/1",
+    "meta": {
+      "template_id": "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd",
+      "version": 4,
+      "name": "B Tipi 3+1",
+      "flat_type": "3+1",
+      "site_id": "8c1d2e3f-4a5b-4c6d-8e7f-0123456789ab"
+    },
+    "ext_module": {
+      "enabled": false,
+      "channels": 0,
+      "address": 1
+    },
+    "relays": [
+      {
+        "ch": 1,
+        "name": "Salon Panjur Yukarı",
+        "room": "Salon",
+        "type": "shutter_up",
+        "runtime_s": 25,
+        "load": "Salon panjur motoru (yukarı)"
+      },
+      {
+        "ch": 2,
+        "name": "Salon Panjur Aşağı",
+        "room": "Salon",
+        "type": "shutter_down",
+        "runtime_s": 25,
+        "load": "Salon panjur motoru (aşağı)"
+      },
+      {
+        "ch": 3,
+        "name": "Yatak Odası Panjur Yukarı",
+        "room": "Yatak Odası",
+        "type": "shutter_up",
+        "runtime_s": 30,
+        "load": "Yatak Odası panjur motoru (yukarı)"
+      },
+      {
+        "ch": 4,
+        "name": "Yatak Odası Panjur Aşağı",
+        "room": "Yatak Odası",
+        "type": "shutter_down",
+        "runtime_s": 30,
+        "load": "Yatak Odası panjur motoru (aşağı)"
+      },
+      {
+        "ch": 5,
+        "name": "Salon Aydınlatma",
+        "room": "Salon",
+        "type": "light",
+        "load": "Salon Aydınlatma lamba hattı"
+      },
+      {
+        "ch": 6,
+        "name": "Mutfak Aydınlatma",
+        "room": "Mutfak",
+        "type": "light",
+        "load": "Mutfak Aydınlatma lamba hattı"
+      },
+      {
+        "ch": 7,
+        "name": "Çocuk Odası",
+        "room": "Çocuk Odası",
+        "type": "light",
+        "load": "Çocuk Odası lamba hattı"
+      },
+      {
+        "ch": 8,
+        "name": "Su Vanası",
+        "room": "Mutfak",
+        "type": "light",
+        "load": "Motorlu su vanası (kapama)"
+      }
+    ],
+    "dis": [
+      {
+        "ch": 1,
+        "name": "Salon Panjur Butonu",
+        "target_relay": 1,
+        "mode": "shutter_step",
+        "wiring": ""
+      },
+      {
+        "ch": 2,
+        "name": "Yatak Panjur Butonu",
+        "target_relay": 3,
+        "mode": "shutter_step",
+        "wiring": ""
+      },
+      {
+        "ch": 3,
+        "name": "Salon Anahtar",
+        "target_relay": 5,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 4,
+        "name": "Mutfak Anahtar",
+        "target_relay": 6,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 5,
+        "name": "Çocuk Odası Anahtar",
+        "target_relay": 7,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 6,
+        "name": "Boşta",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 7,
+        "name": "Mutfak Su Sensörü",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": "Evye altı"
+      },
+      {
+        "ch": 8,
+        "name": "Banyo Su Sensörü",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": "Lavabo altı"
+      }
+    ],
+    "safety": {
+      "policy": {
+        "on": true,
+        "dry_hold_ms": 10000
+      },
+      "zones": [
+        {
+          "id": 1,
+          "name": "Ev"
+        }
+      ],
+      "sensors": [
+        {
+          "id": "d7",
+          "kind": "water",
+          "zone": 1,
+          "active_open": 0,
+          "name": "Mutfak Su"
+        },
+        {
+          "id": "d8",
+          "kind": "water",
+          "zone": 1,
+          "active_open": 0,
+          "name": "Banyo Su"
+        }
+      ],
+      "actuators": [
+        {
+          "relay": 1,
+          "kind": "valve",
+          "close_mode": "energize",
+          "medium": "water",
+          "zones": [
+            1
+          ],
+          "name": "Ana Su Vanası"
+        }
+      ],
+      "lights": [
+        {
+          "relay": 5,
+          "dimmable": 1,
+          "src": 1,
+          "addr": 2,
+          "ch": 1
+        }
+      ]
+    }
+  }
+}

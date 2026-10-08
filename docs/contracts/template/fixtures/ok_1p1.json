@@ -1,0 +1,148 @@
+{
+  "schema": "ahbu-template/1",
+  "meta": {
+    "template_id": "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd",
+    "version": 1,
+    "name": "A Tipi 1+1",
+    "flat_type": "1+1",
+    "site_id": "8c1d2e3f-4a5b-4c6d-8e7f-0123456789ab"
+  },
+  "ext_module": {
+    "enabled": false,
+    "channels": 0,
+    "address": 1
+  },
+  "relays": [
+    {
+      "ch": 1,
+      "name": "Salon Panjur Yukarı",
+      "room": "Salon",
+      "type": "shutter_up",
+      "runtime_s": 25,
+      "load": "Salon panjur motoru (yukarı)"
+    },
+    {
+      "ch": 2,
+      "name": "Salon Panjur Aşağı",
+      "room": "Salon",
+      "type": "shutter_down",
+      "runtime_s": 25,
+      "load": "Salon panjur motoru (aşağı)"
+    },
+    {
+      "ch": 3,
+      "name": "Salon Aydınlatma",
+      "room": "Salon",
+      "type": "light",
+      "load": "Salon Aydınlatma lamba hattı"
+    },
+    {
+      "ch": 4,
+      "name": "Yatak Odası",
+      "room": "Yatak Odası",
+      "type": "light",
+      "load": "Yatak Odası lamba hattı"
+    },
+    {
+      "ch": 5,
+      "name": "Mutfak",
+      "room": "Mutfak",
+      "type": "light",
+      "load": "Mutfak lamba hattı"
+    },
+    {
+      "ch": 6,
+      "name": "Banyo",
+      "room": "Banyo",
+      "type": "light",
+      "load": "Banyo lamba hattı"
+    },
+    {
+      "ch": 7,
+      "name": "Antre",
+      "room": "Antre",
+      "type": "light",
+      "load": "Antre lamba hattı"
+    },
+    {
+      "ch": 8,
+      "name": "Balkon",
+      "room": "Balkon",
+      "type": "light",
+      "load": "Balkon lamba hattı"
+    }
+  ],
+  "dis": [
+    {
+      "ch": 1,
+      "name": "Salon Panjur Butonu",
+      "target_relay": 1,
+      "mode": "shutter_step",
+      "wiring": "Salon pencere yanı"
+    },
+    {
+      "ch": 2,
+      "name": "Salon Anahtar",
+      "target_relay": 3,
+      "mode": "toggle",
+      "wiring": "Salon kapı yanı"
+    },
+    {
+      "ch": 3,
+      "name": "Yatak Odası Anahtar",
+      "target_relay": 4,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 4,
+      "name": "Mutfak Anahtar",
+      "target_relay": 5,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 5,
+      "name": "Banyo Anahtar",
+      "target_relay": 6,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 6,
+      "name": "Antre Anahtar",
+      "target_relay": 7,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 7,
+      "name": "Balkon Anahtar",
+      "target_relay": 8,
+      "mode": "toggle",
+      "wiring": ""
+    },
+    {
+      "ch": 8,
+      "name": "Boşta",
+      "target_relay": 0,
+      "mode": "toggle",
+      "wiring": ""
+    }
+  ],
+  "safety": {
+    "policy": {
+      "on": true,
+      "dry_hold_ms": 10000
+    },
+    "zones": [
+      {
+        "id": 1,
+        "name": "Ev"
+      }
+    ],
+    "sensors": [],
+    "actuators": [],
+    "lights": []
+  }
+}

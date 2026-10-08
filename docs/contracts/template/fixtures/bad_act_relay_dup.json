@@ -1,0 +1,299 @@
+{
+  "expect": "act_relay_dup",
+  "template": {
+    "schema": "ahbu-template/1",
+    "meta": {
+      "template_id": "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd",
+      "version": 2,
+      "name": "Dubleks 4+1",
+      "flat_type": "dubleks",
+      "site_id": "8c1d2e3f-4a5b-4c6d-8e7f-0123456789ab"
+    },
+    "ext_module": {
+      "enabled": true,
+      "channels": 8,
+      "address": 1
+    },
+    "relays": [
+      {
+        "ch": 1,
+        "name": "Salon Panjur Yukarı",
+        "room": "Salon",
+        "type": "shutter_up",
+        "runtime_s": 25,
+        "load": "Salon panjur motoru (yukarı)"
+      },
+      {
+        "ch": 2,
+        "name": "Salon Panjur Aşağı",
+        "room": "Salon",
+        "type": "shutter_down",
+        "runtime_s": 25,
+        "load": "Salon panjur motoru (aşağı)"
+      },
+      {
+        "ch": 3,
+        "name": "Yatak Odası Panjur Yukarı",
+        "room": "Yatak Odası",
+        "type": "shutter_up",
+        "runtime_s": 25,
+        "load": "Yatak Odası panjur motoru (yukarı)"
+      },
+      {
+        "ch": 4,
+        "name": "Yatak Odası Panjur Aşağı",
+        "room": "Yatak Odası",
+        "type": "shutter_down",
+        "runtime_s": 25,
+        "load": "Yatak Odası panjur motoru (aşağı)"
+      },
+      {
+        "ch": 5,
+        "name": "Çalışma Panjur Yukarı",
+        "room": "Çalışma",
+        "type": "shutter_up",
+        "runtime_s": 25,
+        "load": "Çalışma panjur motoru (yukarı)"
+      },
+      {
+        "ch": 6,
+        "name": "Çalışma Panjur Aşağı",
+        "room": "Çalışma",
+        "type": "shutter_down",
+        "runtime_s": 25,
+        "load": "Çalışma panjur motoru (aşağı)"
+      },
+      {
+        "ch": 7,
+        "name": "Salon Aydınlatma",
+        "room": "Salon",
+        "type": "light",
+        "load": "Salon Aydınlatma lamba hattı"
+      },
+      {
+        "ch": 8,
+        "name": "Mutfak Aydınlatma",
+        "room": "Mutfak",
+        "type": "light",
+        "load": "Mutfak Aydınlatma lamba hattı"
+      },
+      {
+        "ch": 9,
+        "name": "Üst Kat Lamba 1",
+        "room": "Üst Kat",
+        "type": "light",
+        "load": "Üst Kat Lamba 1 lamba hattı"
+      },
+      {
+        "ch": 10,
+        "name": "Üst Kat Lamba 2",
+        "room": "Üst Kat",
+        "type": "light",
+        "load": "Üst Kat Lamba 2 lamba hattı"
+      },
+      {
+        "ch": 11,
+        "name": "Üst Kat Lamba 3",
+        "room": "Üst Kat",
+        "type": "light",
+        "load": "Üst Kat Lamba 3 lamba hattı"
+      },
+      {
+        "ch": 12,
+        "name": "Üst Kat Lamba 4",
+        "room": "Üst Kat",
+        "type": "light",
+        "load": "Üst Kat Lamba 4 lamba hattı"
+      },
+      {
+        "ch": 13,
+        "name": "Üst Kat Lamba 5",
+        "room": "Üst Kat",
+        "type": "light",
+        "load": "Üst Kat Lamba 5 lamba hattı"
+      },
+      {
+        "ch": 14,
+        "name": "Üst Kat Lamba 6",
+        "room": "Üst Kat",
+        "type": "light",
+        "load": "Üst Kat Lamba 6 lamba hattı"
+      },
+      {
+        "ch": 15,
+        "name": "Siren",
+        "room": "Antre",
+        "type": "light",
+        "load": "İç siren 12 V"
+      },
+      {
+        "ch": 16,
+        "name": "Gaz Vanası",
+        "room": "Mutfak",
+        "type": "light",
+        "load": "Gaz selenoid vanası"
+      }
+    ],
+    "dis": [
+      {
+        "ch": 1,
+        "name": "Salon Panjur Butonu",
+        "target_relay": 1,
+        "mode": "shutter_step",
+        "wiring": ""
+      },
+      {
+        "ch": 2,
+        "name": "Anahtar 2",
+        "target_relay": 8,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 3,
+        "name": "Anahtar 3",
+        "target_relay": 9,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 4,
+        "name": "Anahtar 4",
+        "target_relay": 10,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 5,
+        "name": "Anahtar 5",
+        "target_relay": 11,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 6,
+        "name": "Anahtar 6",
+        "target_relay": 12,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 7,
+        "name": "Anahtar 7",
+        "target_relay": 13,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 8,
+        "name": "Anahtar 8",
+        "target_relay": 14,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 9,
+        "name": "Anahtar 9",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 10,
+        "name": "Anahtar 10",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 11,
+        "name": "Anahtar 11",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 12,
+        "name": "Anahtar 12",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 13,
+        "name": "Anahtar 13",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 14,
+        "name": "Anahtar 14",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 15,
+        "name": "Anahtar 15",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": ""
+      },
+      {
+        "ch": 16,
+        "name": "Mutfak Gaz Dedektörü",
+        "target_relay": 0,
+        "mode": "toggle",
+        "wiring": "Sertifikalı dedektör röle çıkışı (NC)"
+      }
+    ],
+    "safety": {
+      "policy": {
+        "on": true,
+        "dry_hold_ms": 10000
+      },
+      "zones": [
+        {
+          "id": 1,
+          "name": "Alt Kat"
+        },
+        {
+          "id": 2,
+          "name": "Üst Kat"
+        }
+      ],
+      "sensors": [
+        {
+          "id": "d16",
+          "kind": "gas",
+          "zone": 1,
+          "active_open": 1,
+          "name": "Mutfak Gaz"
+        }
+      ],
+      "actuators": [
+        {
+          "relay": 16,
+          "kind": "valve",
+          "close_mode": "deenergize",
+          "medium": "gas",
+          "zones": [
+            1
+          ],
+          "name": "Gaz Vanası"
+        },
+        {
+          "relay": 16,
+          "kind": "siren",
+          "zones": [
+            1,
+            2
+          ],
+          "name": "İç Siren"
+        }
+      ],
+      "lights": []
+    }
+  }
+}
