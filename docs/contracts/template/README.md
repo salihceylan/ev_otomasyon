@@ -125,6 +125,29 @@ Hata kodları: `tpl_no_begin`, `tpl_size`, `tpl_crc`, `tpl_overflow`, `tpl_timeo
 Şablon her kaydedildiğinde `meta.version` +1 olan yeni değişmez sürüm üretilir; sunucu `meta.template_id`/`version`'ı
 kendisi doldurur (istemcinin gönderdiği değerler yok sayılır). Gövde SHA-256'sı sürümle saklanır.
 
+## Ek hata kodları (firmware v1.3.0 ile hizalandı, 2026-10-08)
+Yukarıdaki tablolarda adı geçmeyen durumlar için üç doğrulayıcı da şunları döndürür:
+
+| Durum | Kod |
+|---|---|
+| `meta` alanları | `invalid_template_id`, `invalid_version`, `invalid_name`, `invalid_flat_type`, `invalid_site_id` |
+| `relays[].room` / `relays[].load` / `dis[].wiring` | `invalid_room` / `invalid_load` / `invalid_wiring` |
+| `safety.lights`: ışık olmayan röle ya da tekrar | `invalid_light` |
+| eylemci `zones` içinde tanımsız bölge | `act_zone` |
+| `zones` listesi: id hatası/tekrarı/bölge 1 yok · ad hatası | `bad_zone` · `bad_name` |
+| yapı/tip hatası, bilinmeyen ya da eksik anahtar | `bad_field` |
+| güvenlik öğe ayrıştırıcıları (`SafetyCfgApi`) | `bad_id`, `bad_kind`, `bad_zone`, `bad_value`, `bad_relay`, `bad_name`, `bad_field` |
+| liste sınırı aşıldı | `count` |
+| çapraz güvenlik kuralları (`safety::validate`) | `CfgErr` metinleri (`sensor_dup`, `act_relay_dup`, `fb_di_conflict` …) |
+| zarf `label` | `invalid_label` (yalnız firmware; sunucu yalnız gövdeyi doğrular) |
+
+Yol (`path`): öğe ayrıştırıcı hataları öğeyi (`safety.sensors[0]`), çapraz kural hataları listeyi (`safety.sensors`) gösterir.
+
+Firmware'e özgü yanıtlar: HTTP bozuk JSON `400 invalid_json` (seri `bad_json`); cihaz durumuyla çakışma
+`409 cfg_invalid` + `detail`; provizyonsuz kartta HTTP uygulama `403 unprovisioned` (atölye zinciri: flash → `FACTORYINIT`
+→ şablon; ya da USB `TPL`); seri `ERR tpl_b64` (bozuk base64 / 150 karakter üstü satır), `ERR busy` (bellek yok).
+`GET /api/template` `label` alanı etkin addır (label ya da `meta.name`'in ilk 31 baytı).
+
 ## Doğrulama sırası (ilk hata döner)
 `schema` → kök alanlar (`bad_field`) → `meta` → `ext_module` → `relays` (sayı/sıra → her öğe → panjur çiftleri →
 çift süreleri) → `dis` (sayı/sıra → her öğe) → `safety` (`policy` → `intrusion` → `zones` → `sensors` → `actuators` →

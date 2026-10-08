@@ -139,20 +139,20 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
 - [ ] **İP-2.7** `pio run` yeşil; sürüm notu "DONANIMDA DENENMEDİ" bandıyla; birleşik imaj + SHA256.
 
 ### Faz 3 — Servis yazılımı (`ev_otomasyon_servis_yazilimi/`)
-- [ ] **İP-3.1** Giriş: `service_user` da girebilsin (bugün yalnız `super_user`). Envanter kaydı/durum/silme yetkileri
+- [x] **İP-3.1** Giriş: `service_user` da girebilsin (bugün yalnız `super_user`). Envanter kaydı/durum/silme yetkileri
   sunucudaki gibi kalır (servis sorumlusu fabrika kaydı yapamaz; yalnız süper kullanıcı).
-- [ ] **İP-3.2** `🏢 4. Siteler` sekmesi: site ekle/düzenle/sil (ad, adres, il/ilçe, sorumlu, telefon, e-posta, blok
+- [x] **İP-3.2** `🏢 4. Siteler` sekmesi: site ekle/düzenle/sil (ad, adres, il/ilçe, sorumlu, telefon, e-posta, blok
   ve daire sayısı, not); blok/daire listesini toplu üret; daireye daire tipi + şablon ata; ilerleme sütunu
   (planlandı/yazıldı/kuruldu/teslim).
-- [ ] **İP-3.3** `📐 5. Şablonlar` sekmesi: site seç → şablon ekle/düzenle/sil/çoğalt; röle tablosu (kanal, ad, oda,
+- [x] **İP-3.3** `📐 5. Şablonlar` sekmesi: site seç → şablon ekle/düzenle/sil/çoğalt; röle tablosu (kanal, ad, oda,
   tip: lamba/priz, panjur yukarı/aşağı, darbe, vana, siren, fan), girişler (anahtar/buton, su, gaz, duman, kapı/pencere,
   NO/NC, bölge), ek modül, dimmer sorusu (K4: "parlaklık ayarı yapılacak mı?" → dimmer gerekli + nereye). Kaydetmeden
   önce sunucu doğrulaması; her kayıt yeni sürüm; sürüm geçmişi görünümü.
-- [ ] **İP-3.4** Karta yaz: daire (ya da yalnız şablon) seç → **USB** (`TPL` seri, mevcut port/arka uç altyapısı) veya
+- [x] **İP-3.4** Karta yaz: daire (ya da yalnız şablon) seç → **USB** (`TPL` seri, mevcut port/arka uç altyapısı) veya
   **Ethernet** (IP gir/ara, yerel anahtar sunucudan) → sonuç `template_writes`'a işlenir → karttan `GET /api/template`
   / `TPL STATUS` ile geri okunup doğrulanır. Firmware yükleme sonrası akış: flash → FACTORYINIT → şablon yaz zinciri.
-- [ ] **İP-3.5** PDF kablolama şeması (K-Ş9) + etikete daire bilgisi ("A Blok / Daire 12 · 3+1 · Şablon v4").
-- [ ] **İP-3.6** Testler (`unittest`): sahte sunucu + `FakeFirmwareCli`'ye `TPL` desteği; Ethernet için `LoopbackHttpServer`;
+- [x] **İP-3.5** PDF kablolama şeması (K-Ş9) + etikete daire bilgisi ("A Blok / Daire 12 · 3+1 · Şablon v4").
+- [x] **İP-3.6** Testler (`unittest`): sahte sunucu + `FakeFirmwareCli`'ye `TPL` desteği; Ethernet için `LoopbackHttpServer`;
   PDF üretimi (sayfa boyutu, metin varlığı); yetki (service_user girişi); kullanım rehberi + `test_guide_consistency` güncellemesi.
 
 ### Faz 4 — Uygulama (Flutter)

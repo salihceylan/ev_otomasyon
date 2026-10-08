@@ -786,7 +786,7 @@ Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message
 | `DELETE /templates/:id` | yumuşak; sürümler ve yazım kayıtları kalır |
 | `GET /templates/:id/versions` · `GET /templates/:id/versions/:version` | sürüm listesi (`version, sha256, created_at, created_by`) · gövde |
 | `POST /templates/validate` | `{body}` → `{ok:true}` ya da 422 `{code:"TEMPLATE_INVALID", error:"<şablon kodu>", path}` |
-| `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth", result:"ok"\|"error", error_code?}`; `ok` ise daire `written` |
+| `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth"\|"lan", result:"ok"\|"error", error_code?}`; `ok` ise daire `written` |
 | `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; denetim kaydı + oran sınırı (K-Ş4) |
 
 Claim (K-Ş8): kart bir daireye bağlıysa ev adı `"<site adı> <blok>-<no>"`, uç noktalar karta son yazılan şablon
