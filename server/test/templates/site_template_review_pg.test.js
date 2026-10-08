@@ -1,7 +1,8 @@
 'use strict';
 
 // Faz 1 bagimsiz inceleme duzeltmeleri - GERCEK PostgreSQL (yalitilmis gecici veritabani, migration 035).
-//   1  yerel anahtar yalniz IN_STOCK + sahiplenilmemis kartta (aksi 409 DEVICE_NOT_IN_STOCK); denetimde envanter durumu
+//   1  yerel anahtar (kullanici karari 2026-10-08): HER envanter kartinda (stok, iptal, askida, sahiplenilmis) doner;
+//      anahtar yoksa 404; denetim kaydi (envanter durumu + home_id) anahtardan ONCE, yazilamazsa anahtar verilmez
 //   2  es zamanli PUT /templates/:id yanlis 404 vermez (surum 2 ve 3 olusur)
 //   3  deleteSite <-> linkFlatDevice yarisi: "silinmis site + karta bagli daire" olusmaz
 //   4  recordWrite: silinmis sablon / silinmis site / baska sitenin sablonu reddedilir
@@ -89,18 +90,31 @@ test('inceleme duzeltmeleri gercek PG', { skip: PG_SKIP }, async () => {
     assert.equal(audit[0].details.inventory_status, 'IN_STOCK');
     assert.equal(audit[0].home_id, null);
     assert.ok(!JSON.stringify(audit).includes('Anahtar-'), 'anahtar denetime yazilmaz');
-    for (const u of ['AHBU-R035-0002', 'AHBU-R035-0003']) {
-      const e = await expectHttp(svc.getInventoryLocalKey(sActor, u), 409, 'DEVICE_NOT_IN_STOCK');
-      assert.match(e.message, /homes/);
+    for (const [u, st] of [['AHBU-R035-0002', 'REVOKED'], ['AHBU-R035-0003', 'SUSPENDED']]) {
+      assert.equal((await svc.getInventoryLocalKey(sActor, u)).local_key, `Anahtar-${u}`, st);
+      const a = (await db.query("SELECT details FROM device_audit_logs WHERE event = 'inventory_local_key_read' AND device_uuid = $1", [u])).rows;
+      assert.equal(a.length, 1);
+      assert.equal(a[0].details.inventory_status, st);
     }
-    // Sahiplenilmis kart (envanter CLAIMED + devices satiri evli)
+    // Sahiplenilmis (musteri) karti: anahtar doner; denetimde CLAIMED + ev kimligi
     const claimed = await deviceService.claimDevice({ actor: { userId: owner.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-R035-0004', setupPin: '135790', homeName: 'Ev' });
-    await expectHttp(svc.getInventoryLocalKey(sActor, 'AHBU-R035-0004'), 409, 'DEVICE_NOT_IN_STOCK');
-    // Envanter IN_STOCK gorunse de devices satiri bir eve bagliysa reddedilir
-    await db.query("UPDATE device_inventory SET status = 'IN_STOCK' WHERE device_uuid = 'AHBU-R035-0004'");
-    await expectHttp(svc.getInventoryLocalKey(sActor, 'AHBU-R035-0004'), 409, 'DEVICE_NOT_IN_STOCK');
-    await db.query("UPDATE device_inventory SET status = 'CLAIMED' WHERE device_uuid = 'AHBU-R035-0004'");
-    assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM device_audit_logs WHERE event = 'inventory_local_key_read' AND device_uuid <> 'AHBU-R035-0001'")).rows[0].n, 0);
+    const k4 = await svc.getInventoryLocalKey(sActor, 'AHBU-R035-0004');
+    const devKey = (await db.query("SELECT local_key_enc FROM devices WHERE device_uuid = 'AHBU-R035-0004'")).rows[0].local_key_enc;
+    assert.equal(k4.local_key, secretBox.decrypt(devKey), 'panodaki gecerli anahtar (devices) doner');
+    const a4 = (await db.query("SELECT home_id, details FROM device_audit_logs WHERE event = 'inventory_local_key_read' AND device_uuid = 'AHBU-R035-0004'")).rows;
+    assert.equal(a4.length, 1);
+    assert.equal(a4[0].details.inventory_status, 'CLAIMED');
+    assert.equal(a4[0].home_id, claimed.home_id);
+    // Anahtari olmayan kart: 404, denetim kaydi yok
+    await db.query("INSERT INTO device_inventory (device_uuid, mac_address, pin_hash, model) VALUES ('AHBU-R035-0099', 'E8:F6:0A:35:99:99', 'x', 'M')");
+    await expectHttp(svc.getInventoryLocalKey(sActor, 'AHBU-R035-0099'), 404, 'NOT_FOUND');
+    assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM device_audit_logs WHERE device_uuid = 'AHBU-R035-0099'")).rows[0].n, 0);
+    // Denetim kaydi yazilamazsa anahtar VERILMEZ (fail-closed)
+    const failing = new SiteTemplateService({
+      db: { query: (t, p) => (String(t).includes('INSERT INTO device_audit_logs') ? Promise.reject(new Error('denetim yok')) : db.query(t, p)) },
+      secretBox,
+    });
+    await assert.rejects(failing.getInventoryLocalKey(sActor, 'AHBU-R035-0001'), /denetim yok/);
 
     // ---------------------------------------------------------------- 6) kart baglama yalniz IN_STOCK
     const site = await svc.createSite(sActor, { name: 'Ay Sitesi' });

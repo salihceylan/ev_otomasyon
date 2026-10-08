@@ -677,17 +677,17 @@ class SiteTemplateService {
   // ===========================================================================
 
   /**
-   * GET /admin/inventory/:uuid/local-key -> {local_key}. YALNIZ stoktaki (IN_STOCK) ve hicbir eve bagli olmayan kart
-   * (atolye yazimi; super_user + service_user). Kurulu kartin anahtari ev kapsamli uctan alinir
-   * (GET /homes/:homeId/devices/:uuid/local-key): aksi 409 DEVICE_NOT_IN_STOCK. Her okuma denetim kaydina (envanter
-   * durumu dahil) yazilir; kayit yazilamazsa anahtar VERILMEZ (fail-closed).
+   * GET /admin/inventory/:uuid/local-key -> {local_key}. HER envanter kartinda (stok, iptal, askida, sahiplenilmis
+   * musteri karti) doner (kullanici karari 2026-10-08, riskler bilerek kabul edildi); yetki route katmaninda
+   * (service_user + super_user, servis PIN oturumu HARIC) + kullanici basina saatte 60 oran siniri. Karta bagli bir
+   * cihaz kaydi varsa panodaki gecerli anahtar (devices.local_key_enc) esas alinir. Anahtar yoksa 404. Her okuma
+   * anahtar verilmeden ONCE denetim kaydina (envanter durumu + home_id) yazilir; yazilamazsa anahtar VERILMEZ.
    */
   async getInventoryLocalKey(actor, deviceUuid) {
     const uuid = normalizeDeviceUuid(deviceUuid);
     if (!uuid) throw bad('Geçersiz cihaz kimliği.');
     const res = await this.db.query(
-      `SELECT di.device_uuid, di.status, di.local_key_enc, d.home_id,
-              (d.id IS NOT NULL AND (d.home_id IS NOT NULL OR d.is_claimed IS TRUE)) AS attached
+      `SELECT di.device_uuid, di.status, COALESCE(d.local_key_enc, di.local_key_enc) AS local_key_enc, d.home_id
          FROM device_inventory di
          LEFT JOIN devices d ON d.device_uuid = di.device_uuid
         WHERE di.device_uuid = $1`,
@@ -695,13 +695,6 @@ class SiteTemplateService {
     );
     if (res.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
     const row = res.rows[0];
-    if (row.status !== 'IN_STOCK' || row.attached === true) {
-      throw httpError(
-        409,
-        `Kart stokta değil (durum: ${row.status}${row.attached ? ', bir eve bağlı' : ''}). Kurulu kartın yerel anahtarı ev kapsamlı uçtan alınır: GET /homes/:homeId/devices/:uuid/local-key.`,
-        'DEVICE_NOT_IN_STOCK'
-      );
-    }
     if (!row.local_key_enc) throw httpError(404, 'Bu cihaz için yerel anahtar tanımlı değil.', 'NOT_FOUND');
     const box = this.secretBox;
     if (!box || typeof box.isConfigured !== 'function' || !box.isConfigured()) {
