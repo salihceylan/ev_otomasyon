@@ -207,6 +207,7 @@ static void cliPrintStatus() {
     Serial.printf("  - Ethernet: %s %s\r\n", netlink::ethUp(e) ? "bagli" : "yok", netlink::ethUp(e) ? ip : "-");
     tpl::TplRecord r;
     tpl::TemplateStore::get(r);
+    Serial.printf("  - Bootstrap: %s\r\n", MqttManager::instance().bootstrapStatus());   // CONTRACTS §3f
     Serial.printf("  - Sablon: %s v%lu%s\r\n", r.present ? r.id : "-", (unsigned long)(r.present ? r.ver : 0),
                   tpl::TemplateStore::txnInterrupted() ? " YARIM (guvenli kip; seri TPL ile yeniden yazin)" : "");
   }

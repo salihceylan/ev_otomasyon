@@ -8,6 +8,7 @@
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 #include "NetTime.h"
+#include "BootstrapCore.h"
 
 struct AutomationSnapshot;
 
@@ -35,6 +36,8 @@ public:
   void reconfigure();
   // MQTT kimligi var mi ve etkin mi (baglanmayi deneyebilir mi)?
   bool isConfigured();
+  // CONTRACTS §3f bootstrap durumu: idle | waiting_claim | ok | denied | error (tam /api/status "bootstrap", seri STATUS).
+  const char* bootstrapStatus() const { return boot::statusText((boot::Status)_bootStatus); }
   // Planli yeniden baslatma oncesi cagrilir (SmartAutomation on-yeniden-baslatma kancasi):
   // "offline" durumunu yayinlar ve baglantiyi temiz kapatir (LWT yalnizca ani kopmada tetiklenir).
   void prepareForRestart();
@@ -145,4 +148,11 @@ private:
   // ---- sys cfg_patch kabul yankisi (WP-C1; yalniz MQTT gorevi): last_id, otomasyonun son kimligi degismedikce bu kimliktir ----
   char _acceptId[25];
   char _acceptBase[25];
+
+  // ---- Bootstrap (CONTRACTS §3f; yalniz MQTT gorevi) ----
+  boot::Fsm _boot;
+  volatile uint8_t _bootStatus;           // boot::Status (diger gorevler okur)
+  uint8_t _authRejects;                   // art arda CONNACK 4/5 (kimlik/yetki reddi); basarili baglantida 0
+  void maybeBootstrap();
+  void runBootstrap();
 };

@@ -3,28 +3,45 @@
 > **DONANIMDA DENENMEDİ.** Bu imaj hiçbir karta yazılmadı ve hiçbir kartta açılmadı; Ethernet (W5500) hiç kabloyla denenmedi.
 > Dosya düzeyinde doğrulandı (esptool `image_info`: checksum + validation hash geçerli; 0x0000-0xFFFF bölgesi v1.2.1 ile bayt bayt
 > aynı; 0x10000 sonrası = uygulama imajı; imajda "1.3.0" var, "1.2.1" yok) ve saf mantık donanımsız testlerle sınandı (firmware'in kendi
-> Unity testleri MSVC ile: 23 takım / 396 test, yeni 4 takım: `test_template_parse` (ortak 31 örnek dosya), `test_template_rules`,
-> `test_tpl_serial`, `test_net_link`). Toplu üretimden ve sahaya çıkmadan önce aşağıdaki "İlk kartta denenecekler" listesinin tamamı tek
+> Unity testleri MSVC ile: 24 takım / 406 test, yeni 5 takım: `test_template_parse` (ortak 31 örnek dosya), `test_template_rules`,
+> `test_tpl_serial`, `test_net_link`, `test_bootstrap`). Toplu üretimden ve sahaya çıkmadan önce aşağıdaki "İlk kartta denenecekler" listesinin tamamı tek
 > bir test kartında yapılmalıdır. `version_info.json` bu paketle GÜNCELLENMEDİ (yayın kararı ayrıca verilir).
 
 Plan: `docs/superpowers/plans/2026-10-08-site-sablon-kurulum.md` Faz 2 (İP-2.1..2.7). Sözleşme: `docs/contracts/template/README.md`,
-`docs/CONTRACTS.md` §3e.
+`docs/CONTRACTS.md` §3e, §3f (bootstrap).
 
 ## Dosyalar
 
 | Dosya | Boyut (bayt) | Amaç |
 | --- | --- | --- |
-| `firmware_combined_0x0.bin` | 1382368 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
-| `app_0x10000_v1.3.0.bin` | 1317168 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
+| `firmware_combined_0x0.bin` | 1407616 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
+| `app_0x10000_v1.3.0.bin` | 1342080 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
 | `SHA256SUMS.txt` | - | `sha256sum -c SHA256SUMS.txt` ile doğrulayın. |
 
-SHA-256 (ana imaj): `b0a13c989560d1fec8bed5f96cb8ccea6927362141ac04805b31314583a50f72`
-SHA-256 (yalnız uygulama): `1a2a4df9937b5d8266fe5b4118e3d2bdd5d43d737f62c65959d3a8feb7754e64`
-ELF SHA-256: `232f151d1c53fdfc1d2cf042c57a7134952cedb0388a0c5a9b330b297caaea15`
+SHA-256 (ana imaj): `644d4f372cbab1f6008cbe624db07067576d63083e82b5d2bdc8af72dfdb981b`
+SHA-256 (yalnız uygulama): `1e38dac3106fc087e6529d4ecd6ff0d93d87cac7998333b8141cb91b8fb881b8`
+ELF SHA-256: `a8d906ec708c61969e59e70e20cdc411bf924e8c74a19c65db08723ffc0fcf03`
 
 Derleme: PlatformIO espressif32@7.1.3 (Arduino-ESP32 2.0.17 / IDF 4.4, çekirdek DEĞİŞMEDİ), esptool 4.11.0 `merge_bin`
 (`--flash_mode dio --flash_freq 80m --flash_size 16MB`, 0x0 bootloader / 0x8000 bölüm tablosu / 0xe000 boot_app0 / 0x10000 uygulama).
-Boyut: Flash 1256049 -> 1316805 bayt (+60756, %41,9 / 3 MB), statik RAM 68624 -> 69256 bayt (+632).
+Boyut: Flash 1256049 -> 1341713 bayt (+85664, %42,7 / 3 MB; bootstrap için HTTPClient +~25 KB), statik RAM 68624 -> 69272 bayt (+648).
+
+## Bootstrap + Ethernet'li kartta AP döngüsü düzeltmesi (2026-10-08; paket yeniden üretildi, önceki özetler `b0a13c98…` / `1a2a4df9…`
+## GEÇERSİZ)
+
+- **AP döngüsü düzeltmesi:** provizyonlu, yalnız Ethernet'le bağlı (kayıtlı Wi-Fi'si olmayan) kart kurulum/kurtarma AP'sini 10 dk açık /
+  15 dk kapalı sonsuza dek döndürüyordu. `NetUtil::ApPolicy` artık "ağ bağlı" = Wi-Fi bağlı VEYA (Ethernet bağlı VE provizyonlu) sayar:
+  kesinti tetiği ve erken kapanış buna bakar; kayıtlı Wi-Fi yokluğu, provizyonlu kartta Ethernet bağlıyken pencere AÇMAZ. Ethernet yokken
+  davranış v1.2.1 ile aynı; provizyonsuz kartta kurulum AP'si kablo takılıyken de açılır (değişmedi). Testler: `test_net_link` (3 saatlik
+  Ethernet-only senaryo dahil).
+- **Bootstrap (CONTRACTS §3f):** provizyonlu + ağ (Wi-Fi ya da Ethernet) + saat senkron + MQTT etkin + (MQTT kimliği yok YA DA broker art
+  arda 3 kez kimlik/yetki reddi, CONNACK 4/5) iken pano `POST https://<mqtt_server>/api/v1/devices/bootstrap` çağırır
+  (`{"device_uuid","ts","nonce","fw","sig"}`, `sig = hex(HMAC-SHA256(local_key, "ahbu-bootstrap/1|uid|ts|nonce"))`, nonce 16 rastgele
+  bayt; TLS MQTT ile aynı ISRG kökleri). 200 -> kimlik `/api/mqtt/config` ile aynı yoldan NVS'e yazılır ve MQTT yeniden yapılandırılıp
+  bağlanır; 202 -> 10 dk, 401 -> 60 dk, 429 / ağ / bozuk yanıt -> 30 dk sonra yeniden. MqttTask'ta (Core 0) çalışır; güvenlik döngüsünü
+  (loopTask, Core 1) bloklamaz. Yerel anahtar, parola ve imza loglanmaz. Durum: tam `GET /api/status` `"bootstrap":"idle|waiting_claim|
+  ok|denied|error"`, seri STATUS yeni satır `  - Bootstrap: <durum>` (Sablon satırından önce; eski satırlar aynen). Saf mantık:
+  `BootstrapCore.h` (`test_bootstrap`).
 
 ## Kullanıcı kararı: Ethernet kısıtlamaları kaldırıldı (2026-10-08; paket yeniden üretildi, önceki 1.3.0 özetleri `97c21d15…` / `c1a42e2d…`
 ## ve `3ce05170…` / `9b62c948…` GEÇERSİZ)
@@ -136,6 +153,9 @@ Yetmezse hiçbir şey yazılmaz (`507 storage` / `ERR storage`). Dolu bir kartta
 6. NVS: dolu kartta 16 ve 40 kanallı şablon (`[SABLON] NVS bos girdi yetersiz` satırı / `nvs_get_stats`).
 7. Fabrika sıfırlaması (`/api/system/reset`) sonrası `tpl` yok.
 8. Uygulama sırasında güç kesme (NVS yazımı ortası): açılışta güvenli kip + `tpl_incomplete`; seri TPL ya da LAN ile yeniden yazınca normal.
+10. Ethernet-only provizyonlu kart (kayıtlı Wi-Fi yok): AP hiç açılmıyor (en az 30 dk izleyin); kablo çekilince açılıyor.
+11. Bootstrap: kimliksiz, sahiplenilmemiş kart -> `bootstrap: waiting_claim` (202); sahiplendikten sonra (en geç 10 dk) `ok`, MQTT bağlı;
+    sunucuda kimlik değiştirilince 3 red sonra yeniden bootstrap; saat senkron değilken çağrı yapılmıyor.
 9. Ethernet <-> Wi-Fi geçişinde MQTT yeniden bağlanıyor, DNS etkin arayüzünkine dönüyor (`[AG] Etkin arayuz ... DNS ...`).
 
 

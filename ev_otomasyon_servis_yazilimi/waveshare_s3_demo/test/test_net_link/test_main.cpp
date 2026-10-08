@@ -12,6 +12,7 @@
 #include <string.h>
 #include "NetLinkCore.h"
 #include "ApAccess.h"
+#include "NetTime.h"
 
 using namespace netlink;
 
@@ -33,8 +34,8 @@ void test_without_ethernet_every_decision_equals_wifi_only_behavior() {
     const bool wifi = w == 1;
     TEST_ASSERT_EQUAL(wifi, netUp(wifi, ethUp(none)));
     TEST_ASSERT_EQUAL(wifi, mqttNetOk(wifi, ethUp(none)));
-    TEST_ASSERT_EQUAL(wifi, apPolicyConnected(wifi, ethUp(none), true));
-    TEST_ASSERT_EQUAL(wifi, apPolicyConnected(wifi, ethUp(none), false));
+    TEST_ASSERT_FALSE(apPolicyEthUp(ethUp(none), true));
+    TEST_ASSERT_FALSE(apPolicyEthUp(ethUp(none), false));
     TEST_ASSERT_EQUAL(wifi, sntpDue(true, wifi, ethUp(none)));
     TEST_ASSERT_FALSE(sntpDue(false, wifi, ethUp(none)));
     // tam durum: eski kural "staConnected ? staIp : apIp"
@@ -80,8 +81,8 @@ void test_link_then_dhcp_brings_ethernet_up_and_cable_pull_takes_it_down() {
   ethApply(s, EthEvent::GOT_IP, ip(10, 0, 0, 7), MASK24, ip(10, 0, 0, 1));
   TEST_ASSERT_TRUE(ethUp(s));
   TEST_ASSERT_TRUE(netUp(false, ethUp(s)));
-  TEST_ASSERT_TRUE(apPolicyConnected(false, ethUp(s), true));    // provizyonlu + Ethernet bağlı: kurtarma AP'si açılmaz
-  TEST_ASSERT_FALSE(apPolicyConnected(false, ethUp(s), false));  // provizyonsuz: kurulum AP'si Ethernet varken de açılır (R1-1)
+  TEST_ASSERT_TRUE(apPolicyEthUp(ethUp(s), true));    // provizyonlu + Ethernet bağlı: kurtarma AP'si açılmaz
+  TEST_ASSERT_FALSE(apPolicyEthUp(ethUp(s), false));  // provizyonsuz: kurulum AP'si Ethernet varken de açılır
   TEST_ASSERT_TRUE(mqttNetOk(false, ethUp(s)));
   TEST_ASSERT_TRUE(sntpDue(true, false, ethUp(s)));
   TEST_ASSERT_EQUAL_UINT(ip(10, 0, 0, 7), statusIp(false, 0, ethUp(s), s.ip, ip(192, 168, 4, 1)));
@@ -91,7 +92,7 @@ void test_link_then_dhcp_brings_ethernet_up_and_cable_pull_takes_it_down() {
   ethApply(s, EthEvent::LINK_DOWN);
   TEST_ASSERT_FALSE(ethUp(s));
   TEST_ASSERT_EQUAL_UINT(0, s.ip);
-  TEST_ASSERT_FALSE(apPolicyConnected(false, ethUp(s), true));
+  TEST_ASSERT_FALSE(apPolicyEthUp(ethUp(s), true));
   // yeniden takıldı: link tek başına yetmez, yeni DHCP adresi gerekir
   ethApply(s, EthEvent::LINK_UP);
   TEST_ASSERT_FALSE(ethUp(s));
@@ -180,6 +181,83 @@ void test_dns_applied_on_switch_or_new_lease_only_when_known() {
   TEST_ASSERT_FALSE(dnsShouldApply(NetIf::WIFI, NetIf::NONE, true, wifiDns));   // ağ yok
 }
 
+// ---- Kurtarma AP penceresi + Ethernet (NetUtil::ApPolicy, v1.3.0 düzeltmesi) ----
+namespace {
+struct ApSim {
+  NetUtil::ApPolicy p;
+  NetUtil::ApPolicy::In in;
+  bool apOn;
+  uint32_t opens;
+  uint32_t onMs;
+  ApSim(bool allowed, bool staConfigured) : apOn(false), opens(0), onMs(0) {
+    in.allowed = allowed;
+    in.staConfigured = staConfigured;
+  }
+  // [t0, t1) aralığını 250 ms adımla (wifi_task gibi) yürütür.
+  void run(uint32_t t0, uint32_t t1) {
+    for (uint32_t t = t0; t < t1; t += 250) {
+      in.apActive = apOn;
+      const NetUtil::ApPolicy::Out o = p.update(t, in);
+      if (o.opened) opens++;
+      if (o.startAp) apOn = true;
+      if (o.stopAp) apOn = false;
+      if (apOn) onMs += 250;
+    }
+  }
+};
+const uint32_t MIN = 60000;
+}  // namespace
+
+void test_provisioned_ethernet_only_board_never_cycles_the_ap() {
+  ApSim a(true, false);                  // provizyonlu (ap_pass var), kayıtlı Wi-Fi YOK
+  a.in.ethUp = apPolicyEthUp(true, true);
+  a.run(0, 180 * MIN);                   // 3 saat
+  TEST_ASSERT_EQUAL_UINT(0, a.opens);
+  TEST_ASSERT_EQUAL_UINT(0, a.onMs);
+  TEST_ASSERT_FALSE(a.apOn);
+}
+
+void test_provisioned_board_with_saved_wifi_down_but_ethernet_up_does_not_trigger() {
+  ApSim a(true, true);                   // kayıtlı Wi-Fi var ama bağlanamıyor, Ethernet bağlı
+  a.in.connected = false;
+  a.in.ethUp = apPolicyEthUp(true, true);
+  a.run(0, 120 * MIN);
+  TEST_ASSERT_EQUAL_UINT(0, a.opens);
+}
+
+void test_without_ethernet_no_saved_wifi_still_opens_and_cycles_as_v121() {
+  ApSim a(true, false);
+  a.run(0, 60 * MIN);
+  TEST_ASSERT_TRUE(a.opens >= 2);        // 10 dk açık / 15 dk kapalı döngüsü (Ethernet yokken değişmedi)
+}
+
+void test_unprovisioned_board_opens_setup_ap_with_cable_plugged() {
+  ApSim a(true, false);                  // provizyonsuz: allowed (açık kurulum AP'si)
+  a.in.ethUp = apPolicyEthUp(true, false);
+  TEST_ASSERT_FALSE(a.in.ethUp);
+  a.run(0, 1000);
+  TEST_ASSERT_TRUE(a.apOn);
+  TEST_ASSERT_EQUAL_UINT(1, a.opens);
+}
+
+void test_open_window_closes_early_when_ethernet_comes_up_on_provisioned_board() {
+  ApSim a(true, false);
+  a.run(0, 2000);
+  TEST_ASSERT_TRUE(a.apOn);
+  a.in.ethUp = apPolicyEthUp(true, true);
+  a.run(2000, 2000 + 29000);
+  TEST_ASSERT_TRUE(a.apOn);              // 30 sn kararlılık dolmadı
+  a.run(31000, 31000 + 2000);
+  TEST_ASSERT_FALSE(a.apOn);             // kararlı: pencere erken kapandı
+  a.run(33000, 33000 + 90 * MIN);
+  TEST_ASSERT_FALSE(a.apOn);             // ve yeniden açılmadı
+  // kablo çekildi: kayıtlı Wi-Fi yok -> pencere yeniden açılır
+  a.in.ethUp = false;
+  const uint32_t t = 33000 + 90 * MIN;
+  a.run(t, t + 2000);
+  TEST_ASSERT_TRUE(a.apOn);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_without_ethernet_every_decision_equals_wifi_only_behavior);
@@ -192,5 +270,10 @@ int main(int, char**) {
   RUN_TEST(test_ap_access_ethernet_subnet_overlap_closes_ap_origin);
   RUN_TEST(test_mqtt_reconnects_when_active_interface_changes);
   RUN_TEST(test_dns_applied_on_switch_or_new_lease_only_when_known);
+  RUN_TEST(test_provisioned_ethernet_only_board_never_cycles_the_ap);
+  RUN_TEST(test_provisioned_board_with_saved_wifi_down_but_ethernet_up_does_not_trigger);
+  RUN_TEST(test_without_ethernet_no_saved_wifi_still_opens_and_cycles_as_v121);
+  RUN_TEST(test_unprovisioned_board_opens_setup_ap_with_cable_plugged);
+  RUN_TEST(test_open_window_closes_early_when_ethernet_comes_up_on_provisioned_board);
   return UNITY_END();
 }

@@ -592,10 +592,12 @@ void WiFiManager::stepAp(uint32_t now) {
 
   NetUtil::ApPolicy::In in;
   in.allowed = !provisioned || passOk;
-  const bool ethUp = NetLink::ethUp();   // v1.3.0 (K-Ş1): Ethernet bagliyken kurtarma AP'si acilmaz (NetLinkCore::apPolicyConnected)
+  // v1.3.0 (K-Ş1): provizyonlu kart Ethernet'le bagliyken kurtarma AP'si acilmaz / acik pencere kararli baglantida kapanir;
+  // provizyonsuz kartta Ethernet sayilmaz (kurulum AP'si kabloyla da acilir). Karar NetUtil::ApPolicy + NetLinkCore::apPolicyEthUp.
+  in.ethUp = netlink::apPolicyEthUp(NetLink::ethUp(), provisioned);
   {
     MutexGuard g(_mutex, 100);
-    in.connected = netlink::apPolicyConnected(_connected, ethUp, provisioned);   // provizyonsuz kartta Ethernet sayilmaz (R1-1)
+    in.connected = _connected;
     in.staConfigured = (_ssid.length() > 0);
   }
   in.apActive = _apActive;

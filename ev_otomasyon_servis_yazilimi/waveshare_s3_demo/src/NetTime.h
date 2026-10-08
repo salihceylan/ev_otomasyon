@@ -326,10 +326,12 @@ struct ApPolicy {
   struct In {
     bool allowed;        // AP acilabilir mi (provizyonsuz VEYA gecerli ap_pass)
     bool connected;      // STA bagli (IP var)
+    bool ethUp;          // v1.3.0: Ethernet bagli VE cihaz provizyonlu (NetLinkCore::apPolicyEthUp). Provizyonsuz kartta HER ZAMAN false:
+                         // kurulum AP'si kablo takiliyken de acilir. false iken davranis v1.2.1 ile birebir aynidir.
     bool staConfigured;  // kayitli STA kimligi var
     bool apActive;       // AP su an yayinda
     uint8_t clients;     // AP'ye bagli istemci sayisi
-    In() : allowed(false), connected(false), staConfigured(false), apActive(false), clients(0) {}
+    In() : allowed(false), connected(false), ethUp(false), staConfigured(false), apActive(false), clients(0) {}
   };
 
   struct Out {
@@ -386,11 +388,12 @@ struct ApPolicy {
     reopen.service(now);
     restart.service(now);
 
-    // 2) STA baglanti kenarlari: kesinti sayaci (3 dk) ve kararlilik sayaci (30 sn)
-    if (!primed || in.connected != prevConnected) {
+    // 2) Ag baglanti kenarlari: kesinti sayaci (3 dk) ve kararlilik sayaci (30 sn). "Ag" = STA bagli VEYA (Ethernet bagli ve provizyonlu).
+    const bool netConnected = in.connected || in.ethUp;
+    if (!primed || netConnected != prevConnected) {
       primed = true;
-      prevConnected = in.connected;
-      if (in.connected) {
+      prevConnected = netConnected;
+      if (netConnected) {
         disc.disarm();
         trigger = false;
         stable.arm(now, STABLE_MS);
@@ -405,8 +408,9 @@ struct ApPolicy {
     if (disc.service(now)) trigger = true;
     if (stable.service(now)) stableOk = true;
 
-    // 3) pencere
-    const bool trig = !in.staConfigured || trigger;
+    // 3) pencere. Kayitli STA yoksa pencere acilir -- AMA provizyonlu kart Ethernet'le bagliyken degil (aksi halde Ethernet'li kart
+    // AP'yi 10 dk acik / 15 dk kapali sonsuza dek dongulerdi; v1.3.0 duzeltmesi).
+    const bool trig = (!in.staConfigured && !in.ethUp) || trigger;
     if (!windowOpen) {
       if (in.allowed && trig && reopen.elapsed(now)) {
         windowOpen = true;
@@ -415,8 +419,8 @@ struct ApPolicy {
         out.opened = true;
       }
     } else {
-      if (in.connected && in.staConfigured && stableOk) {
-        closeWindow();          // histerezis: STA 30 sn kararli
+      if (netConnected && (in.staConfigured || in.ethUp) && stableOk) {
+        closeWindow();          // histerezis: ag (STA ya da provizyonlu kartta Ethernet) 30 sn kararli
         reopen.disarm();
         out.closedStable = true;
       } else if (window.service(now)) {

@@ -115,11 +115,11 @@ inline uint32_t stateIp(bool wifiUp, uint32_t wifiIp, bool ethIsUp, uint32_t eth
   }
 }
 
-// Kurtarma AP politikası girdisi "connected" (NetUtil::ApPolicy::In::connected): provizyonlu kartta Ethernet bağlıyken de "bağlı"
-// sayılır -> kurtarma penceresi açılmaz / kararlı bağlantıda kapanır (K-Ş1). PROVİZYONSUZ kartta Ethernet sayılmaz: kurulum AP'si
-// (açık AP + POST /api/factory/init yalnız AP'den, inceleme R1-1) Ethernet kablosu takılıyken de açılabilmelidir.
-// Servis AP penceresi (AP ON) bundan bağımsızdır.
-inline bool apPolicyConnected(bool wifiUp, bool ethIsUp, bool provisioned) { return wifiUp || (ethIsUp && provisioned); }
+// Kurtarma AP politikası Ethernet girdisi (NetUtil::ApPolicy::In::ethUp): provizyonlu kartta Ethernet bağlıyken ağ "bağlı" sayılır ->
+// kurtarma penceresi açılmaz (kayıtlı Wi-Fi olmasa da) ve açıksa kararlı bağlantıda kapanır (K-Ş1). PROVİZYONSUZ kartta Ethernet
+// sayılmaz: kurulum AP'si kablo takılıyken de açılır (kurulum AP'den de yapılabilsin; POST /api/factory/init kullanıcı kararıyla HER
+// arayüzden kabul edilir, Ethernet dahil). Servis AP penceresi (AP ON) bundan bağımsızdır.
+inline bool apPolicyEthUp(bool ethIsUp, bool provisioned) { return ethIsUp && provisioned; }
 
 // SNTP: herhangi bir arayüz adres aldığında istek bırakılır (pending); ağ varken bir kez başlatılır.
 inline bool sntpDue(bool pending, bool wifiUp, bool ethIsUp) { return pending && netUp(wifiUp, ethIsUp); }

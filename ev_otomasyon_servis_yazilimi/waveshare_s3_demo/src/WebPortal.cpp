@@ -998,7 +998,7 @@ void WebPortal::sendFullStatus() {
   const uint8_t nP = nR / 2;
   const uint8_t nD = (snap.totalDIs > MAX_TOTAL_DIS) ? (uint8_t)MAX_TOTAL_DIS : snap.totalDIs;
 
-  const size_t cap = JSON_OBJECT_SIZE(49) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
+  const size_t cap = JSON_OBJECT_SIZE(50) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
                      JSON_ARRAY_SIZE(nP) + (size_t)nP * JSON_OBJECT_SIZE(8) + JSON_ARRAY_SIZE(nD) +
                      (size_t)nD * JSON_OBJECT_SIZE(3) + 512;
   DynamicJsonDocument doc(cap);
@@ -1042,6 +1042,7 @@ void WebPortal::sendFullStatus() {
   doc["eth_connected"] = ethUp;
   doc["eth_ip"] = (const char*)ethIpStr;
   doc["net_if"] = netlink::netIfName(netlink::activeIf(staConnected, ethUp));
+  doc["bootstrap"] = MqttManager::instance().bootstrapStatus();   // CONTRACTS §3f
   if (tplRec.present) {
     JsonObject t = doc.createNestedObject("tpl");
     t["id"] = (const char*)tplRec.id;
@@ -1807,7 +1808,7 @@ void WebPortal::handleApiFactoryInit() {
   }
   // v1.3.0: kullanıcı kararı (2026-10-08, riskler anlatıldıktan sonra) -> factory/init Ethernet'ten de kabul edilir (kurulum AP'sinden
   // olduğu gibi; v1.2.1 davranışı, kaynak arayüz denetimi YOK). Provizyonsuz kartta kurulum AP'si Ethernet bağlıyken de açılır
-  // (NetLinkCore::apPolicyConnected).
+  // (NetLinkCore::apPolicyEthUp + NetUtil::ApPolicy).
   String body;
   if (!readJsonBody(body)) return;
   DynamicJsonDocument doc(jsonCapacityFor(body.length()));

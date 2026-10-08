@@ -6,6 +6,8 @@
 #include "NetUtil.h"
 #include "CaCerts.h"
 #include "NetLink.h"
+#include <HTTPClient.h>
+#include <mbedtls/md.h>
 #include "template/TemplateStore.h"
 #include "safety/SafetyManager.h"
 #include "safety/SafetyCfgApi.h"
@@ -351,7 +353,10 @@ MqttManager::MqttManager()
       _enabled(true),
       _port(8884),
       _publishedSigValid(false),
-      _recentHead(0) {
+      _recentHead(0),
+      _boot(),
+      _bootStatus((uint8_t)boot::Status::IDLE),
+      _authRejects(0) {
   _server[0] = _user[0] = _pass[0] = _topicId[0] = '\0';
   _topicStatus[0] = _topicState[0] = _topicCmd[0] = _topicSys[0] = _topicEvent[0] = '\0';
   _clientId[0] = _uid[0] = '\0';
@@ -538,6 +543,119 @@ void MqttManager::dropConnection(const char* why, bool sendDisconnect) {
   if (was) printf("[MQTTS] Baglanti kapatildi: %s\r\n", why);
 }
 
+// ============================================================================
+// Bootstrap: panonun bulut kimligini kendisi almasi (CONTRACTS §3f). Karar/ayristirma saf: BootstrapCore.h (test/test_bootstrap).
+// Yerel anahtar, parola ve imza ASLA loglanmaz.
+// ============================================================================
+void MqttManager::maybeBootstrap() {
+  boot::In in;
+  {
+    ConfigManager::ConfigLock lk(ConfigManager::instance());
+    in.provisioned = ConfigManager::instance().config.hasLocalKey();
+  }
+  {
+    MutexGuard g(_mutex, 50);
+    in.enabled = _enabled;
+    in.haveCreds = _haveCreds;
+  }
+  in.netUp = netlink::mqttNetOk(WiFiManager::instance().isConnected(), NetLink::ethUp());
+  in.timeSynced = NetUtil::isTimeSynced();
+  in.authRejects = _authRejects;
+  if (_mqttClient.connected()) return;
+  if (!_boot.due(millis(), in)) return;
+  runBootstrap();
+}
+
+void MqttManager::runBootstrap() {
+  char key[LOCAL_KEY_MAX_LEN + 1];
+  char host[64];
+  {
+    ConfigManager::ConfigLock lk(ConfigManager::instance());
+    const SystemConfig& cfg = ConfigManager::instance().config;
+    memcpy(key, cfg.local_key, sizeof(key));
+    memcpy(host, cfg.mqtt_server, sizeof(host));
+  }
+  key[sizeof(key) - 1] = '\0';
+  host[sizeof(host) - 1] = '\0';
+  const String uid = WiFiManager::instance().getDeviceUid();
+  const uint32_t ts = (uint32_t)time(nullptr);
+  uint8_t nonceRaw[16];
+  esp_fill_random(nonceRaw, sizeof(nonceRaw));
+  char nonce[33];
+  boot::toHex(nonceRaw, sizeof(nonceRaw), nonce);
+
+  char msg[128];
+  char sigHex[65];
+  bool ok = boot::signString(msg, sizeof(msg), uid.c_str(), ts, nonce);
+  if (ok) {
+    uint8_t mac[32];
+    const mbedtls_md_info_t* md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    ok = md && mbedtls_md_hmac(md, (const unsigned char*)key, strlen(key), (const unsigned char*)msg, strlen(msg), mac) == 0;
+    if (ok) boot::toHex(mac, sizeof(mac), sigHex);
+    memset(mac, 0, sizeof(mac));
+  }
+  memset(key, 0, sizeof(key));
+  char body[256];
+  if (ok) ok = boot::buildBody(body, sizeof(body), uid.c_str(), ts, nonce, FW_VERSION, sigHex);
+  memset(sigHex, 0, sizeof(sigHex));
+  if (!ok) {
+    _boot.onResult(millis(), boot::Result::BAD_RESPONSE);
+    _bootStatus = (uint8_t)_boot.status;
+    return;
+  }
+
+  printf("[BOOTSTRAP] https://%s/api/v1/devices/bootstrap istegi (uid %s, bos heap %u)...\r\n", host, uid.c_str(),
+         (unsigned)ESP.getFreeHeap());
+  _secureClient.stop();                    // MQTT TLS oturumu yok (bagli degil); bellek bootstrap'a kalsin
+  int code = -1;
+  String resp;
+  {
+    WiFiClientSecure tls;
+    tls.setCACert(LETS_ENCRYPT_ROOT_CA_PEM);   // MQTT ile ayni ISRG kokleri
+    tls.setHandshakeTimeout(12);
+    tls.setTimeout(10);
+    HTTPClient http;
+    http.setReuse(false);
+    http.setTimeout(10000);
+    http.setConnectTimeout(10000);
+    char url[112];
+    snprintf(url, sizeof(url), "https://%s/api/v1/devices/bootstrap", host);
+    if (http.begin(tls, url)) {
+      http.addHeader("Content-Type", "application/json");
+      code = http.POST((uint8_t*)body, strlen(body));
+      if (code == 200) {
+        const int size = http.getSize();
+        if (size < 0 || size <= 1024) resp = http.getString();
+        if (resp.length() > 1024) resp = "";
+      }
+      http.end();
+    }
+    tls.stop();
+  }
+  memset(body, 0, sizeof(body));
+
+  boot::Creds c;
+  boot::Result r = boot::parseResponse(code, resp.c_str(), c);
+  for (unsigned i = 0; i < resp.length(); i++) resp.setCharAt(i, '\0');   // parola bellekte kalmasin
+  if (r == boot::Result::OK) {
+    // /api/mqtt/config ile ayni yol: dogrulama + NVS + MQTT yeniden yapilandirma
+    if (ConfigManager::instance().setMqttCredentials(c.host, c.port, c.user, c.pass)) {
+      _authRejects = 0;
+      reconfigure();
+      printf("[BOOTSTRAP] MQTT kimligi alindi ve kaydedildi (%s:%u); baglaniliyor.\r\n", c.host, (unsigned)c.port);
+    } else {
+      r = boot::Result::BAD_RESPONSE;
+      printf("[BOOTSTRAP] Alinan kimlik kaydedilemedi.\r\n");
+    }
+  } else {
+    printf("[BOOTSTRAP] Sonuc: HTTP %d (%s)\r\n", code,
+           r == boot::Result::PENDING ? "pano henuz sahiplenilmemis" : r == boot::Result::DENIED ? "reddedildi" : "hata");
+  }
+  memset(&c, 0, sizeof(c));
+  _boot.onResult(millis(), r);
+  _bootStatus = (uint8_t)_boot.status;
+}
+
 void MqttManager::taskLoop() {
   for (;;) {
     // Zamanlayicilar HER turda (kimlik/Wi-Fi/baglanti durumu ne olursa olsun) yoklanir: sure dolunca sonlanir.
@@ -549,6 +667,7 @@ void MqttManager::taskLoop() {
       _ignore.service(t);
       _noTimeLog.service(t);
       _sigCheck.service(t);
+      _boot.service(t);
       // Yigin izleme (TLS el sikismasi yigin tuketir): arada ve sorun varsa logla
       if (_watermark.elapsed(t)) {
         const UBaseType_t freeStack = uxTaskGetStackHighWaterMark(nullptr);
@@ -582,6 +701,10 @@ void MqttManager::taskLoop() {
       _noCredLogged = false;
       printf("[MQTTS] Yapilandirma yenilendi (kimlik: %s).\r\n", _haveCreds ? "VAR" : "YOK");
     }
+
+    // Bootstrap (CONTRACTS §3f): kimlik yoksa ya da broker art arda 3 kez reddettiyse panonun kimligini sunucudan almasi. Bu gorevde
+    // (Core 0) bloklayan HTTPS (en cok ~25 sn); guvenlik dongusu (loopTask, Core 1) etkilenmez. MQTT bu gorevde zaten bagli degildir.
+    maybeBootstrap();
 
     if (!_haveCreds || !_enabled) {
       if (!_noCredLogged) {
@@ -730,6 +853,7 @@ bool MqttManager::tryConnect() {
     const int st = _mqttClient.state();
     _secureClient.stop();
     if (st == 4 || st == 5) {
+      if (_authRejects < 255) _authRejects++;   // bootstrap tetigi (CONTRACTS §3f: art arda 3 "not authorized")
       printf("[MQTTS] Broker kimligi/yetkiyi REDDETTI (CONNACK %d). Uzun bekleme.\r\n", st);
       _reconnect.scheduleAuthRejected(millis(), esp_random());
     } else {
@@ -756,6 +880,7 @@ bool MqttManager::tryConnect() {
     MutexGuard g(_mutex, 50);
     _connected = true;
   }
+  _authRejects = 0;
   _reconnect.reset();
   memset(_recentIds, 0, sizeof(_recentIds));
   _recentHead = 0;
