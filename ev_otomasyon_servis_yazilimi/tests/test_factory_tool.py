@@ -2752,6 +2752,34 @@ class AppSmokeTests(unittest.TestCase):
         self.assertNotIn(record.ap_pass, shown)
         self.assert_no_callback_errors()
 
+    def test_ethernet_provision_uses_the_entered_ip_and_marks_record_verified(self):
+        # Kullanıcı kararı (2026-10-08): provizyon Ethernet'ten de yapılabilir (firmware v1.3.0 factory/init'i LAN'dan kabul eder).
+        record = self.register()
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="192.168.10.57"):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(record.state, "verified")
+        self.assertEqual(record.path, "eth")
+        self.assertEqual([(c.method, c.host, c.path) for c in self.device.calls],
+                         [("GET", "192.168.10.57", "/api/status"), ("POST", "192.168.10.57", "/api/factory/init"),
+                          ("GET", "192.168.10.57", "/api/auth/check")])
+        self.assertIn("Ethernet", self.app.prov_device_var.get())
+        shown = self.dialogs.all_text() + self.app.prov_log.get("1.0", "end")
+        self.assertNotIn(FAKE_LOCAL_KEY, shown)
+        self.assertNotIn(record.ap_pass, shown)
+        self.assert_no_callback_errors()
+
+    def test_ethernet_provision_rejects_public_ip_and_cancel(self):
+        record = self.register()
+        with mock.patch.object(tool.simpledialog, "askstring", return_value="8.8.8.8"):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(record.state, "registered")
+        self.assertEqual(self.device.calls, [])
+        self.assertTrue(self.dialogs.of("error"))
+        with mock.patch.object(tool.simpledialog, "askstring", return_value=None):
+            self.app.provision_via_ethernet_clicked()
+        self.assertEqual(self.device.calls, [])
+        self.assertEqual(str(self.app.btn_prov_eth.cget("state")), "normal")
+
     def test_provision_unreachable_gives_step_by_step_help(self):
         record = self.register()
         self.device.fail_all = True

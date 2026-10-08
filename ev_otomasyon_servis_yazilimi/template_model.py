@@ -495,7 +495,7 @@ ERROR_TEXTS: dict[str, str] = {
     "tpl_b64": "Aktarım verisi bozuk (base64); hiçbir şey değişmedi. Yeniden deneyin.",
     "invalid_json": "Kart gönderilen veriyi çözümleyemedi (bozuk JSON). Yeniden deneyin.",
     "invalid_label": "Kart adı (etiket) geçersiz: en çok 31 bayt olmalı.",
-    "unprovisioned": "Kart henüz provizyonlanmamış. Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın.",
+    "unprovisioned": "Kart henüz provizyonlanmamış. Önce provizyon yapın (3. sekme), sonra şablonu yazın.",
     "invalid_ext_channels": "Ek modül kanal sayısı geçersiz (0, 2, 4, 8, 12, 16, 24, 32; etkinse 0 olamaz).",
     "invalid_ext_address": "Ek modül adresi 1-247 arasında olmalı.",
     "relay_count": "Röle tablosu kanal sayısıyla uyuşmuyor (ek modül ayarını kontrol edin).",
@@ -540,7 +540,7 @@ ERROR_TEXTS: dict[str, str] = {
     "tpl_overflow": "Kart beklenenden fazla veri aldı; aktarım iptal edildi. Yeniden deneyin.",
     "tpl_timeout": "Aktarım zaman aşımına uğradı (30 sn); hiçbir şey değişmedi. Yeniden deneyin.",
     "bad_json": "Kart şablonu çözümleyemedi (bozuk veri). Yeniden deneyin.",
-    "local_loosen_forbidden": "Kart bu değişikliği ağ üzerinden kabul etmiyor (güvenlik ayarları gevşiyor). USB ile yazın.",
+    "local_loosen_forbidden": "Kart bu güvenlik değişikliğini ağ üzerinden kabul etmedi (eski firmware olabilir).",
     "zone_latched": "Kartta kilitli (alarmdaki) bir bölge var; alarm onaylanıp kuruluk sağlanana kadar yazılamaz.",
     "armed": "Hırsız alarmı kurulu; önce alarmı kapatın.",
     "busy": "Kart meşgul (panjur hareket halinde olabilir ya da bellek yetersiz). Birkaç saniye bekleyip yeniden deneyin.",
@@ -553,9 +553,7 @@ ERROR_TEXTS: dict[str, str] = {
     "readback_mismatch": "Yazım sonrası karttan okunan şablon kimliği/sürümü beklenenle eşleşmiyor.",
     "cfg_invalid": "Kart şablonu geçersiz buldu (güvenlik ayarları ana yapılandırmayla uyuşmuyor).",
     "mac_mismatch": "Bağlı kart seçilen daireye bağlı kartla eşleşmiyor.",
-    "factory_ap_only": "Kart provizyonu (FACTORYINIT) Ethernet'ten kabul etmiyor: önce USB ile provizyon yapın, sonra şablonu "
-    "USB ya da Ethernet ile yazın.",
-    "device_mismatch": "Bu IP adresindeki kart seçilen kartla eşleşmiyor; yerel anahtar alınmadı, hiçbir şey yazılmadı.",
+    "factory_ap_only": "Kart provizyonu bu yoldan kabul etmedi (eski firmware olabilir).",
     "unexpected": "Karttan beklenmeyen bir yanıt alındı.",
     "cancelled": "İşlem iptal edildi.",
 }

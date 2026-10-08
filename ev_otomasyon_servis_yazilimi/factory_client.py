@@ -458,8 +458,8 @@ def _format_wait(seconds: Optional[int]) -> str:
     return f"{(value + 59) // 60} dakika"
 
 
-DEVICE_NOT_IN_STOCK_TEXT = (
-    "Bu kart stokta değil (müşteriye ait ya da askıda); Ethernet ile şablon yazılamaz — USB kullanın veya ev üzerinden işlem yapın."
+DEVICE_NOT_IN_STOCK_TEXT = (  # yalnız daireye kart bağlama (PUT /sites/:id/flats/:flatId/device)
+    "Bu kart stokta değil (müşteriye ait ya da askıda); daireye bağlanamaz."
 )
 
 
@@ -1497,11 +1497,8 @@ class DeviceClient:
         if status == 403 and err == "factory_ap_only":
             raise ProvisionError(
                 "factory_ap_only",
-                "Kart provizyonu bu ağ arayüzünden kabul etmiyor (factory_ap_only): yalnız kurulum Wi-Fi'si ya da USB.",
-                hint=(
-                    "Atölye sırası: USB ile firmware yükleyin -> USB (seri) FACTORYINIT (araç otomatik yapar) -> şablonu USB ya da "
-                    "Ethernet ile yazın. 'Seri (USB) ile Provizyonla'yı kullanın."
-                ),
+                "Kart provizyonu bu yoldan kabul etmedi (factory_ap_only; eski firmware olabilir).",
+                hint="Firmware'i güncelleyin ya da 'Seri (USB) ile Provizyonla'yı kullanın.",
             )
         if status == 403 and err == "already_provisioned":
             raise ProvisionError(
@@ -2514,11 +2511,6 @@ class TemplateWriteError(FactoryError):
         self.path = path if re.fullmatch(r"[A-Za-z0-9_.\[\]]{1,64}", path or "") else ""
         self.device_uid: Optional[str] = None  # USB yolunda STATUS'tan bilinen kart (yazım kaydı için)
 
-    @property
-    def use_usb(self) -> bool:
-        """LAN gevşetme yasağı: araç 'USB ile yazın' der."""
-        return self.code == "local_loosen_forbidden"
-
 
 @dataclass
 class TemplateWriteOutcome:
@@ -2761,27 +2753,6 @@ class TemplateLanWriter:
             return payload
         raise self._error(status, payload)
 
-    def verify_identity(self, *expected_uids: Optional[str]) -> str:
-        """Anahtarsız ``GET /api/status`` ile bu IP'deki kartın UID'sini okur; beklenen UID(ler)le eşleşmezse yerel anahtar
-        ALINMADAN/GÖNDERİLMEDEN ``TemplateWriteError("device_mismatch")``."""
-        try:
-            found = str(self._device.status().get("device") or "").strip().upper()
-        except ProvisionError as exc:
-            if exc.code == "unreachable":
-                raise TemplateWriteError("unreachable") from None
-            raise TemplateWriteError(
-                "device_mismatch",
-                message="Bu IP adresindeki cihaz bir AHBU kartı gibi yanıt vermedi; yerel anahtar alınmadı, hiçbir şey yazılmadı.",
-            ) from None
-        for expected in expected_uids:
-            if expected and found != expected.strip().upper():
-                raise TemplateWriteError(
-                    "device_mismatch",
-                    message=f"Bu IP adresindeki kart ({found or '?'}) seçilen kartla ({expected.strip().upper()}) eşleşmiyor; "
-                    "yerel anahtar alınmadı, hiçbir şey yazılmadı. IP adresini kontrol edin.",
-                )
-        return found
-
     def write(self, local_key: str, envelope: bytes, *, template_id: str, version: int, label: str = "",
               device_uid: Optional[str] = None, progress: Optional[ProgressCallback] = None) -> TemplateWriteOutcome:
         say = progress or (lambda _message: None)
@@ -2815,7 +2786,7 @@ class TemplateLanWriter:
                     break
                 if waited >= self.PENDING_MAX_S:
                     raise TemplateWriteError("tpl_timeout", message="Kart şablonu 20 sn içinde uygulamadı (202 pending). "
-                                             "Kartın durumunu kontrol edip yeniden deneyin ya da USB ile yazın.")
+                                             "Kartın durumunu kontrol edip yeniden deneyin.")
                 self._sleep(self.PENDING_POLL_S)
                 waited += self.PENDING_POLL_S
         if reply.get("template_id") not in (None, template_id) or reply.get("version") not in (None, int(version)):

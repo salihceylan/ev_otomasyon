@@ -767,6 +767,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         except ValueError as exc:
             self._startup_notes.append(f"Sunucu adresi kullanılamadı ({exc}); varsayılan adres kullanılıyor.")
             self.client = ServerClient(DEFAULT_SERVER_URL, transport=transport, scrubber=self.scrubber)
+        self._device_transport = device_transport  # Ethernet provizyonu: kullanıcının girdiği IP için ayrı DeviceClient
         try:
             self.device = DeviceClient(device_host, transport=device_transport)
         except ValueError as exc:
@@ -1327,6 +1328,11 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.btn_prov_start.pack(side=tk.LEFT, padx=(0, 6))
         self.btn_prov_verify = theme.button(fallback, role="tint.emerald", size="sm", text="✅ Wi-Fi ile Doğrula", command=self.verify_provision)
         self.btn_prov_verify.pack(side=tk.LEFT, padx=6)
+        # Kullanıcı kararı (2026-10-08): firmware v1.3.0 provizyonu Ethernet'ten de kabul eder (atölye ağı, USB'siz zincir).
+        self.btn_prov_eth = theme.button(
+            fallback, role="tint.sky", size="sm", text="🌐 Ethernet ile Provizyonla", command=self.provision_via_ethernet_clicked
+        )
+        self.btn_prov_eth.pack(side=tk.LEFT, padx=6)
 
         result_card, result_frame = theme.card(outer, "📋 Sonuç", accent="emerald", padx=10, pady=10)
         result_card.pack(fill=tk.BOTH, expand=True)
@@ -1379,7 +1385,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             state_text = {
                 "registered": "Provizyon bekliyor",
                 "init_sent": "Anahtar yazıldı (Wi-Fi) - doğrulama bekliyor",
-                "verified": "Provizyon doğrulandı ✔" + {"serial": " (USB seri)", "wifi": " (Wi-Fi)"}.get(rec.path, ""),
+                "verified": "Provizyon doğrulandı ✔" + {"serial": " (USB seri)", "wifi": " (Wi-Fi)", "eth": " (Ethernet)"}.get(rec.path, ""),
             }.get(rec.state, rec.state)
             self.prov_device_var.set(
                 f"Cihaz: {rec.uid}     MAC: {rec.mac}\n"
@@ -1413,6 +1419,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.btn_prov_serial.config(state=tk.NORMAL if can_serial else tk.DISABLED)
         self.btn_prov_start.config(state=tk.NORMAL if can_wifi else tk.DISABLED)
         self.btn_prov_verify.config(state=tk.NORMAL if can_verify else tk.DISABLED)
+        self.btn_prov_eth.config(state=tk.NORMAL if can_wifi else tk.DISABLED)
         self.btn_prov_cancel.config(state=tk.NORMAL if busy else tk.DISABLED)
         self.btn_prov_manual.config(state=tk.NORMAL)
         self.btn_prov_forget.config(state=tk.NORMAL if (rec is not None and not busy) else tk.DISABLED)
@@ -1581,6 +1588,56 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         ):
             self.start_provision()
 
+    def provision_via_ethernet_clicked(self) -> None:
+        """'Ethernet ile Provizyonla': kart atölye ağına kabloyla bağlıyken IP'sine POST /api/factory/init (v1.3.0+).
+
+        Anahtar yerel ağdan düz HTTP ile gider; ağdaki başka bir bilgisayar da yeni kartı ilk sahiplenebilir (kullanıcı bu
+        riski 2026-10-08'de kabul etti). Yalnız özel (yerel) IP kabul edilir."""
+        rec = self._alive_record()
+        if rec is None:
+            self.ui_warn("Kayıt Yok", "Önce 2. sekmede cihazı sunucu envanterine kaydedin.")
+            return
+        if self._prov_busy:
+            return
+        if rec.state != "registered":
+            self.ui_info("Provizyon", "Bu cihazın anahtarı zaten yazıldı.")
+            return
+        raw = simpledialog.askstring(
+            "Ethernet ile Provizyon",
+            "Kartın Ethernet IP adresi (yerel ağ, ör. 192.168.1.57):\n"
+            "Kartın IP'sini modem/DHCP listesinden ya da seri STATUS 'Ethernet:' satırından alabilirsiniz.",
+            parent=self,
+        )
+        if not raw or not raw.strip():
+            return
+        try:
+            device = DeviceClient(raw.strip(), transport=self._device_transport)
+        except ValueError:
+            self.ui_error("Geçersiz Adres", "Yalnız yerel ağ (özel) IP adresi kabul edilir, ör. 192.168.1.57.")
+            return
+        self._run_provision(rec, device, mode="eth", wait=0.0, intro=f"Ethernet yolu: cihaza bağlanılıyor ({device.base_url})...")
+
+    def _run_provision(self, rec: DeviceRecord, device: "DeviceClient", *, mode: str, wait: float, intro: str) -> None:
+        self._prov_busy = True
+        self._prov_mode = mode
+        self._prov_cancel = cancel = threading.Event()
+        self._update_provision_buttons()
+        self._prov_clear_log()
+        self._prov_say(intro)
+        local_key, ap_pass, uid = rec.local_key, rec.ap_pass, rec.uid
+
+        def work() -> Any:
+            return device.provision(
+                local_key,
+                ap_pass,
+                expected_uid=uid,
+                progress=lambda message: self.post_ui(self._prov_say, message),
+                wait_seconds=wait,
+                cancel=cancel,
+            )
+
+        self.run_background(work, lambda outcome, err: self._on_provision_done(rec, outcome, err, path=mode))
+
     # ---- Wi-Fi (açık AP + düz HTTP) provizyonu: GÜVENSİZ YEDEK YOL -----------------------------------------
     def start_provision(self, wait_seconds: Optional[float] = None) -> None:
         """YEDEK (güvensiz) yol: cihazın açık kurulum AP'sine bağlı bilgisayardan POST /api/factory/init.
@@ -1596,25 +1653,9 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             self.ui_info("Provizyon", "Bu cihazın anahtarı zaten yazıldı. 'Wi-Fi ile Doğrula'ya basın.")
             return
         wait = PROVISION_WAIT_MANUAL_S if wait_seconds is None else float(wait_seconds)
-        self._prov_busy = True
-        self._prov_mode = "wifi"
-        self._prov_cancel = cancel = threading.Event()
-        self._update_provision_buttons()
-        self._prov_clear_log()
-        self._prov_say(f"YEDEK (güvensiz) Wi-Fi yolu: cihaza bağlanılıyor ({self.device.base_url})...")
-        local_key, ap_pass, uid = rec.local_key, rec.ap_pass, rec.uid
-
-        def work() -> Any:
-            return self.device.provision(
-                local_key,
-                ap_pass,
-                expected_uid=uid,
-                progress=lambda message: self.post_ui(self._prov_say, message),
-                wait_seconds=wait,
-                cancel=cancel,
-            )
-
-        self.run_background(work, lambda outcome, err: self._on_provision_done(rec, outcome, err))
+        self._run_provision(
+            rec, self.device, mode="wifi", wait=wait, intro=f"YEDEK (güvensiz) Wi-Fi yolu: cihaza bağlanılıyor ({self.device.base_url})..."
+        )
 
     def cancel_provision(self) -> None:
         """Süren provizyon beklemesini/doğrulamasını keser."""
@@ -1622,7 +1663,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             self._prov_cancel.set()
             self._prov_say("İptal isteniyor...")
 
-    def _on_provision_done(self, rec: DeviceRecord, outcome: Any, err: Optional[BaseException]) -> None:
+    def _on_provision_done(self, rec: DeviceRecord, outcome: Any, err: Optional[BaseException], *, path: str = "wifi") -> None:
         self._prov_busy = False
         self._prov_mode = ""
         if rec.state == "wiped":  # kayıt işlem sürerken bellekten silindi: sonuç yok sayılır
@@ -1641,7 +1682,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
                 self.ui_error("Provizyon Başarısız", self._error_text(err))
         elif outcome.verified:
             rec.state = "verified"
-            rec.path = "wifi"
+            rec.path = path
             self._prov_say("✅ Provizyon tamamlandı ve doğrulandı (GET /api/auth/check = 200).")
             self.ui_info("Provizyon Tamamlandı", "Cihaz anahtarı doğrulandı.\n" + LABEL_PHONE_CHECK_HINT + "\nSonra etiketi cihaza yapıştırabilirsiniz.")
         else:

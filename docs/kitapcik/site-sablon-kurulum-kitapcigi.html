@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="tr">
 <head>
 <meta charset="utf-8">
@@ -107,15 +107,15 @@
 <div class="box">Güvenlik cihazı (vana, siren) panjur ya da darbe rölesine bağlanamaz; şablon buna izin vermez.</div>
 
 <h2>4. Atölye: kartı hazırlama</h2>
-<p>Her kart için aynı sıra izlenir. Ethernet kullanılacak olsa da <b>ilk iki adım her zaman USB'den</b> yapılır.</p>
+<p>Her kart için aynı sıra izlenir. Firmware USB'den yüklenir; provizyon ve şablon USB'den ya da Ethernet'ten yapılabilir.</p>
 <ol>
   <li><b>Kartı kaydet ve etiket al</b> (yalnız süper kullanıcı): <span class="btn">2. Karekod Üret &amp; Etiket Bas</span> sekmesinde karttan MAC'i okuyun, <span class="btn">SUNUCU ENVANTERİNE KAYDET &amp; KAREKOD ÜRET</span>.</li>
-  <li><b>Firmware yükle:</b> <span class="btn">1. Firmware Yükleyici</span> sekmesinde USB portunu seçip v1.3.0'ı yükleyin. Yükleme bitince araç aynı porttan <b>provizyonu (FACTORYINIT) kendisi yapar</b>.</li>
+  <li><b>Firmware yükle ve provizyon:</b> <span class="btn">1. Firmware Yükleyici</span> sekmesinde USB portunu seçip v1.3.0'ı yükleyin; yükleme bitince araç aynı porttan provizyonu (FACTORYINIT) kendisi yapar. Kart Ethernet'e bağlıysa provizyonu <span class="btn">3. sekme</span> → <span class="btn">🌐 Ethernet ile Provizyonla</span> ile de yapabilirsiniz (kartın IP'sini girin). <b>Dikkat:</b> provizyonsuz kartı aynı ağdaki başka bir bilgisayar da sahiplenebilir; Ethernet'e bağladıktan sonra provizyonu hemen yapın, mümkünse ayrı bir atölye ağı kullanın.</li>
   <li><b>Kartı daireye bağla:</b> <span class="btn">🏢 4. Siteler</span> → daireyi seçin → <span class="btn">Kart Bağla</span> → kartın UID'si (<code>AHBU-S3-XXXXXX</code>, etikette yazar). Yalnız stoktaki kartlar bağlanabilir.</li>
   <li><b>Şablonu yaz:</b> daireyi seçip <span class="btn">Karta Yaz</span> (ya da provizyon sekmesindeki <span class="btn">📐 Şablon Yaz (aynı USB portu)</span>). Yol seçin:
     <ul>
       <li><b>USB (önerilen):</b> port seçilir. Araç önce takılı kartın o daireye bağlı kart olduğunu denetler; değilse hiçbir şey yazmaz.</li>
-      <li><b>Ethernet:</b> kart atölye ağına kabloyla bağlanır; kartın IP adresi ve UID'si girilir. Araç önce o IP'deki kartın gerçekten o UID olduğunu denetler, sonra kartın anahtarını sunucudan alır (ekranda gösterilmez, kayıt tutulur).</li>
+      <li><b>Ethernet:</b> kart atölye ağına kabloyla bağlanır; kartın IP adresi ve UID'si girilir. Araç kartın anahtarını sunucudan alır (ekranda gösterilmez, kayıt tutulur) ve şablonu o IP'ye gönderir. <b>IP'nin doğru karta ait olduğundan emin olun</b>; araç bunu ayrıca denetlemez.</li>
     </ul>
     Kart şablonu tek parça uygular: geçersizse hiçbir şey değişmez. Sonra araç karttan geri okur ve sonucu sunucuya işler; daire <b>Yazıldı</b> olur.</li>
   <li><b>Etiket:</b> şablon bu oturumda kaydedilen karta yazıldıysa etikete daire satırı eklenir (ör. <code>A Blok / Daire 12 · 3+1 · Şablon v4</code>). Etiketi yeniden kaydedip yazdırın, kartın üstüne yapıştırın.</li>
@@ -165,7 +165,7 @@
   <li><span class="btn">Panoya Uygula</span>: başarıyla yazılınca 7–9. adımlar şablon değerleriyle dolar; yalnız testleri yaparsınız.</li>
   <li>Şablon kullanmak istemezseniz kartı geçin; sihirbaz eskisi gibi çalışır.</li>
 </ol>
-<div class="box warn">Pano "Panodaki güvenlik ayarı bu şablonla gevşer; atölyede USB ile yazın" derse: ağ üzerinden güvenlik ayarı gevşetilemez (ör. vana kaldırma). Şablonu USB ile servis yazılımından yazın.</div>
+<div class="box warn">Şablon ağ üzerinden de güvenlik ayarlarını tamamen değiştirebilir (vana ya da sensör kaldırmak dahil). Doğru şablonu seçtiğinizden emin olun.</div>
 
 <h2>8. İlk kartla deneme (toplu üretimden önce)</h2>
 <p>Firmware v1.3.0'ın yeni özellikleri gerçek kartta henüz denenmedi. İlk sitede şunları bir kartla deneyin:</p>
@@ -173,7 +173,7 @@
   <li>Firmware v1.3.0 yükleme + otomatik provizyon.</li>
   <li>Şablonu USB ile yazma ve geri okuma.</li>
   <li>Kartı Ethernet kablosuyla atölye ağına bağlayıp kartın IP almasını görme (seri durum satırında <code>Ethernet: bagli &lt;ip&gt;</code>).</li>
-  <li>Şablonu Ethernet ile yazma (fabrika ayarındaki kartta).</li>
+  <li>Ethernet ile provizyon ve şablon yazma.</li>
   <li>Ethernet takılıyken kartın sunucuya bağlanması (uygulamada çevrimiçi görünmesi).</li>
   <li>Duvar butonu, panjur ve su sensörü testleri (Bölüm 5).</li>
   <li>Kablolama şemasının baskıda okunaklı olması.</li>
@@ -183,18 +183,17 @@
 <h2>9. Sorun giderme</h2>
 <table>
   <tr><th style="width:36%">Mesaj</th><th>Anlamı</th><th>Ne yapmalı?</th></tr>
-  <tr><td>"USB ile yazın"</td><td>Ağdan güvenlik ayarı gevşetilemez.</td><td>Şablonu USB ile yazın.</td></tr>
   <tr><td>"Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın"</td><td>Kartın provizyonu yapılmamış.</td><td>USB'den provizyon, sonra şablon.</td></tr>
-  <tr><td>"provizyonu Ethernet'ten kabul etmiyor"</td><td>Provizyon güvenlik için yalnız USB'den ya da kartın kurulum Wi-Fi'sinden yapılır.</td><td>Sıra: USB flash → USB provizyon → şablon.</td></tr>
+  <tr><td>"provizyonu bu yoldan kabul etmedi"</td><td>Kartta eski bir firmware var.</td><td>Firmware'i güncelleyin ya da USB ile provizyon yapın.</td></tr>
   <tr><td>"Kartın firmware'i şablon yazmayı desteklemiyor"</td><td>Firmware v1.3.0'dan eski.</td><td>Önce firmware güncelleyin.</td></tr>
-  <tr><td>"Bağlı kart … eşleşmiyor" / "Bu IP adresindeki kart … eşleşmiyor"</td><td>Yanlış kart takılı ya da IP başka karta ait.</td><td>Etiketteki UID'yi ve IP'yi kontrol edin.</td></tr>
-  <tr><td>"Bu kart stokta değil"</td><td>Kart müşteriye ait ya da askıda.</td><td>USB kullanın ya da ev üzerinden işlem yapın.</td></tr>
+  <tr><td>"Bağlı kart … eşleşmiyor"</td><td>USB'ye yanlış kart takılı.</td><td>Etiketteki UID'yi kontrol edin.</td></tr>
+  <tr><td>"Bu kart stokta değil"</td><td>Kart müşteriye ait ya da askıda; daireye bağlanamaz.</td><td>Stoktaki bir kart kullanın.</td></tr>
   <tr><td>"Aktarım bozuldu (CRC uyuşmadı)"</td><td>USB verisi bozuldu; kartta hiçbir şey değişmedi.</td><td>Kabloyu kontrol edip yeniden deneyin.</td></tr>
   <tr><td>"Kart meşgul"</td><td>Panjur hareket halinde ya da kart başka bir yazımı bitiriyor.</td><td>Birkaç saniye bekleyip yeniden deneyin.</td></tr>
   <tr><td>"Pano yazmayı sürdürüyor"</td><td>Kart yazımı bitirmedi; uygulama sonucu kontrol ediyor.</td><td>Birkaç saniye sonra yeniden kontrol edin.</td></tr>
   <tr><td>"kilitli (alarmdaki) bölge" / "Hırsız alarmı kurulu"</td><td>Kart güvenlik durumunda.</td><td>Alarmı onaylayın ya da kapatın, sonra yazın.</td></tr>
   <tr><td>"kalıcı belleğinde yer yok"</td><td>Kartın belleği dolu; hiçbir şey yazılmadı.</td><td>Servis ekibine bildirin.</td></tr>
-  <tr><td>Seri durumda <code>Sablon: … YARIM</code></td><td>Yazım sırasında elektrik kesildi; kart güvenli kipte (röleler güvenli konumda).</td><td>Şablonu USB ile yeniden yazın.</td></tr>
+  <tr><td>Seri durumda <code>Sablon: … YARIM</code></td><td>Yazım sırasında elektrik kesildi; kart güvenli kipte (röleler güvenli konumda).</td><td>Şablonu USB ya da Ethernet ile yeniden yazın.</td></tr>
 </table>
 
 <footer>AHBU Ev Otomasyonu · Site ve Şablon Kurulum Kitapçığı · Firmware v1.3.0 · Kaynak: docs/kitapcik/site-sablon-kurulum-kitapcigi.html</footer>

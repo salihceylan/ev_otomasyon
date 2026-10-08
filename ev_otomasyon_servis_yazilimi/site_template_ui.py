@@ -305,7 +305,7 @@ class TemplateWriteDialog(_Modal):
         self.e_label.grid(row=6, column=1, sticky="w", pady=(10, 0))
         theme.label(
             body, "label.note.amber",
-            text="Ethernet yolu yalnız güvenliği gevşetmeyen yazımları kabul eder; kart 'USB ile yazın' derse USB'yi seçin.",
+            text="Ethernet yolunda IP adresinin doğru karta ait olduğundan emin olun: yerel anahtar bu UID'ye göre alınır ve o IP'ye gönderilir.",
             wraplength=520, justify="left",
         ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         buttons = theme.frame(body, "frame.surface")
@@ -1383,8 +1383,6 @@ class SiteTemplateTabsMixin:
                     request.port, envelope, template_id=template_id, version=version, label=request.label,
                     expected_uid=expected_uid, progress=say, cancel=cancel)
             writer = TemplateLanWriter(request.host, transport=self._device_transport)
-            say("Kartın kimliği doğrulanıyor (GET /api/status, anahtarsız)...")
-            writer.verify_identity(request.device_uid, (flat or {}).get("device_uuid"))
             say("Kartın yerel anahtarı sunucudan alınıyor (denetim kaydı tutulur; anahtar gösterilmez)...")
             key = self.client.fetch_local_key(request.device_uid)
             return writer.write(key, envelope, template_id=template_id, version=version, label=request.label,
@@ -1407,10 +1405,9 @@ class SiteTemplateTabsMixin:
                 err = TemplateWriteError(err.code or "no_response", message=err.message + (f"\n{err.hint}" if err.hint else ""))
             text = self._error_text(err)
             self._tpl_say("❌ " + text)
-            if isinstance(err, TemplateWriteError) and uid and err.code not in ("cancelled", "unreachable", "mac_mismatch", "device_mismatch"):
+            if isinstance(err, TemplateWriteError) and uid and err.code not in ("cancelled", "unreachable", "mac_mismatch"):
                 self._record_write(uid, meta, request.via, "error", flat, err.code)
-            extra = "\n\nUSB ile yazın: '💾 Karta Yaz' penceresinde USB'yi seçin." if isinstance(err, TemplateWriteError) and err.use_usb else ""
-            self.ui_error("Karta Yazılamadı", text + extra)
+            self.ui_error("Karta Yazılamadı", text)
             return
         self._tpl_say(f"✅ Şablon karta yazıldı ve geri okundu: {outcome.template_id} v{outcome.version} "
                       f"(kart {outcome.device_uid or '-'}, yol {outcome.via.upper()}).")

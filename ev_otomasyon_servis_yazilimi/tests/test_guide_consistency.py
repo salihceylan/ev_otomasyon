@@ -55,6 +55,7 @@ class GuideConsistencyTests(unittest.TestCase):
         "Kaydı Bellekten Sil / Yeni Cihaz",
         "Wi-Fi ile Provizyonla (güvensiz yedek yol)",
         "Wi-Fi ile Doğrula",
+        "Ethernet ile Provizyonla",
         "Anahtarı kopyala",
         "AP parolasını kopyala",
         "1. Firmware Yükleyici",
@@ -89,13 +90,11 @@ class GuideConsistencyTests(unittest.TestCase):
 
     # Bölüm 4b'nin alıntıladığı kart/araç mesajları (template_model.ERROR_TEXTS ve PDF).
     TEMPLATE_TEXTS = (
-        "USB ile yazın",
-        "Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın",
+        "Önce provizyon yapın",
         "Kartın firmware'i şablon yazmayı desteklemiyor",
         "Aktarım bozuldu (CRC uyuşmadı)",
         "Bu şema şablon sürümü v",
         "servis sorumlusu",
-        "local_loosen_forbidden",
         "unprovisioned",
         "tpl_crc",
         "tpl_b64",

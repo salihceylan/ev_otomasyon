@@ -254,8 +254,8 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
    - **USB (seri) — önerilen:** USB portunu seçin. Kart fiziksel olarak bağlı olduğu için güvenlik ayarlarını tamamen yazabilir.
      Daireye bağlı kart varsa araç bağlı kartın o kart olduğunu denetler; değilse hiçbir şey yazmaz.
    - **Ethernet (LAN):** kartın IP adresi (yalnız yerel ağ) ve UID'si. Kartın yerel anahtarı sunucudan alınır (denetim kaydı tutulur)
-     ve **ekranda gösterilmez**. Kart "**USB ile yazın**" derse güvenlik ayarları gevşiyordur: USB'yi seçin. Kart "**Önce FACTORYINIT
-     (provizyon) yapın ya da USB ile yazın**" derse kart henüz provizyonsuzdur (sıra: flash → FACTORYINIT → şablon).
+     ve **ekranda gösterilmez**; araç anahtarı doğrudan girilen IP'ye gönderir (IP ile UID ayrıca karşılaştırılmaz): **IP adresinin
+     doğru karta ait olduğundan emin olun.** Kart "**Önce provizyon yapın**" derse kart henüz provizyonsuzdur (sıra: flash → provizyon → şablon).
 3. Araç şablonu gönderir, kart **atomik** uygular (geçersizse hiçbir şey değişmez), ardından karttan **geri okur**. Sonuç
    "Karta Yazım Sonucu" alanında görünür ve sunucuya yazım kaydı işlenir (daire **Yazıldı** olur).
 4. Firmware yükleme + USB provizyon bittikten sonra **3. sekmede** **Şablon Yaz (aynı USB portu)** düğmesi aynı porttan şablon
@@ -275,17 +275,16 @@ NO/NC + bölge, dimmer yerleşimi, güvenlik cihazları ve uyarılar (gaz için 
 
 | Mesaj (kısaltılmış) | Anlamı | Ne yapmalı? |
 |---|---|---|
-| "USB ile yazın" (`local_loosen_forbidden`) | Ethernet'ten güvenlik gevşetilemez | USB yolunu seçin |
-| "Önce FACTORYINIT (provizyon) yapın ya da USB ile yazın" (`unprovisioned`) | Kart provizyonsuz | 3. sekmede provizyon, sonra yeniden yazın |
+| "Önce provizyon yapın" (`unprovisioned`) | Kart provizyonsuz | 3. sekmede provizyon, sonra yeniden yazın |
+| "güvenlik değişikliğini ağ üzerinden kabul etmedi" (`local_loosen_forbidden`) | Eski firmware | Firmware'i güncelleyin ya da USB ile deneyin |
 | "Kartın firmware'i şablon yazmayı desteklemiyor" (`unsupported_fw`) | Firmware v1.3.0'dan eski | Önce firmware güncelleyin |
 | "Aktarım bozuldu (CRC uyuşmadı)" (`tpl_crc`, `tpl_b64`) | USB verisi bozuldu; hiçbir şey değişmedi | Kabloyu kontrol edip yeniden deneyin |
 | "kilitli (alarmdaki) bir bölge" (`zone_latched`), "Hırsız alarmı kurulu" (`armed`) | Kart güvenlik durumunda | Alarmı onaylayın/kapatın, sonra yazın |
 | "Kart meşgul" (`busy`) | Panjur hareket halinde ya da bellek yetersiz | Birkaç saniye bekleyin |
 | "kalıcı belleğinde yer yok" (`storage`) | NVS dolu; uygulanmadı | Servis ekibine bildirin |
 | "Bağlı kart ... eşleşmiyor" (`mac_mismatch`) | Yanlış kart takılı ya da kartın kimliği okunamadı | Doğru kartı bağlayın |
-| "Bu IP adresindeki kart ... eşleşmiyor" (`device_mismatch`) | Ethernet: IP başka bir karta ait (araç önce anahtarsız kimlik denetimi yapar; anahtar alınmaz) | IP adresini kontrol edin |
-| "Bu kart stokta değil" (`DEVICE_NOT_IN_STOCK`) | Kart müşteriye ait ya da askıda | USB kullanın veya ev üzerinden işlem yapın |
-| "provizyonu (FACTORYINIT) Ethernet'ten kabul etmiyor" (`factory_ap_only`) | Provizyon Ethernet'ten yapılamaz | Sıra: USB flash → USB FACTORYINIT → şablon USB ya da Ethernet |
+| "Bu kart stokta değil ... daireye bağlanamaz" (`DEVICE_NOT_IN_STOCK`, Kart Bağla) | Kart müşteriye ait ya da askıda | Doğru kartı seçin ya da ev üzerinden işlem yapın |
+| "provizyonu bu yoldan kabul etmedi" (`factory_ap_only`) | Eski firmware | Firmware'i güncelleyin ya da USB ile provizyon yapın |
 
 ---
 
@@ -306,6 +305,19 @@ Araç USB'yi kullanamazsa kendisi size sorar: *"USB (Seri) Provizyon Yapılamad�
 5. İşiniz bitince bilgisayarı normal (internetli) ağınıza geri alın.
 
 Ayrıntılı elle adımlar için **Elle Provizyon Talimatı** düğmesine basın.
+
+### 5b. Ethernet ile provizyon (firmware v1.3.0+)
+
+Kart atölye ağına **Ethernet kablosuyla** bağlıysa provizyon USB'siz de yapılabilir:
+
+1. Firmware'i USB'den yükleyin (otomatik USB provizyonu çalışırsa bu adıma gerek kalmaz).
+2. Kartın Ethernet IP adresini öğrenin (modem/DHCP listesi ya da seri `STATUS` çıktısındaki `Ethernet:` satırı).
+3. 3. sekmede **Ethernet ile Provizyonla**'ya basın ve IP'yi girin (yalnız yerel/özel IP kabul edilir). Araç kartın kimliğini
+   denetler, anahtarı yazar ve hemen doğrular; kart erişilebilir kaldığı için ayrıca yeniden bağlanmanız gerekmez.
+
+**Bilinmesi gereken (kullanıcı kararıyla kabul edildi):** anahtar yerel ağdan düz HTTP ile gider ve aynı ağdaki başka bir
+bilgisayar da provizyonsuz kartı ilk sahiplenebilir. Kartı Ethernet'e bağladıktan sonra provizyonu **hemen** yapın; mümkünse
+yalnız atölye bilgisayarlarının olduğu ayrı bir ağ kullanın.
 
 ---
 
