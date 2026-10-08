@@ -1,8 +1,9 @@
 // ============================================================================
 // template/TemplateRules (src/template/TemplateRules.h) birim testleri:  pio test -e native -f test_template_rules
 //
-// K-Ş4 LAN kuralı (fabrika durumu / aynı şablonun aynı-yeni sürümü + gevşetmeme), uygulama kararının önceliği (kilit, kurulu alarm,
-// panjur, çapraz doğrulama, gevşetme, NVS), HTTP eşlemesi ve NVS girdi bütçesi (en kötü durum sayıları yazdırılır).
+// Uygulama kararının önceliği (kilit, kurulu alarm, panjur, çapraz doğrulama, NVS; LAN ve seri AYNI karar: K-Ş4 LAN gevşetme kuralı
+// kullanıcı kararıyla kaldırıldı, 2026-10-08), başarısız uygulamada güvenlik bölümünün geri alma biçimi, HTTP eşlemesi ve NVS girdi bütçesi
+// (en kötü durum sayıları yazdırılır).
 // ============================================================================
 #include <unity.h>
 #include <stdint.h>
@@ -17,9 +18,6 @@ void setUp(void) {}
 void tearDown(void) {}
 
 namespace {
-
-const char* ID_A = "3f2a9c1e-5b7d-4e8f-9a01-23456789abcd";
-const char* ID_B = "11111111-2222-4333-8444-555555555555";
 
 SensorConfig water(uint8_t di, uint8_t zone = 1) {
   SensorConfig s;
@@ -55,15 +53,6 @@ SafetyConfig withValve() {
   return c;
 }
 
-TplRecord rec(const char* id, uint32_t ver) {
-  TplRecord r;
-  tplRecordClear(r);
-  r.present = true;
-  strcpy(r.id, id);
-  r.ver = ver;
-  strcpy(r.label, "A-12");
-  return r;
-}
 
 SystemConfig sys8() {
   SystemConfig s;
@@ -76,14 +65,12 @@ SystemConfig sys8() {
   return s;
 }
 
-ApplyIn okIn(bool lan) {
+ApplyIn okIn() {
   ApplyIn in;
-  in.viaLan = lan;
   in.latched = false;
   in.armed = false;
   in.shutterMoving = false;
   in.sysErr = CfgErr::OK;
-  in.lan = LanRule::ALLOW_FACTORY;
   in.nvsRoom = true;
   return in;
 }
@@ -105,77 +92,6 @@ SafetyState storedState() {
   return st;
 }
 
-void test_factory_state_requires_never_written_usable_not_safe_mode_no_txn() {
-  TEST_ASSERT_TRUE(isFactoryState(factoryState()));
-  SafetyState st = factoryState();
-  st.stored = true;                            // boş tablolu ama yazılmış yapılandırma fabrika durumu DEĞİL
-  TEST_ASSERT_FALSE(isFactoryState(st));
-  st = factoryState();
-  st.usable = false;
-  TEST_ASSERT_FALSE(isFactoryState(st));
-  st = factoryState();
-  st.safeMode = true;
-  TEST_ASSERT_FALSE(isFactoryState(st));
-  st = factoryState();
-  st.txnInterrupted = true;
-  TEST_ASSERT_FALSE(isFactoryState(st));
-}
-
-void test_lan_rule_factory_board_accepts_any_template() {
-  SafetyConfig cur;
-  cur.setDefaults();
-  TplRecord none;
-  tplRecordClear(none);
-  SafetyConfig next = withValve();
-  TEST_ASSERT_TRUE(lanRule(factoryState(), cur, none, ID_A, 1, next, 0) == LanRule::ALLOW_FACTORY);
-  next.pol.policy_on = 0;                      // fabrika durumundan gevşek bir şablon bile (atölye: kartlar fabrika durumunda)
-  TEST_ASSERT_TRUE(lanRule(factoryState(), cur, none, ID_A, 1, next, 0) == LanRule::ALLOW_FACTORY);
-  // aynı boş tablo ama ad alanı yazılmış: fabrika değil, şablon kaydı da yok -> yasak
-  TEST_ASSERT_TRUE(lanRule(storedState(), cur, none, ID_A, 1, withValve(), 0) == LanRule::FORBID);
-}
-
-void test_lan_rule_forbids_everything_in_safe_mode_unusable_or_interrupted_txn() {
-  const SafetyConfig cur = withValve();
-  SafetyConfig tighter = withValve();
-  tighter.sens[1] = water(6);
-  tighter.nSens = 2;
-  SafetyState st = storedState();
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::ALLOW_SAME_TEMPLATE);
-  st.safeMode = true;
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
-  st = storedState();
-  st.usable = false;
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
-  st = storedState();
-  st.txnInterrupted = true;
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
-  st = factoryState();                         // fabrika + yarım işlem (önceki yazım hiç tamamlanmadı)
-  st.txnInterrupted = true;
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
-}
-
-void test_lan_rule_same_template_newer_or_same_version_only_if_not_loosening() {
-  const SafetyState st = storedState();
-  const SafetyConfig cur = withValve();
-  SafetyConfig tighter = withValve();
-  tighter.sens[1] = water(6);
-  tighter.nSens = 2;                           // sensör ekleme = sıkılaştırma
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::ALLOW_SAME_TEMPLATE);
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 3, cur, 0) == LanRule::ALLOW_SAME_TEMPLATE);   // aynı sürüm (idempotent yeniden deneme)
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 2, tighter, 0) == LanRule::FORBID);           // eski sürüm
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_B, 9, tighter, 0) == LanRule::FORBID);           // başka şablon
-  TplRecord none;
-  tplRecordClear(none);
-  TEST_ASSERT_TRUE(lanRule(st, cur, none, ID_A, 9, tighter, 0) == LanRule::FORBID);                   // kartta şablon kaydı yok
-  SafetyConfig looser = withValve();
-  looser.nAct = 0;                             // vanayı silmek = gevşetme
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, looser, 0) == LanRule::FORBID);
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 3, looser, 0) == LanRule::FORBID);           // EŞİT sürümle de gevşetilemez
-  SafetyConfig offPol = withValve();
-  offPol.pol.policy_on = 0;
-  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, offPol, 0) == LanRule::FORBID);
-}
-
 void test_safety_rollback_kind() {
   TEST_ASSERT_TRUE(safetyRollbackKind(storedState()) == SafetyRollback::REWRITE_OLD);
   TEST_ASSERT_TRUE(safetyRollbackKind(factoryState()) == SafetyRollback::ERASE);       // fabrika durumu korunur
@@ -190,14 +106,10 @@ void test_safety_rollback_kind() {
   TEST_ASSERT_TRUE(safetyRollbackKind(st) == SafetyRollback::REWRITE_OLD);
 }
 
-void test_decide_apply_precedence_and_cli_ignores_loosen_rule() {
-  TEST_ASSERT_TRUE(decideApply(okIn(true)) == ApplyResult::OK);
-  ApplyIn in = okIn(true);
-  in.lan = LanRule::FORBID;
-  TEST_ASSERT_TRUE(decideApply(in) == ApplyResult::LOOSEN);
-  in.viaLan = false;                           // seri (fiziksel erişim): gevşetme serbest
-  TEST_ASSERT_TRUE(decideApply(in) == ApplyResult::OK);
-  in = okIn(false);
+// LAN ve seri yol AYNI karar: geçerli her şablon; yalnız durum denetimleri (kilit, kurulu alarm, panjur, çapraz doğrulama, NVS).
+void test_decide_apply_precedence_only_state_checks() {
+  TEST_ASSERT_TRUE(decideApply(okIn()) == ApplyResult::OK);
+  ApplyIn in = okIn();
   in.nvsRoom = false;
   TEST_ASSERT_TRUE(decideApply(in) == ApplyResult::STORAGE);
   in.sysErr = CfgErr::ACT_RELAY_SHUTTER;
@@ -208,14 +120,9 @@ void test_decide_apply_precedence_and_cli_ignores_loosen_rule() {
   TEST_ASSERT_TRUE(decideApply(in) == ApplyResult::ARMED);
   in.latched = true;
   TEST_ASSERT_TRUE(decideApply(in) == ApplyResult::LATCHED);
-  in = okIn(false);
-  in.latched = true;                           // kilit seri yolda da reddedilir
-  TEST_ASSERT_TRUE(decideApply(in) == ApplyResult::LATCHED);
 }
 
 void test_http_mapping_matches_readme() {
-  TEST_ASSERT_EQUAL_INT(403, httpOf(ApplyResult::LOOSEN).status);
-  TEST_ASSERT_EQUAL_STRING("local_loosen_forbidden", httpOf(ApplyResult::LOOSEN).code);
   TEST_ASSERT_EQUAL_INT(409, httpOf(ApplyResult::LATCHED).status);
   TEST_ASSERT_EQUAL_STRING("zone_latched", httpOf(ApplyResult::LATCHED).code);
   TEST_ASSERT_EQUAL_STRING("armed", httpOf(ApplyResult::ARMED).code);
@@ -289,12 +196,8 @@ void test_nvs_budget_numbers_for_report() {
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_factory_state_requires_never_written_usable_not_safe_mode_no_txn);
-  RUN_TEST(test_lan_rule_forbids_everything_in_safe_mode_unusable_or_interrupted_txn);
-  RUN_TEST(test_lan_rule_factory_board_accepts_any_template);
-  RUN_TEST(test_lan_rule_same_template_newer_or_same_version_only_if_not_loosening);
   RUN_TEST(test_safety_rollback_kind);
-  RUN_TEST(test_decide_apply_precedence_and_cli_ignores_loosen_rule);
+  RUN_TEST(test_decide_apply_precedence_only_state_checks);
   RUN_TEST(test_http_mapping_matches_readme);
   RUN_TEST(test_nvs_entries_unchanged_config_costs_nothing_and_new_channels_count_fully);
   RUN_TEST(test_nvs_budget_numbers_for_report);

@@ -3,12 +3,10 @@
 // template/TemplateRules.h - Şablon uygulamasının cihaz durumuna bağlı KARARLARI. SAF MANTIK (saf başlıklar; NVS/RTOS yok) ->
 // PC'de test/test_template_rules ile sınanır. Bağlayıcı: template/TemplateApply.cpp (loopTask).
 //
-// Plan K-Ş3 / K-Ş4 / İP-2.4 / İP-2.5, README "Kartta uygulama zarfı":
-//  * LAN (POST /api/template/apply, yerel anahtar) "gevşetme yasağı" (karar 7.2b-7) delinmez: kartın güvenlik yapılandırması FABRİKA
-//    durumundaysa (sensör/eylemci yok + varsayılan politika) ya da AYNI şablonun aynı/yeni sürümü yalnız sıkılaştırıyorsa
-//    (SafetyCfgEdit isLoosening, DI geçmişiyle) uygulanır; aksi 403 local_loosen_forbidden ("USB ile yazın").
-//  * USB (seri TPL) fiziksel erişimdir: gevşetme kuralı uygulanmaz, provizyon gerekmez.
-//  * Her iki yolda: kilitli bölge 409 zone_latched, kurulu hırsız alarmı 409 armed, panjur hareket halinde 409 busy, ana yapılandırma
+// Plan K-Ş3 / İP-2.4 / İP-2.5, README "Kartta uygulama zarfı":
+//  * Kullanıcı kararı (2026-10-08, riskler anlatıldıktan sonra): K-Ş4 LAN gevşetme kuralı KALDIRILDI. LAN (POST /api/template/apply,
+//    yerel anahtar) ve USB (seri TPL) AYNI kuralla uygular: geçerli her şablon, güvenli kipte / yarım işlemde de (ikisi de kurtarır).
+//  * Her iki yolda yalnız durum denetimleri: kilitli bölge 409 zone_latched, kurulu hırsız alarmı 409 armed, panjur hareket halinde 409 busy, ana yapılandırma
 //    açılış güvenli maskesiyle çelişiyorsa (validateSystemChange) 409 cfg_invalid, NVS payı yetmiyorsa 507 storage.
 //  * NVS bütçesi (20 KB bölüm, 32 B girdi): güvenlik yapılandırmasının tamamı (configNvsEntries) + ana yapılandırmanın DEĞİŞEN anahtarları
 //    + ahbu_tpl (id, ver, label) + kilit kaydı payı + çöp toplama sayfası. Tahmindir; sahada nvs_get_stats ile doğrulanmalı.
@@ -17,7 +15,6 @@
 #include <string.h>
 #include "SystemConfig.h"
 #include "safety/SafetyConfig.h"
-#include "safety/SafetyCfgEdit.h"
 
 namespace tpl {
 
@@ -31,7 +28,7 @@ struct TplRecord {
 
 inline void tplRecordClear(TplRecord& r) { memset(&r, 0, sizeof(r)); }
 
-// Kartın güvenlik yapılandırması durumu (SafetyManager + TemplateStore bayrakları; inceleme R1-3).
+// Kartın güvenlik yapılandırması durumu (SafetyManager + TemplateStore bayrakları): yalnız başarısız uygulamanın geri alma biçimi için.
 struct SafetyState {
   bool stored;            // "ahbu_safety" ad alanına yapılandırma HİÇ yazıldı mı (açılışta vardı ya da sonradan yazıldı)
   bool usable;            // açılışta yapılandırma kullanılabilir (CRC + ana yapılandırmayla çapraz doğrulama) ya da sonradan uygulandı
@@ -39,30 +36,10 @@ struct SafetyState {
   bool txnInterrupted;    // yarım kalmış şablon uygulaması ("ahbu_tpl/txn" açılışta işaretliydi; yeniden uygulanana dek)
 };
 
-// "Fabrika durumu" (LAN'dan her şablon uygulanabilir): güvenlik ad alanı HİÇ yazılmamış + kullanılabilir + güvenli kip yok + yarım işlem
-// yok. Boş tablolu ama yazılmış yapılandırma (ör. kullanıcı her şeyi sildi) fabrika durumu DEĞİLDİR.
-inline bool isFactoryState(const SafetyState& st) { return !st.stored && st.usable && !st.safeMode && !st.txnInterrupted; }
-
-enum class LanRule : uint8_t { ALLOW_FACTORY = 0, ALLOW_SAME_TEMPLATE = 1, FORBID = 2 };
-
-inline LanRule lanRule(const SafetyState& st, const safety::SafetyConfig& cur, const TplRecord& curTpl, const char* newId, uint32_t newVer,
-                       const safety::SafetyConfig& next, uint64_t diHist) {
-  // Güvenli kip / kullanılamayan yapılandırma / yarım işlem: yalnız seri TPL (fiziksel erişim) kurtarır.
-  if (st.safeMode || !st.usable || st.txnInterrupted) return LanRule::FORBID;
-  if (isFactoryState(st)) return LanRule::ALLOW_FACTORY;
-  // Aynı şablonun aynı ya da yeni sürümü, yalnız gevşetmiyorsa. EŞİT sürüm bilinçli olarak kabul edilir: araç zaman aşımı / 202 sonrası
-  // aynı yazımı yeniden dener (idempotent); aynı sürüm aynı gövdedir (sunucuda sürümler değişmez, K-Ş6) ve gevşetme denetimi yine yapılır,
-  // yani eşit sürümle güvenlik tablosu gevşetilemez. Eski sürüme dönüş LAN'dan yasaktır.
-  if (curTpl.present && newId && strcmp(curTpl.id, newId) == 0 && newVer >= curTpl.ver && !safety::isLoosening(cur, next, diHist)) {
-    return LanRule::ALLOW_SAME_TEMPLATE;
-  }
-  return LanRule::FORBID;
-}
-
 // Başarısız uygulamada güvenlik bölümünün geri alınma biçimi (inceleme R1-2/R1-3):
 //  * yapılandırma kullanılamıyordu (cfg_corrupt) ya da önceki şablon işlemi yarımdı -> "ver" geçersiz bırakılır (MARK_CORRUPT): boş/
 //    varsayılan bir tabloyu "geçerli" diye yazmak güvenli kipten sessizce çıkarırdı;
-//  * ad alanı hiç yazılmamıştı -> silinir (ERASE): kart fabrika durumunda kalır (LAN kuralı R1-3 bunu "yazılmamış" diye tanır);
+//  * ad alanı hiç yazılmamıştı -> silinir (ERASE): kart fabrika durumunda kalır;
 //  * aksi halde eski yapılandırma geri yazılır (REWRITE_OLD; pay denetimsiz [FW2-3]).
 enum class SafetyRollback : uint8_t { REWRITE_OLD = 0, ERASE = 1, MARK_CORRUPT = 2 };
 
@@ -116,25 +93,22 @@ inline bool nvsRoomForTemplate(uint32_t freeEntries, const safety::SafetyConfig&
 }
 
 // ---- Uygulama kararı ---------------------------------------------------------------------------------------------
-enum class ApplyResult : uint8_t { OK = 0, INVALID, LOOSEN, LATCHED, ARMED, BUSY, CFG_INVALID, STORAGE, INTERNAL };
+enum class ApplyResult : uint8_t { OK = 0, INVALID, LATCHED, ARMED, BUSY, CFG_INVALID, STORAGE, INTERNAL };
 
 struct ApplyIn {
-  bool viaLan;              // true: POST /api/template/apply (yerel anahtar); false: seri TPL (fiziksel erişim)
   bool latched;             // kilitli/arızalı bölge var
   bool armed;               // hırsız alarmı kurulu (kip != off)
   bool shutterMoving;       // herhangi bir panjur hareket ediyor / ölü zamanda
   safety::CfgErr sysErr;    // validateSystemChange(aday ana, aday güvenlik, açılış/kilit maskesi)
-  LanRule lan;              // yalnız viaLan iken anlamlı
   bool nvsRoom;
 };
 
-// Öncelik: kilit -> kurulu alarm -> panjur -> çapraz doğrulama -> LAN gevşetme -> NVS payı.
+// Öncelik: kilit -> kurulu alarm -> panjur -> çapraz doğrulama -> NVS payı. LAN ve seri yol AYNI karar (kullanıcı kararı 2026-10-08).
 inline ApplyResult decideApply(const ApplyIn& in) {
   if (in.latched) return ApplyResult::LATCHED;
   if (in.armed) return ApplyResult::ARMED;
   if (in.shutterMoving) return ApplyResult::BUSY;
   if (in.sysErr != safety::CfgErr::OK) return ApplyResult::CFG_INVALID;
-  if (in.viaLan && in.lan == LanRule::FORBID) return ApplyResult::LOOSEN;
   if (!in.nvsRoom) return ApplyResult::STORAGE;
   return ApplyResult::OK;
 }
@@ -149,7 +123,6 @@ inline HttpErr httpOf(ApplyResult r) {
   switch (r) {
     case ApplyResult::OK: return {200, "ok"};
     case ApplyResult::INVALID: return {400, "invalid"};
-    case ApplyResult::LOOSEN: return {403, "local_loosen_forbidden"};
     case ApplyResult::LATCHED: return {409, "zone_latched"};
     case ApplyResult::ARMED: return {409, "armed"};
     case ApplyResult::BUSY: return {409, "busy"};

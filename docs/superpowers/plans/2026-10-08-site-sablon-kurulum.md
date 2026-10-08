@@ -55,7 +55,10 @@ güvenlik (eylemciler, sensörler, bölgeler, politika, dimmer).
 sürümü ve daire etiketi yeni küçük NVS ad alanına (`ahbu_tpl`) yazılır; durum/state yükünde `tpl {id, ver}` bildirilir.
 Böylece bulut ve uygulama hangi şablonun yüklü olduğunu panodan görür.
 
-**K-Ş4 — Güvenlik kuralı korunur.**
+**K-Ş4 — Güvenlik kuralı korunur.** ⚠ *2026-10-08 kullanıcı kararıyla DEĞİŞTİ:* Ethernet kısıtlamaları kaldırıldı —
+provizyon (`factory/init`) Ethernet'ten de yapılır, LAN'dan her geçerli şablon yazılır (gevşetme kuralı yok), servis
+yazılımı her envanter kartının (müşteri kartı dahil) anahtarını sunucudan alabilir (denetim kaydı + oran sınırı kalır),
+IP↔UID ön denetimi kaldırıldı. Ağdan fabrika sıfırlamasına dokunulmadı. Aşağıdaki özgün metin tarihçe içindir.
 - **USB (seri):** Fiziksel erişim yetki sayılır (bugünkü `FACTORYINIT`/`SAFETY` gibi). Her durumda uygulanır;
   provizyon gerekmez; güvenlik tablosunu tamamen değiştirebilir.
 - **Ethernet (LAN):** Yerel anahtar (`X-Device-Key`) gerekir. "LAN'dan gevşetme yasak" kuralı (7.2b-7) delinmez:

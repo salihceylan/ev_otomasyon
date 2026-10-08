@@ -1792,12 +1792,9 @@ void WebPortal::handleApiFactoryInit() {
     sendError(403, "already_provisioned");
     return;
   }
-  // v1.3.0 (inceleme R1-1): anahtarsız ilk provizyon yalnız kurulum AP'sindeki istemciye (SoftAP alt ağı; ApAccess::clientOnSoftAp,
-  // STA/Ethernet alt ağı çakışmasında kapalı). Ethernet ya da STA (LAN) üzerinden gelen istek 403 factory_ap_only; seri FACTORYINIT değişmedi.
-  if (!remoteOnSoftAp()) {
-    sendError(403, "factory_ap_only");
-    return;
-  }
+  // v1.3.0: kullanıcı kararı (2026-10-08, riskler anlatıldıktan sonra) -> factory/init Ethernet'ten de kabul edilir (kurulum AP'sinden
+  // olduğu gibi; v1.2.1 davranışı, kaynak arayüz denetimi YOK). Provizyonsuz kartta kurulum AP'si Ethernet bağlıyken de açılır
+  // (NetLinkCore::apPolicyConnected).
   String body;
   if (!readJsonBody(body)) return;
   DynamicJsonDocument doc(jsonCapacityFor(body.length()));
@@ -2165,7 +2162,7 @@ void WebPortal::handleApiSafetyConfigPost() {
 // ============================================================================
 // Kurulum sablonu (v1.3.0, IP-2.5; docs/contracts/template/README.md "Kartta uygulama zarfi", CONTRACTS 3e). KEYED.
 // POST /api/template/apply {"template":{ahbu-template/1},"label":"..."} -> 200 {"ok":true,"template_id","version","rev"}
-//   400 {"error":<sablon kodu>,"path":...} | 403 local_loosen_forbidden (K-S4 LAN kurali; guvenli kip / yarim islem dahil) |
+//   400 {"error":<sablon kodu>,"path":...} | (K-S4 LAN gevsetme kurali kullanici karariyla KALDIRILDI: LAN = seri, 403 yok) |
 //   409 zone_latched / armed / busy / cfg_invalid (+detail) | 413 too_large | 507 storage | 503 busy (baska uygulama suruyor) |
 //   202 {"pending":true} (inceleme R1-8): uygulama bekleme siniri (10 sn) icinde bitmedi ve SURUYOR; istemci GET /api/template ile dogrular.
 // Ayristirma + NVS islemi ayri isci gorevinde (tpl_apply), canli takas loopTask'ta (tpl::serviceLoop); web gorevi yalniz bekler.

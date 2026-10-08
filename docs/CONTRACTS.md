@@ -787,7 +787,7 @@ Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message
 | `GET /templates/:id/versions` · `GET /templates/:id/versions/:version` | sürüm listesi (`version, sha256, created_at, created_by`) · gövde |
 | `POST /templates/validate` | `{body}` → `{ok:true}` ya da 422 `{code:"TEMPLATE_INVALID", error:"<şablon kodu>", path}` |
 | `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth"\|"lan", result:"ok"\|"error", error_code?}`; `ok` ise daire `written` |
-| `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; denetim kaydı + oran sınırı (K-Ş4) |
+| `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; her envanter kartı (müşteri kartı dahil; kullanıcı kararı 2026-10-08); denetim kaydı + oran sınırı |
 
 Claim (K-Ş8): kart bir daireye bağlıysa ev adı `"<site adı> <blok>-<no>"`, uç noktalar karta son yazılan şablon
 sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas alır. Daire durumu `installed`'a geçer.

@@ -107,8 +107,8 @@ ApplyOutcome applyWorker(const TplCandidate& cand, bool viaLan) {
     return o;
   }
   Work* w = (Work*)malloc(sizeof(Work));
-  uint64_t guard = 0, diHist = 0;
-  if (!w || !sm.copyConfig(w->cur, &guard, &diHist)) {
+  uint64_t guard = 0;
+  if (!w || !sm.copyConfig(w->cur, &guard)) {
     free(w);
     sm.unlockWriter();
     outcomeOf(o, ApplyResult::INTERNAL);
@@ -139,12 +139,10 @@ ApplyOutcome applyWorker(const TplCandidate& cand, bool viaLan) {
     w->nextSafety.rev = w->cur.rev + 1;
 
     ApplyIn in;
-    in.viaLan = viaLan;
     in.latched = sm.latchedMask() != 0;
     in.armed = sm.intrusionArmed();
     in.shutterMoving = shutterMovingNow();
     in.sysErr = safety::validateSystemChange(w->next, w->nextSafety, guard);
-    in.lan = lanRule(st, w->cur, oldRec, cand.templateId, cand.version, w->nextSafety, diHist);
     const uint16_t sysE = sysConfigNvsEntries(w->live, w->next);
     const uint16_t tplE = tplNvsEntries(newRec.label);
     nvs_stats_t ns;

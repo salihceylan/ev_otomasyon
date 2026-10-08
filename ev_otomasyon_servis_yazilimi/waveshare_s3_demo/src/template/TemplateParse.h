@@ -14,7 +14,7 @@
 //    `zones` içinde tanımlı olmalı, panjur çifti süreleri eşit, panjur DI kipleri çiftin YUKARI rölesini hedefler, ek modül kapalıyken
 //    kanal 0, ışık seçeneği yalnız lamba tipi röleye (benzersiz).
 //  * Kartta saklanmayan alanlar (room, load, wiring, meta.name/flat_type/site_id) yalnız doğrulanır.
-//  * Cihaza bağlı denetimler (kilitli bölge, kurulu alarm, panjur hareketi, açılış güvenli maskesi -> validateSystemChange, LAN gevşetme
+//  * Cihaza bağlı denetimler (kilitli bölge, kurulu alarm, panjur hareketi, açılış güvenli maskesi -> validateSystemChange
 //    yasağı, NVS payı) burada DEĞİL, uygulama adımındadır (template/TemplateApply).
 // ============================================================================
 #include <ArduinoJson.h>

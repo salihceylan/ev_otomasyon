@@ -3,7 +3,7 @@
 > **DONANIMDA DENENMEDİ.** Bu imaj hiçbir karta yazılmadı ve hiçbir kartta açılmadı; Ethernet (W5500) hiç kabloyla denenmedi.
 > Dosya düzeyinde doğrulandı (esptool `image_info`: checksum + validation hash geçerli; 0x0000-0xFFFF bölgesi v1.2.1 ile bayt bayt
 > aynı; 0x10000 sonrası = uygulama imajı; imajda "1.3.0" var, "1.2.1" yok) ve saf mantık donanımsız testlerle sınandı (firmware'in kendi
-> Unity testleri MSVC ile: 23 takım / 400 test, yeni 4 takım: `test_template_parse` (ortak 31 örnek dosya), `test_template_rules`,
+> Unity testleri MSVC ile: 23 takım / 396 test, yeni 4 takım: `test_template_parse` (ortak 31 örnek dosya), `test_template_rules`,
 > `test_tpl_serial`, `test_net_link`). Toplu üretimden ve sahaya çıkmadan önce aşağıdaki "İlk kartta denenecekler" listesinin tamamı tek
 > bir test kartında yapılmalıdır. `version_info.json` bu paketle GÜNCELLENMEDİ (yayın kararı ayrıca verilir).
 
@@ -14,31 +14,45 @@ Plan: `docs/superpowers/plans/2026-10-08-site-sablon-kurulum.md` Faz 2 (İP-2.1.
 
 | Dosya | Boyut (bayt) | Amaç |
 | --- | --- | --- |
-| `firmware_combined_0x0.bin` | 1383216 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
-| `app_0x10000_v1.3.0.bin` | 1317680 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
+| `firmware_combined_0x0.bin` | 1382368 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
+| `app_0x10000_v1.3.0.bin` | 1316832 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
 | `SHA256SUMS.txt` | - | `sha256sum -c SHA256SUMS.txt` ile doğrulayın. |
 
-SHA-256 (ana imaj): `3ce05170182109a7f2fcd6d7dd5539ab161e926a98cc8375c93a3d28d97f016e`
-SHA-256 (yalnız uygulama): `9b62c9484e62308c32c9b3228cdeb24e21a5b558b8c57077dd647f846c786c2b`
-ELF SHA-256: `219a587cb20400f71dd98c87badebd322414c2df615193581b9f15b32d2a914d`
+SHA-256 (ana imaj): `c15095c5931fd3c969be115c5a066d8151419adee986ac13400f568f029a4cea`
+SHA-256 (yalnız uygulama): `676abcaeccf03ccce6a18c7b1b79778672b5c95e042621d7eda643da2cf4c3b5`
+ELF SHA-256: `5b84b4f439d14211ed30a60cd23487c81d935270e12469ce56da0ff2563589a9`
 
 Derleme: PlatformIO espressif32@7.1.3 (Arduino-ESP32 2.0.17 / IDF 4.4, çekirdek DEĞİŞMEDİ), esptool 4.11.0 `merge_bin`
 (`--flash_mode dio --flash_freq 80m --flash_size 16MB`, 0x0 bootloader / 0x8000 bölüm tablosu / 0xe000 boot_app0 / 0x10000 uygulama).
-Boyut: Flash 1256049 -> 1317313 bayt (+61264, %41,9 / 3 MB), statik RAM 68624 -> 69256 bayt (+632).
+Boyut: Flash 1256049 -> 1316473 bayt (+60424, %41,8 / 3 MB), statik RAM 68624 -> 69256 bayt (+632).
 
-## İnceleme turu 1 düzeltmeleri (paket yeniden üretildi; önceki 1.3.0 özetleri `97c21d15…` / `c1a42e2d…` GEÇERSİZ)
+## Kullanıcı kararı: Ethernet kısıtlamaları kaldırıldı (2026-10-08; paket yeniden üretildi, önceki 1.3.0 özetleri `97c21d15…` / `c1a42e2d…`
+## ve `3ce05170…` / `9b62c948…` GEÇERSİZ)
 
-- **R1-1 `POST /api/factory/init` yalnız kurulum AP'sinden:** anahtarsız ilk provizyon yalnız SoftAP alt ağındaki istemciye açık
-  (`ApAccess::clientOnSoftAp`, STA/Ethernet alt ağı çakışmasında kapalı); Ethernet ya da STA'dan gelen istek `403 factory_ap_only`.
-  Seri `FACTORYINIT` değişmedi. Provizyonsuz kartta Ethernet bağlı olsa da kurulum AP'si açılır (AP politikası Ethernet'i yalnız
-  provizyonlu kartta "bağlı" sayar).
+Kullanıcı, riskler anlatıldıktan sonra açıkça karar verdi:
+- **`POST /api/factory/init` Ethernet'ten de kabul edilir** (v1.2.1 davranışı: kaynak arayüz denetimi yok; kurulum AP'sinden aynen).
+  `403 factory_ap_only` KALDIRILDI. **Risk:** provizyonsuz bir kart Ethernet'e takılıysa aynı LAN'daki herhangi biri onu sahiplenebilir;
+  atölyede flash'tan hemen sonra provizyon (seri `FACTORYINIT` tercih) yapılmalıdır. Provizyonsuz kartta Ethernet bağlıyken kurulum AP'si
+  yine açılır (R1-1'in bu kısmı korundu).
+- **K-Ş4 LAN gevşetme kuralı KALDIRILDI:** `POST /api/template/apply` geçerli her şablonu uygular (güvenlik tablosunu gevşetse de, başka
+  şablon / eski sürüm olsa da), güvenli kipte ve yarım işlemde de; başarılı LAN uygulaması da `txn` işaretini siler (seri ile aynı).
+  `403 local_loosen_forbidden` bu uçta artık üretilmez. Kalan durum denetimleri: `409 zone_latched`, `409 armed`, `409 busy` (panjur
+  hareketi), `503 busy` (başka uygulama sürüyor), `409 cfg_invalid`, `507 storage`, `400` doğrulama. **Risk:** yerel anahtarı bilen biri
+  LAN'dan güvenlik tablosunu (gaz/su vanası, sensörler) tamamen değiştirebilir/boşaltabilir.
+- `POST /api/system/reset` DEĞİŞMEDİ (kullanıcı kararı).
+- Kaldırılan kod: `TemplateRules` `isFactoryState`, `LanRule`/`lanRule`, `ApplyResult::LOOSEN` ve testleri. `SafetyState` + `SafetyManager::
+  cfgStored()/cfgUsable()` yalnız başarısız uygulamanın güvenlik geri alma biçimi (`safetyRollbackKind`) için kaldı.
+
+## İnceleme turu 1 düzeltmeleri
+
+- **R1-1** (kısmen geri alındı, yukarıya bakın): provizyonsuz kartta Ethernet bağlı olsa da kurulum AP'si açılır (AP politikası
+  Ethernet'i yalnız provizyonlu kartta "bağlı" sayar). `factory_ap_only` kısıtı kullanıcı kararıyla kaldırıldı.
 - **R1-2 işlem işareti:** uygulama NVS'e İLK `ahbu_tpl/txn=1` yazar, sonra güvenlik -> ana yapılandırma -> şablon kaydı, en son `txn`'i
   siler. Açılışta `txn` varsa uygulama yarıda kalmıştır: güvenlik yapılandırması kullanılmaz (cfg_corrupt güvenli kipi, röleler güvenli
   maskede), tam durumda `"tpl_incomplete":true`, `GET /api/template`'te `"incomplete":true`, seri STATUS `Sablon:` satırı sonunda
-  `YARIM (guvenli kip; seri TPL ile yeniden yazin)`. Yalnız seri TPL ile yeniden uygulanınca temizlenir.
-- **R1-3 LAN "fabrika durumu":** güvenlik ad alanı HİÇ yazılmamış + yapılandırma kullanılabilir + güvenli kip yok + yarım işlem yok.
-  Güvenli kipte / kullanılamayan yapılandırmada / yarım işlemde LAN uygulaması `403 local_loosen_forbidden` (yalnız seri TPL kurtarır).
-  Geri almada güvenlik bölümü: hiç yazılmamışsa silinir, kullanılamıyorsa "ver" geçersiz bırakılır, aksi eskisi yazılır.
+  `YARIM (guvenli kip; seri TPL ile yeniden yazin)`. Şablon yeniden uygulanınca (seri TPL ya da LAN) temizlenir.
+- **R1-3** (LAN kuralı kullanıcı kararıyla kaldırıldı): başarısız uygulamada güvenlik bölümü — hiç yazılmamışsa silinir,
+  kullanılamıyorsa / yarım işlemdeyse "ver" geçersiz bırakılır, aksi eskisi yazılır.
 - **R1-4 DNS:** her arayüzün DHCP DNS'i kira anında saklanır; etkin arayüz değişince ya da başka arayüz kira alınca genel lwIP DNS'i
   etkin arayüzünkine çekilir.
 - **R1-5 MQTT:** bağlantı kurulduğu arayüz saklanır; etkin arayüz değişirse bağlantı bırakılıp hemen yeniden kurulur.
@@ -49,7 +63,7 @@ Boyut: Flash 1256049 -> 1317313 bayt (+61264, %41,9 / 3 MB), statik RAM 68624 ->
 - **R1-7** hata yolu (`path`) seri satıra / JSON'a basılmadan önce `[A-Za-z0-9_.[]]` dışı her bayt `?` yapılır.
 - **R1-8** HTTP uygulaması 10 sn içinde bitmezse `202 {"pending":true}` (uygulama sürer; istemci `GET /api/template` ile doğrular);
   başka uygulama sürerken `503 busy`.
-- **R1-9** aynı şablonun EŞİT sürümü LAN'dan kabul (idempotent yeniden deneme) ama gevşetme denetimi yine yapılır.
+- **R1-9** LAN kuralıyla birlikte kalktı (sürüm denetimi yok).
 
 ## v1.2.1'den farklar
 
@@ -71,13 +85,13 @@ eskisiyle aynı sonucu verir: `test_net_link`). Mevcut durum alanları ve seri `
 - **Kurulum şablonu (`ahbu-template/1`, K-Ş2..K-Ş5).** Ana yapılandırma (ad, ek modül, röle ad/tip/süre, DI ad/hedef/kip) + güvenlik
   yapılandırması (politika, hırsız gecikmeleri, bölgeler, sensörler, eylemciler, dimmer seçenekleri) TEK iş olarak doğrulanır ve yazılır.
   - `POST /api/template/apply` (KEYED, gövde en çok 24 KB) `{"template":{...},"label":"..."}` -> `200 {"ok":true,"template_id","version","rev"}`.
-    Hatalar: `400 {"error":<şablon kodu>,"path":...}`, `403 local_loosen_forbidden`, `409 zone_latched|armed|busy|cfg_invalid(+detail)`,
-    `413 too_large`, `507 storage`, `503 busy`, `202 {"pending":true}` (10 sn'de bitmedi, sürüyor), bozuk JSON `400 invalid_json`.
+    Hatalar: `400 {"error":<şablon kodu>,"path":...}`, `409 zone_latched|armed|busy|cfg_invalid(+detail)`,
+    `413 too_large`, `507 storage`, `503 busy`, `202 {"pending":true}` (10 sn'de bitmedi, sürüyor), bozuk JSON `400 invalid_json`
+    (`403 local_loosen_forbidden` artık YOK).
   - `GET /api/template` (KEYED) -> `{"template_id":"…"|null,"version":N|0,"label":"…","applied_at_uptime_s":N|null}`.
-  - LAN kuralı (K-Ş4, R1-3): kart fabrika durumundaysa (güvenlik ad alanı hiç yazılmamış, kullanılabilir, güvenli kip ve yarım işlem
-    yok) ya da AYNI şablonun aynı/yeni sürümü yalnız sıkılaştırıyorsa uygulanır; aksi `403 local_loosen_forbidden` ("USB ile yazın").
+  - LAN ve seri AYNI kural (K-Ş4 LAN gevşetme yasağı kullanıcı kararıyla kaldırıldı): geçerli her şablon uygulanır.
   - Seri `TPL BEGIN <bayt> <crc32> | TPL DATA <base64> | TPL COMMIT | TPL ABORT | TPL STATUS` (fiziksel erişim: provizyon gerekmez,
-    gevşetme serbest; kilit/kurulu alarm/panjur hareketi yine reddedilir). En çok 24576 bayt, CRC-32 IEEE, 30 sn zaman aşımı, `TPL DATA`
+    kilit/kurulu alarm/panjur hareketi reddedilir). En çok 24576 bayt, CRC-32 IEEE, 30 sn zaman aşımı, `TPL DATA`
     satırları yankılanmaz. Yanıtlar `OK tpl_begin` / `OK tpl_data <n>` / `OK tpl_applied <id> <ver>` / `OK tpl_abort` /
     `TPL <id|-> <ver> <label>` / `ERR <kod> [path]`.
   - Atomiklik (R1-2/R1-6): ayrıştırma + NVS işlemi işçi görevde; NVS sırası `txn=1` -> güvenlik tamamı (rev+1) -> ana yapılandırmanın
@@ -110,16 +124,16 @@ Yetmezse hiçbir şey yazılmaz (`507 storage` / `ERR storage`). Dolu bir kartta
 
 ## İlk kartta denenecekler (tamamı yapılmadan sahaya çıkmaz)
 
-0. `factory/init` Ethernet'ten 403 `factory_ap_only`, kurulum AP'sinden 200; provizyonsuz kartta Ethernet takılıyken kurulum AP'si açılıyor.
+0. `factory/init` Ethernet'ten ve kurulum AP'sinden 200; provizyonsuz kartta Ethernet takılıyken kurulum AP'si açılıyor.
 1. Kablosuz açılış: `[ETH] W5500 basladi` / süre satırı; `STATUS` eski satırlar + `Ethernet: yok -`, `Sablon: - v0`; Wi-Fi, MQTT, AP
    penceresi v1.2.1 gibi.
 2. Kablo tak: `[ETH] IP alindi`, `GET /api/status` `eth_connected:true`, `net_if` (Wi-Fi yoksa `eth`), MQTT Ethernet'ten bağlanır
    (TLS + SNTP), Wi-Fi tanımsızken kurtarma AP'si açılmaz; kablo çek/tak, DHCP yenileme, Wi-Fi + Ethernet birlikte.
 3. Ethernet'ten `POST /api/template/apply` (fabrika durumundaki kart) -> 200; `GET /api/template`; yeniden başlatma sonrası `tpl` korunur.
 4. USB `TPL BEGIN/DATA/COMMIT` (servis aracı) -> `OK tpl_applied`; CRC bozuk, zaman aşımı, ABORT.
-5. Kilitli alarm / kurulu hırsız alarmı / hareket eden panjur sırasında uygulama reddi; güvenlik tablosu dolu kartta LAN'dan gevşetme
-   `403`; aynı şablonun yeni sürümü (sıkılaştırma) LAN'dan kabul.
+5. Kilitli alarm / kurulu hırsız alarmı / hareket eden panjur sırasında uygulama reddi; güvenlik tablosu dolu kartta LAN'dan başka bir
+   şablon (gevşeten dahil) kabul; güvenli kipteki / yarım işlemli kart LAN'dan kurtarılıyor.
 6. NVS: dolu kartta 16 ve 40 kanallı şablon (`[SABLON] NVS bos girdi yetersiz` satırı / `nvs_get_stats`).
 7. Fabrika sıfırlaması (`/api/system/reset`) sonrası `tpl` yok.
-8. Uygulama sırasında güç kesme (NVS yazımı ortası): açılışta güvenli kip + `tpl_incomplete`; seri TPL ile yeniden yazınca normal.
+8. Uygulama sırasında güç kesme (NVS yazımı ortası): açılışta güvenli kip + `tpl_incomplete`; seri TPL ya da LAN ile yeniden yazınca normal.
 9. Ethernet <-> Wi-Fi geçişinde MQTT yeniden bağlanıyor, DNS etkin arayüzünkine dönüyor (`[AG] Etkin arayuz ... DNS ...`).
