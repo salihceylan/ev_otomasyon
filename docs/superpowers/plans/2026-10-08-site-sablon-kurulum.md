@@ -165,7 +165,7 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
 
 ### Faz 5 — Dağıtım ve belgeler
 - [x] **İP-5.1** Bağımsız kod incelemesi (sunucu+firmware+araç) ve bulguların düzeltilmesi.
-- [ ] **İP-5.2** Canlı: DB yedeği → migration 035 → ev-api dağıtımı (dizin takası) → duman testi.
+- [x] **İP-5.2** Canlı: DB yedeği → migration 035 → ev-api dağıtımı (dizin takası) → duman testi.
 - [ ] **İP-5.3** Firmware v1.3.0 yayımı (onayınızla karta yazılır); servis yazılımı kullanım rehberi; CONTRACTS.
 - [x] **İP-5.5** Kullanım kitapçığı (PDF + Markdown): servis sorumlusu (site/şablon/karta yazma), atölye (flash +
   şablon USB/Ethernet + etiket + PDF şema), saha ekibi (şemaya göre kablolama + kablolama testi), sorun giderme.
