@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/api_models.dart';
 import '../models/automation_models.dart';
+import '../models/install_template_models.dart';
 import '../models/json_utils.dart';
 import 'board_network_binding.dart';
 import 'clock.dart';
@@ -23,6 +24,7 @@ class LocalApiException implements Exception {
     this.code,
     this.retryAfter,
     this.hint,
+    this.path,
   });
 
   /// `0` = cihaza ulaşılamadı / zaman aşımı.
@@ -34,6 +36,10 @@ class LocalApiException implements Exception {
   /// Ağ hatasına, panonun kurulum ağına yönlenme ([BoardNetworkBinding], Android) başarısız olduğu için eklenen
   /// Türkçe ipucu; [message] bunu zaten içerir. Yalnızca [isNetwork] hatalarında ve bağlama başarısızken dolar.
   final String? hint;
+
+  /// Doğrulama hatasında sorunlu alanın yolu (`{"error":"invalid_runtime","path":"relays[3].runtime_s"}`; şablon
+  /// uygulama, CONTRACTS §3e). Diğer uçlarda `null`.
+  final String? path;
 
   factory LocalApiException.network([Object? cause]) => const LocalApiException(
         statusCode: 0,
@@ -421,6 +427,8 @@ class AutomationApiService {
     'invalid_aid': 'Geçersiz alarm kimliği.',
     'invalid_id': 'Geçersiz komut kimliği.',
     'invalid_after': 'Geçersiz olay kimliği.',
+    // Kurulum şablonu (CONTRACTS §3e, `POST /api/template/apply`)
+    'armed': 'Hırsız alarmı kurulu; önce alarm çözülmeli.',
   };
 
   http.Response _check(http.Response res) {
@@ -468,6 +476,7 @@ class AutomationApiService {
       code: error,
       message: message,
       retryAfter: retryAfter,
+      path: asNonEmptyString(body['path']),
     );
   }
 
@@ -714,6 +723,27 @@ class AutomationApiService {
     if (mapped == null) throw LocalApiException.invalid('Geçersiz toplu komut.');
     await _send('POST', '/api/all', query: <String, String>{'cmd': mapped});
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Kurulum şablonu (firmware v1.3.0+; CONTRACTS §3e, docs/contracts/template/README.md)
+  // ---------------------------------------------------------------------------
+
+  /// Panoda yüklü şablon: `GET /api/template` (KEYED). Eski firmware (v1.2.x) bu ucu bilmez: `404`
+  /// ([LocalApiException.statusCode] 404) -> çağıran "pano yazılımını güncelleyin" der.
+  Future<BoardTemplateInfo> fetchTemplate() async {
+    final res = await _send('GET', '/api/template', timeout: const Duration(seconds: 5));
+    return BoardTemplateInfo.fromJson(_json(res));
+  }
+
+  /// Şablonu panoya atomik olarak uygular: `POST /api/template/apply` (KEYED) gövde [envelope] =
+  /// `{"template": {...ahbu-template/1...}, "label": "..."}`. Ana yapılandırma + güvenlik birlikte yazılır; herhangi
+  /// biri geçersizse panoda hiçbir şey değişmez. Ret ([LocalApiException], kod + varsa [LocalApiException.path]):
+  /// `400 <doğrulama kodu>` (`path`), `403 local_loosen_forbidden` (LAN'dan güvenlik gevşetme yasak; USB ile yazılır),
+  /// `409 zone_latched` / `armed` / `busy`, `507 storage`; eski firmware `404`.
+  Future<TemplateApplyResult> applyTemplate(Map<String, dynamic> envelope) async {
+    final res = await _send('POST', '/api/template/apply', body: envelope, timeout: const Duration(seconds: 15));
+    return TemplateApplyResult.fromJson(_json(res));
   }
 
   // ---------------------------------------------------------------------------

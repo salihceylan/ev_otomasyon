@@ -15,6 +15,7 @@ import 'logic/identify_logic.dart';
 import 'logic/preparation_logic.dart';
 import 'logic/relay_logic.dart';
 import 'logic/shutter_logic.dart';
+import 'logic/template_logic.dart';
 import 'logic/wifi_logic.dart';
 import 'service_target.dart';
 import 'setup_context.dart';
@@ -82,6 +83,7 @@ class ServiceSetupController extends ChangeNotifier {
     relays = RelayLogic(ctx);
     shutters = ShutterLogic(ctx);
     buttons = ButtonLogic(ctx);
+    template = TemplateLogic(ctx)..onApplied = _onTemplateApplied;
     handover = HandoverLogic(
       ctx,
       wifi: wifi,
@@ -126,6 +128,9 @@ class ServiceSetupController extends ChangeNotifier {
   late final ShutterLogic shutters;
   late final ButtonLogic buttons;
   late final HandoverLogic handover;
+
+  /// 7. adımın başındaki isteğe bağlı "Şablon uygula" kartı (İP-4.3; yalnız servis personeli / süper kullanıcı).
+  late final TemplateLogic template;
 
   int _currentStep = SetupSteps.preparation;
   final Set<int> _skipped = <int>{};
@@ -179,7 +184,7 @@ class ServiceSetupController extends ChangeNotifier {
   }
 
   List<SetupLogic> get _allLogics =>
-      <SetupLogic>[prep, identify, customer, claim, wifi, cloud, conn, relays, shutters, buttons, handover];
+      <SetupLogic>[prep, identify, customer, claim, wifi, cloud, conn, template, relays, shutters, buttons, handover];
 
   /// Adımın geçiş koşulu gerçek yanıtla sağlandı mı (atlanan adımlar dahil).
   bool isStepComplete(int step) {
@@ -308,6 +313,19 @@ class ServiceSetupController extends ChangeNotifier {
       case SetupSteps.handover:
         if (ctx.target != null && handover.result == null) unawaited(handover.refreshSummary());
     }
+  }
+
+  /// Şablon panoya yazıldı: 7-9. adımların test ilerlemesi bırakılır (şablon adları/türleri/süreleri geçerli olur) ve
+  /// röleler panodan yeniden okunur; panjur ve buton adımları girişte yeniden yüklenir. Teste ilişkin hiçbir adım
+  /// kendiliğinden "tamam" sayılmaz: yalnız test kalır (K-Ş10).
+  Future<void> _onTemplateApplied() async {
+    if (_disposed) return;
+    relays.resetForTemplate();
+    shutters.resetForTemplate();
+    buttons.resetForTemplate();
+    _notify();
+    _schedulePersist();
+    if (ctx.target != null) await relays.load();
   }
 
   /// Pano bağlantısı kuruldu (6-9. adım paneli): adımın bekleyen yüklemeleri yeniden denenir.

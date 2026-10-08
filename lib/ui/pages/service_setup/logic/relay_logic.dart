@@ -167,6 +167,30 @@ class RelayLogic extends SetupLogic {
   List<RelayCheck> get relays => _relays;
   bool get loaded => _loaded;
 
+  TemplateRef? _boardTemplate;
+
+  /// Panoda yüklü kurulum şablonu (durumdaki `tpl`; firmware v1.3.0+, şablon yoksa `null`).
+  TemplateRef? get boardTemplate => _boardTemplate;
+
+  /// Şablon panoya uygulandı (İP-4.3): bu adımın test ilerlemesi ve kayıttaki atamalar bırakılır; sonraki [load]
+  /// röle adlarını, türlerini ve güvenlik atamalarını panonun (şablonun) yeni değerlerinden okur.
+  void resetForTemplate() {
+    _relays = const <RelayCheck>[];
+    _shutterRelays = const <RelayItem>[];
+    _loaded = false;
+    _saved = const <int, String>{};
+    _savedAssign = const <int, ChannelAssignment>{};
+    _savedInputs = null;
+    _inputs = const <InputAssignment>[];
+    _safetyDirty = false;
+    _boardHasDevices = false;
+    _cloudOffer = false;
+    _usedCloud = false;
+    _unconfirmed = false;
+    _testResults = const <SafetyTestResult>[];
+    clearProblem();
+  }
+
   List<RelayItem> _shutterRelays = const <RelayItem>[];
 
   /// Panoda panjura ayrılmış röleler (numara sırasıyla). Listede bilgi kartı olarak görünür (saha geri bildirimi
@@ -377,6 +401,7 @@ class RelayLogic extends SetupLogic {
   /// birebir aynıdır.
   Future<bool> load() => run('Röleler panodan okunuyor', () async {
         final status = await ctx.deviceCall((api) => api.fetchStatus());
+        _boardTemplate = status.template;
         final skip = status.shutterRelayIds;
         _shutterRelays = List<RelayItem>.unmodifiable(
           status.relays.where((r) => skip.contains(r.id)).toList()..sort((a, b) => a.id.compareTo(b.id)),

@@ -174,6 +174,15 @@ class ShutterLogic extends SetupLogic {
 
   List<ShutterCheck> get shutters => _shutters;
   bool get loaded => _loaded;
+
+  /// Şablon panoya uygulandı (İP-4.3): panjur listesi ve kayıttaki yön/süre ilerlemesi bırakılır (süreler şablondan
+  /// gelir); adıma girilince panodan yeniden okunur.
+  void resetForTemplate() {
+    _shutters = const <ShutterCheck>[];
+    _loaded = false;
+    _saved = const <int, Map<String, dynamic>>{};
+    clearProblem();
+  }
   bool get hasNoShutters => _loaded && _shutters.isEmpty;
 
   @override

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/models/install_template_models.dart';
 import 'package:ev_otomasyon/services/automation_api_service.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/services/clock.dart';
@@ -33,6 +34,52 @@ const String kHomeWifiSsid = 'EvAgi';
 const String kHomeWifiPass = 'ev-wifi-sifre-1';
 const String kApPass = 'ap-parola-123';
 const String kLanIp = '192.168.1.42';
+
+/// Kurulum şablonu (İP-4.4) sahte kimlikleri.
+const String kSiteId = '8c1d2e3f-4a5b-4c6d-8e7f-0123456789ab';
+const String kTplId = '3f2a9c1e-5b7d-4e8f-9a01-23456789abcd';
+const String kGlobalTplId = '11111111-2222-4333-8444-555555555555';
+
+/// `ahbu-template/1` gövdesi: 8 röle (2 panjur çifti + [lights] lamba), 8 giriş, su sensörü + vana ([safety]).
+Map<String, dynamic> templateBody({
+  String id = kTplId,
+  int version = 4,
+  String name = 'B Tipi 3+1',
+  String? siteId = kSiteId,
+  bool safety = true,
+}) =>
+    <String, dynamic>{
+      'schema': 'ahbu-template/1',
+      'meta': <String, dynamic>{
+        'template_id': id,
+        'version': version,
+        'name': name,
+        'flat_type': '3+1',
+        'site_id': siteId,
+      },
+      'ext_module': <String, dynamic>{'enabled': false, 'channels': 0, 'address': 1},
+      'relays': <Map<String, dynamic>>[
+        for (var p = 1; p <= 2; p++) ...<Map<String, dynamic>>[
+          <String, dynamic>{'ch': 2 * p - 1, 'name': 'Oda $p Panjur Yukarı', 'room': 'Oda $p', 'type': 'shutter_up', 'runtime_s': 25},
+          <String, dynamic>{'ch': 2 * p, 'name': 'Oda $p Panjur Aşağı', 'room': 'Oda $p', 'type': 'shutter_down', 'runtime_s': 25},
+        ],
+        for (var c = 5; c <= 8; c++)
+          <String, dynamic>{'ch': c, 'name': 'Şablon Lamba ${c - 4}', 'room': 'Salon', 'type': 'light'},
+      ],
+      'dis': <Map<String, dynamic>>[
+        for (var c = 1; c <= 8; c++)
+          <String, dynamic>{'ch': c, 'name': 'Şablon Giriş $c', 'target_relay': c <= 4 ? c + 4 : 0, 'mode': 'toggle'},
+      ],
+      'safety': <String, dynamic>{
+        'policy': <String, dynamic>{'on': true, 'dry_hold_ms': 10000},
+        'zones': <Map<String, dynamic>>[<String, dynamic>{'id': 1, 'name': 'Ev'}],
+        'sensors': safety
+            ? <Map<String, dynamic>>[<String, dynamic>{'id': 'd7', 'kind': 'water', 'zone': 1, 'active_open': 0, 'name': 'Mutfak Su'}]
+            : <Map<String, dynamic>>[],
+        'actuators': <Map<String, dynamic>>[],
+        'lights': <Map<String, dynamic>>[],
+      },
+    };
 
 /// Test boyunca üretilen gizli değerler: sızıntı denetimi için bunların hiçbir kayıtta olmaması beklenir.
 const String kCredentialPassword = 'bulut-kimlik-parolasi-xyz';
@@ -190,6 +237,25 @@ class FakeDevice {
   /// 7.2b-7; Faz 2 F2.D.5 bulut önerisi testleri).
   bool loosenForbidden = false;
 
+  // --- Kurulum şablonu (firmware v1.3.0, CONTRACTS §3e) ---
+
+  /// Pano şablonu destekliyor mu: `false` = v1.2.x (`/api/template*` 404, durumda `tpl` yok).
+  bool templateCaps = false;
+
+  /// Panoda yüklü şablon (`tpl {id, ver}`) ve etiket.
+  String? tplId;
+  int tplVer = 0;
+  String tplLabel = '';
+
+  /// Ethernet alanları (firmware v1.3.0; `null` = durumda alan yok).
+  bool? ethConnected;
+
+  /// Bir sonraki `POST /api/template/apply` bu hatayla reddedilir: `(status, error, path)` (tek seferlik).
+  (int, String, String?)? templateRejectOnce;
+
+  /// Gelen uygulama zarfları.
+  final List<Map<String, dynamic>> templateApplies = <Map<String, dynamic>>[];
+
   /// Ek röle modülü (`/api/config`, `/api/status`).
   bool extEnabled = false;
   int extAddress = 1;
@@ -232,6 +298,8 @@ class FakeDevice {
     _route('POST', '/api/safety/config', _safetyConfigPost);
     _route('POST', '/api/alarm/test', _alarmTest);
     _route('GET', '/api/events', _events);
+    _route('GET', '/api/template', _templateGet);
+    _route('POST', '/api/template/apply', _templateApply);
   }
 
   /// Ucu kaydeder. [unreachableDelay] > 0 iken erişilemeyen adrese giden istek önce o süre (sanal saat) bekler;
@@ -389,6 +457,12 @@ class FakeDevice {
       'child_lock': childLock,
       'last_id': '',
       if (extEnabled) 'ext_module_enabled': true,
+      if (templateCaps && tplId != null) 'tpl': <String, dynamic>{'id': tplId, 'ver': tplVer},
+      if (ethConnected != null) ...<String, dynamic>{
+        'eth_connected': ethConnected,
+        'eth_ip': ethConnected! ? '192.168.1.77' : '',
+        'net_if': ethConnected! ? 'eth' : (wifiConnected ? 'wifi' : 'none'),
+      },
       if (safetyCaps) 'caps': <String>['safety', 'actuator', 'event', 'cfg', if (intrusionCaps) 'intrusion'],
       'relays': <Map<String, dynamic>>[
         for (final r in relays)
@@ -728,6 +802,59 @@ class FakeDevice {
     return _json(<String, dynamic>{'events': events});
   }
 
+  http.Response _templateGet(RecordedRequest r) {
+    _reach(r);
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    if (!templateCaps) return _err(404, 'not_found');
+    return _json(<String, dynamic>{
+      'template_id': tplId,
+      'version': tplVer,
+      'label': tplLabel,
+      'applied_at_uptime_s': tplId == null ? null : 90,
+    });
+  }
+
+  /// `POST /api/template/apply`: zarf kaydedilir; ret enjekte edilmediyse röle/panjur/giriş listesi şablondan kurulur.
+  http.Response _templateApply(RecordedRequest r) {
+    _reach(r);
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    if (!templateCaps) return _err(404, 'not_found');
+    final body = r.json ?? const <String, dynamic>{};
+    templateApplies.add(Map<String, dynamic>.of(body));
+    final reject = templateRejectOnce;
+    if (reject != null) {
+      templateRejectOnce = null;
+      return _err(reject.$1, reject.$2, extra: <String, dynamic>{'path': ?reject.$3});
+    }
+    if (shutters.any((s) => s.dir != 0)) return _err(409, 'busy');
+    final tpl = Map<String, dynamic>.from(body['template'] as Map);
+    final meta = Map<String, dynamic>.from(tpl['meta'] as Map);
+    relays.clear();
+    shutters.clear();
+    for (final raw in tpl['relays'] as List) {
+      final m = Map<String, dynamic>.from(raw as Map);
+      final type = switch (m['type']) { 'shutter_up' => 1, 'shutter_down' => 2, 'impulse' => 3, _ => 0 };
+      relays.add(SimRelay(m['ch'] as int, m['name'] as String, type));
+      if (type == 1) {
+        final s = SimShutter(((m['ch'] as int) + 1) ~/ 2)..runtimeSec = (m['runtime_s'] as int?) ?? 20;
+        shutters.add(s);
+      }
+    }
+    dis
+      ..clear()
+      ..addAll(<SimDi>[
+        for (final raw in tpl['dis'] as List)
+          SimDi((raw as Map)['ch'] as int, raw['name'] as String),
+      ]);
+    tplId = meta['template_id'] as String;
+    tplVer = meta['version'] as int;
+    tplLabel = (body['label'] as String?) ?? '';
+    safetyRev++;
+    return _json(<String, dynamic>{'ok': true, 'template_id': tplId, 'version': tplVer, 'rev': safetyRev});
+  }
+
   // --- test kancaları ---
   void setDi(int id, bool pressed) => dis.firstWhere((d) => d.id == id).state = pressed;
 
@@ -878,6 +1005,88 @@ class ServiceFakeCloud extends FakeCloudApi {
             currentState: false,
           ),
       ];
+
+  // --- Site / kurulum şablonları (CONTRACTS §3e) ---
+  List<InstallSite> sites = <InstallSite>[const InstallSite(id: kSiteId, name: 'Güneş Sitesi', city: 'Ankara', district: 'Çankaya')];
+  final Map<String, Map<String, dynamic>> templateBodies = <String, Map<String, dynamic>>{
+    kTplId: templateBody(),
+    kGlobalTplId: templateBody(id: kGlobalTplId, version: 2, name: 'Standart 2+1', siteId: null, safety: false),
+  };
+
+  /// Şablon uçlarına verilecek hata (ör. servis oturumunda 403).
+  Object? templatesError;
+
+  /// Yazım kayıtları (`POST /template-writes`) ve kayıt hatası.
+  final List<Map<String, dynamic>> templateWrites = <Map<String, dynamic>>[];
+  Object? templateWriteError;
+
+  void _tplGate() {
+    _net();
+    final e = templatesError;
+    if (e != null) throw e;
+  }
+
+  @override
+  Future<List<InstallSite>> listInstallSites() async {
+    _tplGate();
+    calls.add('listInstallSites');
+    return sites;
+  }
+
+  @override
+  Future<List<InstallTemplateSummary>> listInstallTemplates({String? siteId, bool includeGlobal = true}) async {
+    _tplGate();
+    calls.add('listInstallTemplates:${siteId ?? '-'}:$includeGlobal');
+    return <InstallTemplateSummary>[
+      for (final e in templateBodies.entries)
+        if ((siteId != null && e.value['meta']['site_id'] == siteId) || (includeGlobal && e.value['meta']['site_id'] == null))
+          InstallTemplateSummary(
+            id: e.key,
+            siteId: e.value['meta']['site_id'] as String?,
+            name: e.value['meta']['name'] as String,
+            flatType: e.value['meta']['flat_type'] as String,
+            currentVersion: e.value['meta']['version'] as int,
+          ),
+    ];
+  }
+
+  @override
+  Future<InstallTemplate> installTemplate(String templateId) async {
+    _tplGate();
+    final body = templateBodies[templateId];
+    if (body == null) throw const ApiException(statusCode: 404, code: 'NOT_FOUND', message: 'Şablon bulunamadı.');
+    return InstallTemplate.fromJson(<String, dynamic>{
+      'id': templateId,
+      'site_id': body['meta']['site_id'],
+      'name': body['meta']['name'],
+      'flat_type': body['meta']['flat_type'],
+      'current_version': body['meta']['version'],
+      'body': body,
+    });
+  }
+
+  @override
+  Future<void> recordTemplateWrite({
+    required String deviceUuid,
+    required String templateId,
+    required int version,
+    required String via,
+    required bool ok,
+    String? errorCode,
+    String? flatId,
+  }) async {
+    _net();
+    final e = templateWriteError;
+    if (e != null) throw e;
+    templateWrites.add(<String, dynamic>{
+      'device_uuid': deviceUuid,
+      'template_id': templateId,
+      'version': version,
+      'via': via,
+      'result': ok ? 'ok' : 'error',
+      'error_code': ?errorCode,
+    });
+  }
 
   /// Sunucuda claim edilmiş gibi evi/cihazı kurar (mevcut cihaz testleri).
   void seedClaimed({bool online = false}) {

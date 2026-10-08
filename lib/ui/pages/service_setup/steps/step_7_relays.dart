@@ -12,6 +12,7 @@ import '../service_setup_controller.dart';
 import '../setup_style.dart';
 import '../setup_widgets.dart';
 import 'step_7_safety.dart';
+import 'step_7_template.dart';
 import 'step_common.dart';
 
 /// Adım 7 - Röle Testi: Aç/Kapat -> panonun **gerçek** durum bildirimi -> "yük çalıştı mı?" teyidi.
@@ -44,6 +45,8 @@ class Step7Relays extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           DeviceConnectionPanel(controller: c),
+          // İsteğe bağlı şablon kartı (İP-4.3): yalnız servis personeli / süper kullanıcı ve pano bağlıyken görünür.
+          TemplateApplyCard(controller: c),
           if (r.loaded) ...[
             SetupCard(
               key: const Key('relay_summary'),
@@ -70,6 +73,12 @@ class Step7Relays extends StatelessWidget {
                             ServiceStatusPill(label: '${r.unusedCount} kullanılmıyor', color: _tone(r.unusedCount, SetupColors.warn)),
                             ServiceStatusPill(label: '${r.problemCount} sorunlu', color: _tone(r.problemCount, SetupColors.error)),
                             ServiceStatusPill(label: '${r.untestedCount} bekliyor', color: _tone(r.untestedCount, SetupColors.info)),
+                            if (r.boardTemplate != null)
+                              ServiceStatusPill(
+                                key: const Key('relay_template_pill'),
+                                label: 'Şablon v${r.boardTemplate!.version}',
+                                color: AppFamilies.violet.base,
+                              ),
                             if (r.shutterRelays.isNotEmpty)
                               ServiceStatusPill(
                                 key: const Key('relay_shutter_pill'),

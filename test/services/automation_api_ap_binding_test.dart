@@ -102,6 +102,8 @@ void main() {
     route('GET', '/api/events', (_) => jsonResponse(<String, dynamic>{'events': <dynamic>[]}));
     route('GET', '/api/safety/config', (_) => jsonResponse(<String, dynamic>{'rev': 1}));
     route('POST', '/api/safety/config', (_) => jsonResponse(<String, dynamic>{'ok': true, 'rev': 2}));
+    route('GET', '/api/template', (_) => jsonResponse(<String, dynamic>{'template_id': null, 'version': 0}));
+    route('POST', '/api/template/apply', (_) => jsonResponse(<String, dynamic>{'ok': true, 'template_id': 't', 'version': 1}));
   }
 
   /// `GET /api/wifi/status` yanıtlarını sırayla verir (son yanıt tekrarlanır).
@@ -200,6 +202,8 @@ void main() {
     'fetchEvents': ((a) => a.fetchEvents(), 'GET /api/events'),
     'fetchSafetyConfig': ((a) => a.fetchSafetyConfig(), 'GET /api/safety/config'),
     'saveSafetyConfig': ((a) => a.saveSafetyConfig(<String, dynamic>{'base_rev': 1}), 'POST /api/safety/config'),
+    'fetchTemplate': ((a) => a.fetchTemplate(), 'GET /api/template'),
+    'applyTemplate': ((a) => a.applyTemplate(<String, dynamic>{'template': <String, dynamic>{}}), 'POST /api/template/apply'),
   };
 
   group('her AP çağrısında kira ÖNCE alınır, SONRA istek, EN SON bırakılır', () {

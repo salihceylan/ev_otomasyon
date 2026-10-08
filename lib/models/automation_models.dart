@@ -1,7 +1,9 @@
 import 'cloud_models.dart' show shutterBaseName;
+import 'install_template_models.dart';
 import 'json_utils.dart';
 import 'safety_models.dart';
 
+export 'install_template_models.dart' show TemplateRef;
 export 'safety_models.dart';
 
 /// Röle (cihaz durum JSON'unda `relays[]`). **Numaralar 1 tabanlıdır** (CONTRACTS §0).
@@ -305,6 +307,10 @@ class DeviceStatus {
     this.stateVersion,
     this.safety = SafetyState.unsupported,
     this.lastRej,
+    this.template,
+    this.ethConnected,
+    this.ethIp = '',
+    this.netIf,
   });
 
   final String deviceName;
@@ -380,6 +386,16 @@ class DeviceStatus {
 
   /// Son reddedilen komut (`last_rej`). Komut hattı bunu görünce bekleyen komutu BEKLEMEDEN geri alır.
   final SafetyRejection? lastRej;
+
+  /// Panoda yüklü kurulum şablonu (`tpl: {id, ver}`, firmware v1.3.0+; yoksa `null`).
+  final TemplateRef? template;
+
+  /// Ethernet (W5500) bağlı mı ve IP'si (firmware v1.3.0+; eski panoda `null` / boş).
+  final bool? ethConnected;
+  final String ethIp;
+
+  /// Etkin ağ arayüzü: `wifi` | `eth` | `none` (firmware v1.3.0+; eski panoda `null`).
+  final String? netIf;
 
   RelayItem? relayById(int id) {
     for (final r in relays) {
@@ -467,6 +483,10 @@ class DeviceStatus {
         uid: asNonEmptyString(json['uid'])?.toUpperCase() ?? (deviceIsUid ? deviceField.toUpperCase() : null),
       ),
       lastRej: SafetyRejection.fromJson(json['last_rej']),
+      template: TemplateRef.tryParse(json['tpl']),
+      ethConnected: asBool(json['eth_connected']),
+      ethIp: asString(json['eth_ip']) ?? '',
+      netIf: asNonEmptyString(json['net_if']),
     );
   }
 
@@ -551,6 +571,10 @@ class DeviceStatus {
         mqttConnected != other.mqttConnected ||
         stateVersion != other.stateVersion ||
         lastRej != other.lastRej ||
+        template != other.template ||
+        ethConnected != other.ethConnected ||
+        ethIp != other.ethIp ||
+        netIf != other.netIf ||
         safety != other.safety ||
         relays.length != other.relays.length ||
         dis.length != other.dis.length ||
@@ -627,6 +651,10 @@ class DeviceStatus {
       stateVersion: stateVersion,
       safety: safety,
       lastRej: lastRej,
+      template: template,
+      ethConnected: ethConnected,
+      ethIp: ethIp,
+      netIf: netIf,
     );
   }
 }

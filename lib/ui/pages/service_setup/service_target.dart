@@ -106,6 +106,10 @@ class ServiceSetupAccess {
   /// Cihazı müşteriye bağlama (claim) yalnızca kalıcı personel / süper kullanıcıdadır.
   bool get canClaim => mode == SetupMode.staff;
 
+  /// Kurulum şablonu uygulanabilir mi (CONTRACTS §3e: `service_user` + `super_user`; servis PIN oturumu ✖).
+  /// [Capabilities.canUseInstallTemplates] ile aynı kapsam: sihirbaz personel kipini yalnız bu iki role açar.
+  bool get canUseInstallTemplates => mode == SetupMode.staff;
+
   /// Oturumdan çıkarılır; sihirbaz yetkisi yoksa `null`.
   static ServiceSetupAccess? fromState(AutomationState state) {
     if (!state.isAuthenticated) return null;

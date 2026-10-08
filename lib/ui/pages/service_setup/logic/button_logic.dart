@@ -66,6 +66,16 @@ class ButtonLogic extends SetupLogic {
 
   List<ButtonCheck> get buttons => _buttons;
   bool get loaded => _loaded;
+
+  /// Şablon panoya uygulandı (İP-4.3): giriş listesi ve kayıttaki algılama ilerlemesi bırakılır; adıma girilince
+  /// panodan (şablonun giriş adlarıyla) yeniden okunur.
+  void resetForTemplate() {
+    stopListening();
+    _buttons = const <ButtonCheck>[];
+    _loaded = false;
+    _saved = const <int, String>{};
+    clearProblem();
+  }
   bool get listening => _listening;
 
   /// Pano çocuk kilidinin AÇIK olduğunu bildiriyor (duvar butonları röleleri tetiklemez).

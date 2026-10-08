@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 import '../models/api_models.dart';
 import '../models/cloud_models.dart';
+import '../models/install_template_models.dart';
 import '../models/json_utils.dart';
 import '../models/safety_models.dart';
 import '../models/scheduled_rule_model.dart';
@@ -1680,6 +1681,69 @@ class EvCloudApiService {
   Future<bool> deleteInventoryDevice(String uuid) async {
     await _call('DELETE', '/v1/admin/inventory/${_seg(uuid)}');
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Site ve kurulum şablonları (CONTRACTS §3e; yalnız `service_user` + `super_user`, servis PIN oturumu 403)
+  // ---------------------------------------------------------------------------
+
+  /// Siteler: `GET /sites` -> `[{id, name, address, city, district, ..., flat_count}]`.
+  Future<List<InstallSite>> listInstallSites() async {
+    final body = await _call('GET', '/v1/sites');
+    return parseList(_list(body, 'sites'), InstallSite.fromJson, label: 'Site');
+  }
+
+  /// Şablon listesi: `GET /templates?site_id=&include_global=1`. [siteId] `null` ise yalnız genel (standart) şablonlar
+  /// istenir; [includeGlobal] site şablonlarına genel şablonları da ekletir.
+  Future<List<InstallTemplateSummary>> listInstallTemplates({String? siteId, bool includeGlobal = true}) async {
+    final body = await _call(
+      'GET',
+      '/v1/templates',
+      query: <String, String>{
+        if (siteId != null && siteId.isNotEmpty) 'site_id': siteId,
+        if (includeGlobal) 'include_global': '1',
+      },
+    );
+    return parseList(_list(body, 'templates'), InstallTemplateSummary.fromJson, label: 'Template');
+  }
+
+  /// Şablonun güncel sürümü (gövdesiyle): `GET /templates/:id` -> `{..., body}`.
+  Future<InstallTemplate> installTemplate(String templateId) async {
+    final body = await _call('GET', '/v1/templates/${_seg(templateId)}');
+    return _parseOrThrow(() => InstallTemplate.fromJson(_data(body)));
+  }
+
+  /// Şablonun belirli bir sürümü: `GET /templates/:id/versions/:version` -> gövde.
+  Future<InstallTemplate> installTemplateVersion(String templateId, int version) async {
+    final body = await _call('GET', '/v1/templates/${_seg(templateId)}/versions/$version');
+    return _parseOrThrow(() => InstallTemplate.fromJson(<String, dynamic>{'id': templateId, ..._data(body)}));
+  }
+
+  /// Karta şablon yazımının kaydı (K-Ş6): `POST /template-writes` gövde `{device_uuid, template_id, version,
+  /// flat_id?, via: "usb"|"eth"|"lan", result: "ok"|"error", error_code?}`. Sihirbaz Wi-Fi LAN üzerinden yazdığı için
+  /// `via: "lan"` gönderir.
+  Future<void> recordTemplateWrite({
+    required String deviceUuid,
+    required String templateId,
+    required int version,
+    required String via,
+    required bool ok,
+    String? errorCode,
+    String? flatId,
+  }) async {
+    await _call(
+      'POST',
+      '/v1/template-writes',
+      body: <String, dynamic>{
+        'device_uuid': deviceUuid,
+        'template_id': templateId,
+        'version': version,
+        if (flatId != null && flatId.isNotEmpty) 'flat_id': flatId,
+        'via': via,
+        'result': ok ? 'ok' : 'error',
+        if (!ok && errorCode != null && errorCode.isNotEmpty) 'error_code': errorCode,
+      },
+    );
   }
 
   /// Servis sorumlusunun devreye aldığı aboneler/panolar.

@@ -491,6 +491,11 @@ class Capabilities {
     return hasHomeAccess && (isOwner || isResident) && !isSuperUser && !isStaff && !isServiceSession;
   }
 
+  /// Site / kurulum şablonlarını görme ve panoya uygulama (CONTRACTS §3e, K-Ş7): süper kullanıcı ve küresel servis
+  /// personeli (`requireServiceManager`). Servis PIN oturumu, ev sahibi, sakin ve misafir ✖. Mevcut bayraktan
+  /// türetilir (eşitlik maskesi değişmez): servis yönetim ekranıyla aynı kapsam.
+  bool get canUseInstallTemplates => canOpenServiceManagement && !isServiceSession;
+
   /// Test/hata ayıklama için tüm bayrakların adlı görünümü.
   Map<String, bool> toMap() => <String, bool>{
         'isAuthenticated': isAuthenticated,
