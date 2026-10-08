@@ -10,6 +10,8 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications (arka plan alarm bildirimi) Java 8+ API'leri icin desugaring ister.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -49,6 +51,7 @@ flutter {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // JVM birim testleri (src/test): saf mantik (Ipv4Subnet, BoardNetworkCore). 4.12 cevrimdisi Gradle onbelleginde var.
     testImplementation("junit:junit:4.12")
 }

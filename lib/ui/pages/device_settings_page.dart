@@ -7,6 +7,7 @@ import '../motion/motion.dart';
 import '../theme/feature_accent.dart';
 import '../widgets/neon_app_bar.dart';
 import '../widgets/settings/action_cards.dart';
+import '../widgets/settings/alarm_watch_card.dart';
 import '../widgets/settings/appearance_cards.dart';
 import '../widgets/settings/child_lock_card.dart';
 import '../widgets/settings/device_host_card.dart';
@@ -28,6 +29,7 @@ typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatu
 /// |---|---|
 /// | Çocuk kilidi | `canViewState` (misafir salt-okunur görür; değiştirme `canChangeChildLock`) |
 /// | Gece huzur bildirimi | bulut modu + `canChangeChildLock` |
+/// | Arka planda alarm bildirimi | bulut modu + ev sahibi / sakin (servis rolleri ✖) |
 /// | Zamanlı kurallar | bulut modu + `canManageRules` |
 /// | Sistem doktoru | aktif eve erişim + `canChangeChildLock` |
 /// | Servis PIN'i | bulut modu + `canGenerateServicePin` (ev sahibi) |
@@ -61,6 +63,9 @@ class DeviceSettingsPage extends StatelessWidget {
           if (caps.canViewState) const ChildLockCard(),
           if (vm.hasUser) const BiometricCard(),
           if (cloud && caps.canGenerateServicePin) const ServicePinCard(),
+          // Arka planda alarm bildirimi: yalnız ev sahibi / sakin (misafir ve servis rolleri ✖).
+          if (cloud && (caps.isOwner || caps.isResident) && !caps.isSuperUser && !caps.isStaff && !caps.isServiceSession)
+            const AlarmWatchCard(),
         ],
       ),
       ('Görünüm', Icons.palette_rounded, AppFeature.appearance.accentFamily, [const ThemeSelectorCard()]),

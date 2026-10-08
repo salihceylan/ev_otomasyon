@@ -17,6 +17,9 @@ import '../setup_steps.dart';
 /// adresi (`wifi_sta_ip`) 5. adımda hedefe yazılmıştır. Claim yanıtındaki bulut kimliği uygulama kapanırsa
 /// kaybolur: kimlik bellekte yoksa sunucudan yeniden üretilir (`POST /homes/:id/devices/:uuid/mqtt-credential`).
 ///
+/// Bellekte bekleyen (claim'deki tek seferlik) kimlik varken pano sunucuda yeni görülmüş çevrimiçi ise (pano kimliğini
+/// kendisi aldı: bootstrap, CONTRACTS §3f) bekleyen kimlik YAZILMAZ ve bırakılır; adım tamamlanır.
+///
 /// Pano sunucuda **zaten çevrimiçiyse** ve bellekte bekleyen (tek seferlik) kimlik yoksa bulut kimliği
 /// DEĞİŞTİRİLMEZ (CONTRACTS §3d): çalışan panonun kimliğini yeniden üretip yazmak onu buluttan düşürür. Kural kipten
 /// bağımsızdır: mevcut cihaz ("Mevcut cihazlarım -> Testleri yap"), geçici servis (PIN) oturumunda "Yeni Kurulum" ve
@@ -33,6 +36,10 @@ class CloudLogic extends SetupLogic {
 
   /// Bulutun beklenme süresi.
   static const Duration waitLimit = Duration(seconds: 90);
+
+  /// Bekleyen kimlik varken panonun "şu an buluta bağlı" sayılması için son görülmenin en çok bu kadar eski olması
+  /// gerekir (sunucunun `online` bayrağı tek başına bayat olabilir).
+  static const Duration freshSeen = Duration(minutes: 2);
   static const Duration pollInterval = Duration(seconds: 3);
 
   bool _credentialWritten = false;
@@ -73,6 +80,17 @@ class CloudLogic extends SetupLogic {
           // Kimlik yazılmadan ÖNCE sunucudaki durum alınır: son görülme zamanının yazımdan sonra ilerlemesi
           // "yeni durum iletisi alındı" kanıtıdır (saat farkından etkilenmez).
           final current = _find(await ctx.cloud.devices(t.homeId), t.deviceUuid);
+          if (!force && ctx.pendingCredential != null && current != null && _seenRecently(current)) {
+            // Pano kimliğini kendisi aldı (bootstrap, CONTRACTS §3f): sunucu claim'deki tek seferlik kimliği silip yenisini
+            // verdi. Bekleyen (artık silinmiş) kimlik YAZILMAZ — yazılırsa pano geçersiz kimlikle yeniden bağlanıp düşerdi.
+            // Acil sıfırlama / pano değişiminde pano çevrimdışıdır; orada kimlik yine yazılır. Zorla yazım: "Kimliği
+            // Yeniden Yaz".
+            ctx.pendingCredential = null;
+            _online = true;
+            _alreadyOnline = true;
+            _lastSeenAt = current.lastSeenAt;
+            return;
+          }
           if (!force && ctx.pendingCredential == null && current != null && current.online) {
             // Pano zaten buluttan görünüyor (kip ne olursa olsun): çalışan panonun kimliğine dokunulmaz.
             _online = true;
@@ -111,6 +129,14 @@ class CloudLogic extends SetupLogic {
       if (d.deviceUuid.toUpperCase() == uid.toUpperCase()) return d;
     }
     return null;
+  }
+
+  /// Sunucu panoyu çevrimiçi gösteriyor VE son görülme yeni (saat farkına karşı ileri tarih de kabul).
+  bool _seenRecently(DeviceInfo d) {
+    if (!d.online) return false;
+    final seen = d.lastSeenAt;
+    if (seen == null) return false;
+    return ctx.clock.now().difference(seen) <= freshSeen;
   }
 
   bool _isFresh(DeviceInfo d) {

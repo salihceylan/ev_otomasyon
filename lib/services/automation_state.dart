@@ -15,6 +15,8 @@ import '../models/endpoint_sync.dart';
 import '../models/json_utils.dart';
 import '../models/scheduled_rule_model.dart';
 import '../utils/qr_claim_parser.dart';
+import 'alarm_watch/alarm_watch_support.dart';
+import 'alarm_watch/refresh_gate.dart';
 import 'api_exception.dart';
 import 'automation_api_service.dart';
 import 'biometric_auth_service.dart';
@@ -149,6 +151,13 @@ class AutomationState extends ChangeNotifier {
       ..onSessionExpired = _handleSessionExpired
       ..onGuestExpired = _handleGuestExpired
       ..onForbidden = _handleForbidden;
+    if (alarmWatchPlatformSupported && this.cloudApi.refreshGate == null) {
+      // Android: arka plan alarm izleyicisi (ayrı isolate) aynı oturum ailesini kullanabilir; yenileme süreç geneli
+      // kapıyla ve depodaki en son token'la yapılır (eş zamanlı rotasyon oturum ailesini iptal ettirirdi).
+      this.cloudApi
+        ..refreshGate = IsolateRefreshGate()
+        ..readStoredRefreshToken = this.secureStorage.getRefreshToken;
+    }
     _bindMqtt();
     _failureSub = _pipeline.failures.listen(_onCommandFailure);
     if (observeAppLifecycle) _attachLifecycle();

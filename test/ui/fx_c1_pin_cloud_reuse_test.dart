@@ -124,6 +124,9 @@ void main() {
       expect(await drive(env, c.wifi.confirmLanIp(kLanIp)), isTrue);
       c.continueNext();
       c.ctx.pendingCredential = env.cloud.claimCredential;
+      // Bayat bayrak: son görülme eski. Yeni görülmüş çevrimiçi panoda (bootstrap) bekleyen kimlik YAZILMAZ
+      // (`cloud_bootstrap_race_test.dart`).
+      env.cloud.deviceLastSeen = env.clock.now().toUtc().subtract(const Duration(minutes: 10));
       env.device.onMqttConfigured = (server, port, user, pass) {
         env.cloud.deviceOnline = true;
         env.cloud.deviceLastSeen = env.clock.now().toUtc().add(const Duration(seconds: 5));

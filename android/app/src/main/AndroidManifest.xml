@@ -9,6 +9,15 @@
     <!-- Android 13+ bildirim izni (Faz 2 F2.C.5). Izin penceresi kendiliginden ACILMAZ; yalniz kullanici bildirimleri
          acmak isteyince (PushCoordinator kurali). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Arka planda alarm bildirimi (Firebase'siz; kullanici ayardan acarsa): on plan servisi bulut (MQTT) baglantisini
+         acik tutar. Android 14+ servis turu "specialUse" (dataSync 6 saat/gun sinirli ve acilista baslatilamaz).
+         Telefon yeniden acilinca eklentinin RebootReceiver'i servisi surdurur (RECEIVE_BOOT_COMPLETED eklentiden gelir).
+         Pil optimizasyonu muafiyeti istegi yalniz kullanici ayar kartindaki dugmeye basinca acilir. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <!-- allowBackup=false: oturum belirteclerinin/yerel verilerin bulut yedegine veya adb backup'a
@@ -68,6 +77,15 @@
                 <data android:pathPrefix="/claim" />
             </intent-filter>
         </activity>
+        <!-- Arka planda alarm bildirimi servisi (flutter_foreground_task; ad degistirilmez). -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Ev guvenlik alarmlari (su baskini, gaz, duman, hirsiz) icin kullanicinin actigi surekli bulut baglantisi" />
+        </service>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

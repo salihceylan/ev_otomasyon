@@ -3,8 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../services/alarm_watch/alarm_watch_controller.dart';
 import '../services/automation_state.dart';
 import '../services/peace_notice_controller.dart';
+import '../services/push/safety_notice.dart';
 import '../services/safety_notice_controller.dart';
 import 'common/app_dialogs.dart';
 import 'common/deep_links.dart';
@@ -62,6 +64,13 @@ class _AppShellState extends State<AppShell> {
 
   /// Güvenlik bildirimi (alarm push'u) yönlendirmesi ve ön plan afişi (Faz 2 F2.C.4-C.7).
   late final SafetyNoticeController _safety;
+
+  /// Arka planda alarm bildirimi (Android, Firebase'siz): ayar + servis + bildirime dokunuş.
+  late final AlarmWatchController _alarmWatch;
+
+  /// Push'tan ve yerel alarm bildiriminden gelen dokunuşlar tek akışta (SafetyNoticeController).
+  final StreamController<SafetyPushNotice> _safetyNotices = StreamController<SafetyPushNotice>.broadcast();
+  final List<StreamSubscription<SafetyPushNotice>> _noticeSubs = <StreamSubscription<SafetyPushNotice>>[];
   StreamSubscription<CommandFailure>? _failureSub;
   StreamSubscription<SessionEvent>? _sessionSub;
 
@@ -76,7 +85,14 @@ class _AppShellState extends State<AppShell> {
     final state = context.read<AutomationState>();
     _state = state;
     _peace = PeaceNoticeController(state: state);
-    _safety = SafetyNoticeController(state: state, notices: _peace.push.safetyNotices);
+    _alarmWatch = AlarmWatchController(state: state);
+    _safety = SafetyNoticeController(state: state, notices: _safetyNotices.stream);
+    for (final source in <Stream<SafetyPushNotice>>[_peace.push.safetyNotices, _alarmWatch.openedNotices]) {
+      _noticeSubs.add(source.listen((n) {
+        if (!_safetyNotices.isClosed) _safetyNotices.add(n);
+      }));
+    }
+    unawaited(_alarmWatch.init());
     _failureSub = state.commandFailures.listen(_onFailure);
     _sessionSub = state.sessionEvents.listen(_onSessionEvent);
     state.addListener(_onStateChanged);
@@ -88,7 +104,12 @@ class _AppShellState extends State<AppShell> {
     _sessionSub?.cancel();
     _state?.removeListener(_onStateChanged);
     _retry.clear();
+    for (final sub in _noticeSubs) {
+      sub.cancel();
+    }
+    _safetyNotices.close();
     _safety.dispose();
+    _alarmWatch.dispose();
     _peace.dispose();
     super.dispose();
   }
@@ -244,8 +265,11 @@ class _AppShellState extends State<AppShell> {
         builder: (context, child) {
           // Sağlayıcı ve afiş köprüsü Navigator'ın ÜSTÜNDE: tüm sayfalar/diyaloglar denetleyiciyi okuyabilir; afiş
           // ScaffoldMessenger üzerinden (MaterialBanner/SnackBar) gösterilir, köprü kendisi bir şey çizmez.
-          return ChangeNotifierProvider<PeaceNoticeController>.value(
-            value: _peace,
+          return MultiProvider(
+            providers: [
+              ChangeNotifierProvider<PeaceNoticeController>.value(value: _peace),
+              ChangeNotifierProvider<AlarmWatchController>.value(value: _alarmWatch),
+            ],
             child: ChangeNotifierProvider<SafetyNoticeController>.value(
               value: _safety,
               child: SafetyNoticeHost(

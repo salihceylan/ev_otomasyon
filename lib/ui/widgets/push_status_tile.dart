@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../services/alarm_watch/alarm_watch_controller.dart';
 import '../../services/peace_notice_controller.dart';
 import '../../services/push/push_coordinator.dart';
 import '../theme/app_theme.dart';
@@ -64,12 +65,14 @@ class _PushStatusTileState extends State<PushStatusTile> {
         );
     final controller = context.read<PeaceNoticeController?>();
     if (view == null || controller == null) return const SizedBox.shrink();
+    // Android: alarmlar için arka plan bildirimi seçeneği var (gece hatırlatması yine uygulama açılınca görünür).
+    final alarmWatch = context.select<AlarmWatchController?, bool>((c) => c?.supported ?? false);
 
     final _TileSpec? spec = switch (view.state) {
       // Push gönderim katmanı yapılandırılmadı: uygun kullanıcıya bildirimin telefona gönderilmediği söylenir.
       PushState.unsupported when view.eligible => _TileSpec(
         icon: Icons.info_outline,
-        text: 'Bu sürümde bildirim telefona gönderilmez; uygulamayı açtığınızda hatırlatma görünür.',
+        text: alarmWatch ? kPushTileAndroidText : kPushTileUnsupportedText,
         tone: _Tone.muted,
       ),
       PushState.unsupported || PushState.idle => null,
@@ -194,6 +197,15 @@ class _PushStatusTileState extends State<PushStatusTile> {
     );
   }
 }
+
+/// Push gönderim katmanı yokken (bu sürüm) gösterilen dürüst metin.
+const String kPushTileUnsupportedText =
+    'Bu sürümde bildirim telefona gönderilmez; uygulamayı açtığınızda hatırlatma görünür.';
+
+/// Android'de: gece hatırlatması yine uygulama açılınca görünür; alarmlar için arka plan bildirimi açılabilir.
+const String kPushTileAndroidText =
+    'Gece hatırlatması telefona gönderilmez; uygulamayı açtığınızda görünür. Alarmların uygulama kapalıyken de '
+    'gelmesi için Güvenlik bölümündeki "Arka planda alarm bildirimi"ni açın.';
 
 enum _Tone { success, warning, muted }
 

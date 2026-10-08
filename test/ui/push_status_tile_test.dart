@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show SemanticsAction;
 
+import 'package:ev_otomasyon/services/alarm_watch/alarm_watch_controller.dart';
+import 'package:ev_otomasyon/services/alarm_watch/alarm_watch_service.dart';
 import 'package:ev_otomasyon/services/peace_notice_controller.dart';
 import 'package:ev_otomasyon/services/push/push_coordinator.dart';
 import 'package:ev_otomasyon/ui/theme/app_theme.dart';
@@ -48,6 +50,7 @@ Future<PeaceUiRig> _pumpTile(
   double textScale = 1.0,
   bool disableAnimations = false,
   double width = 320,
+  bool androidAlarmWatch = false,
 }) async {
   usePhone(tester, size: Size(width, 700));
   final rig = PeaceUiRig.create(role: role, startState: state);
@@ -67,8 +70,14 @@ Future<PeaceUiRig> _pumpTile(
         ),
         child: child!,
       ),
-      home: ChangeNotifierProvider<PeaceNoticeController>.value(
-        value: rig.controller,
+      home: MultiProvider(
+        providers: [
+          ChangeNotifierProvider<PeaceNoticeController>.value(value: rig.controller),
+          if (androidAlarmWatch)
+            ChangeNotifierProvider<AlarmWatchController>(
+              create: (_) => AlarmWatchController(state: rig.state, platform: _AndroidLike()),
+            ),
+        ],
         child: Scaffold(
           body: ListView(
             padding: const EdgeInsets.all(16),
@@ -94,8 +103,20 @@ Future<PeaceUiRig> _pumpTile(
   return rig;
 }
 
+/// Android gibi davranan (destekli) ama hiçbir şey yapmayan alarm izleyici platformu.
+class _AndroidLike extends UnsupportedAlarmWatchPlatform {
+  @override
+  bool get isSupported => true;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('Android: gece hatırlatması satırı arka planda alarm bildirimi ayarını anar', (tester) async {
+    await _pumpTile(tester, state: PushState.unsupported, androidAlarmWatch: true);
+    expect(find.text(kPushTileAndroidText), findsOneWidget);
+    expect(find.text(_unsupportedText), findsNothing);
+  });
 
   group('durumlar ve metinler', () {
     testWidgets(

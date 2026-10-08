@@ -16,6 +16,12 @@ import '../setup_widgets.dart';
 import 'step_common.dart';
 
 /// Adım 10 - Teslim: kontrol listesi özeti, notlar, müşteri onayı, sunucuya devreye alma, kurulum raporu.
+
+/// Teslimde müşteriye söylenen bildirim notu (müşterinin telefonu her platformda olabilir; teknisyenin telefonu değil).
+const String kHandoverAlarmNotificationNote =
+    'Uygulama kapalıyken alarm bildirimi yalnız Android telefonda gelir: müşterinin telefonunda Ayarlar > '
+    '"Arka planda alarm bildirimi"ni açın (iPhone\'da gelmez). Yine de siren takmanız önerilir.';
+
 class Step10Handover extends StatefulWidget {
   const Step10Handover({super.key, required this.controller, required this.onFinish});
 
@@ -231,7 +237,7 @@ class _Step10HandoverState extends State<Step10Handover> {
                 key: Key('handover_push_note'),
                 icon: Icons.notifications_off_outlined,
                 color: SetupColors.warn,
-                text: 'Uygulama kapalıyken alarm bildirimi bu sürümde gelmez; siren takmanız önerilir.',
+                text: kHandoverAlarmNotificationNote,
               ),
             ],
           ),

@@ -45,6 +45,8 @@ dependencies:
   sign_in_with_apple: ^6.1.4
   local_auth: ^2.3.0
   local_auth_android: ^1.0.56 # sistem istemi metinleri (AndroidAuthMessages); local_auth zaten getiriyor
+  flutter_local_notifications: ^22.3.1
+  flutter_foreground_task: ^11.0.3
 
 dev_dependencies:
   flutter_test:

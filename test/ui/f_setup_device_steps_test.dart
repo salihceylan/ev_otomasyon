@@ -315,10 +315,12 @@ void main() {
       expect(env.device.mqttConfigCount, 2);
     });
 
-    test('yeni kurulumda (claim edilen pano) sunucuda çevrimiçi görünse bile bulut kimliği yazılır: çevrimiçi atlama yalnızca mevcut cihazlar içindir',
+    // Pano YENİ görülmüş çevrimiçiyse (kimliğini bootstrap ile kendisi aldı) bekleyen kimlik yazılmaz:
+    // `cloud_bootstrap_race_test.dart`. Burada son görülme eski: sunucunun "çevrimiçi" bayrağı bayat sayılır.
+    test('yeni kurulumda (claim edilen pano) sunucu BAYAT "çevrimiçi" gösterse bile bekleyen bulut kimliği yazılır',
         () async {
       env.cloud.deviceOnline = true; // bayat "çevrimiçi" bilgisi (claim kimliği yeniledi)
-      env.cloud.deviceLastSeen = env.clock.now().toUtc().subtract(const Duration(seconds: 30));
+      env.cloud.deviceLastSeen = env.clock.now().toUtc().subtract(const Duration(minutes: 10));
       env.device.onMqttConfigured = (server, port, user, pass) {
         env.cloud.deviceOnline = true;
         env.cloud.deviceLastSeen = env.clock.now().toUtc().add(const Duration(seconds: 5));
