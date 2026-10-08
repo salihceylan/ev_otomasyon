@@ -1,5 +1,10 @@
 # AHBU Ev Otomasyonu: Servis ve Kullanıcı Akışları
 
+> **Güncel akış belgeleri:** `docs/akislar/SERVIS_SORUMLUSU_AKISI.md` ve `docs/akislar/DAIRE_KULLANICISI_AKISI.md`
+> (2026-10-08, düzeltmeler sonrası). Bu belge ayrıntılı başvuru olarak kalır. Bölüm 12'deki 1, 2, 3 ve 6. maddeler
+> 2026-10-08'de düzeltildi (pano bulut kimliğini kendisi alıyor; yanlış PIN mesajı; sihirbazda Ethernet; Ethernet'li
+> panoda kurulum ağı döngüsü). 4. madde (bildirim) Android için Firebase'siz yapılıyor.
+
 > Kaynak: kodun kendisi (2026-10-08, commit `b79cc2b` sonrası). Ekrandaki düğme ve mesaj metinleri koddaki gibi tırnak içinde
 > verildi. Belge koddan dört ayrı inceleme ile çıkarıldı; akışı etkileyen iddialar ayrıca elle doğrulandı. Kodda olmayan bir şey
 > "YOK" diye yazıldı. Bulunan hatalar ve tutarsızlıklar en sonda, **Bölüm 12**'de numaralı liste olarak duruyor.
