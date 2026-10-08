@@ -8,13 +8,16 @@ sürüm, tarih), karta bakan klemens düzeni (8 röle + 8 giriş; ek modül etki
 bölge), dimmer yerleşimi (K4), güvenlik cihazları ve uyarılar (gaz: sertifikalı bağımsız dedektör; vana kapanma kipi),
 şablon kimliği + sürümü taşıyan karekod ve "Bu şema şablon sürümü vN içindir" alt bilgisi. Çok sayfalı olabilir.
 
+Klemens düzenindeki etiketler KISADIR (``BoardLabel``): giriş "ad · kısa kip -> Rn", sensör "ad · tür · NO/NC · bölge",
+röle "ad · tür (· oda)". Sığmazsa önce oda atılır, sonra ad "…" ile kısaltılır; hedef röle / sensör ayrıntısı / röle türü
+hiç kesilmez. Uzun açıklamalar 2. ve 3. bölüm tablolarındadır.
+
 Türkçe karakterler: TrueType yazı tipi aracın ``_load_font`` yükleyicisiyle (``font_loader`` parametresi) alınır; bulunamazsa
 metin ASCII'ye indirgenir (kutucuk çıkmasın). Üretilen her metin ``WiringDocument.texts`` listesinde de tutulur (test).
 """
 
 from __future__ import annotations
 
-import textwrap
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -29,7 +32,8 @@ DPI = 300
 MARGIN = 140
 HEADER_H = 430
 FOOTER_H = 120
-_TR_TO_ASCII = str.maketrans("İıŞşĞğÜüÖöÇç·", "IiSsGgUuOoCc-")
+BOARD_LABEL_LINES = 5             # klemens etiketi en çok 5 satır (şemada etiket alanı buna göre ayrıldı)
+_TR_TO_ASCII = {**str.maketrans("İıŞşĞğÜüÖöÇç·–", "IiSsGgUuOoCc--"), ord("•"): "*", ord("…"): "..."}
 REGULAR_FONTS = ("segoeui.ttf", "arial.ttf", "tahoma.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf")
 BOLD_FONTS = ("segoeuib.ttf", "arialbd.ttf", "tahomabd.ttf", "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf")
 
@@ -48,6 +52,7 @@ LATCHING_SWITCH_WARNING = (
     "değiştirir; kalıcı anahtar kullanılırsa her konum değişimi bir basış sayılmaz ve lamba ters çalışır.)"
 )
 GENERAL_NOTES = (
+    "Tüm bağlantılar yetkili elektrikçi tarafından, ilgili sigortalar kapalıyken yapılmalıdır.",
     "Röle kontakları kuru kontaktır: faz hattını COM'a, yükü NO'ya bağlayın; yük akımı rölenin anma değerini aşmamalı "
     "(motor/ısıtıcı için kontaktör kullanın).",
     "Girişler (DI) kuru kontak içindir: yaylı buton / sensör kontağını DI ile GND (COM) arasına bağlayın; girişe şebeke "
@@ -55,6 +60,14 @@ GENERAL_NOTES = (
     "Bu şema karta yazılan şablon sürümüne göredir. Sahada değişiklik yapılırsa pano esastır; yeni sürüm yazılıp şema "
     "yeniden basılmalıdır.",
 )
+# Klemens düzenindeki kısa kip adları; uzun açıklama (yaylı buton vb.) 3. bölüm tablosunda: tm.DI_MODE_TEXT
+DI_MODE_SHORT = {
+    "toggle": "Aç/Kapa",
+    "momentary": "Basılı tut",
+    "shutter_step": "Panjur adım",
+    "shutter_up": "Panjur yukarı",
+    "shutter_down": "Panjur aşağı",
+}
 
 FontLoader = Callable[[tuple[str, ...], int], tuple[Any, bool]]
 
@@ -82,11 +95,87 @@ def footer_text(template: dict[str, Any]) -> str:
     return f"Bu şema şablon sürümü v{template.get('meta', {}).get('version', 0)} içindir"
 
 
+def _to_ascii(text: str) -> str:
+    """Yedek (TrueType'sız) yazı tipi için: Türkçe ve tipografik karakterler ASCII'ye indirgenir; kalan Latin-1 dışı
+    karakter '?' olur (bitmap yazı tipi Latin-1 dışını çizemez; çizim çökmesin)."""
+    return text.translate(_TR_TO_ASCII).encode("latin-1", "replace").decode("latin-1")
+
+
+def wrap_text(text: str, measure: Callable[[str], float], width: float) -> list[str]:
+    """Metni ``width`` genişliğe sözcük sınırından böler (``measure``: metnin çizim genişliği). "->" oku hedefiyle aynı
+    satırda kalır ("-> R5"), "·" ayırıcısı satır başına düşmez; satırdan geniş tek sözcük harf harf bölünür (taşmaz)."""
+    tokens: list[str] = []
+    for word in (text or "").split():
+        if tokens and (tokens[-1] == "->" or word == "·"):
+            tokens[-1] += " " + word
+        else:
+            tokens.append(word)
+    if not tokens:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for token in tokens:
+        candidate = f"{current} {token}" if current else token
+        if measure(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = token
+        if measure(token) > width:  # tek sözcük satırdan geniş: harf harf bölünür
+            pieces = _split_word(token, measure, width)
+            lines.extend(pieces[:-1])
+            current = pieces[-1]
+    lines.append(current)
+    return lines
+
+
+def _split_word(word: str, measure: Callable[[str], float], width: float) -> list[str]:
+    pieces, current = [], ""
+    for char in word:
+        if current and measure(current + char) > width:
+            pieces.append(current)
+            current = char
+        else:
+            current += char
+    pieces.append(current)
+    return pieces
+
+
+@dataclass(frozen=True)
+class BoardLabel:
+    """Klemens düzenindeki kısa etiket: ``name · detail · extra``. ``detail`` (giriş kipi -> hedef röle, sensör türü ·
+    NO/NC · bölge ya da röle türü) HİÇ kısaltılmaz; ``extra`` (oda) yalnız yer varsa yazılır."""
+
+    name: str
+    detail: str = ""
+    extra: str = ""
+
+    @property
+    def text(self) -> str:
+        return " · ".join(part for part in (self.name, self.detail, self.extra) if part)
+
+    def fit(self, wrap: Callable[[str], list[str]], max_lines: int = BOARD_LABEL_LINES) -> list[str]:
+        """Etiketi en çok ``max_lines`` satıra sığdırır (``wrap``: metni satırlara bölen işlev). Sığmazsa sırayla: oda atılır,
+        ad sonundan "…" ile kısaltılır, en son ad hiç yazılmaz. Ayrıntı her durumda tam ve sondadır."""
+        lines = wrap(self.text)
+        if len(lines) <= max_lines:
+            return lines
+        for cut in range(len(self.name), -1, -1):
+            short = self.name[:cut].rstrip()
+            name = self.name if cut == len(self.name) else (short + "…" if short else "")
+            lines = wrap(" · ".join(part for part in (name, self.detail) if part))
+            if len(lines) <= max_lines:
+                return lines
+        return lines[:max_lines]  # yalnız ayrıntı bile sığmıyor: gerçek şablonda olmaz (ayrıntı en çok 3 satır)
+
+
 @dataclass
 class WiringDocument:
     pages: list[Any] = field(default_factory=list)
     texts: list[str] = field(default_factory=list)
     qr_box: tuple[int, int, int, int] = (0, 0, 0, 0)   # 1. sayfadaki karekodun kutusu (test için)
+    board_labels: dict[str, list[str]] = field(default_factory=dict)  # klemens -> çizilen etiket satırları (test için)
 
     def save(self, path: str) -> None:
         if not self.pages:
@@ -114,7 +203,7 @@ class _Renderer:
 
     # ---- metin yardımcıları ----
     def tr(self, text: str) -> str:
-        return text if self.truetype else text.translate(_TR_TO_ASCII)
+        return text if self.truetype else _to_ascii(text)
 
     def text(self, xy: tuple[float, float], text: str, font: Any, fill: str = "#0f172a") -> None:
         self.doc.texts.append(text)
@@ -124,24 +213,7 @@ class _Renderer:
         return self.draw.textlength(self.tr(text), font=font)
 
     def wrap(self, text: str, font: Any, width: float) -> list[str]:
-        words = (text or "").split()
-        if not words:
-            return [""]
-        lines, current = [], ""
-        for word in words:
-            candidate = f"{current} {word}".strip()
-            if self.width_of(candidate, font) <= width or not current:
-                if self.width_of(candidate, font) > width and not current:  # tek sözcük taşıyor: kaba bölme
-                    pieces = textwrap.wrap(word, max(4, int(len(word) * width / max(self.width_of(word, font), 1))))
-                    lines.extend(pieces[:-1])
-                    current = pieces[-1]
-                    continue
-                current = candidate
-            else:
-                lines.append(current)
-                current = word
-        lines.append(current)
-        return lines
+        return wrap_text(text, lambda part: self.width_of(part, font), width)
 
     # ---- sayfa düzeni ----
     @property
@@ -242,8 +314,9 @@ class _Renderer:
         self.y += 20
 
     # ---- klemens düzeni ----
-    def board(self, relay_texts: list[str], di_texts: list[str], title: str, first_ch: int, kind_colors: list[str]) -> None:
-        count = len(relay_texts)
+    def board(self, relay_labels: list[BoardLabel], di_labels: list[BoardLabel], title: str, first_ch: int,
+              kind_colors: list[str]) -> None:
+        count = len(relay_labels)
         height = 980
         self.ensure(height + 40)
         top = self.y
@@ -255,6 +328,12 @@ class _Renderer:
         title_w = self.width_of(title, self.f_head)
         self.text((center - title_w / 2, (box_top + box_bottom) / 2 - 26), title, self.f_head)
         slot = (self.content_w - 80) / max(count, 1)
+
+        def fitted(terminal: str, label: BoardLabel) -> list[str]:  # en çok BOARD_LABEL_LINES satır; ayrıntı hiç kesilmez
+            lines = label.fit(lambda text: self.wrap(text, self.f_small, slot - 16))
+            self.doc.board_labels[terminal] = lines
+            return lines
+
         for i in range(count):
             cx = MARGIN + 40 + slot * i + slot / 2
             ch = first_ch + i
@@ -264,8 +343,7 @@ class _Renderer:
             label = f"R{ch} COM|NO"
             self.text((cx - self.width_of(label, self.f_term) / 2, box_top - 56), label, self.f_term)
             d.line([(cx, box_top - 70), (cx, top + 200)], fill="#334155", width=3)
-            lines = self.wrap(relay_texts[i], self.f_small, slot - 16)[:5]
-            for j, line in enumerate(lines):
+            for j, line in enumerate(fitted(f"R{ch}", relay_labels[i])):
                 self.text((cx - self.width_of(line, self.f_small) / 2, top + 10 + j * 36), line, self.f_small)
             # Giriş klemensi (alt kenar): DI / GND
             d.rectangle([(cx - slot / 2 + 10, box_bottom), (cx + slot / 2 - 10, box_bottom + 70)], outline="#0f172a", width=3,
@@ -273,8 +351,7 @@ class _Renderer:
             label = f"D{ch} DI|GND"
             self.text((cx - self.width_of(label, self.f_term) / 2, box_bottom + 14), label, self.f_term)
             d.line([(cx, box_bottom + 70), (cx, box_bottom + 130)], fill="#334155", width=3)
-            lines = self.wrap(di_texts[i], self.f_small, slot - 16)[:5]
-            for j, line in enumerate(lines):
+            for j, line in enumerate(fitted(f"D{ch}", di_labels[i])):
                 self.text((cx - self.width_of(line, self.f_small) / 2, box_bottom + 140 + j * 36), line, self.f_small)
         self.y = top + height
 
@@ -295,6 +372,46 @@ def _actuator_for_relay(template: dict[str, Any], ch: int) -> Optional[dict[str,
         if ch in (act.get("relay"), act.get("relay2")):
             return act
     return None
+
+
+def _relay_kind_text(template: dict[str, Any], ch: int) -> str:
+    """Röle tipi; güvenlik cihazı rölesi "Lamba/Priz" değil cihaz türüyle (Vana/Siren/Fan) görünür (şema ve tablo aynı)."""
+    relay = template["relays"][ch - 1]
+    kind = tm.RELAY_TYPE_TEXT.get(relay["type"], relay["type"])
+    act = _actuator_for_relay(template, ch)
+    if act is not None:
+        kind = tm.ACT_KIND_TEXT.get(act.get("kind", ""), kind)
+    return kind
+
+
+def _zone_text(zone: Any) -> str:
+    return "tüm bölgeler" if zone == 0 else f"bölge {zone}"
+
+
+def relay_board_label(template: dict[str, Any], ch: int) -> BoardLabel:
+    """Klemens düzeninde rölenin üstündeki kısa etiket: ad · tür (· oda, adda geçmiyorsa). Yük ve notlar 2. bölüm tablosunda."""
+    relay = template["relays"][ch - 1]
+    words, room = relay["name"].casefold().split(), str(relay.get("room") or "").casefold().split()
+    named = bool(room) and any(words[i:i + len(room)] == room for i in range(len(words) - len(room) + 1))
+    # "Salon Aydınlatma" (oda Salon) zaten yerini söyler: oda tekrar yazılmaz; "Çalışma Odası" (oda "Oda") söylemez
+    return BoardLabel(relay["name"], _relay_kind_text(template, ch), "" if named else str(relay.get("room") or "").strip())
+
+
+def di_board_label(template: dict[str, Any], ch: int) -> BoardLabel:
+    """Klemens düzeninde girişin altındaki kısa etiket: ad · kısa kip -> hedef röle ("Salon Panjur Butonu · Panjur adım
+    -> R1"), sensörde ad · tür · NO/NC · bölge, boşta girişte "Boşta". Uzun kip açıklaması ve hedef rölenin adı 3. bölüm
+    tablosunda."""
+    item = template["dis"][ch - 1]
+    name = item["name"]
+    sensor = tm.di_sensor(template, ch)
+    if sensor is not None:
+        kind = tm.SENSOR_KIND_TEXT.get(sensor.get("kind", ""), sensor.get("kind", ""))
+        contact = "NC" if sensor.get("active_open") else "NO"
+        return BoardLabel(name, f"{kind} · {contact} · {_zone_text(sensor.get('zone', 0))}")
+    target = item["target_relay"]
+    if target == 0:
+        return BoardLabel(name) if name.lower().startswith("boş") else BoardLabel(name, "Boşta")
+    return BoardLabel(name, f"{DI_MODE_SHORT.get(item['mode'], item['mode'])} -> R{target}")
 
 
 def actuator_text(act: dict[str, Any]) -> str:
@@ -338,10 +455,8 @@ def di_note(template: dict[str, Any], ch: int) -> tuple[str, str]:
     sensor = tm.di_sensor(template, ch)
     if sensor is not None:
         contact = "NC (normalde kapalı)" if sensor.get("active_open") else "NO (normalde açık)"
-        zone = sensor.get("zone", 0)
-        zone_text = "tüm bölgeler" if zone == 0 else f"bölge {zone}"
         kind = tm.SENSOR_KIND_TEXT.get(sensor.get("kind", ""), sensor.get("kind", ""))
-        return "Sensör (hedef yok)", f"{kind} · {contact} · {zone_text}"
+        return "Sensör (hedef yok)", f"{kind} · {contact} · {_zone_text(sensor.get('zone', 0))}"
     target = item["target_relay"]
     mode = tm.DI_MODE_TEXT.get(item["mode"], item["mode"])
     if target == 0:
@@ -382,21 +497,6 @@ def build_wiring_document(
     r = _Renderer(template, header, font_loader)
     r.new_page()
 
-    def relay_label(ch: int) -> str:
-        relay = template["relays"][ch - 1]
-        kind = tm.RELAY_TYPE_TEXT.get(relay["type"], relay["type"])
-        act = _actuator_for_relay(template, ch)
-        if act is not None:
-            kind = tm.ACT_KIND_TEXT.get(act.get("kind", ""), kind)
-        return f"{relay['name']} · {kind}" + (f" · {relay.get('room')}" if relay.get("room") else "")
-
-    def di_label(ch: int) -> str:
-        item = template["dis"][ch - 1]
-        mode, sensor = di_note(template, ch)
-        if not sensor and mode == "Boşta":
-            return item["name"] if item["name"].lower().startswith("boş") else f"{item['name']} (boşta)"
-        return f"{item['name']} · {sensor or mode}"
-
     def color(ch: int) -> str:
         kind = template["relays"][ch - 1]["type"]
         if _actuator_for_relay(template, ch) is not None:
@@ -405,8 +505,8 @@ def build_wiring_document(
 
     r.heading("1. Karta bakan klemens düzeni (ana kart: 8 röle çıkışı üstte, 8 giriş altta)")
     base = list(range(1, min(n, 8) + 1))
-    r.board([relay_label(ch) for ch in base], [di_label(ch) for ch in base], "Ana kart ESP32-S3 8DI-8RO", 1,
-            [color(ch) for ch in base])
+    r.board([relay_board_label(template, ch) for ch in base], [di_board_label(template, ch) for ch in base],
+            "Ana kart ESP32-S3 8DI-8RO", 1, [color(ch) for ch in base])
     ext = template["ext_module"]
     if ext.get("enabled"):
         r.paragraph(
@@ -416,18 +516,15 @@ def build_wiring_document(
         )
         for start in range(9, n + 1, 8):
             chans = list(range(start, min(start + 7, n) + 1))
-            r.board([relay_label(ch) for ch in chans], [di_label(ch) for ch in chans],
+            r.board([relay_board_label(template, ch) for ch in chans], [di_board_label(template, ch) for ch in chans],
                     f"Ek modül (adres {ext['address']}) R{chans[0]}-R{chans[-1]}", start, [color(ch) for ch in chans])
 
     r.heading("2. Röle çıkışları -> bağlanacak yük")
     rows, shade = [], []
     for ch in range(1, n + 1):
         relay = template["relays"][ch - 1]
-        kind = tm.RELAY_TYPE_TEXT.get(relay["type"], relay["type"])
-        act = _actuator_for_relay(template, ch)
-        if act is not None:  # güvenlik cihazı rölesi "Lamba/Priz" değil cihaz türüyle görünür (klemens satırıyla aynı)
-            kind = tm.ACT_KIND_TEXT.get(act.get("kind", ""), kind)
-        rows.append([f"R{ch}", relay["name"], relay.get("room", ""), kind, relay.get("load", ""), relay_note(template, ch)])
+        rows.append([f"R{ch}", relay["name"], relay.get("room", ""), _relay_kind_text(template, ch), relay.get("load", ""),
+                     relay_note(template, ch)])
         shade.append(color(ch))
     r.table(["Çıkış", "Ad", "Oda", "Tip", "Bağlanacak yük", "Not"], [0.6, 1.6, 1.0, 1.0, 1.8, 2.6], rows, shade)
     if any(rel["type"].startswith("shutter") for rel in template["relays"]):
@@ -526,7 +623,7 @@ def build_flat_label(
 
     def put(xy: tuple[float, float], text: str, font: Any, fill: str) -> None:
         texts.append(text)
-        draw.text(xy, text if truetype else text.translate(_TR_TO_ASCII), font=font, fill=fill)
+        draw.text(xy, text if truetype else _to_ascii(text), font=font, fill=fill)
 
     width, height = FLAT_LABEL_SIZE
     draw.rectangle([(2, 2), (width - 3, height - 3)], outline="#0f172a", width=3)
