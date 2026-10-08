@@ -31,6 +31,7 @@ const { invalidateUserAuthCache, invalidateServiceSessionCache } = require('../m
 const { normalizeEmail, normalizePhone, normalizeFullName, validatePassword } = authService;
 
 const VALID_ROLES = Object.freeze(['super_user', 'service_user', 'user']);
+const STAFF_ROLES = Object.freeze(['super_user', 'service_user']);
 const TARGET_COLS = `id, email, full_name, phone, role, is_active, account_status, created_by_user_id,
   must_change_password, created_at, updated_at, admin_notes`;
 
@@ -368,9 +369,10 @@ class AdminUserService {
 
           // Oturum iptalinde silinen uygulama MQTT kimlikleri (TUM evler); baglantilar COMMIT sonrasi atilir.
           const usernames = [];
+          const revokeInfo = {};
           if (wantsPassword) {
             // Super baska kullaniciya parola atarsa: ilk giriste degistirme zorunlu.
-            const u = await authService.setPassword(target.id, String(password), { tx, mustChange: true, revokedMqtt: usernames });
+            const u = await authService.setPassword(target.id, String(password), { tx, mustChange: true, revokedMqtt: usernames, revokeInfo });
             updated = { ...updated, must_change_password: u.must_change_password };
           }
 
@@ -381,12 +383,24 @@ class AdminUserService {
               reason: activeChanged && nextActive === false ? 'account_suspended' : 'role_changed',
             });
             usernames.push(...revoked.mqttUsernames);
+            if (revoked.serviceSessionsRevoked) revokeInfo.serviceSessionsRevoked = true;
+          }
+          // Personel rolunden 'user'a dusurulen hesabin ev bazli servis uyelikleri kalkar (uyelik-13): eski servis
+          // evlerinde personel olarak kalmasin (requireHomeAccess zaten reddeder; listede de gorunmesin).
+          if (roleChanged && role === 'user' && STAFF_ROLES.includes(target.role)) {
+            await tx.query("DELETE FROM home_users WHERE user_id = $1 AND role = 'service_user'", [target.id]);
           }
           // Oturumlar toplu iptal edildiyse (parola atama dahil) push belirteci COMMIT sonrasi kapatilir.
           const pushReason = wantsPassword
             ? 'admin_password_set'
             : (activeChanged && nextActive === false ? 'account_suspended' : 'role_changed');
-          return { updated, usernames, sessionsRevoked: Boolean(wantsPassword || revokeSessions), pushReason };
+          return {
+            updated,
+            usernames,
+            sessionsRevoked: Boolean(wantsPassword || revokeSessions),
+            serviceSessionsRevoked: Boolean(revokeInfo.serviceSessionsRevoked),
+            pushReason,
+          };
         });
       } catch (err) {
         throw mapPgError(err);
@@ -394,6 +408,7 @@ class AdminUserService {
     })();
 
     invalidateUserAuthCache(userId);
+    if (outcome.serviceSessionsRevoked) invalidateServiceSessionCache();
     // Push belirteci gizliligi (plan §5d-1): COMMIT sonrasi; hata/yapilandirma yoklugu islemi bozmaz.
     if (outcome.sessionsRevoked) await authService.revokePushTokens(userId, { reason: outcome.pushReason });
     await authService.kickMqttUsernames(outcome.usernames, { reason: outcome.pushReason });
@@ -489,7 +504,8 @@ class AdminUserService {
             const r = await mqtt.revokeHomeAccess({ homeId, includeDevice: true, tx });
             if (r && Array.isArray(r.usernames)) usernames.push(...r.usernames);
           }
-          await serviceTokenService.revokeHomeServiceAccess(homeId, tx, 'home_deleted');
+          const svc = await serviceTokenService.revokeHomeServiceAccess(homeId, tx, 'home_deleted');
+          if (svc && Array.isArray(svc.mqtt_usernames)) usernames.push(...svc.mqtt_usernames);
           await tx.query('DELETE FROM homes WHERE id = $1', [homeId]);
         }
 

@@ -515,6 +515,22 @@ test('atama (sahip YOK): kod gerekmez, pending_invite hesap + davet; mevcut üye
   assert.ok(env.mailsTo(tg.email).some((m) => /etkinle/i.test(m.subject)));
 });
 
+test('uyelik-6: atama (sahip YOK) de evin servis oturumu MQTT kimligi (user_id bos) silinir ve atilir; kullanici kimlikleri KORUNUR', async () => {
+  const { svc, fetchFn } = makeSvc();
+  const staff = h.user({ role: 'service_user' });
+  const resident = h.user();
+  const home = h.home({ name: 'Sahipsiz Servisli Ev' });
+  h.member(home, staff, 'service_user');
+  h.member(home, resident, 'resident');
+  const residentCred = h.appCredential(home, resident);
+  const sessionCred = h.appCredential(home, null);
+  const r = await svc.assignAdmin({ actor: actorOf(staff), homeId: home.id, target: target({ fullName: 'Servisli Admin' }) });
+  assert.equal(r.mode, 'no_owner');
+  assert.ok(!state.mqtt_credentials.includes(sessionCred), 'servis oturumu kimligi silindi');
+  assert.ok(state.mqtt_credentials.includes(residentCred), 'kullanici kimligi korunur');
+  assert.ok(fetchFn.calls.some((c) => c.method === 'DELETE' && decodeURIComponent(c.url).includes(sessionCred.username)), 'baglanti atildi');
+});
+
 test('atama: hedef MEVCUT etkin hesapsa yeni hesap açılmaz (bilgilendirme e-postası); pending_invite hesapsa davet yeniden gider; telefonla da bulunur', async () => {
   const { svc } = makeSvc();
   const staff = h.user({ role: 'service_user' });
@@ -538,9 +554,84 @@ test('atama: hedef MEVCUT etkin hesapsa yeni hesap açılmaz (bilgilendirme e-po
   assert.equal(r2.invite_sent, true);
   assert.ok(env.mailsTo(pending.email).some((m) => /etkinle/i.test(m.subject)));
 
-  const r3 = await svc.assignAdmin({ actor: actorOf(staff), homeId: mk().id, target: { fullName: 'Etkin Hesap', phone: '+90 555 777 00 01' } });
-  assert.equal(r3.new_owner.id, active.id, 'telefon normalize edilip mevcut hesap bulunur');
-  assert.equal(state.users.length, usersBefore, 'yeni hesap açılmadı');
+  // uyelik-1: kayitta telefon DOGRULANMAZ -> telefonla bulunan gercek e-postali hesap atanamaz (e-posta istenir)
+  const h3 = mk();
+  const e3 = await rejects(svc.assignAdmin({ actor: actorOf(staff), homeId: h3.id, target: { fullName: 'Etkin Hesap', phone: '+90 555 777 00 01' } }), 400, 'VALIDATION');
+  assert.equal(e3.message, 'Bu numara e-postalı bir hesaba kayıtlı; atama için hesabın e-posta adresini girin.');
+  assert.equal(ownersOf(h3.id).length, 0);
+  // telefon-OTP ile acilmis (yer tutucu e-postali) hesap telefonla bulunur ve atanir
+  const otpUser = h.user({ full_name: 'Telefon Hesabi', phone: '+905557770002', email: 'phone_905557770002@ahbu.local' });
+  const r3 = await svc.assignAdmin({ actor: actorOf(staff), homeId: mk().id, target: { fullName: 'Telefon Hesabi', phone: '+90 555 777 00 02' } });
+  assert.equal(r3.new_owner.id, otpUser.id, 'telefon normalize edilip mevcut hesap bulunur');
+  assert.equal(state.users.length, usersBefore + 1, 'yeni hesap açılmadı');
+});
+
+test('uyelik-1: atama - telefonla istenen onay kodu da gercek e-postali hesapta 400 (sahibe bosuna kod gitmez)', async () => {
+  const { svc } = makeSvc();
+  const t = scenario();
+  h.user({ full_name: 'Telefonlu', phone: '+905557770003' });
+  await rejects(svc.requestAssignAdminOtp({ actor: actorOf(t.staff), homeId: t.home.id, target: { fullName: 'Telefonlu', phone: '+905557770003' } }), 400, 'VALIDATION');
+  assert.equal(env.mailsTo(t.owner.email).length, 0);
+});
+
+test('uyelik-1: atama - dogrulanmamis e-posta hedefi (sahip YOK / zorla / sahip onayi) etkisizlestirilir, davet gider, guvenlik notu doner', async () => {
+  const runCase = async (mode) => {
+    const { svc } = makeSvc();
+    const staff = h.user({ role: 'service_user' });
+    let home;
+    let otpCode;
+    let actor = actorOf(staff);
+    let extra = {};
+    const victim = h.user({ full_name: 'Kurban Hesap', password_hash: 'saldirgan-ozet' });
+    victim.email_verified = false;
+    const cred = h.appCredential(h.home({ name: `Baska ${++n}` }), victim);
+    if (mode === 'no_owner') {
+      home = h.home({ name: `Sahipsiz ${++n}` });
+      h.member(home, staff, 'service_user');
+    } else {
+      const t = scenario();
+      home = t.home;
+      actor = actorOf(t.staff);
+      if (mode === 'forced') {
+        actor = actorOf(h.user({ role: 'super_user' }));
+        extra = { force: true, reason: 'Sahibe ulaşılamıyor, zorunlu devir.' };
+      } else {
+        await requestOtp(svc, t, { fullName: 'Kurban Hesap', email: victim.email });
+        otpCode = env.lastOtp(t.owner.email);
+      }
+    }
+    const r = await svc.assignAdmin({ actor, homeId: home.id, target: { fullName: 'Kurban Hesap', email: victim.email }, otpCode, ...extra });
+    assert.equal(r.mode, mode);
+    const u = state.users.find((x) => x.id === victim.id);
+    assert.notEqual(u.password_hash, 'saldirgan-ozet', `${mode}: parola kullanilamaz yapildi`);
+    assert.equal(u.account_status, 'pending_invite', mode);
+    assert.equal(u.token_version, 2, mode);
+    assert.ok(!state.mqtt_credentials.includes(cred), `${mode}: uygulama MQTT kimligi silindi`);
+    assert.equal(r.new_owner.account_status, 'pending_invite');
+    assert.equal(r.invite_sent, true);
+    assert.ok(env.mailsTo(victim.email).some((m) => /etkinle/i.test(m.subject)), `${mode}: davet`);
+    assert.ok((r.warnings || []).some((w) => w.includes('güvenlik için sıfırlandı')), `${mode}: guvenlik notu`);
+    assert.notEqual(r.partial, true, 'bilgi notu kismi basarisizlik sayilmaz');
+  };
+  await runCase('no_owner');
+  await runCase('forced');
+  await runCase('owner_consent');
+});
+
+test('uyelik-1: telefonla bulunan YER TUTUCU e-postali hesap (telefon-OTP ile acilmis) etkisizlestirilmez; dogrudan atanir', async () => {
+  const { svc } = makeSvc();
+  const sup = h.user({ role: 'super_user' });
+  const phone = '+905559990011';
+  const phoneUser = h.user({ full_name: 'Telefon Kisi', phone, email: 'phone_905559990011@ahbu.local', password_hash: 'kendi-ozeti' });
+  phoneUser.email_verified = false;
+  const t = scenario();
+  const r = await svc.assignAdmin({ actor: actorOf(sup), homeId: t.home.id, target: { fullName: 'Telefon Kisi', phone }, force: true, reason: 'Sahibe ulaşılamıyor, zorunlu devir.' });
+  assert.equal(r.new_owner.id, phoneUser.id);
+  const u = state.users.find((x) => x.id === phoneUser.id);
+  assert.equal(u.password_hash, 'kendi-ozeti', 'parola korunur');
+  assert.equal(u.account_status, 'active');
+  assert.equal(u.token_version, 1, 'oturumlari dusmez');
+  assert.ok(!(r.warnings || []).some((w) => w.includes('güvenlik için sıfırlandı')));
 });
 
 test('atama: yeni hesapta telefon başka hesapta kayıtlıysa 409; davet e-postası gönderilemezse atama YİNE başarılı (uyarı + partial)', async () => {
@@ -592,6 +683,33 @@ test('zorla atama: yalnız super_user, gerekçe >= 15; OTP aranmaz; bekleyen kod
   assert.ok(env.mailsTo(t.owner.email).some((m) => /devredildi/i.test(m.subject)));
   // super üyelik olmadan işlem yapar: staff'in servis üyeliği (başkasının) silinir — super için korunacak satır yok
   assert.ok(!state.home_users.some((m) => m.home_id === t.home.id && m.user_id === t.staff.id), 'super zorla atamasında diğer personelin üyeliği de kalkar');
+});
+
+test('pano-6: atama owner/resident uyeligini silince tek panolu evin yerel anahtari BEKLEYEN yolla doner (ayni tx, COMMIT sonrasi uzlastirici); sahip YOK modunda donmez', async () => {
+  const { LocalKeyRotation } = env.SRC('services/local_key_rotation');
+  const reconciles = [];
+  const rotation = new LocalKeyRotation({ requestReconcile: (topicId) => reconciles.push(topicId), logger: silentLogger });
+  const sup = h.user({ role: 'super_user' });
+  const t = scenario();
+  const { svc } = makeSvc();
+  svc._deps.rotation = rotation;
+  const r = await svc.assignAdmin({ actor: actorOf(sup), homeId: t.home.id, target: target(), force: true, reason: 'Ev sahibine ulaşılamıyor, yerinde teslim alındı' });
+  assert.equal(r.mode, 'forced');
+  assert.ok(t.dev.local_key_pending_enc, 'bekleyen anahtar yazildi');
+  const a = state.device_audit_logs.filter((x) => x.event === 'local_key_rotation_scheduled' && x.home_id === t.home.id);
+  assert.equal(a.length, 1);
+  assert.deepEqual(a[0].details, { reason: 'admin_assigned' });
+  assert.deepEqual(reconciles, [t.home.mqtt_username]);
+
+  // sahip YOK: uyelik silinmez -> rotasyon yok
+  const lone = h.user();
+  const home2 = h.home({ name: 'Sahipsiz Ev' });
+  h.member(home2, lone, 'resident');
+  const dev2 = h.device(home2);
+  const r2 = await svc.assignAdmin({ actor: actorOf(sup), homeId: home2.id, target: target() });
+  assert.equal(r2.mode, 'no_owner');
+  assert.ok(!dev2.local_key_pending_enc, 'sahip yok modunda rotasyon yok');
+  assert.deepEqual(reconciles, [t.home.mqtt_username]);
 });
 
 test('zorla atama: sahibi ulaşılamaz (yer tutucu e-posta) evde staff OTP ile ilerleyemez, super zorlayabilir', async () => {

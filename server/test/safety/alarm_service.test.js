@@ -211,6 +211,7 @@ function liveDb(openRows) {
   const calls = { open: 0, cleared: [], lost: [] };
   const db = {
     async query(text, params) {
+      if (/WHERE device_id = \$1 AND home_id <> \$2/.test(text)) return { rows: [], rowCount: 0 }; // guvenlik-1: baska evde acik satir yok
       if (/^SELECT id, aid, zone, kind, status, ack_requested_at/.test(text)) { calls.open += 1; return { rows: openRows() }; }
       if (/SET status = 'cleared'/.test(text)) { calls.cleared.push(params); return { rows: [], rowCount: 1 }; }
       if (/SET status = 'lost'/.test(text)) { calls.lost.push(params); return { rows: [{ id: params[0] }], rowCount: 1 }; }

@@ -48,12 +48,14 @@ test('isValidTopicId: joker karakter / bosluk / eik cizgi yok', () => {
   }
 });
 
-test('parseStatusPayload: yalnizca online/offline', () => {
-  assert.equal(parseStatusPayload('online'), true);
-  assert.equal(parseStatusPayload(' ONLINE \n'), true);
-  assert.equal(parseStatusPayload('offline'), false);
-  assert.equal(parseStatusPayload('Offline'), false);
-  for (const bad of ['', 'on', 'true', '1', 'online!', '{"status":"online"}', null, undefined]) {
+test('parseStatusPayload: duz online/offline (eski firmware) -> {online, uid:null}; JSON durumu bridge_status_uid.test.js', () => {
+  assert.deepEqual(parseStatusPayload('online'), { online: true, uid: null });
+  assert.deepEqual(parseStatusPayload(' ONLINE \n'), { online: true, uid: null });
+  assert.deepEqual(parseStatusPayload('offline'), { online: false, uid: null });
+  assert.deepEqual(parseStatusPayload('Offline'), { online: false, uid: null });
+  // guvenlik-6: JSON {status|state, uid?} artik gecerli (firmware 1.3.1)
+  assert.deepEqual(parseStatusPayload('{"status":"online"}'), { online: true, uid: null });
+  for (const bad of ['', 'on', 'true', '1', 'online!', '{"online":true}', null, undefined]) {
     assert.equal(parseStatusPayload(bad), null, `reddedilmeli: ${String(bad)}`);
   }
 });

@@ -2,7 +2,7 @@
 
 // A2: start() -> yapilandirma denetimi, BIND_HOST, MQTT koprusu + kimlik temizligi + zamanlayici
 // (C: scheduler.start({ mqttBridge, db })) ve zarif kapanis sirasi:
-// server.close -> scheduler.stop -> mqtt kimlik temizligi stop -> mqtt end -> pool.end.
+// server.close -> scheduler.stop -> mqtt kimlik temizligi stop -> servis oturumu supurucusu stop (pano-6) -> mqtt end -> pool.end.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -33,6 +33,11 @@ installModule('services/mqtt_credential_service.js', {
   revokeHomeAccess: async () => ({ usernames: [] }),
 });
 
+// pano-6: biten servis oturumu supurucusu (5 dk, unref) baslar ve kapanista durur
+const serviceTokenService = require('../../src/services/service_token_service');
+serviceTokenService.startSweeper = () => events.push('sweep.start');
+serviceTokenService.stopSweeper = () => events.push('sweep.stop');
+
 const { start } = require('../../src/server');
 
 test('start(): JWT_SECRET kisaysa BASLAMAZ', () => {
@@ -55,13 +60,13 @@ test('start(): 127.0.0.1 e baglanir, kopru/temizlik/zamanlayici baslar; kapanis 
     const { server, shutdown } = start();
     if (!server.listening) await once(server, 'listening');
     assert.strictEqual(server.address().address, '127.0.0.1');
-    assert.deepStrictEqual(events.slice(0, 3), ['mqtt.init', 'cred.startCleanup', 'scheduler.start']);
+    assert.deepStrictEqual(events.slice(0, 4), ['mqtt.init', 'cred.startCleanup', 'sweep.start', 'scheduler.start']);
     assert.strictEqual(schedulerArgs.db, fakeDb);
     assert.ok(schedulerArgs.mqttBridge && typeof schedulerArgs.mqttBridge.init === 'function');
 
     await shutdown('TEST');
     assert.strictEqual(server.listening, false);
-    assert.deepStrictEqual(events.slice(3), ['scheduler.stop', 'cred.stopCleanup', 'mqtt.end', 'db.end']);
+    assert.deepStrictEqual(events.slice(4), ['scheduler.stop', 'cred.stopCleanup', 'sweep.stop', 'mqtt.end', 'db.end']);
     assert.strictEqual(exitCode, 0);
   } finally {
     process.exit = realExit;

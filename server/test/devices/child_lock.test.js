@@ -644,12 +644,14 @@ test('acil sifirlama: homes + devices cocuk kilidi ve NIYET sifirlanir; panoya {
   assert.strictEqual(lockCmds[0].topicId, c.home.mqtt_username);
   assert.strictEqual(lockCmds[0].obj.enabled, false);
   assert.match(lockCmds[0].obj.id, /^[A-Za-z0-9_-]{12}$/);
-  // sira: kilit sifirlama -> yerel anahtar (sys) -> (baglanti atma yok: EMQX tanimsiz) -> retained temizligi
+  // sira: kilit sifirlama -> yerel anahtar (sys; stoga donuste yeni anahtar gecerli) -> (baglanti atma yok: EMQX
+  // tanimsiz) -> retained temizligi
   const t = c.timeline;
   assert.ok(t.indexOf('publishCommand') >= 0 && t.indexOf('publishCommand') < t.indexOf('publishSys') && t.indexOf('publishSys') < t.indexOf('clearRetained'), t.join(','));
   // yerel anahtar C paketinin publishSys'iyle (yuk loglanmaz) iletildi
   assert.strictEqual(c.bridge.topics[0].via, 'publishSys');
   assert.strictEqual(c.bridge.topics[0].topic, `ev/${c.home.mqtt_username}/sys`);
+  assert.strictEqual(r.local_key_publish, 'published');
 });
 
 test('acil sifirlama: yeni sahibe devirde de kilit sifirlanir (REASSIGNED)', async () => {

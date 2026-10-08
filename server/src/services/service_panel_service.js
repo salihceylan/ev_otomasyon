@@ -35,6 +35,8 @@
 
 const crypto = require('crypto');
 const { HttpError, isUuid } = require('../utils/helpers');
+// Yalniz saf yardimci (yer tutucu e-posta: telefon-OTP / Apple gizli / silinmis hesap)
+const { isPlaceholderEmail } = require('./account_deletion_service');
 
 // --- Sabitler ---------------------------------------------------------------
 const OTP_TTL_SECONDS = 15 * 60;
@@ -151,6 +153,9 @@ class ServicePanelService {
   }
   get cleanup() {
     return this._deps.cleanup || require('./home_cleanup');
+  }
+  get rotation() {
+    return this._deps.rotation || require('./local_key_rotation');
   }
   get authMiddleware() {
     return this._deps.authMiddleware || require('../middlewares/auth_middleware');
@@ -358,11 +363,11 @@ class ServicePanelService {
     const res =
       target.keyType === 'email'
         ? await q(
-            'SELECT id, email, full_name, phone, role, is_active, account_status FROM users WHERE LOWER(email) = $1',
+            'SELECT id, email, full_name, phone, role, is_active, account_status, email_verified FROM users WHERE LOWER(email) = $1',
             [target.key]
           )
         : await q(
-            'SELECT id, email, full_name, phone, role, is_active, account_status FROM users WHERE phone = $1',
+            'SELECT id, email, full_name, phone, role, is_active, account_status, email_verified FROM users WHERE phone = $1',
             [target.key]
           );
     if (res.rows.length > 1) {
@@ -382,6 +387,11 @@ class ServicePanelService {
         );
       }
       return;
+    }
+    // uyelik-1: kayitta telefon DOGRULANMAZ; YALNIZ telefonla bulunan, gercek e-postali hesap baskasinin olabilir.
+    // Yer tutucu e-postali hesaplar telefon-OTP ile acildigi icin telefonla kabul edilir.
+    if (target.keyType === 'phone' && !isPlaceholderEmail(user.email)) {
+      throw httpError(400, 'Bu numara e-postalı bir hesaba kayıtlı; atama için hesabın e-posta adresini girin.', 'VALIDATION');
     }
     if (user.id === actor.userId) {
       throw httpError(403, 'Kendinizi Home Admin olarak atayamazsınız.', 'FORBIDDEN');
@@ -649,10 +659,13 @@ class ServicePanelService {
       }
     }
 
-    // Yeni hesap gerekirse kullanilamaz rastgele parolanin ozeti (yavas bcrypt) islem DISINDA hesaplanir.
+    // Yeni hesap ya da dogrulanmamis on-hesabin etkisizlestirilmesi (uyelik-1) gerekirse kullanilamaz rastgele parolanin
+    // ozeti (yavas bcrypt) islem DISINDA hesaplanir.
     const preUser = await this._findTargetUser((t, p) => this.db.query(t, p), target);
     const unusableHash =
-      !preUser && target.email ? await this.auth._unusablePasswordHash() : null;
+      (!preUser && target.email) || (preUser && target.keyType === 'email' && preUser.email_verified === false)
+        ? await this.auth._unusablePasswordHash()
+        : null;
 
     const outcome = await this.db.withTransaction(async (tx) => {
       const q = (text, params) => tx.query(text, params);
@@ -697,6 +710,21 @@ class ServicePanelService {
         await q('DELETE FROM home_admin_assign_otps WHERE home_id = $1', [homeId]);
       }
 
+      // 5b) On-hesap ele gecirme savunmasi (uyelik-1): DOGRULANMAMIS mevcut hedef hesap (tum kiplerde) owner
+      //     yapilmadan ONCE ayni tx'te etkisizlesir; aktifse pending_invite olur ve asagidaki davet dalina duser.
+      let neutralized = null;
+      let securityReset = false;
+      // Yalniz E-POSTAYLA bulunan hedef: telefonla bulunan (yer tutucu e-postali, telefon-OTP ile acilmis) hesap sifirlanmaz.
+      if (targetUser && target.keyType === 'email' && targetUser.email_verified === false) {
+        const wasActive = targetUser.account_status === 'active';
+        const hash = unusableHash || (await this.auth._unusablePasswordHash());
+        neutralized = await this.auth.neutralizeUnverifiedAccount(targetUser.id, { tx, reason: 'admin_assign_unverified', unusableHash: hash });
+        if (neutralized && neutralized.neutralized) {
+          securityReset = wasActive;
+          if (wasActive) targetUser = { ...targetUser, account_status: 'pending_invite' };
+        }
+      }
+
       // 6) Hedef hesap yoksa 'pending_invite' + kullanilamaz rastgele parola ile ac
       let accountCreated = false;
       if (!targetUser) {
@@ -726,15 +754,19 @@ class ServicePanelService {
 
       // 7) Uyelikler: sahip varsa daire DEVRI (tum uyelikler kalkar; islemi yapan staff'in servis uyeligi haric)
       let removedMemberships = 0;
+      let removedKeyHolders = 0; // pano-6: yerel anahtari okuyabilen (owner/resident) ve yeni sahip OLMAYAN cikanlar
       if (mode !== MODES.NO_OWNER) {
         const removed = await q(
           `DELETE FROM home_users
             WHERE home_id = $1
               AND ($2::uuid IS NULL OR NOT (user_id = $2::uuid AND role = 'service_user'))
-            RETURNING user_id`,
+            RETURNING user_id, role`,
           [homeId, scope.isStaff ? actor.userId : null]
         );
         removedMemberships = (removed.rows || []).length;
+        removedKeyHolders = (removed.rows || []).filter(
+          (m) => (m.role === 'owner' || m.role === 'resident') && m.user_id !== targetUser.id
+        ).length;
       }
       await q(
         `INSERT INTO home_users (home_id, user_id, role)
@@ -748,14 +780,19 @@ class ServicePanelService {
       await q('UPDATE device_inventory SET claimed_by_user_id = $1 WHERE claimed_home_id = $2', [targetUser.id, homeId]);
       await q('UPDATE devices SET claimed_by = $1 WHERE home_id = $2', [targetUser.id, homeId]);
 
+      // 8b) pano-6: cikarilan owner/resident panonun yerel anahtarini biliyor -> bekleyen yolla dondurulur (tek panolu ev;
+      //     cihaz satirlari yukarida zaten kilitli). COMMIT sonrasi uzlastirici.
+      const rotation = removedKeyHolders > 0 ? await this.rotation.scheduleRotation(homeId, { tx, reason: 'admin_assigned' }) : null;
+
       // 9) Erisim iptali (bu eve ozgu): servis PIN/oturumlari her modda; devirde ayrica evin uygulama MQTT
       //    kimlikleri ve davet/kural/bekleyen devir temizligi
+      // Servis (PIN) oturumu MQTT kimlikleri (user_id bos) HER modda silinir (uyelik-6; NO_OWNER dahil): COMMIT sonrasi atilir.
       const service = await this.serviceTokens.revokeHomeServiceAccess(homeId, tx, 'admin_assigned');
-      let usernames = [];
+      let usernames = Array.isArray(service && service.mqtt_usernames) ? service.mqtt_usernames.slice() : [];
       let cleanup = null;
       if (mode !== MODES.NO_OWNER) {
         const revoked = await this.mqtt.revokeHomeAccess({ homeId, tx });
-        usernames = (revoked && revoked.usernames) || [];
+        usernames = usernames.concat((revoked && revoked.usernames) || []);
         cleanup = await this.cleanup.cleanupHome(tx, homeId, { keepEndpoints: true });
       }
 
@@ -789,15 +826,24 @@ class ServicePanelService {
         service,
         usernames,
         cleanup,
+        neutralized,
+        securityReset,
+        rotation,
       };
     });
 
     if (!outcome.ok) throw outcome.error;
+    if (outcome.rotation) this.rotation.afterCommit(outcome.rotation); // pano-6: en iyi caba, firlatmaz
 
     // --- Commit SONRASI yan etkiler (hicbiri atamayi bozmaz; hatalar `warnings` olarak doner) ---
     const warnings = [];
+    const notices = []; // bilgi notlari (kismi basarisizlik DEGIL: partial yapmaz)
     const mw = this.authMiddleware;
     if (mw && typeof mw.invalidateServiceSessionCache === 'function') mw.invalidateServiceSessionCache();
+    if (outcome.neutralized && outcome.neutralized.neutralized) {
+      // On-hesap etkisizlestirme: kimlik onbellegi, push belirteci, acik MQTT baglantilari (en iyi caba)
+      await this.auth.finishNeutralize(outcome.targetUser.id, outcome.neutralized, { reason: 'admin_assign_unverified' });
+    }
 
     if (outcome.usernames.length > 0) {
       try {
@@ -823,6 +869,8 @@ class ServicePanelService {
           warnings.push(
             'Hesap etkinleştirme e-postası gönderilemedi; kullanıcı uygulamada "Şifremi unuttum" ile hesabını etkinleştirebilir.'
           );
+        } else if (outcome.securityReset) {
+          notices.push('Hedef kişinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası gönderildi.');
         }
       } else if (isDeliverableEmail(t.email)) {
         const note = await this.mailer.sendHomeAdminAssignedEmail({ to: t.email, fullName: t.full_name, homeName: outcome.home.name });
@@ -870,10 +918,8 @@ class ServicePanelService {
           ? `${t.full_name} "${outcome.home.name}" dairesinin Home Admin'i olarak atandı.`
           : `"${outcome.home.name}" dairesinin yönetimi ${t.full_name} adlı kullanıcıya devredildi. Önceki erişimler kaldırıldı.`,
     };
-    if (warnings.length > 0) {
-      data.warnings = warnings;
-      data.partial = true;
-    }
+    if (warnings.length > 0 || notices.length > 0) data.warnings = [...notices, ...warnings];
+    if (warnings.length > 0) data.partial = true;
     return data;
   }
 }

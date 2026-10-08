@@ -6,6 +6,8 @@
 //   - sahiplenilmemis kart (envanter / evsiz cihaz satiri) -> 202 {status:"pending"}
 //   - bilinmeyen / yanlis imza / zaman kaymasi / nonce tekrari / askida / iptal / bozuk govde -> 401 AYNI govde
 //   - bekleyen yerel anahtarla dogrulama -> anahtar asil anahtar yapilir (uzlastirici ile ayni takas)
+//   - inceleme: ONCEKI anahtar hicbir yolda gecmez (terfi, pano-6 rotasyonu + uzlastirici takasi, acil sifirlama stoga
+//     donus): eski anahtari bilen kisi 401 alir, sunucu anahtari geri alinmaz; stoga donusten sonraki claim YENI anahtari alir
 // EV_PG_TEST_URL yoksa ATLANIR.
 
 const test = require('node:test');
@@ -129,8 +131,71 @@ test('bootstrap servisi gercek PG', { skip: PG_SKIP }, async () => {
     const rot = (await db.query("SELECT details FROM device_audit_logs WHERE event = 'local_key_rotated' AND device_uuid = 'AHBU-B036-0001'")).rows;
     assert.equal(rot.length, 1);
     assert.equal(rot[0].details.via, 'bootstrap');
-    // eski asil anahtar artik gecmez
-    assert.deepEqual(await call(req('AHBU-B036-0001')), denied);
+    // --- inceleme: terfiden sonra ESKI anahtar (or. cikarilan uyenin bildigi) GECMEZ; sunucu anahtari geri alinmaz
+    const credBefore = (await db.query("SELECT password_hash FROM mqtt_credentials WHERE home_id = $1 AND kind = 'device'", [claim.home_id])).rows[0];
+    assert.deepEqual(await call(req('AHBU-B036-0001')), denied, 'terfiden sonra eski anahtar 401');
+    const devOld = (await db.query("SELECT local_key_enc, local_key_pending_enc FROM devices WHERE device_uuid = 'AHBU-B036-0001'")).rows[0];
+    assert.equal(secretBox.decrypt(devOld.local_key_enc), pendingKey, 'gecerli anahtar degismedi');
+    assert.equal(devOld.local_key_pending_enc, null);
+    const invOld = (await db.query("SELECT local_key_enc FROM device_inventory WHERE device_uuid = 'AHBU-B036-0001'")).rows[0];
+    assert.equal(secretBox.decrypt(invOld.local_key_enc), pendingKey, 'envanter eski anahtara donmedi');
+    const credAfter = (await db.query("SELECT password_hash FROM mqtt_credentials WHERE home_id = $1 AND kind = 'device'", [claim.home_id])).rows[0];
+    assert.equal(credAfter.password_hash, credBefore.password_hash, 'eski anahtara cihaz kimligi uretilmedi (pano atilmadi)');
+    assert.equal((await db.query("SELECT COUNT(*)::int AS n FROM device_audit_logs WHERE event = 'local_key_reverted'")).rows[0].n, 0);
+    assert.equal((await call(req('AHBU-B036-0001', { key: pendingKey }))).http, 200, 'yeni anahtar gecmeye devam eder');
+    const prevCols = (await db.query(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'devices' AND column_name LIKE 'local_key_prev%'"
+    )).rows;
+    assert.deepEqual(prevCols, [], 'onceki anahtar kolonu yok');
+
+    // --- pano-6: uye cikarilinca rotasyon -> (eski firmware) uzlastirici PUBACK takasi -> eski anahtar 401
+    {
+      const { LocalKeyRotation } = require('../../src/services/local_key_rotation');
+      const { SQL } = require('../../src/services/device_reconciler');
+      const rotation = new LocalKeyRotation({ db, secretBox, logger, requestReconcile: () => {} });
+      await inv('AHBU-B036-0005');
+      const c5 = await deviceService.claimDevice({ actor: { userId: owner.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-B036-0005', setupPin: '135790', homeName: 'Ev5' });
+      assert.equal((await call(req('AHBU-B036-0005'))).http, 200, 'rotasyondan once mevcut anahtar gecer');
+      const sch = await db.withTransaction((tx) => rotation.scheduleRotation(c5.home_id, { tx, reason: 'member_removed' }));
+      assert.equal(sch.scheduled, true);
+      const d5 = (await db.query("SELECT id, local_key_pending_enc FROM devices WHERE device_uuid = 'AHBU-B036-0005'")).rows[0];
+      await db.withTransaction(async (tx) => {
+        await tx.query(SQL.localKeyLockInventory, ['AHBU-B036-0005']);
+        assert.equal((await tx.query(SQL.localKeySwap, [d5.id, d5.local_key_pending_enc])).rowCount, 1);
+        await tx.query(SQL.localKeyInventory, ['AHBU-B036-0005', d5.local_key_pending_enc]);
+      });
+      assert.deepEqual(await call(req('AHBU-B036-0005')), denied, 'cikarilan uyenin bildigi eski anahtar 401');
+      assert.equal((await call(req('AHBU-B036-0005', { key: secretBox.decrypt(d5.local_key_pending_enc) }))).http, 200);
+      const k5 = (await db.query("SELECT local_key_enc FROM devices WHERE device_uuid = 'AHBU-B036-0005'")).rows[0];
+      assert.equal(k5.local_key_enc, d5.local_key_pending_enc, 'yeni anahtar gecerli kaldi');
+    }
+
+    // --- acil sifirlama STOGA DONUS: eski anahtar envanterde kalmaz; sonraki musterinin claim'i YENI anahtari alir
+    {
+      const root = (await db.query("INSERT INTO users (full_name, email, password_hash, role) VALUES ('R', 'r@boot036.test', 'x', 'super_user') RETURNING id")).rows[0];
+      const buyer = (await db.query("INSERT INTO users (full_name, email, password_hash, role) VALUES ('B', 'b@boot036.test', 'x', 'user') RETURNING id")).rows[0];
+      await inv('AHBU-B036-0006');
+      const c6 = await deviceService.claimDevice({ actor: { userId: owner.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-B036-0006', setupPin: '135790', homeName: 'Ev6' });
+      const er = await deviceService.emergencyReset({
+        actor: { userId: root.id, globalRole: 'super_user', ip: '127.0.0.1' },
+        deviceUuid: 'AHBU-B036-0006', confirmUid: 'AHBU-B036-0006', reason: 'Kiraci ulasilamiyor, daire teslim alindi',
+      });
+      assert.equal(er.action, 'UNCLAIMED');
+      assert.ok(secretBox.isValidLocalKey(er.local_key), 'stoga donus: anahtar yanitta bir kez');
+      const inv6 = (await db.query("SELECT local_key_enc FROM device_inventory WHERE device_uuid = 'AHBU-B036-0006'")).rows[0];
+      assert.equal(secretBox.decrypt(inv6.local_key_enc), er.local_key, 'envanter anahtari artik eski anahtar degil');
+      const d6 = (await db.query("SELECT local_key_enc, local_key_pending_enc, home_id FROM devices WHERE device_uuid = 'AHBU-B036-0006'")).rows[0];
+      assert.equal(secretBox.decrypt(d6.local_key_enc), er.local_key);
+      assert.equal(d6.local_key_pending_enc, null);
+      assert.equal(d6.home_id, null);
+      assert.deepEqual(await call(req('AHBU-B036-0006')), denied, 'eski sahibin anahtari 401');
+      const c7 = await deviceService.claimDevice({ actor: { userId: buyer.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-B036-0006', setupPin: er.setup_pin, homeName: 'Yeni Ev' });
+      assert.notEqual(c7.home_id, c6.home_id);
+      const d7 = (await db.query("SELECT local_key_enc FROM devices WHERE device_uuid = 'AHBU-B036-0006'")).rows[0];
+      assert.equal(secretBox.decrypt(d7.local_key_enc), er.local_key, 'yeni musterinin panosu yeni anahtarla');
+      assert.deepEqual(await call(req('AHBU-B036-0006')), denied, 'yeni dairede eski anahtar 401 (cihaz kimligi alinamaz)');
+      assert.equal((await call(req('AHBU-B036-0006', { key: er.local_key }))).http, 200);
+    }
 
     // --- gunluk: sir yok
     const joined = logs.join('\n');

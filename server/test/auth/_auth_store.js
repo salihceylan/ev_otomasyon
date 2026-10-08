@@ -24,6 +24,9 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     // { id, username, kind:'app'|'device', home_id, user_id }  (UYELIK-02: toplu oturum iptali uygulama kimliklerini siler)
     mqttCreds: [],
     homes: [], // { home_id, user_id, role, name, mqtt_username, valid_from, valid_until }
+    // uyelik-7: kullanicinin urettigi servis PIN'leri ve bunlarla acilmis servis oturumlari
+    serviceTokens: [], // { id, home_id, created_by, used_at, revoked_at }
+    serviceSessions: [], // { id, home_id, service_token_id, revoked_at, revoked_reason }
     seq: 1,
   };
 
@@ -116,8 +119,19 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       r.used_at = NOW();
       return [{ id: r.id, user_id: r.user_id, family_id: r.family_id }];
     }],
-    [/SELECT id, user_id, family_id, used_at, revoked_at FROM refresh_tokens WHERE token_hash = \$1/, (p) =>
-      s.refresh.filter((x) => x.token_hash === p[0])],
+    // uyelik-2: yaniti kaybolan yenileme toleransi (within_grace: used_at > NOW() - $2 sn)
+    [/SELECT id, user_id, family_id, used_at, revoked_at, revoked_reason, replaced_by,[\s\S]*FROM refresh_tokens WHERE token_hash = \$1/, (p) =>
+      s.refresh.filter((x) => x.token_hash === p[0]).map((x) => ({
+        ...x,
+        within_grace: Boolean(x.used_at && x.used_at.getTime() > s.now() - Number(p[1]) * 1000),
+      }))],
+    [/SELECT id, used_at, revoked_at FROM refresh_tokens WHERE id = \$1 FOR UPDATE/, (p) =>
+      s.refresh.filter((x) => x.id === p[0]).map((x) => ({ id: x.id, used_at: x.used_at, revoked_at: x.revoked_at }))],
+    [/revoked_reason = 'retry_superseded'\s+WHERE id = \$1 AND revoked_at IS NULL/, (p) => {
+      const r = s.refresh.find((x) => x.id === p[0] && !x.revoked_at);
+      if (r) { r.revoked_at = NOW(); r.revoked_reason = 'retry_superseded'; }
+      return [];
+    }],
     [/revoked_reason = 'reuse_detected'/, (p) => {
       s.refresh.filter((x) => x.family_id === p[0] && !x.revoked_at).forEach((x) => { x.revoked_at = NOW(); x.revoked_reason = 'reuse_detected'; });
       return [];
@@ -156,6 +170,25 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       s.mqttCreds = s.mqttCreds.filter((c) => !hit.includes(c));
       return hit.map((c) => ({ username: c.username }));
     }],
+    // uyelik-6/7: evin servis (PIN) oturumu kimlikleri (user_id bos)
+    [/DELETE FROM mqtt_credentials WHERE home_id = \$1 AND kind = 'app' AND user_id IS NULL RETURNING username/, (p) => {
+      const hit = s.mqttCreds.filter((c) => c.home_id === p[0] && c.kind === 'app' && !c.user_id);
+      s.mqttCreds = s.mqttCreds.filter((c) => !hit.includes(c));
+      return hit.map((c) => ({ username: c.username }));
+    }],
+
+    // ---------------- servis PIN / oturum (uyelik-7: toplu oturum iptali) ----------------
+    [/UPDATE service_tokens SET revoked_at = NOW\(\)\s+WHERE created_by = \$1 AND revoked_at IS NULL AND used_at IS NULL/, (p) => {
+      const hit = s.serviceTokens.filter((t) => t.created_by === p[0] && !t.revoked_at && !t.used_at);
+      hit.forEach((t) => { t.revoked_at = NOW(); });
+      return { rows: [], rowCount: hit.length };
+    }],
+    [/UPDATE service_sessions SET revoked_at = NOW\(\), revoked_reason = \$2\s+WHERE revoked_at IS NULL AND service_token_id IN \(SELECT id FROM service_tokens WHERE created_by = \$1\)\s+RETURNING id, home_id/, (p) => {
+      const tokenIds = s.serviceTokens.filter((t) => t.created_by === p[0]).map((t) => t.id);
+      const hit = s.serviceSessions.filter((x) => !x.revoked_at && tokenIds.includes(x.service_token_id));
+      hit.forEach((x) => { x.revoked_at = NOW(); x.revoked_reason = p[1]; });
+      return hit.map((x) => ({ id: x.id, home_id: x.home_id }));
+    }],
 
     // ---------------- push_tokens (push_service.disableAllTokensForUser) ----------------
     [/UPDATE push_tokens SET disabled_at = now\(\) WHERE user_id = \$1 AND disabled_at IS NULL/, (p) => {
@@ -165,6 +198,17 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     }],
 
     // ---------------- users ----------------
+    // uyelik-1: dogrulanmamis on-hesabin etkisizlestirilmesi
+    [/UPDATE users\s+SET password_hash = \$2,\s+token_version = token_version \+ 1,\s+must_change_password = FALSE,\s+password_changed_at = NULL,[\s\S]*WHERE id = \$1 AND email_verified = FALSE/, (p) => {
+      const u = s.users.get(p[0]);
+      if (!u || u.email_verified !== false) return [];
+      u.password_hash = p[1];
+      u.token_version += 1;
+      u.must_change_password = false;
+      u.password_changed_at = null;
+      if (u.account_status === 'active') u.account_status = 'pending_invite';
+      return [{ id: u.id }];
+    }],
     [/UPDATE users SET token_version = token_version \+ 1 WHERE id = \$1/, (p) => {
       const u = s.users.get(p[0]);
       if (u) u.token_version += 1;
@@ -200,6 +244,10 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       u.email_verified = true;
       u.password_hash = p[1];
       u.token_version += 1;
+      if (/password_changed_at = NULL, must_change_password = FALSE/.test(t)) {
+        u.password_changed_at = null;
+        u.must_change_password = false;
+      }
       if (u.account_status === 'pending_invite') u.account_status = 'active';
       return [{ ...u }];
     }],
@@ -268,6 +316,11 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       s.resets.push(row);
       return [{ id: row.id, expires_at: row.expires_at }];
     }],
+    // uyelik-10: magic-login baglantiyi TUKETMEDEN sahibini okur
+    [/SELECT user_id FROM password_resets\s+WHERE token_hash = \$1 AND used_at IS NULL AND expires_at > NOW\(\)/, (p) =>
+      s.resets
+        .filter((x) => x.token_hash === p[0] && !x.used_at && x.expires_at.getTime() > s.now() && p[1].includes(x.purpose))
+        .map((x) => ({ user_id: x.user_id }))],
     [/UPDATE password_resets\s+SET used_at = NOW\(\)\s+WHERE token_hash = \$1/, (p) => {
       const r = s.resets.find((x) => x.token_hash === p[0] && !x.used_at && x.expires_at.getTime() > s.now() && p[1].includes(x.purpose));
       if (!r) return [];
@@ -338,9 +391,12 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     }],
 
     // ---------------- evler ----------------
-    [/FROM home_users hu\s+JOIN homes h/, (p) => s.homes
+    [/FROM home_users hu\s+JOIN homes h/, (p, t) => s.homes
       .filter((h) => h.user_id === p[0])
       .filter((h) => !(h.role === 'service_user' && h.installer_expires_at && new Date(h.installer_expires_at).getTime() <= s.now()))
+      // uyelik-13: personel olmayan hesabin kalmis servis uyeligi listelenmez (sorgu users ile birlesir)
+      .filter((h) => !(/JOIN users u ON u\.id = hu\.user_id/.test(t) && h.role === 'service_user'
+        && !['service_user', 'super_user'].includes((s.users.get(h.user_id) || {}).role)))
       .map((h) => ({
         id: h.home_id, name: h.name, address: null, mqtt_username: h.mqtt_username, timezone: 'Europe/Istanbul',
         role: h.role, valid_from: h.valid_from || null, valid_until: h.valid_until || null,

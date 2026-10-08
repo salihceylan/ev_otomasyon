@@ -24,7 +24,7 @@ const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { HttpError, generateNumericPin, sha256Hex, isUuid } = require('../utils/helpers');
 const jwtConfig = require('../middlewares/jwt_config');
-const { invalidateUserAuthCache } = require('../middlewares/auth_middleware');
+const { invalidateUserAuthCache, invalidateServiceSessionCache } = require('../middlewares/auth_middleware');
 const pin = require('../utils/pin');
 const mailer = require('../utils/mailer');
 // Yalniz saf yardimci (modul yuklenirken db/auth_service gerektirmez; silme servisi auth_service'i tembel kullanir).
@@ -66,6 +66,18 @@ function bcryptCost() {
 
 function isDebugOtpAllowed() {
   return process.env.ALLOW_DEBUG_OTP === 'true' && process.env.NODE_ENV !== 'production';
+}
+
+/**
+ * Yaniti kaybolan yenilemenin tekrar toleransi (uyelik-2, sn). Varsayilan 3600: arka plan alarm servisinin 15 dk'lik
+ * yenileme araligini ve yeniden denemelerini kapsar. 0 = kapali (eski davranis: her tekrar aile iptali). En cok 1 gun.
+ */
+function refreshRetryGraceSec() {
+  const raw = process.env.REFRESH_RETRY_GRACE_SEC;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return 3600;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 3600;
+  return Math.min(86400, Math.floor(n));
 }
 
 function csvEnv(name) {
@@ -423,8 +435,11 @@ class AuthService {
               hu.role, hu.valid_from, hu.valid_until, hu.installer_expires_at
          FROM home_users hu
          JOIN homes h ON h.id = hu.home_id
+         JOIN users u ON u.id = hu.user_id
         WHERE hu.user_id = $1
           AND NOT (hu.role = 'service_user' AND hu.installer_expires_at IS NOT NULL AND hu.installer_expires_at <= NOW())
+          -- uyelik-13: personel rolunden dusurulmus hesabin kalmis servis uyeligi listelenmez (erisim zaten yok)
+          AND NOT (hu.role = 'service_user' AND u.role NOT IN ('service_user', 'super_user'))
         ORDER BY h.name ASC`,
       [userId]
     );
@@ -584,11 +599,42 @@ class AuthService {
 
       if (upd.rows.length === 0) {
         const ex = await tx.query(
-          'SELECT id, user_id, family_id, used_at, revoked_at FROM refresh_tokens WHERE token_hash = $1',
-          [tokenHash]
+          `SELECT id, user_id, family_id, used_at, revoked_at, revoked_reason, replaced_by,
+                  (used_at IS NOT NULL AND used_at > NOW() - make_interval(secs => $2::int)) AS within_grace
+             FROM refresh_tokens WHERE token_hash = $1
+             FOR UPDATE`,
+          [tokenHash, refreshRetryGraceSec()]
         );
         const row = ex.rows[0];
-        if (row && row.used_at) {
+        // Yaniti kaybolan yenilemenin tekrari (uyelik-2): istemci R1'i kullandi, sunucu R2'yi uretti ama yanit
+        // ulasmadi. R2 HIC kullanilmadiysa ve tolerans icindeysek bu calinma degil yeniden denemedir: R2
+        // 'retry_superseded' ile iptal edilir, AYNI aileden yeni cift doner. R2 sonradan sunulursa aile iptal edilir.
+        if (row && row.revoked_reason !== 'retry_superseded' && row.used_at && !row.revoked_at && row.replaced_by && row.within_grace === true) {
+          const succ = await tx.query('SELECT id, used_at, revoked_at FROM refresh_tokens WHERE id = $1 FOR UPDATE', [row.replaced_by]);
+          const s = succ.rows[0];
+          if (s && !s.used_at && !s.revoked_at) {
+            await tx.query(
+              `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'retry_superseded'
+                WHERE id = $1 AND revoked_at IS NULL`,
+              [s.id]
+            );
+            const user = await this._findUserById(tx, row.user_id);
+            if (!user || user.is_active === false || user.account_status !== 'active') {
+              await tx.query(
+                `UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = 'inactive'
+                  WHERE family_id = $1 AND revoked_at IS NULL`,
+                [row.family_id]
+              );
+              return { status: 'invalid' };
+            }
+            const { tokens, refreshId } = await this._issueSession(user, { tx, familyId: row.family_id, ip });
+            if (refreshId) {
+              await tx.query('UPDATE refresh_tokens SET replaced_by = $1 WHERE id = $2', [refreshId, row.id]);
+            }
+            return { status: 'ok', tokens, user, retried: true };
+          }
+        }
+        if (row && (row.used_at || row.revoked_reason === 'retry_superseded')) {
           // Yeniden kullanim: calinmis olabilir -> tum aile iptal (COMMIT edilmesi icin hata firlatilmaz).
           await tx.query(
             `UPDATE refresh_tokens
@@ -626,6 +672,9 @@ class AuthService {
     if (outcome.status !== 'ok') {
       throw httpError(401, 'Geçersiz veya süresi dolmuş oturum. Lütfen tekrar giriş yapın.', 'INVALID_TOKEN');
     }
+    if (outcome.retried) {
+      console.warn(`[AUTH] Yanitlari kaybolan yenileme yeniden denendi (kullanici ${outcome.user.id}).`);
+    }
     return { ...outcome.tokens, must_change_password: Boolean(outcome.user.must_change_password) };
   }
 
@@ -653,20 +702,26 @@ class AuthService {
    *  - `tx` VARSA cagiran COMMIT'ten SONRA `revokePushTokens(userId)` ve donen `mqttUsernames` icin
    *    `kickMqttUsernames(...)` cagirmalidir (transaction icinde dis cagri/ikinci baglanti yok; tx geri alinirsa
    *    belirtece / baglantiya dokunulmaz).
+   * SERVIS PIN'LERI (uyelik-7): reason 'role_changed' DISINDA kullanicinin urettigi kullanilmamis servis PIN'leri ve
+   * bunlarla acilmis servis oturumlari da ayni transaction'da kapanir; o evlerin servis oturumu MQTT kimlikleri
+   * (user_id bos) silinir (adlar `mqttUsernames`e eklenir). `tx` ile cagiran, `serviceSessionsRevoked` ise COMMIT
+   * SONRASI `invalidateServiceSessionCache()` cagirir (tx'siz yolda servis kendisi yapar).
    * @param {string} userId
    * @param {{tx?:object, reason?:string, bumpTokenVersion?:boolean, disablePushTokens?:boolean}} [opts]
-   * @returns {Promise<{mqttUsernames:string[]}>} tx ile: COMMIT sonrasi atilacak adlar; tx'siz: bos (atildi)
+   * @returns {Promise<{mqttUsernames:string[], serviceSessionsRevoked:boolean}>} tx ile: COMMIT sonrasi atilacak
+   *   adlar; tx'siz: bos (atildi)
    */
   async revokeAllUserSessions(userId, { tx, reason = 'revoke_all', bumpTokenVersion = true, disablePushTokens } = {}) {
-    if (!userId) return { mqttUsernames: [] };
+    if (!userId) return { mqttUsernames: [], serviceSessionsRevoked: false };
     if (!tx) {
       const out = await db.withTransaction((t) =>
         this.revokeAllUserSessions(userId, { tx: t, reason, bumpTokenVersion, disablePushTokens: false })
       );
       invalidateUserAuthCache(userId);
+      if (out.serviceSessionsRevoked) invalidateServiceSessionCache();
       if (disablePushTokens !== false) await this.revokePushTokens(userId, { reason });
       await this.kickMqttUsernames(out.mqttUsernames, { reason });
-      return { mqttUsernames: [] };
+      return { mqttUsernames: [], serviceSessionsRevoked: out.serviceSessionsRevoked };
     }
     if (bumpTokenVersion) {
       await tx.query('UPDATE users SET token_version = token_version + 1 WHERE id = $1', [userId]);
@@ -677,11 +732,96 @@ class AuthService {
       [userId, String(reason).slice(0, 40)]
     );
     const mqttUsernames = await this.revokeUserMqttCredentials(userId, { tx });
+    let serviceSessionsRevoked = false;
+    if (reason !== 'role_changed') {
+      const svc = await this._revokeUserServicePins(userId, { tx, reason });
+      mqttUsernames.push(...svc.mqttUsernames);
+      serviceSessionsRevoked = svc.sessionsRevoked;
+    }
     invalidateUserAuthCache(userId);
     if (disablePushTokens === true) {
       await this.revokePushTokens(userId, { reason });
     }
-    return { mqttUsernames };
+    return { mqttUsernames, serviceSessionsRevoked };
+  }
+
+  /**
+   * uyelik-7: kullanicinin urettigi KULLANILMAMIS servis PIN'lerini ve bu PIN'lerle acilmis servis oturumlarini `tx`
+   * icinde iptal eder; oturumlarin evlerindeki servis oturumu MQTT kimlikleri (user_id bos) silinir (kick YOK).
+   * @returns {Promise<{mqttUsernames:string[], sessionsRevoked:boolean}>}
+   */
+  async _revokeUserServicePins(userId, { tx, reason }) {
+    await tx.query(
+      `UPDATE service_tokens SET revoked_at = NOW()
+        WHERE created_by = $1 AND revoked_at IS NULL AND used_at IS NULL`,
+      [userId]
+    );
+    const sessions = await tx.query(
+      `UPDATE service_sessions SET revoked_at = NOW(), revoked_reason = $2
+        WHERE revoked_at IS NULL AND service_token_id IN (SELECT id FROM service_tokens WHERE created_by = $1)
+        RETURNING id, home_id`,
+      [userId, String(reason).slice(0, 40)]
+    );
+    const rows = sessions.rows || [];
+    const names = [];
+    const svc = this.getMqttCredentialService();
+    if (svc && typeof svc.revokeServiceSessionAccess === 'function') {
+      for (const homeId of [...new Set(rows.map((r) => r.home_id).filter(Boolean))]) {
+        const r = await svc.revokeServiceSessionAccess({ homeId, tx });
+        if (r && Array.isArray(r.usernames)) names.push(...r.usernames);
+      }
+    }
+    return { mqttUsernames: names, sessionsRevoked: rows.length > 0 };
+  }
+
+  /**
+   * uyelik-1: personel akislarinda (claim, Home Admin atama, acil sifirlama yeni sahip) DOGRULANMAMIS onceden acilmis
+   * hesabi etkisizlestirir (on-hesap ele gecirme savunmasi): baskasinin kaydettigi parola gecersiz, token_version++,
+   * aktif hesap 'pending_invite' olur ve TUM oturumlar + uygulama MQTT kimlikleri AYNI tx'te iptal edilir. Dogrulanmis
+   * hesaba DOKUNULMAZ. Kullanilamaz bcrypt ozeti (_unusablePasswordHash) yavas oldugu icin tx DISINDA hesaplanip verilir.
+   * Cagiran COMMIT SONRASI `finishNeutralize(userId, sonuc, { reason })` cagirir (sosyal giris savunmasina DOKUNULMAZ).
+   * @returns {Promise<{neutralized:boolean, mqttUsernames:string[], serviceSessionsRevoked?:boolean}>}
+   */
+  async neutralizeUnverifiedAccount(userId, { tx, reason = 'unverified_reset', unusableHash } = {}) {
+    if (!tx) throw new TypeError('neutralizeUnverifiedAccount: tx zorunludur.');
+    if (typeof unusableHash !== 'string' || !BCRYPT_HASH_RE.test(unusableHash)) {
+      throw new TypeError('neutralizeUnverifiedAccount: kullanilamaz parola ozeti (unusableHash) zorunludur.');
+    }
+    const r = await tx.query(
+      `UPDATE users
+          SET password_hash = $2,
+              token_version = token_version + 1,
+              must_change_password = FALSE,
+              password_changed_at = NULL,
+              account_status = CASE WHEN account_status = 'active' THEN 'pending_invite' ELSE account_status END,
+              updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND email_verified = FALSE
+        RETURNING id`,
+      [userId, unusableHash]
+    );
+    if (!r.rows || r.rows.length === 0) return { neutralized: false, mqttUsernames: [] };
+    const revoked = await this.revokeAllUserSessions(userId, { tx, reason, bumpTokenVersion: false });
+    return {
+      neutralized: true,
+      mqttUsernames: revoked.mqttUsernames,
+      serviceSessionsRevoked: Boolean(revoked.serviceSessionsRevoked),
+    };
+  }
+
+  /**
+   * neutralizeUnverifiedAccount'in COMMIT SONRASI isleri: kimlik onbellegi, push belirtecleri, acik MQTT baglantilari.
+   * En iyi caba: ASLA firlatmaz (yaniti bozmaz).
+   */
+  async finishNeutralize(userId, result, { reason = 'unverified_reset' } = {}) {
+    if (!userId || !result || result.neutralized !== true) return;
+    try {
+      invalidateUserAuthCache(userId);
+      if (result.serviceSessionsRevoked) invalidateServiceSessionCache();
+      await this.revokePushTokens(userId, { reason });
+      await this.kickMqttUsernames(result.mqttUsernames, { reason });
+    } catch (_) {
+      /* en iyi caba */
+    }
   }
 
   /**
@@ -791,10 +931,11 @@ class AuthService {
   /**
    * Parolayi ayarlar (bcrypt 12) ve tum oturumlari sonlandirir (uygulama MQTT kimlikleri dahil). Yonetici akislari
    * da kullanir. `tx` ile cagrilirsa silinen MQTT kimlik adlari `revokedMqtt` dizisine eklenir; cagiran COMMIT
-   * SONRASI `kickMqttUsernames(revokedMqtt)` cagirir.
+   * SONRASI `kickMqttUsernames(revokedMqtt)` cagirir. `revokeInfo` nesnesi verilirse servis oturumu kapandiysa
+   * `revokeInfo.serviceSessionsRevoked = true` yazilir (cagiran COMMIT sonrasi invalidateServiceSessionCache; uyelik-7).
    * @returns {Promise<object>} guncel kullanici satiri
    */
-  async setPassword(userId, newPassword, { tx, mustChange = false, markEmailVerified = false, activate = false, revokedMqtt } = {}) {
+  async setPassword(userId, newPassword, { tx, mustChange = false, markEmailVerified = false, activate = false, revokedMqtt, revokeInfo } = {}) {
     validatePassword(newPassword);
     const q = tx || db;
     const hash = await bcrypt.hash(newPassword, bcryptCost());
@@ -811,8 +952,9 @@ class AuthService {
       [hash, Boolean(mustChange), Boolean(markEmailVerified), Boolean(activate), userId]
     );
     if (r.rows.length === 0) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
-    const { mqttUsernames } = await this.revokeAllUserSessions(userId, { tx, reason: 'password_changed', bumpTokenVersion: false });
+    const { mqttUsernames, serviceSessionsRevoked } = await this.revokeAllUserSessions(userId, { tx, reason: 'password_changed', bumpTokenVersion: false });
     if (Array.isArray(revokedMqtt)) revokedMqtt.push(...mqttUsernames);
+    if (serviceSessionsRevoked && revokeInfo && typeof revokeInfo === 'object') revokeInfo.serviceSessionsRevoked = true;
     return r.rows[0];
   }
 
@@ -831,11 +973,13 @@ class AuthService {
     if (!ok) throw httpError(400, 'Mevcut şifre hatalı.', 'INVALID_CREDENTIALS');
 
     const revokedMqtt = [];
+    const revokeInfo = {};
     const updated = await db.withTransaction(async (tx) => {
-      const u = await this.setPassword(userId, new_password, { tx, mustChange: false, revokedMqtt });
+      const u = await this.setPassword(userId, new_password, { tx, mustChange: false, revokedMqtt, revokeInfo });
       return u;
     });
     invalidateUserAuthCache(userId);
+    if (revokeInfo.serviceSessionsRevoked) invalidateServiceSessionCache();
     // Push belirteci gizliligi (plan §5d-1): COMMIT sonrasi, hata/yapilandirma yoklugu akisi bozmaz.
     // Bu cihaz oturumda KALIR ama belirteci de kapanir: istemci yeni oturumdan sonra belirtecini yeniden kaydeder
     // (PUT /me/push-tokens; docs/FLUTTER_API_CHANGES.md).
@@ -1111,6 +1255,7 @@ class AuthService {
     if (!request.user_id) throw httpError(400, 'Geçersiz veya süresi dolmuş kod.', 'VALIDATION');
 
     const revokedMqtt = [];
+    const revokeInfo = {};
     const user = await db.withTransaction(async (tx) => {
       const current = await this._findUserById(tx, request.user_id);
       if (!current || current.is_active === false || current.account_status === 'suspended') {
@@ -1122,12 +1267,14 @@ class AuthService {
         markEmailVerified: true,
         activate: true,
         revokedMqtt,
+        revokeInfo,
       });
       // Kullaniciya ait diger acik talepler kapatilir.
       await tx.query('UPDATE password_resets SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL', [current.id]);
       return updated;
     });
     invalidateUserAuthCache(user.id);
+    if (revokeInfo.serviceSessionsRevoked) invalidateServiceSessionCache();
     // Push belirteci gizliligi (plan §5d-1): tum oturumlar kapandi -> COMMIT sonrasi belirteclerde de kapat.
     // Yanit bu cihaza yeni oturum verir; istemci belirtecini yeniden kaydeder (PUT /me/push-tokens).
     await this.revokePushTokens(user.id, { reason: 'password_reset' });
@@ -1142,7 +1289,21 @@ class AuthService {
     if (typeof token !== 'string' || !token.trim()) {
       throw httpError(400, 'Bağlantı kodu zorunludur.', 'VALIDATION');
     }
-    const request = await this._consumeResetRequest({ token, allowedPurposes: ['reset'] });
+    // Hesap durumu baglanti TUKETILMEDEN denetlenir (uyelik-10): davet bekleyen hesap (ACCOUNT_PENDING) ayni
+    // baglantiyla parolasini belirleyebilsin; askidaki hesap baglantiyi bosa harcamasin. Baglanti sahibi zaten
+    // gizli degeri bildigi icin durumun aciklanmasi bilgi sizdirmaz (parolali giriste sira DEGISMEZ).
+    const t = token.trim();
+    if (t.length > 512) throw httpError(400, 'Geçersiz veya süresi dolmuş bağlantı.', 'VALIDATION');
+    const pre = await db.query(
+      `SELECT user_id FROM password_resets
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW() AND purpose = ANY($2::text[])`,
+      [this._hashToken(t), ['reset']]
+    );
+    const preUser = pre.rows[0] && pre.rows[0].user_id ? await this._findUserById(db, pre.rows[0].user_id) : null;
+    if (!preUser) throw httpError(400, 'Geçersiz veya süresi dolmuş bağlantı.', 'VALIDATION');
+    this._assertUserCanSignIn(preUser);
+
+    const request = await this._consumeResetRequest({ token: t, allowedPurposes: ['reset'] });
     const user = await this._findUserById(db, request.user_id);
     if (!user) throw httpError(400, 'Geçersiz veya süresi dolmuş bağlantı.', 'VALIDATION');
     this._assertUserCanSignIn(user);
@@ -1383,6 +1544,7 @@ class AuthService {
 
     let user;
     let sessionsRevoked = false; // on-hesap-ele-gecirme savunmasi calistiysa (push belirteci gizliligi, plan §5d-1)
+    let serviceSessionsRevoked = false; // ayni savunmada kapanan servis (PIN) oturumlari (uyelik-7)
     const revokedMqtt = []; // ayni savunmada silinen uygulama MQTT kimlikleri (COMMIT sonrasi atilir)
     try {
       user = await db.withTransaction(async (tx) => {
@@ -1398,10 +1560,13 @@ class AuthService {
             }
             if (!found.email_verified) {
               const unusable = await this._unusablePasswordHash();
+              // Parola gecersiz kilindi: hesap artik SIFRESIZ sayilir (uyelik-8; hesap silme "SİL" onayiyla calisir,
+              // eski "parolayi degistir" zorunlulugu da anlamsizdir).
               const upd = await tx.query(
                 `UPDATE users
                     SET ${idCol} = $1, email_verified = TRUE, password_hash = $2,
                         token_version = token_version + 1,
+                        password_changed_at = NULL, must_change_password = FALSE,
                         account_status = CASE WHEN account_status = 'pending_invite' THEN 'active' ELSE account_status END
                   WHERE id = $3
                   RETURNING ${USER_COLS}`,
@@ -1411,6 +1576,7 @@ class AuthService {
               const revoked = await this.revokeAllUserSessions(found.id, { tx, reason: 'social_link', bumpTokenVersion: false });
               revokedMqtt.push(...revoked.mqttUsernames);
               sessionsRevoked = true;
+              serviceSessionsRevoked = Boolean(revoked.serviceSessionsRevoked);
               found = upd.rows[0];
             } else {
               const upd = await tx.query(
@@ -1453,6 +1619,7 @@ class AuthService {
     }
 
     invalidateUserAuthCache(user.id);
+    if (serviceSessionsRevoked) invalidateServiceSessionCache();
     // Eski (dogrulanmamis) hesabin oturumlari kapandi: o hesapla kayit edilmis push belirteclerini de kapat
     // (onceden kayit olan saldirganin telefonu ev bildirimlerini almaya devam etmesin). COMMIT sonrasi.
     if (sessionsRevoked) {

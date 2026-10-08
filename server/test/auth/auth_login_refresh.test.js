@@ -159,21 +159,150 @@ test('refresh: rotation - yeni cift doner, eski token kullanildi isaretlenir', a
   assert.strictEqual(r2.status, 200);
 });
 
-test('refresh: kullanilmis token tekrar gelirse AILE iptal edilir (calinma tespiti)', async () => {
+test('refresh: kullanilmis token tekrar gelirse AILE iptal edilir (calinma tespiti; halef kullanilmis)', async () => {
   const reg = await register('reuse@example.com');
   const rt1 = reg.body.data.refresh_token;
   const r1 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
   const rt2 = r1.body.data.refresh_token;
+  // Mesru istemci halefi (rt2) kullandi: rt1'in yeniden gelmesi artik "yaniti kaybolan yenileme" olamaz
+  const r2 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt2 });
+  assert.strictEqual(r2.status, 200);
+  const rt3 = r2.body.data.refresh_token;
 
   const replay = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
   assert.strictEqual(replay.status, 401);
   assert.strictEqual(replay.body.code, 'INVALID_TOKEN');
 
   // Mesru istemcinin yeni token'i da artik gecersiz (aile iptal)
-  const after = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt2 });
+  const after = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt3 });
   assert.strictEqual(after.status, 401);
-  const fam = store.refresh.find((r) => r.token_hash === authService._hashToken(rt2)).family_id;
+  const fam = store.refresh.find((r) => r.token_hash === authService._hashToken(rt3)).family_id;
   assert.ok(store.refresh.filter((r) => r.family_id === fam).every((r) => r.revoked_at));
+});
+
+test('uyelik-2: yaniti kaybolan yenileme - hemen gelen R1 tekrari 200 (yeni cift), ardindan R2 sunulunca 401 ve aile iptal', async () => {
+  const reg = await register('kayip-yanit@example.com');
+  const rt1 = reg.body.data.refresh_token;
+  const r1 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
+  assert.strictEqual(r1.status, 200);
+  const rt2 = r1.body.data.refresh_token; // istemciye ULASMADI (yanit kayboldu)
+
+  const logs = [];
+  const origLog = console.log;
+  const origWarn = console.warn;
+  console.log = (...a) => logs.push(a.join(' '));
+  console.warn = (...a) => logs.push(a.join(' '));
+  let retry;
+  try {
+    retry = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
+  } finally {
+    console.log = origLog;
+    console.warn = origWarn;
+  }
+  assert.strictEqual(retry.status, 200, JSON.stringify(retry.body));
+  const rt2b = retry.body.data.refresh_token;
+  assert.ok(rt2b && rt2b !== rt2 && rt2b !== rt1);
+  assert.ok(retry.body.data.access_token);
+
+  const row1 = store.refresh.find((r) => r.token_hash === authService._hashToken(rt1));
+  const row2 = store.refresh.find((r) => r.token_hash === authService._hashToken(rt2));
+  const row2b = store.refresh.find((r) => r.token_hash === authService._hashToken(rt2b));
+  assert.strictEqual(row2.revoked_reason, 'retry_superseded', 'eski halef iptal');
+  assert.ok(row2.revoked_at);
+  assert.strictEqual(row1.replaced_by, row2b.id, 'sunulan token yeni halefe isaret eder');
+  assert.strictEqual(row2b.family_id, row1.family_id, 'ayni aile');
+  assert.ok(!row2b.revoked_at);
+  assert.ok(logs.some((l) => l.includes('Yanitlari kaybolan yenileme yeniden denendi')), 'log yazildi');
+  assert.ok(!logs.some((l) => l.includes(rt1) || l.includes(rt2b)), 'log token icermez');
+
+  // Yeni halef calisir
+  const next = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt2b });
+  assert.strictEqual(next.status, 200);
+
+  // retry_superseded token (rt2) sunulursa: yeniden kullanim -> AILE iptal
+  const stolen = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt2 });
+  assert.strictEqual(stolen.status, 401);
+  assert.strictEqual(stolen.body.code, 'INVALID_TOKEN');
+  assert.ok(store.refresh.filter((r) => r.family_id === row1.family_id).every((r) => r.revoked_at), 'aile iptal');
+});
+
+test('uyelik-2: tolerans disindaki R1 tekrari aile iptal; tolerans 0 iken hemen gelen tekrar da aile iptal', async () => {
+  const reg = await register('tolerans@example.com');
+  const rt1 = reg.body.data.refresh_token;
+  const r1 = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
+  const rt2 = r1.body.data.refresh_token;
+  const row1 = store.refresh.find((r) => r.token_hash === authService._hashToken(rt1));
+  row1.used_at = new Date(Date.now() - 2 * 3600 * 1000); // varsayilan tolerans (3600 sn) disi
+  const replay = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
+  assert.strictEqual(replay.status, 401);
+  assert.strictEqual((await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt2 })).status, 401);
+  assert.ok(store.refresh.filter((r) => r.family_id === row1.family_id).every((r) => r.revoked_at));
+
+  process.env.REFRESH_RETRY_GRACE_SEC = '0';
+  try {
+    const reg2 = await register('tolerans0@example.com');
+    const a1 = reg2.body.data.refresh_token;
+    await request(app).post('/api/v1/auth/refresh').send({ refresh_token: a1 });
+    const again = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: a1 });
+    assert.strictEqual(again.status, 401, 'tolerans kapali');
+  } finally {
+    delete process.env.REFRESH_RETRY_GRACE_SEC;
+  }
+});
+
+test('uyelik-2: yeniden denemede pasif kullanici -> 401 ve aile iptal', async () => {
+  const reg = await register('tolerans-pasif@example.com');
+  const rt1 = reg.body.data.refresh_token;
+  await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
+  const u = [...store.users.values()].find((x) => x.email === 'tolerans-pasif@example.com');
+  u.is_active = false;
+  const replay = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: rt1 });
+  assert.strictEqual(replay.status, 401);
+  const fam = store.refresh.find((r) => r.token_hash === authService._hashToken(rt1)).family_id;
+  assert.ok(store.refresh.filter((r) => r.family_id === fam).every((r) => r.revoked_at));
+});
+
+test('uyelik-5: refresh siniri token basina - ayni IP den 61 farkli token 429 almaz; ayni token 11. istekte 429', async () => {
+  const crypto = require('crypto');
+  for (let i = 0; i < 61; i++) {
+    const r = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: crypto.randomBytes(32).toString('base64url') });
+    assert.notStrictEqual(r.status, 429, `istek ${i + 1}`);
+    assert.strictEqual(r.status, 401);
+  }
+  const same = crypto.randomBytes(32).toString('base64url');
+  for (let i = 0; i < 10; i++) {
+    assert.strictEqual((await request(app).post('/api/v1/auth/refresh').send({ refresh_token: same })).status, 401, `istek ${i + 1}`);
+  }
+  const blocked = await request(app).post('/api/v1/auth/refresh').send({ refreshToken: same });
+  assert.strictEqual(blocked.status, 429);
+  assert.strictEqual(blocked.body.code, 'RATE_LIMITED');
+  assert.ok(Number(blocked.headers['retry-after']) > 0);
+  assert.ok(Number.isFinite(blocked.body.retry_after));
+});
+
+test('uyelik-5: refresh IP tavani 1000 / 15 dk - 1001. istek 429', async () => {
+  const crypto = require('crypto');
+  assert.strictEqual(authRoutes.limiters.refreshIp.options.max, 1000);
+  for (let i = 0; i < 1000; i++) {
+    const r = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: crypto.randomBytes(24).toString('base64url') });
+    if (r.status !== 401) assert.fail(`istek ${i + 1}: ${r.status}`);
+  }
+  const blocked = await request(app).post('/api/v1/auth/refresh').send({ refresh_token: crypto.randomBytes(24).toString('base64url') });
+  assert.strictEqual(blocked.status, 429);
+  assert.strictEqual(blocked.body.code, 'RATE_LIMITED');
+});
+
+test('uyelik-5: login IP siniri 200 / 15 dk (31. istek 429 degil); register ve forgot 50 / saat', async () => {
+  for (let i = 0; i < 31; i++) {
+    const r = await request(app).post('/api/v1/auth/login').send({ email: `nat-${i}@example.com`, password: 'yanlis-parola-123' });
+    assert.notStrictEqual(r.status, 429, `istek ${i + 1}`);
+  }
+  assert.strictEqual(authRoutes.limiters.login.options.max, 200);
+  assert.strictEqual(authRoutes.limiters.login.options.windowMs, 15 * 60 * 1000);
+  assert.strictEqual(authRoutes.limiters.register.options.max, 50);
+  assert.strictEqual(authRoutes.limiters.register.options.windowMs, 60 * 60 * 1000);
+  assert.strictEqual(authRoutes.limiters.forgot.options.max, 50);
+  assert.strictEqual(authRoutes.limiters.forgot.options.windowMs, 60 * 60 * 1000);
 });
 
 test('refresh: bilinmeyen / bos / suresi dolmus token 401 INVALID_TOKEN', async () => {
@@ -261,6 +390,7 @@ test('/auth/me ve /auth/homes: ev listesi sozlesme alanlari; suresi dolmus misaf
 test('/homes: sureli teknisyen uyeligi (WP-B) aktifken listelenir ve bitisi valid_until; suresi dolunca listelenmez', async () => {
   const reg = await register('teknisyen.evler@example.com');
   const uid = reg.body.data.user.id;
+  store.users.get(uid).role = 'service_user'; // servis uyeligi yalniz personel rolundeki hesapta gorunur (uyelik-13)
   const until = new Date(Date.now() + 3600e3);
   store.homes.push({ home_id: '33333333-3333-4333-8333-333333333333', user_id: uid, role: 'service_user', name: 'C Evi', mqtt_username: 'h_cccccccccccccccc', installer_expires_at: until });
   store.homes.push({ home_id: '44444444-4444-4444-8444-444444444444', user_id: uid, role: 'service_user', name: 'D Evi', mqtt_username: 'h_dddddddddddddddd', installer_expires_at: new Date(Date.now() - 1000) });
@@ -269,6 +399,20 @@ test('/homes: sureli teknisyen uyeligi (WP-B) aktifken listelenir ve bitisi vali
   assert.deepStrictEqual(res.body.data.map((h) => h.name), ['C Evi']);
   assert.strictEqual(new Date(res.body.data[0].valid_until).getTime(), until.getTime());
   assert.strictEqual(res.body.data[0].is_expired, false);
+});
+
+test('uyelik-13: rolu user a dusurulmus hesabin kalmis servis uyeligi /homes ta GORUNMEZ; diger uyelikleri gorunur', async () => {
+  const reg = await register('eski.personel@example.com');
+  const uid = reg.body.data.user.id;
+  store.homes.push({ home_id: '55555555-5555-4555-8555-555555555555', user_id: uid, role: 'service_user', name: 'E Evi', mqtt_username: 'h_eeeeeeeeeeeeeeee', installer_expires_at: null });
+  store.homes.push({ home_id: '66666666-6666-4666-8666-666666666666', user_id: uid, role: 'resident', name: 'F Evi', mqtt_username: 'h_ffffffffffffffff' });
+  const res = await request(app).get('/api/v1/auth/homes').set('Authorization', `Bearer ${reg.body.data.access_token}`);
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(res.body.data.map((h) => h.name), ['F Evi']);
+  // personel rolundeyken servis evi gorunur
+  store.users.get(uid).role = 'super_user';
+  const res2 = await request(app).get('/api/v1/auth/homes').set('Authorization', `Bearer ${reg.body.data.access_token}`);
+  assert.deepStrictEqual(res2.body.data.map((h) => h.name).sort(), ['E Evi', 'F Evi']);
 });
 
 test('change-password / logout-all servis oturumu ile kullanilamaz; tokensiz 401', async () => {

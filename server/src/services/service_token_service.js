@@ -13,6 +13,8 @@
 //    token doner: { access_token, expires_in, scope:'home_service', home:{id,name} } - refresh YOK.
 //    Kullanici satiri OLUSTURULMAZ, global rol VERILMEZ.
 //  - Ev devri / acil sifirlama: revokeHomeServiceAccess(homeId, tx?) PIN'leri ve oturumlari iptal eder.
+//  - pano-6: yerel anahtari OKUMUS (local_key_read_at) oturum bitince (iptal / sure) evin yerel anahtari bekleyen yolla
+//    dondurulur: sweepEndedSessions (sunucuda 5 dk'da bir + iptal ucu / kendi cikisi sonrasi o ev icin hemen).
 
 const db = require('../db');
 const { HttpError, generateNumericPin, isUuid } = require('../utils/helpers');
@@ -22,6 +24,11 @@ const { invalidateServiceSessionCache } = require('../middlewares/auth_middlewar
 
 const PIN_TTL_SEC = 2 * 60 * 60;
 const PIN_GENERATION_ATTEMPTS = 8;
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // pano-6: biten servis oturumlari icin anahtar rotasyonu turu
+
+// pano-6: anahtari okumus ve bitmis (iptal / suresi dolmus) ama rotasyonu yapilmamis oturumlar
+const ENDED_READ_SESSIONS_COND =
+  'local_key_read_at IS NOT NULL AND key_rotated_at IS NULL AND (revoked_at IS NOT NULL OR expires_at <= NOW())';
 
 function normalizeTechnicianName(value) {
   if (typeof value !== 'string') return 'Yetkili Servis';
@@ -31,6 +38,99 @@ function normalizeTechnicianName(value) {
 }
 
 class ServiceTokenService {
+  constructor() {
+    // undefined: varsayilan mqtt_credential_service modulu; null: bilincli devre disi (test)
+    this._mqttCredentials = undefined;
+    this._localKeyRotation = undefined; // undefined: varsayilan local_key_rotation modulu (pano-6)
+    this._sweepTimer = null;
+    this._sweepRunning = false;
+  }
+
+  /** Test / DI: yerel anahtar rotasyonu servisi (pano-6; scheduleRotation + afterCommit). */
+  setLocalKeyRotation(svc) {
+    this._localKeyRotation = svc;
+  }
+
+  _rotation() {
+    if (this._localKeyRotation !== undefined) return this._localKeyRotation;
+    return require('./local_key_rotation');
+  }
+
+  /**
+   * pano-6: yerel anahtari okumus servis oturumu bittiyse (iptal / suresi doldu) evin anahtari bekleyen yolla dondurulur.
+   * Her ev AYRI islemde: rotasyon + o evin bu kosuldaki oturumlarina key_rotated_at (cok panolu evde rotasyon yapilmaz
+   * ama oturum yine isaretlenir: sonsuz tekrar yok). COMMIT sonrasi uzlastirici. Bir evin hatasi digerlerini durdurmaz.
+   * @param {{homeId?:string}} [opts]  homeId: yalniz o ev (iptal ucu / servis oturumunun kendi cikisi)
+   * @returns {Promise<{homes:number, scheduled:number}>}
+   */
+  async sweepEndedSessions({ homeId = null } = {}) {
+    const res = homeId
+      ? await db.query(`SELECT DISTINCT home_id FROM service_sessions WHERE ${ENDED_READ_SESSIONS_COND} AND home_id = $1`, [homeId])
+      : await db.query(`SELECT DISTINCT home_id FROM service_sessions WHERE ${ENDED_READ_SESSIONS_COND}`);
+    const homes = ((res && res.rows) || []).map((r) => r.home_id).filter(Boolean);
+    const rotation = this._rotation();
+    let scheduled = 0;
+    for (const h of homes) {
+      try {
+        const rot = await db.withTransaction(async (tx) => {
+          const r = rotation ? await rotation.scheduleRotation(h, { tx, reason: 'service_session_ended' }) : null;
+          await tx.query(`UPDATE service_sessions SET key_rotated_at = NOW() WHERE home_id = $1 AND ${ENDED_READ_SESSIONS_COND}`, [h]);
+          return r;
+        });
+        if (rot && rot.scheduled) {
+          scheduled += 1;
+          rotation.afterCommit(rot);
+        }
+      } catch (err) {
+        console.warn(`[SERVIS] Servis oturumu anahtar rotasyonu yapilamadi (ev=${String(h).slice(0, 8)}): ${err && err.code ? err.code : 'hata'}`);
+      }
+    }
+    return { homes: homes.length, scheduled };
+  }
+
+  /** pano-6: periyodik supurme (5 dk, unref: sureci acik tutmaz). Ikinci cagri yeni zamanlayici kurmaz. */
+  startSweeper({ intervalMs = SWEEP_INTERVAL_MS } = {}) {
+    if (this._sweepTimer) return;
+    this._sweepTimer = setInterval(() => {
+      this._sweepTick().catch(() => {});
+    }, intervalMs);
+    if (this._sweepTimer && typeof this._sweepTimer.unref === 'function') this._sweepTimer.unref();
+  }
+
+  stopSweeper() {
+    if (!this._sweepTimer) return;
+    clearInterval(this._sweepTimer);
+    this._sweepTimer = null;
+  }
+
+  async _sweepTick() {
+    if (this._sweepRunning) return; // onceki tur surerken ust uste binmez
+    this._sweepRunning = true;
+    try {
+      await this.sweepEndedSessions();
+    } catch (err) {
+      // 037 uygulanmadiysa (42703) ya da DB gecici hatasi: sonraki turda yeniden denenir
+      console.warn(`[SERVIS] Servis oturumu supurmesi basarisiz: ${err && err.code ? err.code : 'hata'}`);
+    } finally {
+      this._sweepRunning = false;
+    }
+  }
+
+  /** Test / DI: servis oturumu MQTT kimliklerini silen servis (`revokeServiceSessionAccess`). */
+  setMqttCredentialService(svc) {
+    this._mqttCredentials = svc;
+  }
+
+  _mqtt() {
+    if (this._mqttCredentials !== undefined) return this._mqttCredentials;
+    try {
+      return require('./mqtt_credential_service');
+    } catch (err) {
+      if (err && err.code === 'MODULE_NOT_FOUND' && /mqtt_credential_service/.test(String(err.message))) return null;
+      throw err;
+    }
+  }
+
   /**
    * Ev sahibinin 2 saat gecerli servis PIN'i uretmesi. PIN yalnizca bu yanitta (bir kez) doner.
    */
@@ -149,12 +249,15 @@ class ServiceTokenService {
   }
 
   /**
-   * Evin tum kullanilmamis servis PIN'lerini ve acik servis oturumlarini iptal eder.
+   * Evin tum kullanilmamis servis PIN'lerini ve acik servis oturumlarini iptal eder; evin servis oturumu uygulama MQTT
+   * kimlikleri (user_id bos) de silinir (uyelik-6: canli izleme kesilir).
    * Devir, acil sifirlama ve ev sahibinin "servis erisimini kapat" islemi kullanir.
+   * `tx` VARSA MQTT kimlikleri ayni transaction'da silinir ve baglanti ATILMAZ: cagiran COMMIT SONRASI donen
+   * `mqtt_usernames` icin kick yapar. `tx` YOKSA kimlik servisi silip hemen atar.
    * @param {string} homeId
    * @param {{query:Function}} [tx] db.withTransaction islem nesnesi (yoksa havuz)
    * @param {string} [reason]
-   * @returns {Promise<{revoked_pins:number, revoked_sessions:number}>}
+   * @returns {Promise<{revoked_pins:number, revoked_sessions:number, mqtt_usernames:string[]}>}
    */
   async revokeHomeServiceAccess(homeId, tx = null, reason = 'home_revoked') {
     if (!homeId) throw new TypeError('revokeHomeServiceAccess: homeId zorunludur.');
@@ -172,7 +275,17 @@ class ServiceTokenService {
       [homeId, String(reason).slice(0, 40)]
     );
     for (const row of sessions.rows || []) invalidateServiceSessionCache(row.id);
-    return { revoked_pins: (pins.rows || []).length, revoked_sessions: (sessions.rows || []).length };
+    let mqttUsernames = [];
+    const mqtt = this._mqtt();
+    if (mqtt && typeof mqtt.revokeServiceSessionAccess === 'function') {
+      const r = await mqtt.revokeServiceSessionAccess({ homeId, tx: tx || null });
+      mqttUsernames = r && Array.isArray(r.usernames) ? r.usernames.slice() : [];
+    }
+    return {
+      revoked_pins: (pins.rows || []).length,
+      revoked_sessions: (sessions.rows || []).length,
+      mqtt_usernames: mqttUsernames,
+    };
   }
 
   /** Ev sahibi icin PIN gecmisi. PIN degeri DONMEZ (yalnizca ozeti saklanir). */
@@ -228,3 +341,4 @@ class ServiceTokenService {
 module.exports = new ServiceTokenService();
 module.exports.ServiceTokenService = ServiceTokenService;
 module.exports.PIN_TTL_SEC = PIN_TTL_SEC;
+module.exports.SWEEP_INTERVAL_MS = SWEEP_INTERVAL_MS;

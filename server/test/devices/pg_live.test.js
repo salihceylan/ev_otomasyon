@@ -634,9 +634,11 @@ test('PG acil sifirlama (stoga don): yetki, yeni rastgele PIN, cleanup (kural/da
   assert.equal(r.action, 'UNCLAIMED');
   assert.match(r.setup_pin, /^\d{6}$/);
   assert.equal(r.affected_users_count, 4);
+  // inceleme: stoga donuste yeni anahtar HEMEN gecerli (cihaz + envanter; bekleyen yok); tek panolu evde kick'ten once
+  // set_local_key yayinlanir ve anahtar yanitta bir kez doner (pano yenilenirken RESETKEY + FACTORYINIT)
   assert.equal(r.local_key_publish, 'published');
   assert.equal(r.child_lock_reset, 'published');
-  assert.ok(!('local_key' in r), 'cihaza iletildiyse anahtar yanitta donmez');
+  assert.match(r.local_key, /^[\x21-\x7E]{8,32}$/);
 
   assert.equal(await h.count('home_users', 'home_id = $1', [t.home.id]), 0);
   const dev = await h.one('SELECT * FROM devices WHERE id = $1', [t.dev.id]);
@@ -644,7 +646,9 @@ test('PG acil sifirlama (stoga don): yetki, yeni rastgele PIN, cleanup (kural/da
   assert.equal(dev.is_claimed, false);
   assert.equal(dev.child_lock_enabled, false);
   assert.equal(dev.setup_pin, null);
-  assert.notEqual(dev.local_key_enc, oldKey);
+  assert.notEqual(dev.local_key_enc, oldKey, 'eski anahtar artik gecerli degil');
+  assert.equal(c.secretBox.decrypt(dev.local_key_enc), r.local_key);
+  assert.equal(dev.local_key_pending_enc, null, 'bekleyen anahtar yok');
   assert.equal(await h.count('endpoints', 'device_id = $1', [t.dev.id]), 0);
   assert.equal(await h.count('mqtt_credentials', 'home_id = $1', [t.home.id]), 0);
   assert.equal(await h.count('mqtt_acl', 'username LIKE $1', [`%${t.home.mqtt_username}%`]), 0, 'ACL satirlari CASCADE ile silinir');
@@ -675,7 +679,7 @@ test('PG acil sifirlama (stoga don): yetki, yeni rastgele PIN, cleanup (kural/da
   assert.equal(c.bridge.sys.length, 1);
   assert.deepEqual(Object.keys(c.bridge.sys[0].obj).sort(), ['cmd', 'id', 'local_key']);
   assert.equal(c.secretBox.decrypt(inv.local_key_enc), c.bridge.sys[0].obj.local_key);
-  assert.match(c.bridge.sys[0].obj.local_key, /^[\x21-\x7E]{8,32}$/);
+  assert.equal(c.bridge.sys[0].obj.local_key, r.local_key);
   assert.deepEqual(c.bridge.cleared, [t.home.mqtt_username]);
   // bu harness'ta EMQX yonetim API'si YOK: baglanti atma atlanir -> tek, beklenen uyari
   assert.deepEqual(r.warnings, ['EMQX yönetim API ayarı yok; açık MQTT bağlantıları atılamadı (kimlikler silindi).']);

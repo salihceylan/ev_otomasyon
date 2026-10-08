@@ -27,6 +27,9 @@ const { httpError } = require('../utils/http_errors');
 const { can } = require('../utils/role_matrix');
 const { validateCommand, capabilityForCommand, isSafeTarget, KINDS } = require('../utils/command_schema');
 const { endpointRowsFromTemplate } = require('../utils/template_schema');
+// Yalniz saf yardimci (yer tutucu e-posta: telefon-OTP / Apple gizli / silinmis hesap); modul db yuklemez.
+const { isPlaceholderEmail } = require('./account_deletion_service');
+const { localKeyFingerprint } = require('../utils/local_key_fp');
 
 // --- Sabitler ---------------------------------------------------------------
 const PIN_MAX_ATTEMPTS = 5;
@@ -37,9 +40,8 @@ const OTP_RESEND_COOLDOWN_SECONDS = 60;
 const OTP_ATTEMPT_WINDOW_MINUTES = 15;
 const STAFF_INSTALL_WINDOW_HOURS = 72; // servis personelinin sahiplendigi evde kurulum penceresi
 const BURNED_PIN = 'CLAIMED_BURNED_PIN'; // yakilmis PIN: hicbir ozet bu degere esit olamaz
-// Acil sifirlama: yeni yerel anahtar ne yayinla ne telafiyle tutulabildi ('failed'); anahtar yanitta bir kez doner.
-// Panoya bulut yolu yok: gercek kurtarma yolu seri konsol RESETKEY + FACTORYINIT (istemci yonergesiyle ayni).
-// ('pending' icin uyari YOKTUR: bekleyen anahtar hata degil, uzlastirici otomatik iletir; fx2 S-1.)
+// Acil sifirlama (stoga donus): yeni yerel anahtar sunucuda GECERLI ama panoya iletilemedi ('failed'); anahtar yanitta bir
+// kez doner. Panoya bulut yolu kalmadi: gercek kurtarma yolu seri konsol RESETKEY + FACTORYINIT (istemci yonergesiyle ayni).
 const LOCAL_KEY_FAILED_WARNING =
   'Yeni yerel anahtar panoya iletilemedi; anahtar yalnız bu yanıtta gösterilir. Panoya seri konsoldan RESETKEY ve ' +
   'ardından FACTORYINIT ile (fabrika aracı) yazılabilir.';
@@ -193,6 +195,10 @@ class DeviceService {
   get bcrypt() {
     return this._deps.bcrypt || require('bcryptjs');
   }
+  /** auth_service (uyelik-1: dogrulanmamis on-hesap etkisizlestirme; davet). Tembel: test enjekte eder. */
+  get auth() {
+    return this._deps.authService || require('./auth_service');
+  }
   get env() {
     return this._deps.env || process.env;
   }
@@ -264,36 +270,6 @@ class DeviceService {
       if (bridge && typeof bridge.requestReconcile === 'function') bridge.requestReconcile(topicId);
     } catch (_) {
       /* en iyi caba: uzlastirici yine en gec sonraki cevrimici donemde kontrol eder */
-    }
-  }
-
-  /**
-   * Acil sifirlama TELAFISI (SERVIS-01): yeni yerel anahtar commit ile gecerli olmustu ama panoya iletilemedi. Gecerli
-   * anahtar eskisine (panodaki GERCEK anahtar) geri cekilir, yeni anahtar BEKLEYEN olur (uzlastirici iletir). CAS:
-   * yalniz kayit hala bu sifirlamanin yeni anahtarini tasiyorsa; arada baska yazim olduysa hicbir sey degismez.
-   * Kilit sirasi acil sifirlama / claim ile ayni (once envanter, sonra cihaz). @returns {Promise<boolean>} telafi yazildi mi
-   */
-  async _holdLocalKeyAfterFailedPublish(outcome) {
-    if (!outcome.deviceId) return false;
-    try {
-      return await this.db.withTransaction(async (tx) => {
-        await tx.query('UPDATE device_inventory SET local_key_enc = $2 WHERE id = $1 AND local_key_enc = $3', [
-          outcome.inventoryId,
-          outcome.previousInventoryKeyEnc,
-          outcome.newLocalKeyEnc,
-        ]);
-        const res = await tx.query(
-          `UPDATE devices
-              SET local_key_enc = $2, local_key_pending_enc = $3, local_key_pending_at = CURRENT_TIMESTAMP
-            WHERE id = $1 AND local_key_enc = $3`,
-          [outcome.deviceId, outcome.previousDeviceKeyEnc, outcome.newLocalKeyEnc]
-        );
-        if (!res || !res.rowCount) throw new Error('cihaz anahtari arada degisti; telafi geri alindi');
-        return true;
-      });
-    } catch (err) {
-      console.error('[DEVICE] Acil sifirlama yerel anahtar telafisi yazilamadi:', err && err.message);
-      return false;
     }
   }
 
@@ -501,6 +477,19 @@ class DeviceService {
     const ok = Boolean(res.rows[0] && res.rows[0].schema_035);
     if (ok) this._schema035 = true;
     return ok;
+  }
+
+  /**
+   * guvenlik-1: evden AYRILAN panonun acik (cleared/lost olmayan) alarm kayitlarini kapatir: status 'lost',
+   * cleared_by 'detached', onay istegi temizlenir. Pano degisimi ve stoga donus (acil sifirlama UNCLAIMED) kullanir.
+   */
+  async _detachDeviceAlarms(tx, deviceId) {
+    await tx.query(
+      `UPDATE alarms SET status = 'lost', cleared_at = CURRENT_TIMESTAMP, cleared_by = 'detached',
+              ack_requested_at = NULL, ack_requested_by = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE device_id = $1 AND status NOT IN ('cleared', 'lost')`,
+      [deviceId]
+    );
   }
 
   /** Panonun bildirdigi yuklu sablon kaydini (devices.template_*) temizler; 035 yoksa sessizce atlanir. */
@@ -818,6 +807,25 @@ class DeviceService {
       }
       const inv = invRes.rows[0];
 
+      // 1b) Yaniti kaybolan claim'in tekrari (bireysel-3): kart zaten ISTEYENIN sahibi oldugu evdeyse acik 409
+      //     (reason ALREADY_YOURS + ev). Yalniz evin sahibine; yeni kimlik URETILMEZ, PIN sayacina dokunulmaz.
+      if (inv.status === 'CLAIMED' && !target) {
+        const mine = await tx.query(
+          `SELECT d.home_id, h.name
+             FROM devices d
+             JOIN homes h ON h.id = d.home_id
+             JOIN home_users hu ON hu.home_id = d.home_id AND hu.user_id = $2 AND hu.role = 'owner'
+            WHERE d.device_uuid = $1`,
+          [uuid, actor.userId]
+        );
+        if (mine.rows[0]) {
+          throw httpError(409, 'Bu cihaz zaten sizin dairenize tanımlı.', 'CONFLICT', {
+            reason: 'ALREADY_YOURS',
+            data: { home_id: mine.rows[0].home_id, home_name: mine.rows[0].name },
+          });
+        }
+      }
+
       // 2) Durum (CLAIMED / REVOKED / SUSPENDED sayaclara dokunmadan reddedilir)
       this._assertInventoryClaimable(inv);
 
@@ -838,6 +846,9 @@ class DeviceService {
       // 5) Hedef sahip
       let owner = { id: actor.userId, email: actorRow.email };
       let createdAccount = null;
+      let pendingCustomer = null; // mevcut (ya da sifirlanan) pending_invite musteri: COMMIT sonrasi davet (uyelik-1)
+      let neutralized = null; // dogrulanmamis on-hesap etkisizlestirme sonucu (COMMIT sonrasi finishNeutralize)
+      let securityReset = false; // aktif + dogrulanmamis hesap sifirlandi mi
 
       if (target) {
         // 5a) Hedef hesap (var mi?) ve OTP kimligi. OTP her zaman e-posta adresine gider:
@@ -847,13 +858,13 @@ class DeviceService {
         if (target.type === 'email') {
           identifier = target.value;
           const ur = await tx.query(
-            'SELECT id, email, full_name, is_active, role FROM users WHERE LOWER(email) = $1',
+            'SELECT id, email, full_name, is_active, role, email_verified, account_status FROM users WHERE LOWER(email) = $1',
             [identifier]
           );
           customer = ur.rows[0] || null;
         } else {
           const ur = await tx.query(
-            `SELECT id, email, full_name, is_active, role FROM users
+            `SELECT id, email, full_name, is_active, role, email_verified, account_status FROM users
               WHERE regexp_replace(COALESCE(phone, ''), '[^0-9+]', '', 'g') = $1`,
             [target.value]
           );
@@ -913,6 +924,25 @@ class DeviceService {
           };
         }
         await tx.query('DELETE FROM device_claim_otps WHERE id = $1', [otpRow.id]);
+
+        // 5b2) On-hesap ele gecirme savunmasi (uyelik-1): DOGRULANMAMIS mevcut hesap (baskasi musterinin e-postasiyla
+        //      onceden kaydolmus olabilir) owner yapilmadan ONCE ve AYNI tx'te etkisizlestirilir: parola kullanilamaz,
+        //      tum oturumlar + MQTT kimlikleri iptal, aktifse pending_invite. Musteri davetle kendi parolasini belirler.
+        if (customer && customer.email_verified === false) {
+          const wasActive = customer.account_status === 'active';
+          neutralized = await this.auth.neutralizeUnverifiedAccount(customer.id, {
+            tx,
+            reason: 'staff_claim_unverified',
+            unusableHash: unusablePasswordHash,
+          });
+          if (neutralized && neutralized.neutralized) {
+            securityReset = wasActive;
+            if (wasActive) customer = { ...customer, account_status: 'pending_invite' };
+          }
+        }
+        if (customer && customer.account_status === 'pending_invite') {
+          pendingCustomer = { id: customer.id, email: customer.email, full_name: customer.full_name };
+        }
 
         // 5c) Musteri hesabi yoksa KULLANILAMAZ rastgele parola + pending_invite ile ac (sabit parola YOK)
         if (!customer) {
@@ -1067,6 +1097,7 @@ class DeviceService {
         details: {
           on_behalf_of_customer: Boolean(target),
           customer_account_created: Boolean(createdAccount),
+          customer_account_reset: securityReset,
           local_key_generated: localKey.generated,
           ...(flatSeed
             ? { site_flat_id: flatSeed.flat_id, template_id: seededFromTemplate ? flatSeed.template_id : null, template_version: seededFromTemplate ? flatSeed.version : null }
@@ -1080,6 +1111,9 @@ class DeviceService {
         device,
         credential,
         createdAccount,
+        pendingCustomer,
+        neutralized,
+        securityReset,
         technicianAccessUntil,
       };
     });
@@ -1088,23 +1122,42 @@ class DeviceService {
 
     // --- Commit SONRASI yan etkiler (hicbiri claim'i bozmaz) ---
     const warnings = [];
+    if (outcome.neutralized && outcome.neutralized.neutralized && outcome.pendingCustomer) {
+      // On-hesap etkisizlestirme: kimlik onbellegi, push belirteci, acik MQTT baglantilari (en iyi caba)
+      await this.auth.finishNeutralize(outcome.pendingCustomer.id, outcome.neutralized, { reason: 'staff_claim_unverified' });
+    }
     if (outcome.credential.previous_usernames && outcome.credential.previous_usernames.length > 0) {
       const kick = await this.credentials.kickUsernames(outcome.credential.previous_usernames);
       if (kick && kick.failed > 0) warnings.push('Eski cihaz bağlantısı atılamadı.');
     }
 
     let customerAccount;
+    const inviteFailedWarning =
+      'Müşteri hesabı oluşturuldu ancak davet gönderilemedi; müşteri uygulamada "Şifremi unuttum" ile hesabını etkinleştirebilir.';
     if (outcome.createdAccount) {
       const invite = await this._inviteCustomer({
         userId: outcome.createdAccount.id,
         email: outcome.createdAccount.email,
         fullName: outcome.createdAccount.full_name,
       });
-      customerAccount = { created: true, status: 'pending_invite', invite_sent: invite.sent === true };
-      if (!invite.sent) {
-        warnings.push(
-          'Müşteri hesabı oluşturuldu ancak davet gönderilemedi; müşteri uygulamada "Şifremi unuttum" ile hesabını etkinleştirebilir.'
-        );
+      customerAccount = { created: true, status: 'pending_invite', invite_sent: invite.sent === true, security_reset: false };
+      if (!invite.sent) warnings.push(inviteFailedWarning);
+    } else if (outcome.pendingCustomer) {
+      // Mevcut pending_invite (ya da guvenlik icin sifirlanan) musteri hesabi: davet YENIDEN gider (uyelik-1)
+      const invite = await this._inviteCustomer({
+        userId: outcome.pendingCustomer.id,
+        email: outcome.pendingCustomer.email,
+        fullName: outcome.pendingCustomer.full_name,
+      });
+      customerAccount = {
+        created: false,
+        status: 'pending_invite',
+        invite_sent: invite.sent === true,
+        security_reset: outcome.securityReset === true,
+      };
+      if (!invite.sent) warnings.push(inviteFailedWarning);
+      else if (outcome.securityReset) {
+        warnings.push('Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası gönderildi.');
       }
     }
 
@@ -1134,9 +1187,13 @@ class DeviceService {
    *  - Servis personeli kendisini yeni sahip yapamaz.
    *  - Tek transaction; her seferinde YENI rastgele PIN (yanitta tek sefer) ve YENI yerel anahtar;
    *    devices.setup_pin kullanilmaz.
-   *  - Yerel anahtar (SERVIS-01): pano SIMDI iletilebilir degilse (cevrimdisi ya da kopru broker'a bagli degil)
-   *    panodaki GERCEK anahtar gecerli kalir, yeni anahtar BEKLEYEN yazilir (devices.local_key_pending_enc);
-   *    uzlastirici pano buluta baglaninca iletir. Yanit: local_key_publish 'published' | 'pending' | 'skipped' (ev yok).
+   *  - Yerel anahtar (SERVIS-01, pano-5, inceleme):
+   *    DEVIR (REASSIGNED, pano ayni evde kalir): panodaki GERCEK anahtar gecerli kalir, yeni anahtar BEKLEYEN yazilir
+   *    (devices.local_key_pending_enc); uzlastirici pano canli oldugunda iletir ve dogrular. Yanit 'pending' (anahtar yok).
+   *    STOGA DONUS (UNCLAIMED) / ev ya da cihaz kaydi yok: yeni anahtar HEMEN gecerli (cihaz + envanter; bekleyen ve
+   *    onceki anahtar yok) ve yanitta bir kez doner (pano yenilenirken RESETKEY + FACTORYINIT). Tek panolu evde commit
+   *    sonrasi, cihaz kimligi atilmadan ONCE set_local_key yayinlanir (en iyi caba): 'published' | 'failed' (+ uyari) |
+   *    'skipped_offline' (pano cevrimdisi / kopru kopuk) | 'skipped' (ev/cihaz yok ya da cok panolu ev).
    *  - Temizlik: endpoints, scheduled_rules, davetler, servis PIN/oturumlari (cleanupHome), uyelikler,
    *    MQTT kimlikleri; retained state/status bos yayinla temizlenir.
    *  - Commit sonrasi yan etki hatalari YUTULMAZ: yanitta `warnings` olarak doner.
@@ -1165,6 +1222,8 @@ class DeviceService {
       newOwner = normalizeIdentifier(newOwnerIdentifier);
       if (!newOwner) throw httpError(400, 'Geçerli bir yeni sahip e-posta adresi veya telefon numarası girin.', 'VALIDATION');
     }
+    // Yeni sahip dogrulanmamis on-hesapsa etkisizlestirilir (uyelik-1): yavas bcrypt ozeti islem DISINDA hesaplanir.
+    const unusableHash = newOwner ? await this.bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12) : null;
 
     const outcome = await this.db.withTransaction(async (tx) => {
       // 1) Cihaz + envanter satirlarini KILITLE
@@ -1210,19 +1269,29 @@ class DeviceService {
 
       // 3) Yeni sahip (varsa): mevcut, aktif ve servis personelinin kendisi DEGIL
       let newOwnerRow = null;
+      let neutralized = null; // dogrulanmamis on-hesap etkisizlestirme (uyelik-1)
+      let ownerSecurityReset = false;
       if (newOwner) {
         const actorRes = await tx.query('SELECT id, email, phone FROM users WHERE id = $1', [actor.userId]);
         const actorRow = actorRes.rows[0];
         const ur =
           newOwner.type === 'email'
-            ? await tx.query('SELECT id, email, phone, full_name, is_active, role FROM users WHERE LOWER(email) = $1', [newOwner.value])
+            ? await tx.query(
+                'SELECT id, email, phone, full_name, is_active, role, email_verified, account_status FROM users WHERE LOWER(email) = $1',
+                [newOwner.value]
+              )
             : await tx.query(
-                `SELECT id, email, phone, full_name, is_active, role FROM users
+                `SELECT id, email, phone, full_name, is_active, role, email_verified, account_status FROM users
                   WHERE regexp_replace(COALESCE(phone, ''), '[^0-9+]', '', 'g') = $1`,
                 [newOwner.value]
               );
         newOwnerRow = ur.rows[0] || null;
         if (!newOwnerRow) throw httpError(404, 'Yeni sahip olarak belirtilen kullanıcı sistemde kayıtlı değil.', 'NOT_FOUND');
+        // Kayitta telefon DOGRULANMAZ: telefonla bulunan, gercek e-postali hesap baskasinin olabilir (uyelik-1).
+        // Yer tutucu e-postali (telefon-OTP ile acilmis) hesap telefonla kabul edilir.
+        if (newOwner.type === 'phone' && !isPlaceholderEmail(newOwnerRow.email)) {
+          throw httpError(400, 'Bu numara e-postalı bir hesaba kayıtlı; atama için hesabın e-posta adresini girin.', 'VALIDATION');
+        }
         if (newOwnerRow.is_active === false) {
           throw httpError(409, 'Yeni sahip hesabı aktif değil.', 'CONFLICT');
         }
@@ -1235,6 +1304,17 @@ class DeviceService {
         if (!homeId) {
           throw httpError(409, 'Cihaz bir daireye bağlı değil; yeni sahip atanamaz. Önce cihazı sıfırlayıp yeniden sahiplendirin.', 'CONFLICT');
         }
+        // On-hesap ele gecirme savunmasi (uyelik-1): dogrulanmamis hesap owner yapilmadan ONCE ayni tx'te etkisizlesir.
+        // Yalniz E-POSTAYLA bulunan hedef: telefonla bulunan (yer tutucu e-postali, telefon-OTP ile acilmis) hesap sifirlanmaz.
+        if (newOwner.type === 'email' && newOwnerRow.email_verified === false) {
+          const wasActive = newOwnerRow.account_status === 'active';
+          neutralized = await this.auth.neutralizeUnverifiedAccount(newOwnerRow.id, {
+            tx,
+            reason: 'emergency_reset_unverified',
+            unusableHash,
+          });
+          if (neutralized && neutralized.neutralized) ownerSecurityReset = wasActive;
+        }
       }
 
       const deviceWasOnline = Boolean(dev && dev.is_online);
@@ -1244,11 +1324,13 @@ class DeviceService {
       // 4) Ev bilgisi (konu kimligi: MQTT temizligi icin)
       let topicId = null;
       let oldUserIds = [];
+      let homeDeviceCount = 0; // stoga donuste set_local_key yalniz tek panolu evde (ev konusu tum panolara gider)
       if (homeId) {
         // Kilit sirasi (cok panolu ev): evin TUM cihaz satirlari id sirasiyla, ev kilidinden ve temizlikten ONCE.
         // Yerlesim esitleme / kopru durum yolu devices -> endpoints -> scheduled_rules / homes sirasini kullanir; ters
         // sira (once ev verisi, sonra kardes panonun cihaz satiri) kilitlenme (40P01) uretirdi.
-        await tx.query('SELECT id FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', [homeId]);
+        const homeDevs = await tx.query('SELECT id FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', [homeId]);
+        homeDeviceCount = ((homeDevs && homeDevs.rows) || []).length;
         const homeRes = await tx.query('SELECT id, mqtt_username FROM homes WHERE id = $1 FOR UPDATE', [homeId]);
         topicId = homeRes.rows[0] ? homeRes.rows[0].mqtt_username : null;
 
@@ -1287,19 +1369,19 @@ class DeviceService {
         }
       }
 
-      // 8) Yeni yerel anahtar (her seferinde). Nereye yazilacagi panoya SIMDI iletilip iletilemeyecegine baglidir
-      //    (SERVIS-01):
-      //    'publish' : pano cevrimici + kopru bagli -> yeni anahtar commit ile gecerli; commit sonrasi sys ile iletilir
-      //                (iletilemezse asagida TELAFI edilir).
-      //    'pending' : pano cevrimdisi ya da kopru kopuk (K1) -> panodaki GERCEK anahtar gecerli kalir (devices +
-      //                envanter degismez; servis sihirbazi LAN'dan bununla baglanip yeni bulut kimligini yazabilir, K2),
-      //                yeni anahtar BEKLEYEN yazilir; uzlastirici pano buluta baglaninca iletir (device_reconciler).
-      //    'direct'  : ev/konu ya da cihaz kaydi yok (stoktaki cihaz) -> iletim yolu yok: eski davranis (anahtar hemen
-      //                degisir, yanitta bir kez doner).
+      // 8) Yeni yerel anahtar (her seferinde). Iki plan (pano-5; PUBACK panonun anahtari aldigini kanitlamaz):
+      //    'pending' : YALNIZ yeni sahibe devir (REASSIGNED) + ev/konu + cihaz kaydi: pano ayni evde kalir. Panodaki GERCEK
+      //                anahtar gecerli kalir (devices + envanter degismez; servis sihirbazi LAN'dan bununla baglanabilir),
+      //                yeni anahtar BEKLEYEN yazilir; uzlastirici pano canli oldugunda iletir ve (firmware 1.3.1)
+      //                state'teki lk_fp ile dogrulayinca takas eder (device_reconciler).
+      //    'direct'  : stoga donus (UNCLAIMED) ya da ev/konu / cihaz kaydi yok: yeni anahtar HEMEN gecerli (cihaz +
+      //                envanter), bekleyen NULL, yanitta bir kez doner. Stoga donuste ev bagi kalmaz: bekleyen anahtar
+      //                hic iletilemezdi (uzlastirici evin konusuyla calisir) ve ESKI anahtar envanterde kalip sonraki
+      //                musterinin claim'ine gecerdi (eski sahip yeni dairenin cihaz kimligini bootstrap ile alabilirdi).
+      //                Onceki anahtar saklanmaz.
       const newLocalKey = this.secretBox.generateLocalKey();
       const newLocalKeyEnc = this.secretBox.encrypt(newLocalKey);
-      let keyPlan = 'direct';
-      if (topicId && dev) keyPlan = deviceWasOnline && this._bridgeConnected() ? 'publish' : 'pending';
+      const keyPlan = newOwnerRow && topicId && dev ? 'pending' : 'direct';
       const holdKey = keyPlan === 'pending';
       const deviceKeyEnc = holdKey ? dev.local_key_enc || null : newLocalKeyEnc; // devices.local_key_enc
       const inventoryKeyEnc = holdKey ? inv.local_key_enc || null : newLocalKeyEnc; // device_inventory.local_key_enc
@@ -1405,6 +1487,8 @@ class DeviceService {
             [deviceKeyEnc, dev.id, pendingKeyEnc]
           );
           await this._clearDeviceTemplate(tx, dev.id);
+          // guvenlik-1: stoga donen panonun acik alarmlari kapanir (evden ayrildi; baska eve sahiplenince yeni satir acilir)
+          await this._detachDeviceAlarms(tx, dev.id);
           // Cihaz bagli oldugu tum kanal satirlarindan arindirilir (yeni sahiplenmede yeniden uretilir).
           await tx.query('DELETE FROM endpoints WHERE device_id = $1', [dev.id]);
         }
@@ -1444,10 +1528,6 @@ class DeviceService {
         newLocalKey,
         newLocalKeyEnc,
         keyPlan,
-        // telafi icin (yayin basarisiz olursa gecerli anahtar bunlara geri cekilir)
-        previousDeviceKeyEnc: dev ? dev.local_key_enc || null : null,
-        previousInventoryKeyEnc: inv.local_key_enc || null,
-        inventoryId: inv.id,
         newOwnerRow,
         deviceCredential,
         affectedUsers: oldUserIds.length,
@@ -1460,6 +1540,9 @@ class DeviceService {
         deviceWasOnline,
         childLockDeferred,
         deviceId: dev ? dev.id : null,
+        homeDeviceCount,
+        neutralized,
+        ownerSecurityReset,
       };
     });
 
@@ -1477,8 +1560,23 @@ class DeviceService {
 
     // --- Commit SONRASI yan etkiler: hatalar yutulmaz, `warnings` olarak doner ---
     const warnings = [];
+    const notices = []; // bilgi notlari (kismi basarisizlik DEGIL: partial yapmaz)
     let localKeyPublish = 'skipped';
     let childLockReset = 'skipped';
+
+    // Yeni sahibin dogrulanmamis on-hesabi etkisizlestirildi (uyelik-1): onbellek/push/MQTT + sifre belirleme daveti
+    if (outcome.neutralized && outcome.neutralized.neutralized && outcome.newOwnerRow) {
+      const o = outcome.newOwnerRow;
+      await this.auth.finishNeutralize(o.id, outcome.neutralized, { reason: 'emergency_reset_unverified' });
+      const invite = await this._inviteCustomer({ userId: o.id, email: o.email, fullName: o.full_name });
+      if (!invite.sent) {
+        warnings.push(
+          'Yeni sahibin hesabı güvenlik için sıfırlandı ancak şifre belirleme e-postası gönderilemedi; kullanıcı uygulamada "Şifremi unuttum" ile hesabını etkinleştirebilir.'
+        );
+      } else if (outcome.ownerSecurityReset) {
+        notices.push('Yeni sahibin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası gönderildi.');
+      }
+    }
 
     if (outcome.topicId) {
       // (a0) Cocuk kilidini sifirla (devredilen pano yeni sahibe kilitli gitmesin). Cihaz hala ESKI kimlikle bagliyken.
@@ -1501,30 +1599,32 @@ class DeviceService {
         warnings.push(`${cause}; çocuk kilidi sıfırlama komutu gönderilemedi. ${tail}`);
       }
 
-      // (a) Yerel anahtar (SERVIS-01). 'publish': yeni anahtar cihaza iletilir (cihaz hala ESKI kimlikle bagliyken;
-      //     sonra baglanti atilir). Iletilemezse TELAFI: gecerli anahtar eskisine, yeni anahtar bekleyene cekilir.
-      //     'pending': transaction'da zaten bekleyen yazildi. Ikisinde de uzlastirici bu ev icin yeniden kurulur.
-      if (outcome.keyPlan === 'publish') {
-        try {
-          await this._publishSys(outcome.topicId, {
-            cmd: 'set_local_key',
-            local_key: outcome.newLocalKey, // alan adi `local_key` (firmware `key` takma adini da kabul eder; biz kullanmayiz)
-            id: this._newCommandId(),
-          });
-          localKeyPublish = 'published';
-        } catch (_) {
-          localKeyPublish = (await this._holdLocalKeyAfterFailedPublish(outcome)) ? 'pending' : 'failed';
-          if (localKeyPublish === 'failed') {
+      // (a) Yerel anahtar (pano-5): 'pending' (devir) planda transaction bekleyen anahtari yazdi; uzlastirici bu ev icin
+      //     yeniden kurulur (pano canliysa sonraki state'te iletir). Uyari YOK (S-1): bekleyen anahtar hata degildir.
+      //     Stoga donus (inceleme): yeni anahtar sunucuda ZATEN gecerli; pano hala ESKI cihaz kimligiyle bagliyken (asagidaki
+      //     kick'ten ONCE) set_local_key ile iletilir (en iyi caba; anahtar yanitta da doner). Ev konusu evdeki TUM
+      //     panolara gider: cok panolu evde yayinlanmaz (kardes panonun anahtari sunucudan habersiz degisirdi).
+      if (outcome.keyPlan === 'pending') {
+        localKeyPublish = 'pending';
+        this._requestReconcile(outcome.topicId);
+      } else if (outcome.action === 'UNCLAIMED' && outcome.deviceId) {
+        if (outcome.homeDeviceCount !== 1) {
+          localKeyPublish = 'skipped';
+        } else if (!(outcome.deviceWasOnline && this._bridgeConnected())) {
+          localKeyPublish = 'skipped_offline';
+        } else {
+          try {
+            await this._publishSys(outcome.topicId, {
+              cmd: 'set_local_key',
+              local_key: outcome.newLocalKey, // alan adi `local_key` (CONTRACTS §3b); kopru sys yukunu loglamaz
+              id: this._newCommandId(),
+            });
+            localKeyPublish = 'published';
+          } catch (_) {
+            localKeyPublish = 'failed';
             warnings.push(LOCAL_KEY_FAILED_WARNING);
           }
         }
-      } else if (outcome.keyPlan === 'pending') {
-        localKeyPublish = 'pending';
-      }
-      if (localKeyPublish === 'pending') {
-        // Uyari YOK (S-1): bekleyen anahtar hata degildir; `local_key_publish:'pending'` istemciye bilgi notu olarak
-        // yeter, tek basina partial yapmaz.
-        this._requestReconcile(outcome.topicId);
       }
 
       // (b) Eski uygulama/cihaz baglantilarini at
@@ -1567,16 +1667,14 @@ class DeviceService {
       data.message =
         'Cihaz yeni sahibe devredildi. Eski ailenin tüm erişimleri kaldırıldı; cihaz kimliği yenilendi.';
     }
-    // Yerel anahtar yanitta YALNIZ gecerli oldugu halde panoya iletilemediyse bir kez doner ('skipped': ev yok,
-    // 'failed': yayin ve telafi basarisiz). 'pending' iken DONMEZ: panonun mevcut anahtari gecerlidir, yenisi
-    // uzlastiriciyla otomatik iletilir; 'published' iken pano zaten aldi.
-    if (localKeyPublish === 'skipped' || localKeyPublish === 'failed') {
+    // Yerel anahtar yanitta bir kez doner: 'direct' planda (stoga donus ya da ev/cihaz kaydi yok) anahtar sunucuda hemen
+    // gecerlidir; pano yenilenirken seri konsoldan RESETKEY + FACTORYINIT ile yazilabilsin (yayin PUBACK'i panonun
+    // aldigini kanitlamaz). 'pending' (devir) iken DONMEZ: panonun mevcut anahtari gecerlidir, yenisi uzlastiriciyla.
+    if (outcome.keyPlan === 'direct') {
       data.local_key = outcome.newLocalKey;
     }
-    if (warnings.length > 0) {
-      data.warnings = warnings;
-      data.partial = true;
-    }
+    if (warnings.length > 0 || notices.length > 0) data.warnings = [...notices, ...warnings];
+    if (warnings.length > 0) data.partial = true;
     return data;
   }
 
@@ -1669,6 +1767,20 @@ class DeviceService {
           existingNew.rows[0].home_id !== homeId) {
         throw httpError(409, 'Yeni pano başka bir daireye bağlı görünüyor. Yetkili servisle iletişime geçin.', 'CONFLICT');
       }
+      // 5b) atolye-8 (inceleme): yeni kart BASKA bir site dairesine bagliysa sessizce o daireden alinmaz: super olmayan
+      //     (owner / servis personeli / servis oturumu) 409 DEVICE_LINKED_TO_FLAT (envanter silme, etiket yenileme ve
+      //     stoga alma ile ayni kural: once daireden ayrilmali). super_user gecersiz kilarsa bag adim 11c'de kaldirilir.
+      //     Kilitsiz okuma yeterli: daireye kart baglama (linkFlatDevice) once kartin envanter satirini kilitler; o satir
+      //     adim 1'den beri bu islemde kilitli (arada baska daireye baglanamaz).
+      const schema035 = await this._hasSchema035(tx);
+      let otherFlatCount = 0;
+      if (schema035) {
+        const other = await tx.query('SELECT id, status FROM site_flats WHERE device_uuid = $1', [newUuid]);
+        otherFlatCount = ((other && other.rows) || []).length;
+        if (otherFlatCount > 0 && !(actor && actor.globalRole === 'super_user')) {
+          throw httpError(409, 'Kart bir daireye bağlı; önce daireden ayırın.', 'DEVICE_LINKED_TO_FLAT');
+        }
+      }
       await this._resolveMacConflict(tx, newInv.mac_address, newUuid);
 
       // 6) Eski panonun kanal yedegi (snapshot)
@@ -1745,6 +1857,9 @@ class DeviceService {
         [oldDevice.id]
       );
       await this._clearDeviceTemplate(tx, oldDevice.id);
+      // 9b) guvenlik-1: ayrilan panonun ACIK alarm kayitlari kapanir ('lost' / 'detached'). Aksi halde kapanmaz,
+      //     onaylanamaz ve evdeki gaz bastirmasi (kurallar / gece hatirlatmasi) kalici olurdu.
+      await this._detachDeviceAlarms(tx, oldDevice.id);
 
       // 10) Envanter: yeni CLAIMED (PIN yakildi), eski REVOKED
       await tx.query(
@@ -1766,6 +1881,47 @@ class DeviceService {
           WHERE device_id = $2 AND home_id = $3`,
         [newDeviceId, oldDevice.id, homeId]
       );
+      // 11b) kullanim-4: zamanli kurallar yeni cihaza tasinir (eski cihaza bagli kural zamanlayicida hic calismazdi)
+      const rulesMoved = await tx.query(
+        `UPDATE scheduled_rules SET device_id = $1, updated_at = CURRENT_TIMESTAMP
+          WHERE home_id = $2 AND device_id = $3
+          RETURNING id`,
+        [newDeviceId, homeId, oldDevice.id]
+      );
+      // 11c) atolye-8: site dairesinin kart baglantisi yeni karta tasinir (migration 035 yoksa atlanir).
+      //      super_user'in gecersiz kildigi baska daire bagi (5b) kaldirilir ve o daire 'planned'a doner (bir kart tek
+      //      daireye bagli olur; kartsiz written / installed / handed_over daire kalmaz).
+      //      atolye-7: degistirilen dairenin 'written' durumu KARTA baglidir: yeni kartin bu dairenin sablonuyla basarili
+      //      yazimi yoksa 'planned' olur (yeni kartta baska dairenin sablonu yazili olabilir). installed / handed_over korunur.
+      let unlinkedFlats = 0;
+      if (schema035) {
+        if (otherFlatCount > 0) {
+          const unlinked = await tx.query(
+            "UPDATE site_flats SET device_uuid = NULL, status = 'planned', updated_at = NOW() WHERE device_uuid = $1",
+            [newUuid]
+          );
+          unlinkedFlats = (unlinked && unlinked.rowCount) || 0;
+        }
+        const movedFlats = await tx.query(
+          'UPDATE site_flats SET device_uuid = $1, updated_at = NOW() WHERE device_uuid = $2 RETURNING id, status, template_id',
+          [newUuid, oldDevice.device_uuid]
+        );
+        for (const f of (movedFlats && movedFlats.rows) || []) {
+          if (f.status !== 'written') continue;
+          const okw = f.template_id
+            ? await tx.query(
+                "SELECT id FROM template_writes WHERE device_uuid = $1 AND template_id = $2 AND result = 'ok' LIMIT 1",
+                [newUuid, f.template_id]
+              )
+            : { rows: [] };
+          if (!okw.rows || okw.rows.length === 0) {
+            await tx.query(
+              "UPDATE site_flats SET status = 'planned', updated_at = NOW() WHERE id = $1 AND status = 'written'",
+              [f.id]
+            );
+          }
+        }
+      }
 
       // 12) MQTT: cihaz kimligi yenilenir (eski pano ayni kullanici adiyla artik baglanamaz)
       const credential = await this.credentials.issueDeviceCredential({
@@ -1815,6 +1971,7 @@ class DeviceService {
         details: {
           old_device_uuid: oldDevice.device_uuid,
           endpoints_migrated: moved.rowCount || 0,
+          rules_migrated: (rulesMoved.rows || []).length,
           child_lock_carried: priorLocked,
         },
       });
@@ -1826,12 +1983,16 @@ class DeviceService {
         migrated: moved.rowCount || 0,
         credential,
         runtimes,
+        unlinkedFlats,
       };
     });
 
     if (!outcome.ok) throw outcome.error;
 
     const warnings = [];
+    if (outcome.unlinkedFlats > 0) {
+      warnings.push('Yeni kart başka bir daireye bağlıydı; o bağ kaldırıldı ve o daire "Planlandı" durumuna alındı.');
+    }
     try {
       const kick = await this.credentials.kickUsernames(outcome.credential.previous_usernames);
       if (kick && kick.failed > 0) warnings.push('Eski pano bağlantısı atılamadı; kimlik yenilendi.');
@@ -1916,7 +2077,13 @@ class DeviceService {
       homeId,
       actor,
     });
-    return { local_key: localKey };
+    // pano-6: servis (PIN) oturumu anahtari okudu -> oturum bitince supurucu evin anahtarini dondurur. Isaret
+    // yazilamazsa anahtar VERILMEZ (fail-closed; denetimle ayni).
+    if (actor && actor.isServiceSession && actor.sessionId) {
+      await this.db.query('UPDATE service_sessions SET local_key_read_at = NOW() WHERE id = $1', [actor.sessionId]);
+    }
+    // pano-5: istemci panonun durumdaki lk_fp'siyle karsilastirir (HMAC hesaplamaz); ayni formul.
+    return { local_key: localKey, local_key_fp: localKeyFingerprint(localKey, res.rows[0].device_uuid || uuid) };
   }
 
   /**
@@ -2008,7 +2175,7 @@ class DeviceService {
       throw httpError(400, 'Komuttaki pano kimliği (uid) hedef cihazla eşleşmiyor.', 'VALIDATION');
     }
 
-    await this._assertCommandTarget(device.id, validated);
+    await this._assertCommandTarget(device.id, validated, actor);
 
     if (!device.is_online) {
       throw httpError(409, 'Cihaz çevrimdışı; komut iletilmedi.', 'DEVICE_OFFLINE', { device_online: false });
@@ -2065,7 +2232,7 @@ class DeviceService {
    *    olmali, degilse 409 ZONE_ALARM_ACTIVE [Y-3]. Bolge testi yalniz normal bolgede.
    *    (caps denetimi once yapilir: caps yoksa ozet de yoktur; tasarimdaki sira 4. maddeydi - uygulama notu.)
    */
-  async _assertCommandTarget(deviceId, validated) {
+  async _assertCommandTarget(deviceId, validated, actor = null) {
     if (validated.kind === KINDS.RELAY) {
       const res = await this.db.query(
         'SELECT type, actuator_type FROM endpoints WHERE device_id = $1 AND channel_index = $2',
@@ -2119,7 +2286,18 @@ class DeviceService {
     if (isValve !== (to === 'open' || to === 'closed')) {
       throw httpError(400, isValve ? 'Vana için hedef "open" ya da "closed" olmalı.' : 'Bu cihaz için hedef "on" ya da "off" olmalı.', 'VALIDATION');
     }
-    if (isSafeTarget(to)) return; // kapatma / susturma her zaman serbest
+    // guvenlik-7: gaz alarmi (bolge latched/fault, kind gas) surerken havalandirma fanini durdurmak gazi biriktirir:
+    // yalniz alarm onaylama yetkisi olanlar (safety_ack: ev sahibi/sakin/servis) kapatabilir; misafir kapatamaz.
+    if (act.kind === 'fan' && to === 'off') {
+      const actZones = Array.isArray(act.zones) ? act.zones : [];
+      const gasActive = zones.some(
+        (z) => z && actZones.includes(z.id) && (z.st === 'latched' || z.st === 'fault') && z.kind === 'gas'
+      );
+      if (gasActive && !can('safety_ack', actor && actor.access)) {
+        throw httpError(403, 'Gaz alarmı sürerken havalandırmayı yalnız ev sahibi/üyeleri durdurabilir.', 'FORBIDDEN');
+      }
+    }
+    if (isSafeTarget(to)) return; // kapatma / susturma her zaman serbest (gaz alarmindaki fan haric, yukarida)
     if (isValve && act.medium === 'gas') {
       throw httpError(409, 'Gaz vanası güvenlik gereği yalnız yerinde, panodaki düğmeyle açılır.', 'GAS_LOCAL_ONLY');
     }
@@ -2380,6 +2558,20 @@ class DeviceService {
     const lastSeenMs = device.last_seen_at ? new Date(device.last_seen_at).getTime() : 0;
     const seconds = lastSeenMs > 0 ? Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000)) : null;
 
+    // bireysel-12: pano buluta HIC baglanmamis (kurulum tamamlanmamis): ariza/guc kesintisi DEGIL, ayri durum.
+    if (!device.last_seen_at) {
+      return {
+        seconds: null, network_status: 'NEVER_SEEN', power_status: 'UNKNOWN', level: 'warning',
+        title: 'Pano Henüz Buluta Hiç Bağlanmadı',
+        summary: 'Pano bulut sunucuya henüz hiç bağlanmadı; kurulumun internet bağlantısı adımı tamamlanmamış olabilir.',
+        action:
+          '1. Panoya Ethernet kablosu takılı olduğundan ya da Wi-Fi kurulumunun yapıldığından emin olun.\n' +
+          '2. Pano internete çıktıktan sonra bulut bağlantısı 10 dk\'ya kadar sürebilir; bu süre kadar bekleyin.\n' +
+          '3. Buluta bağlanmak için pano yazılımı v1.3.0 veya üstü gerekir.\n' +
+          '4. Panonun ilk hazırlığı (provizyon) yapılmamışsa yetkili servisle iletişime geçin.',
+      };
+    }
+
     if (seconds !== null && seconds <= 120) {
       return {
         seconds, network_status: 'OK', power_status: 'OK', level: 'ok',
@@ -2464,16 +2656,18 @@ class DeviceService {
       return { row: d, c };
     });
     const primary = perDevice[0];
-    // Genel seviye: hepsi saglikliysa ok; hicbiri saglikli degilse error; aksi halde warning.
+    // Genel seviye: hepsi saglikliysa ok; HICBIRI haberlesmiyorsa (yakin zamanda gorulmemis) error - yalniz hic
+    // baglanmamis (NEVER_SEEN) panolardan olusuyorsa warning (kurulum eksik, ariza degil; bireysel-12); aksi halde warning.
     const levels = perDevice.map((p) => p.c.level);
+    const communicating = perDevice.filter((p) => p.c.network_status === 'OK' || p.c.network_status === 'WARNING').length;
     let overall = 'warning';
     if (levels.every((l) => l === 'ok')) overall = 'ok';
-    else if (levels.every((l) => l === 'error')) overall = 'error';
+    else if (communicating === 0 && perDevice.some((p) => p.c.network_status !== 'NEVER_SEEN')) overall = 'error';
     const worst = perDevice.reduce((a, b) => (rank[b.c.level] > rank[a.c.level] ? b : a), primary);
-    const headline = perDevice.length > 1 && overall === 'warning'
+    const headline = perDevice.length > 1 && overall === 'warning' && communicating > 0
       ? {
           title: 'Bazı Panolar Çevrimdışı',
-          summary: `${perDevice.length} panodan ${levels.filter((l) => l !== 'error').length} tanesi haberleşiyor.`,
+          summary: `${perDevice.length} panodan ${communicating} tanesi haberleşiyor.`,
           action: worst.c.action,
         }
       : { title: worst.c.title, summary: worst.c.summary, action: worst.c.action };
@@ -2601,6 +2795,16 @@ class DeviceService {
             WHERE id = $2
             RETURNING commissioned_at`,
           [noteText, device.id]
+        );
+      }
+
+      // servis_kurulum-10: basarili devreye alma karta bagli site dairesini teslim eder (planned/written/installed ->
+      // handed_over). Basarisiz devreye alma GERI CEKMEZ. Migration 035 yoksa atlanir.
+      if (testsPassed && (await this._hasSchema035(tx))) {
+        await tx.query(
+          `UPDATE site_flats SET status = 'handed_over', updated_at = CURRENT_TIMESTAMP
+            WHERE device_uuid = $1 AND status IN ('planned', 'written', 'installed')`,
+          [uuid]
         );
       }
 

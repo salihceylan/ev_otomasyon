@@ -75,8 +75,23 @@ router.post(
   authenticateToken,
   requireHomeAccess(HOME_ROLE_SETS.SERVICE_PIN),
   asyncHandler(async (req, res) => {
+    // tx'siz cagri: servis oturumu MQTT kimlikleri silinir VE baglantilari hemen atilir (uyelik-6). Kullanici adlari
+    // yanitta DONMEZ.
     const result = await serviceTokenService.revokeHomeServiceAccess(req.homeAccess.home_id, null, 'owner_revoked');
-    return successResponse(res, result, 'Servis erişimi kapatıldı.');
+    // pano-6: yerel anahtari okumus oturum bittiyse evin anahtari hemen bekleyen yolla dondurulur (en iyi caba; hata
+    // yaniti bozmaz, periyodik supurucu yeniden dener).
+    if (typeof serviceTokenService.sweepEndedSessions === 'function') {
+      try {
+        await serviceTokenService.sweepEndedSessions({ homeId: req.homeAccess.home_id });
+      } catch (err) {
+        console.warn('[SERVIS] Iptal sonrasi anahtar rotasyonu yapilamadi:', err && err.code ? err.code : 'hata');
+      }
+    }
+    return successResponse(
+      res,
+      { revoked_pins: result.revoked_pins, revoked_sessions: result.revoked_sessions },
+      'Servis erişimi kapatıldı.'
+    );
   })
 );
 

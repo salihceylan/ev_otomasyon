@@ -51,6 +51,22 @@ const IDLE_SWEEP_MS = 100; // kapanista bosta kalan keep-alive baglantilarini ka
 const SERVICE_NAME = 'AHBU Ev Otomasyonu Backend API';
 const VERSION = '1.1.0';
 
+// bireysel-9: uygulama baglantisi tarayicida acilinca gosterilen STATIK sayfa (istekten hicbir deger yansitilmaz).
+const APP_LINK_TEXT =
+  'Bu bağlantı AHBU uygulamasında açılmalıdır. Etiketteki karekodu uygulamadaki Karekod Tara ile okutun; uygulama ' +
+  'yüklü değilse önce yükleyin. Şifre sıfırlama ya da giriş bağlantısıysa uygulama yüklü telefonda bağlantıya ' +
+  'yeniden dokunun.';
+const APP_LINK_PAGE =
+  '<!doctype html><html lang="tr"><head><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="referrer" content="no-referrer">' +
+  '<title>AHBU Akıllı Ev</title></head>' +
+  '<body style="margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f4f6f8;color:#1b2430">' +
+  '<main style="max-width:32rem;margin:12vh auto;padding:1.5rem;background:#fff;border-radius:12px;' +
+  'box-shadow:0 1px 4px rgba(0,0,0,.08);line-height:1.5">' +
+  '<h1 style="font-size:1.25rem;margin:0 0 .75rem">AHBU Akıllı Ev</h1>' +
+  `<p style="margin:0">${APP_LINK_TEXT}</p>` +
+  '</main></body></html>';
+
 /**
  * Modul varsa yukler, yoksa null doner (B/C paketlerinin dosyalari henuz olmayabilir).
  * Modul VAR ama icinde hata varsa hata yukari tasinir (sessizce yutulmaz).
@@ -290,6 +306,19 @@ function createApp(deps = {}) {
   app.use('/api/v1/admin', adminRoutes);
   app.use('/api/admin', adminRoutes);
 
+  // --- Uygulama baglantilari tarayicida (bireysel-9) -------------------------
+  // Etiket karekodu (/claim?uid=&pin=), sifre sifirlama ve sihirli giris baglantilari telefon kamerasiyla/tarayicida
+  // acilirsa JSON 404 yerine statik yonlendirme sayfasi doner. Sorgu dizgesi / yol YANSITILMAZ (PIN/belirtec sayfaya
+  // ve onbellege dusmez); oturum ACILMAZ, hicbir sey tuketilmez. GET /api/v1/auth/magic-login/:token 405 AYNEN kalir.
+  app.get(['/claim', '/reset-password', '/magic-login', '/magic-login/:token'], (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(APP_LINK_PAGE);
+  });
+
   // --- 404 + global hata yakalayici -----------------------------------------
   app.use(notFoundHandler);
   app.use(errorHandler);
@@ -428,6 +457,16 @@ function start(options = {}) {
     }
   }
 
+  // pano-6: yerel anahtari okumus servis oturumu bitince evin anahtari bekleyen yolla doner (5 dk'da bir, unref'li)
+  const serviceTokenService = optionalRequire('./services/service_token_service', 'services/service_token_service');
+  if (serviceTokenService && typeof serviceTokenService.startSweeper === 'function') {
+    try {
+      serviceTokenService.startSweeper();
+    } catch (err) {
+      console.error('[SERVER] Servis oturumu supurucusu baslatilamadi:', err && err.message);
+    }
+  }
+
   // Zamanli kural motoru (WP-C: scheduler.start({ mqttBridge, db }))
   let scheduler = null;
   try {
@@ -477,6 +516,7 @@ function start(options = {}) {
     ]);
     // 3) MQTT kimlik temizligi, MQTT koprusu (zamanlayicilar + baglanti), en sonda pg havuzu
     await runShutdownStep('mqtt-cred-cleanup', async () => { if (mqttCredentialService && typeof mqttCredentialService.stopCleanup === 'function') mqttCredentialService.stopCleanup(); }, stepMs);
+    await runShutdownStep('service-session-sweep', async () => { if (serviceTokenService && typeof serviceTokenService.stopSweeper === 'function') serviceTokenService.stopSweeper(); }, stepMs);
     await runShutdownStep('mqtt', async () => { if (typeof mqttBridge.end === 'function') await mqttBridge.end({ timeoutMs: Math.max(300, stepMs - 300) }); }, stepMs);
     await runShutdownStep('db', async () => { if (db.pool && typeof db.pool.end === 'function') await db.pool.end(); }, stepMs);
     clearTimeout(force);

@@ -607,3 +607,152 @@ test('C9: dogrulama / hata mesajlari ASCII\'ye INDIRGENMEMIS, dogru Turkce karak
     assert.ok(all.includes(expected), `beklenen metin yok: ${expected}`);
   }
 });
+
+// -- kullanim-5: kural sahibinin yetkisi (creator_active), ustlenme, personelin tek sahipli evde olusturdugu kural ------
+const OWNER_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const STAFF_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const PAST = new Date(Date.now() - 3600e3);
+const FUTURE = new Date(Date.now() + 3600e3);
+
+test('kullanim-5: listRules creator_active (suresi dolmus servis uyeligi false; sahip true); kural sahibi yetki sutunlari JOIN ile', async () => {
+  const base = { ...EXISTING, created_by_name: 'X', created_at: new Date(0), updated_at: new Date(0), last_run_at: null };
+  const db = makeFakeDb([
+    {
+      match: /FROM scheduled_rules sr LEFT JOIN users u/,
+      reply: {
+        rows: [
+          { ...base, id: 1, created_by: STAFF_ID, creator_is_active: true, creator_account_status: 'active', creator_global_role: 'service_user', creator_home_role: 'service_user', creator_installer_expires_at: PAST },
+          { ...base, id: 2, created_by: OWNER_ID, creator_is_active: true, creator_account_status: 'active', creator_global_role: 'user', creator_home_role: 'owner', creator_installer_expires_at: null },
+          { ...base, id: 3, created_by: STAFF_ID, creator_is_active: true, creator_account_status: 'active', creator_global_role: 'service_user', creator_home_role: 'service_user', creator_installer_expires_at: FUTURE },
+          { ...base, id: 4, created_by: null },
+        ],
+      },
+    },
+  ]);
+  const rules = await createService({ db }).listRules(HOME);
+  assert.deepEqual(rules.map((r) => [r.id, r.creator_active]), [[1, false], [2, true], [3, true], [4, false]]);
+  assert.match(db.calls[0].text, /LEFT JOIN home_users chu ON chu\.user_id = sr\.created_by AND chu\.home_id = sr\.home_id/);
+  assert.doesNotMatch(db.calls[0].text, /u\.email/);
+});
+
+function makeAdoptDb({ creator = null, existing = { ...EXISTING, created_by: STAFF_ID } } = {}) {
+  return makeFakeDb([
+    { match: /^SELECT \* FROM scheduled_rules WHERE id = \$1 AND home_id = \$2 FOR UPDATE$/, reply: () => ({ rows: [{ ...existing }] }) },
+    { match: /FROM users u LEFT JOIN home_users hu ON hu\.user_id = u\.id AND hu\.home_id = \$1 WHERE u\.id = \$2/, reply: () => ({ rows: creator ? [creator] : [] }) },
+    { match: /FROM endpoints WHERE home_id = \$1/, reply: () => ({ rows: [{ channel_index: 3, type: 'light' }] }) },
+    { match: /WITH upd AS/, reply: (text, p) => ({ rows: [{ ...existing, id: 5, created_by_name: 'Y', _sql: text, _p: p }] }) },
+    { match: /INSERT INTO device_audit_logs/, reply: { rows: [], rowCount: 1 } },
+  ]);
+}
+
+test('kullanim-5: yetkisi biten sahibin kuralini yetkili uye duzenleyince USTLENIR (created_by = duzenleyen) + denetim; yetkili sahipte degismez', async () => {
+  const expired = { is_active: true, account_status: 'active', global_role: 'service_user', home_role: 'service_user', installer_expires_at: PAST };
+  const db = makeAdoptDb({ creator: expired });
+  await createService({ db }).updateRule(HOME, 5, { enabled: true }, { userId: OWNER_ID, role: 'owner', ip: '203.0.113.5' });
+  const upd = db.calls.find((c) => /WITH upd AS/.test(c.text));
+  assert.match(upd.text, /created_by = \$\d+/);
+  assert.ok(upd.params.includes(OWNER_ID), 'yeni sahip duzenleyen');
+  const audit = db.calls.find((c) => /INSERT INTO device_audit_logs/.test(c.text));
+  assert.ok(audit, 'ustlenme denetimi');
+  assert.equal(audit.params[0], 'scheduled_rule_adopted');
+  assert.equal(audit.params[3], OWNER_ID);
+  assert.deepEqual(JSON.parse(audit.params[6]), { rule_id: 5 });
+
+  // sahip yetkili: created_by degismez, denetim yok
+  const okCreator = { is_active: true, account_status: 'active', global_role: 'service_user', home_role: 'service_user', installer_expires_at: FUTURE };
+  const db2 = makeAdoptDb({ creator: okCreator });
+  await createService({ db: db2 }).updateRule(HOME, 5, { label: 'x' }, { userId: OWNER_ID, role: 'owner' });
+  assert.doesNotMatch(db2.calls.find((c) => /WITH upd AS/.test(c.text)).text, /created_by =/);
+  assert.equal(db2.calls.filter((c) => /INSERT INTO device_audit_logs/.test(c.text)).length, 0);
+
+  // silinmis sahip (satir yok) + duzenleyen yoksa (eski cagiran) ustlenme yapilmaz
+  const db3 = makeAdoptDb({ creator: null });
+  await createService({ db: db3 }).updateRule(HOME, 5, { label: 'x' });
+  assert.doesNotMatch(db3.calls.find((c) => /WITH upd AS/.test(c.text)).text, /created_by =/);
+  // misafir rolundeki duzenleyen ustlenemez (savunma)
+  const db4 = makeAdoptDb({ creator: null });
+  await createService({ db: db4 }).updateRule(HOME, 5, { label: 'x' }, { userId: OWNER_ID, role: 'guest' });
+  assert.doesNotMatch(db4.calls.find((c) => /WITH upd AS/.test(c.text)).text, /created_by =/);
+});
+
+// inceleme: servis personeli (72 sa sureli uyelik) yetkisi biten sahibin kuralini duzenlerse kural PERSONELE gecmez:
+// tek owner'li evde owner adina ustlenilir (createRule ile ayni kural), denetimde gercek duzenleyen personel. Aksi halde
+// personelin penceresi bitince kural yine sessizce dururdu (kullanim-5'in onledigi hata).
+function makeStaffAdoptDb({ creator, owners, ownerRow = { is_active: true, account_status: 'active', global_role: 'user', home_role: 'owner', installer_expires_at: null } }) {
+  const db = makeAdoptDb({ creator: null });
+  db.addRule({ match: /SELECT user_id FROM home_users WHERE home_id = \$1 AND role = 'owner'/, reply: () => ({ rows: owners.map((id) => ({ user_id: id })) }) });
+  db.addRule({
+    match: /FROM users u LEFT JOIN home_users hu ON hu\.user_id = u\.id AND hu\.home_id = \$1 WHERE u\.id = \$2/,
+    reply: (text, p) => ({ rows: p[1] === STAFF_ID || p[1] === USER ? (creator ? [creator] : []) : ownerRow ? [ownerRow] : [] }),
+  });
+  return db;
+}
+
+test('inceleme kullanim-5: servis personeli duzenlerse tek owner li evde kural OWNER adina ustlenilir; denetimde personel + owner', async () => {
+  const goneResident = { is_active: true, account_status: 'active', global_role: 'user', home_role: null, installer_expires_at: null };
+  const existing = { ...EXISTING, created_by: USER };
+  const db = makeStaffAdoptDb({ creator: goneResident, owners: [OWNER_ID] });
+  db.addRule({ match: /^SELECT \* FROM scheduled_rules WHERE id = \$1 AND home_id = \$2 FOR UPDATE$/, reply: () => ({ rows: [{ ...existing }] }) });
+  await createService({ db }).updateRule(HOME, 5, { enabled: true }, { userId: STAFF_ID, role: 'service_user', ip: '203.0.113.9' });
+  const upd = db.calls.find((c) => /WITH upd AS/.test(c.text));
+  assert.match(upd.text, /created_by = \$\d+/);
+  assert.ok(upd.params.includes(OWNER_ID), 'kural owner a gecer');
+  assert.ok(!upd.params.includes(STAFF_ID), 'kural sureli personele GECMEZ');
+  const audit = db.calls.find((c) => /INSERT INTO device_audit_logs/.test(c.text));
+  assert.equal(audit.params[0], 'scheduled_rule_adopted');
+  assert.equal(audit.params[3], STAFF_ID, 'denetimde gercek duzenleyen personel');
+  assert.equal(audit.params[4], 'service_user');
+  assert.deepEqual(JSON.parse(audit.params[6]), { rule_id: 5, owner_id: OWNER_ID, editor_id: STAFF_ID });
+
+  // cok owner'li ya da owner'siz evde personel ustlenir (eski davranis)
+  for (const owners of [[OWNER_ID, USER], []]) {
+    const db2 = makeStaffAdoptDb({ creator: goneResident, owners });
+    db2.addRule({ match: /^SELECT \* FROM scheduled_rules WHERE id = \$1 AND home_id = \$2 FOR UPDATE$/, reply: () => ({ rows: [{ ...existing }] }) });
+    await createService({ db: db2 }).updateRule(HOME, 5, { label: 'x' }, { userId: STAFF_ID, role: 'service_user' });
+    const u2 = db2.calls.find((c) => /WITH upd AS/.test(c.text));
+    assert.ok(u2.params.includes(STAFF_ID), `owner sayisi ${owners.length}: personel ustlenir`);
+    const a2 = db2.calls.find((c) => /INSERT INTO device_audit_logs/.test(c.text));
+    assert.deepEqual(JSON.parse(a2.params[6]), { rule_id: 5 });
+  }
+
+  // tek owner yetkisizse (or. hesap askida) owner adina ustlenmek kurali yine durdururdu: personel ustlenir
+  const db3 = makeStaffAdoptDb({ creator: goneResident, owners: [OWNER_ID], ownerRow: { is_active: false, account_status: 'suspended', global_role: 'user', home_role: 'owner', installer_expires_at: null } });
+  db3.addRule({ match: /^SELECT \* FROM scheduled_rules WHERE id = \$1 AND home_id = \$2 FOR UPDATE$/, reply: () => ({ rows: [{ ...existing }] }) });
+  await createService({ db: db3 }).updateRule(HOME, 5, { label: 'x' }, { userId: STAFF_ID, role: 'service_user' });
+  assert.ok(db3.calls.find((c) => /WITH upd AS/.test(c.text)).params.includes(STAFF_ID));
+
+  // owner duzenlerse eskisi gibi kendisi ustlenir (owner sorgusu gerekmez)
+  const db4 = makeStaffAdoptDb({ creator: goneResident, owners: [USER] });
+  db4.addRule({ match: /^SELECT \* FROM scheduled_rules WHERE id = \$1 AND home_id = \$2 FOR UPDATE$/, reply: () => ({ rows: [{ ...existing }] }) });
+  await createService({ db: db4 }).updateRule(HOME, 5, { label: 'x' }, { userId: OWNER_ID, role: 'owner' });
+  assert.ok(db4.calls.find((c) => /WITH upd AS/.test(c.text)).params.includes(OWNER_ID));
+  assert.equal(db4.calls.filter((c) => /role = 'owner'/.test(c.text)).length, 0);
+});
+
+function makeStaffCreateDb(owners) {
+  const db = makeCreateDb({ endpoints: [{ channel_index: 3, type: 'light' }] });
+  db.addRule({ match: /SELECT user_id FROM home_users WHERE home_id = \$1 AND role = 'owner'/, reply: () => ({ rows: owners.map((id) => ({ user_id: id })) }) });
+  db.addRule({ match: /INSERT INTO device_audit_logs/, reply: { rows: [], rowCount: 1 } });
+  return db;
+}
+
+test('kullanim-5: tek owner li evde servis personelinin olusturdugu kural created_by = owner (denetimde gercek olusturan); cok owner da personel kalir', async () => {
+  const db = makeStaffCreateDb([OWNER_ID]);
+  await createService({ db }).createRule(HOME, STAFF_ID, validBody(), { role: 'service_user', ip: '203.0.113.7' });
+  const insert = db.calls.find((c) => /INSERT INTO scheduled_rules/.test(c.text));
+  assert.equal(insert.params[10], OWNER_ID);
+  const audit = db.calls.find((c) => /INSERT INTO device_audit_logs/.test(c.text));
+  assert.equal(audit.params[0], 'scheduled_rule_created_for_owner');
+  assert.equal(audit.params[3], STAFF_ID, 'denetimde gercek olusturan personel');
+  assert.equal(audit.params[4], 'service_user');
+  assert.equal(JSON.parse(audit.params[6]).owner_id, OWNER_ID);
+
+  const db2 = makeStaffCreateDb([OWNER_ID, USER]);
+  await createService({ db: db2 }).createRule(HOME, STAFF_ID, validBody(), { role: 'service_user' });
+  assert.equal(db2.calls.find((c) => /INSERT INTO scheduled_rules/.test(c.text)).params[10], STAFF_ID, 'cok owner: personel');
+  // owner olusturursa eskisi gibi
+  const db3 = makeStaffCreateDb([OWNER_ID]);
+  await createService({ db: db3 }).createRule(HOME, OWNER_ID, validBody(), { role: 'owner' });
+  assert.equal(db3.calls.find((c) => /INSERT INTO scheduled_rules/.test(c.text)).params[10], OWNER_ID);
+  assert.equal(db3.calls.filter((c) => /INSERT INTO device_audit_logs/.test(c.text)).length, 0);
+});

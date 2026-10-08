@@ -157,7 +157,8 @@ test('aile sakini: kalibrasyon/devreye alma 403, yerel anahtar 200; owner kalibr
   assert.strictEqual((await api('post', `/api/v1/homes/${home1.id}/commissioning`, res, { device_uuid: 'AHBU-S3-0001', checks: checks() })).status, 403);
   const key = await api('get', `/api/v1/homes/${home1.id}/devices/AHBU-S3-0001/local-key`, res);
   assert.strictEqual(key.status, 200);
-  assert.deepStrictEqual(key.body.data, { local_key: 'YerelAnahtar12345' });
+  const { localKeyFingerprint } = require('../../src/utils/local_key_fp');
+  assert.deepStrictEqual(key.body.data, { local_key: 'YerelAnahtar12345', local_key_fp: localKeyFingerprint('YerelAnahtar12345', 'AHBU-S3-0001') });
   assert.match(String(key.headers['cache-control']), /no-store/);
 
   const own = await api('put', `/api/v1/homes/${home1.id}/endpoints/${ep.id}`, tokenOf(owner), { shutter_duration_sec: 31, name: 'Salon Panjuru' });
@@ -207,7 +208,12 @@ test('MQTT kimligi: owner 12 saat, misafir kendi bitisine kadar, suresi dolmus m
   const url = `/api/v1/homes/${home1.id}/mqtt-credentials`;
   const o = await api('post', url, tokenOf(owner), {});
   assert.strictEqual(o.status, 200, JSON.stringify(o.body));
-  assert.deepStrictEqual(Object.keys(o.body.data).sort(), ['client_id', 'expires_at', 'host', 'password', 'port', 'topic_id', 'username']);
+  assert.deepStrictEqual(Object.keys(o.body.data).sort(), ['client_id', 'expires_at', 'expires_in', 'host', 'password', 'port', 'topic_id', 'username']);
+  // kullanim-10: sunucuda hesaplanan kalan sure (tam sayi sn), expires_at ile tutarli
+  assert.ok(Number.isInteger(o.body.data.expires_in));
+  const fromAt = Math.floor((new Date(o.body.data.expires_at).getTime() - Date.now()) / 1000);
+  assert.ok(Math.abs(o.body.data.expires_in - fromAt) <= 2, `expires_in ${o.body.data.expires_in} ~ ${fromAt}`);
+  assert.ok(o.body.data.expires_in > 11.9 * 3600 && o.body.data.expires_in <= 12 * 3600);
   assert.match(o.body.data.username, new RegExp(`^a_${home1.mqtt_username}_`));
   assert.strictEqual(o.body.data.topic_id, home1.mqtt_username);
   const hours = (new Date(o.body.data.expires_at) - Date.now()) / 3600000;
@@ -226,6 +232,24 @@ test('MQTT kimligi: owner 12 saat, misafir kendi bitisine kadar, suresi dolmus m
 
   assert.strictEqual((await api('post', url, tokenOf(guestExpired), {})).status, 403);
   assert.strictEqual((await api('post', url, tokenOf(outsider), {})).status, 403);
+});
+
+test('uyelik-6: kurulum penceresi 2 saat sonra biten servis sorumlusunun MQTT kimligi o andan sonra bitmez', async (t) => {
+  if (skipIfUnavailable(t)) return;
+  const tech = mkUser('pencereli.servis@example.test', 'service_user');
+  tech.token_version = 1;
+  const until = new Date(Date.now() + 2 * 3600 * 1000);
+  h.addMember(home1, tech, 'service_user', { installer_expires_at: until });
+  const r = await api('post', `/api/v1/homes/${home1.id}/mqtt-credentials`, tokenOf(tech), {});
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  const exp = new Date(r.body.data.expires_at).getTime();
+  assert.ok(exp <= until.getTime(), 'kurulum penceresini asmaz');
+  assert.ok(exp > Date.now() + 1.9 * 3600 * 1000, 'pencere sonuna kadar gecerli');
+  assert.ok(r.body.data.expires_in <= 2 * 3600);
+  // pencere suresiz (kalici servis uyeligi) -> 12 saat
+  const s = await api('post', `/api/v1/homes/${home1.id}/mqtt-credentials`, tokenOf(staff), {});
+  assert.strictEqual(s.status, 200);
+  assert.ok(s.body.data.expires_in > 11.9 * 3600);
 });
 
 test('sahiplenme (gercek PIN ozeti): yanlis PIN 403 + kalan hak; dogru PIN 200 + tek seferlik kimlik; ikinci sahiplenme 409', async (t) => {

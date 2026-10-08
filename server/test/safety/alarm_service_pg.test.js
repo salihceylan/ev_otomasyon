@@ -390,3 +390,76 @@ test('RG-1: pano rev\'i geriledi -> state ile ayni (rev, crc) dokum kopyayi gunc
   assert.equal(String(row.crc).toLowerCase(), '0000abcd');
   assert.equal((await dump(2, '00000002')).status, 'stored', 'ileri rev her zaman yazilir');
 });
+
+// ---- guvenlik-1: pano baska eve tasininca (stoga donup yeniden sahiplenme) alarm satirlari ve gaz bastirmasi ----
+test('guvenlik-1: kilitli pano baska eve sahiplenince AYNI aid yeni evde ACIK satir uretir; eski evdeki acik satir lost olur', { skip: SKIP }, async () => {
+  const w = await world();
+  const s = w.summary([{ id: 1, st: 'latched', kind: 'gas', aid: 'eeee0001-1', silenced: false, since: null, since_up: 5, srcs: ['d3'] }]);
+  await w.live(s);
+  await w.svc.idle();
+  let rows = await w.alarms();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].home_id, w.home.id);
+  // pano evden ayrilmadan (eski kod) baska eve tasindi: eski evin satiri hala ACIK
+  const tag = crypto.randomBytes(4).toString('hex');
+  const home2 = (await w.db.query('INSERT INTO homes (name, mqtt_username) VALUES ($1, $2) RETURNING id', [`S2b ${tag}`, `h_${tag}${tag}`])).rows[0];
+  createdHomes.push(home2.id);
+  await w.db.query('UPDATE devices SET home_id = $2 WHERE id = $1', [w.dev.id, home2.id]);
+  await w.svc.onLiveState({ topicId: `h_${tag}${tag}`, homeId: home2.id, deviceId: w.dev.id, uid: w.uid, caps: ['safety', 'actuator', 'event', 'cfg'], summary: s, prev: null, hadCaps: true });
+  await w.svc.idle();
+  rows = await w.alarms();
+  assert.equal(rows.length, 1, 'ayni (device_id, aid) satiri yeni eve tasindi (ON CONFLICT ... WHERE home_id <> EXCLUDED.home_id)');
+  assert.equal(rows[0].home_id, home2.id);
+  assert.equal(rows[0].status, 'latched', 'yeni evde ACIK');
+  assert.equal(rows[0].acked_at, null);
+  assert.equal(rows[0].cleared_at, null);
+  // ayni evde kapali satir (mezar tasi kurali) yeniden ACILMAZ
+  await w.db.query("UPDATE alarms SET status = 'cleared', cleared_at = now(), cleared_by = 'device_event' WHERE id = $1", [rows[0].id]);
+  await w.svc.onLiveState({ topicId: `h_${tag}${tag}`, homeId: home2.id, deviceId: w.dev.id, uid: w.uid, caps: ['safety', 'actuator', 'event', 'cfg'], summary: s, prev: s, hadCaps: true });
+  await w.svc.idle();
+  assert.equal((await w.alarms())[0].status, 'cleared', 'ayni evde kapanmis aid yeniden acilmaz');
+});
+
+test('guvenlik-1: onLiveState yalniz bu evin acik satirlarini uzlastirir; baska evde acik kalmis satir lost', { skip: SKIP }, async () => {
+  const w = await world();
+  const tag = crypto.randomBytes(4).toString('hex');
+  const oldHome = (await w.db.query('INSERT INTO homes (name, mqtt_username) VALUES ($1, $2) RETURNING id', [`S2c ${tag}`, `h_${tag}${tag}`])).rows[0];
+  createdHomes.push(oldHome.id);
+  const stale = (await w.db.query(
+    "INSERT INTO alarms (home_id, device_id, aid, zone, kind, status, raised_at) VALUES ($1, $2, 'ffff0001-1', 1, 'gas', 'latched', now()) RETURNING id",
+    [oldHome.id, w.dev.id]
+  )).rows[0];
+  await w.live(w.summary([]));
+  await w.svc.idle();
+  const row = (await w.db.query('SELECT status FROM alarms WHERE id = $1', [stale.id])).rows[0];
+  assert.equal(row.status, 'lost');
+  assert.equal(w.pushes.filter((p) => p.homeId === w.home.id).length, 0, 'bu eve bilgi push u gitmez');
+});
+
+test('guvenlik-1: zamanlayici ve gece hatirlatmasi gaz bastirmasi yalniz EVDEKI panonun acik gaz satirini sayar', { skip: SKIP }, async () => {
+  const w = await world();
+  const { SQL: SCHED } = require('../../src/scheduler');
+  const peaceSnap = require('../../src/services/peace_snapshot');
+  const gas = async () => (await w.db.query(SCHED.devices, [w.home.id, null])).rows.every((r) => r.gas_alarm === true);
+  // evden ayrilmis (home_id NULL) eski panonun gaz satiri
+  const tag = crypto.randomBytes(4).toString('hex');
+  const detached = (await w.db.query(
+    'INSERT INTO devices (home_id, device_uuid, mac_address) VALUES (NULL, $1, $2) RETURNING id',
+    [`AHBU-S3-X${tag.slice(0, 5).toUpperCase()}`, `02:02:${tag.slice(0, 2)}:${tag.slice(2, 4)}:${tag.slice(4, 6)}:${tag.slice(6, 8)}`]
+  )).rows[0];
+  await w.db.query(
+    "INSERT INTO alarms (home_id, device_id, aid, zone, kind, status, raised_at) VALUES ($1, $2, 'abab0001-1', 1, 'gas', 'latched', now())",
+    [w.home.id, detached.id]
+  );
+  assert.equal(await gas(), false, 'ayrilmis panonun satiri bastirmaz (zamanlayici)');
+  if (peaceSnap.SQL && peaceSnap.SQL.snapshot) {
+    const snap = await w.db.query(peaceSnap.SQL.snapshot, peaceSnap.snapshotParams ? peaceSnap.snapshotParams(w.home.id) : [w.home.id, 180, 10]);
+    assert.ok(snap.rows.every((r) => r.gas_alarm !== true), 'gece hatirlatmasi da bastirmaz');
+  }
+  // evdeki panonun gaz satiri bastirir
+  await w.db.query(
+    "INSERT INTO alarms (home_id, device_id, aid, zone, kind, status, raised_at) VALUES ($1, $2, 'abab0002-1', 1, 'gas', 'latched', now())",
+    [w.home.id, w.dev.id]
+  );
+  assert.equal(await gas(), true, 'evdeki panonun acik gaz alarmi bastirir');
+});

@@ -54,10 +54,16 @@ const SQL = Object.freeze({
   insertEvent:
     'INSERT INTO device_events (device_id, eid, type, body) VALUES ($1, $2, $3, $4::jsonb) ' +
     'ON CONFLICT (device_id, eid) DO NOTHING RETURNING eid',
+  // guvenlik-1: ayni (device_id, aid) satiri BASKA eve aitse (pano stoga donup baska eve sahiplendi, kilit suruyor)
+  // satir yeni eve tasinip YENIDEN ACILIR; ayni evdeki kapali satir / mezar tasi kurali AYNEN (DO NOTHING etkisi).
   insertRaised:
     'INSERT INTO alarms (home_id, device_id, aid, zone, kind, status, origin, sources, raised_at, device_epoch) ' +
     "VALUES ($1, $2, $3, $4, $5, 'latched', $6, $7::jsonb, CURRENT_TIMESTAMP, $8) " +
-    'ON CONFLICT (device_id, aid) DO NOTHING RETURNING id',
+    'ON CONFLICT (device_id, aid) DO UPDATE SET home_id = EXCLUDED.home_id, zone = EXCLUDED.zone, kind = EXCLUDED.kind, ' +
+    "status = 'latched', origin = EXCLUDED.origin, sources = EXCLUDED.sources, raised_at = CURRENT_TIMESTAMP, " +
+    'device_epoch = EXCLUDED.device_epoch, acked_by = NULL, acked_at = NULL, ack_requested_at = NULL, ack_requested_by = NULL, ' +
+    "cleared_at = NULL, cleared_by = NULL, push_status = 'pending', push_attempts = 0, fault_push_status = NULL, " +
+    'updated_at = CURRENT_TIMESTAMP WHERE alarms.home_id <> EXCLUDED.home_id RETURNING id',
   findAlarm:
     'SELECT id, aid, status FROM alarms WHERE device_id = $1 AND ' +
     "(($2::varchar IS NOT NULL AND aid = $2::varchar) OR ($2::varchar IS NULL AND zone = $3 AND kind <> 'intrusion' AND status NOT IN ('cleared', 'lost'))) " +
@@ -82,9 +88,14 @@ const SQL = Object.freeze({
   audit:
     'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
     "VALUES ($1, $2, $3, NULL, 'device', NULL, $4::jsonb)",
+  // guvenlik-1: yalniz panonun SIMDIKI evine ait acik satirlar uzlastirilir; baska evde acik kalmis satir lost olur.
   openAlarms:
     'SELECT id, aid, zone, kind, status, ack_requested_at, ack_requested_by FROM alarms ' +
-    "WHERE device_id = $1 AND status NOT IN ('cleared', 'lost') ORDER BY id",
+    "WHERE device_id = $1 AND home_id = $2 AND status NOT IN ('cleared', 'lost') ORDER BY id",
+  loseOtherHomes:
+    "UPDATE alarms SET status = 'lost', cleared_at = CURRENT_TIMESTAMP, cleared_by = 'lost', ack_requested_at = NULL, " +
+    'ack_requested_by = NULL, updated_at = CURRENT_TIMESTAMP ' +
+    "WHERE device_id = $1 AND home_id <> $2 AND status NOT IN ('cleared', 'lost') RETURNING id",
   setStatus:
     "UPDATE alarms SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('cleared', 'lost') AND status <> $2",
   setLost:
@@ -474,11 +485,16 @@ class AlarmService {
       const armAlarm = Boolean(arm && arm.st === 'alarm');
       const anyActive = zones.some((z) => z && (z.st === 'latched' || z.st === 'fault')) || armAlarm;
       const cleanAt = this._clean.get(deviceId);
+      // guvenlik-3: kopya tazeleme yapilandirilmamis (present:false) panoda da (firmware 1.3.1 cfg{rev,crc} yazar); caps 'cfg' sart
+      const wantsCfg = Boolean(summary && summary.cfg && Array.isArray(caps) && caps.includes('cfg'));
       if (!anyActive && zonesComplete && cleanAt !== undefined && this.now() - cleanAt < CLEAN_TTL_MS) {
-        if (!noSafety && summary.cfg) this._track(this._maybeRequestConfig({ topicId, deviceId, uid, summary, prev }));
+        if (wantsCfg) this._track(this._maybeRequestConfig({ topicId, deviceId, uid, summary, prev }));
         return { status: 'applied', opened: 0, lost: 0, cached: true };
       }
-      const res = await this.db.query(SQL.openAlarms, [deviceId]);
+      // guvenlik-1: pano baska eve tasindiysa eski evde acik kalmis satirlar kapanir (bilgi push'u YOK: eski ev)
+      const stale = await this.db.query(SQL.loseOtherHomes, [deviceId, homeId]);
+      if (stale && stale.rows && stale.rows.length > 0) this.counters.lost += stale.rows.length;
+      const res = await this.db.query(SQL.openAlarms, [deviceId, homeId]);
       const rows = (res && res.rows) || [];
       // Sozlesme: zones[] yalniz normal OLMAYAN bolgeleri listeler; listede yoksa bolge normaldir (kanit gucu `provable`).
       // Liste eksikse (zones_complete=false) listede olmayan bolge bilinmiyor sayilir (null: dokunma) [RV2-1].
@@ -560,7 +576,7 @@ class AlarmService {
         this.counters.lost += 1;
         this._track(this.pushInfo({ homeId, deviceId, deviceUuid: uid, alarmId: id, reason: 'alarm_lost' }));
       }
-      if (!noSafety && summary.cfg) this._track(this._maybeRequestConfig({ topicId, deviceId, uid, summary, prev }));
+      if (wantsCfg) this._track(this._maybeRequestConfig({ topicId, deviceId, uid, summary, prev }));
       return { status: 'applied', opened: opened.length, lost: lostIds.length };
     } catch (err) {
       this.counters.errors += 1;

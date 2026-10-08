@@ -704,5 +704,6 @@ test('F2.A.4: gaz alarmi yokken davranis ve SORGU SAYISI aynen (gaz denetimi cih
   const res = await w.makeScheduler().runTick(AT_0830);
   assert.equal(res.sent, 1);
   assert.equal(w.db.find(/alarms/).filter((c) => c.text !== SQL.devices).length, 0, 'ayri bir alarm sorgusu yok');
-  assert.match(SQL.devices, /EXISTS \(SELECT 1 FROM alarms a WHERE a\.home_id = devices\.home_id AND a\.kind = 'gas' AND a\.status IN \('latched', 'fault', 'silenced'\)\) AS gas_alarm/);
+  // guvenlik-1: yalniz hala bu evde olan panonun satiri sayilir (devices ile birlesim)
+  assert.match(SQL.devices, /EXISTS \(SELECT 1 FROM alarms a JOIN devices ad ON ad\.id = a\.device_id AND ad\.home_id = a\.home_id WHERE a\.home_id = devices\.home_id AND a\.kind = 'gas' AND a\.status IN \('latched', 'fault', 'silenced'\)\) AS gas_alarm/);
 });

@@ -56,6 +56,7 @@
 
 const crypto = require('crypto');
 const { validateCommand } = require('../utils/command_schema');
+const { localKeyFingerprint, isValidFingerprint } = require('../utils/local_key_fp');
 
 // ------------------------------------------------------------------------------
 // Sabitler (ortam degiskeni DEGIL; plan §5d-3)
@@ -80,6 +81,9 @@ const MAX_NOT_CONNECTED_RETRIES = 8; // ... en cok bu kadar (yaklasik 2 dk); son
 const TRACKED_IDLE_MS = 60 * 60 * 1000; // bu kadar suredir canli state gormeyen ev kaydi bellekten atilir
 const GC_INTERVAL_MS = 60 * 1000;
 const LOG_THROTTLE_MS = 10 * 60 * 1000; // ayni durum icin tekrar eden bilgi/uyari satirlari
+// pano-5: iz bildiren (firmware 1.3.1) panoda set_local_key yayinindan sonra state'te yeni anahtar izinin beklenecegi sure
+const LOCAL_KEY_CONFIRM_MS = 30 * 1000;
+const MAX_MISMATCH_KEYS = 5000; // (cihaz, iz) basina bir kez uyari: bellek siniri
 
 // ------------------------------------------------------------------------------
 // SQL (tek noktada; testler esitlikle eslestirir). Hepsi ayri sorgu: biri hata verirse digeri etkilenmez.
@@ -169,6 +173,7 @@ UPDATE devices
    AND config_snapshot ->> 'replaced_at' IS NOT DISTINCT FROM $2`,
 
   // Bekleyen yerel anahtari olan cihazlar (yalnizca bu evin; SERVIS-01). Deger SIFRELIDIR (yalniz yayinda cozulur).
+  // key_fp (pano-5, migration 037): panonun canli state'te bildirdigi anahtar izi; NULL = eski firmware (iz bildirmez).
   localKeyPending: `
 SELECT h.id AS home_id,
        d.id AS device_id,
@@ -176,7 +181,8 @@ SELECT h.id AS home_id,
        d.local_key_pending_enc AS pending_enc,
        (d.is_online IS TRUE AND d.last_seen_at IS NOT NULL
          AND d.last_seen_at > CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 second')) AS live,
-       (SELECT COUNT(*)::int FROM devices x WHERE x.home_id = h.id) AS device_count
+       (SELECT COUNT(*)::int FROM devices x WHERE x.home_id = h.id) AS device_count,
+       d.local_key_fp AS key_fp
   FROM homes h
   JOIN devices d ON d.home_id = h.id
  WHERE h.mqtt_username = $1
@@ -187,11 +193,24 @@ SELECT h.id AS home_id,
   localKeyLockInventory: 'SELECT id FROM device_inventory WHERE device_uuid = $1 FOR UPDATE',
 
   // CAS takas: yalniz bekleyen anahtar hala YAYINLANANLA ayniysa (arada yeni acil sifirlama / etiket yenileme yazdiysa
-  // dokunulmaz).
+  // dokunulmaz). Kanit: eski firmware'de PUBACK, iz bildiren panoda (pano-5 g) state'teki yeni anahtar izi. ONCEKI anahtar
+  // SAKLANMAZ (inceleme): eski anahtari bilen kisi (cikarilan uye, biten servis oturumu) bootstrap ile geri aldiramaz.
+  // Takasi kacirmis eski firmware'li panonun kurtarma yolu seri konsol RESETKEY + FACTORYINIT'tir.
   localKeySwap: `
 UPDATE devices
    SET local_key_enc = local_key_pending_enc, local_key_pending_enc = NULL, local_key_pending_at = NULL
  WHERE id = $1 AND local_key_pending_enc = $2`,
+
+  // pano-5 (g): iz karsilastirmasi icin cihazin anahtarlari (sifreli; yalniz bellekte cozulur): gecerli + bekleyen.
+  localKeyRow: `
+SELECT d.id AS device_id,
+       d.device_uuid,
+       d.home_id,
+       d.local_key_enc AS current_enc,
+       d.local_key_pending_enc AS pending_enc,
+       (SELECT COUNT(*)::int FROM devices x WHERE x.home_id = d.home_id) AS device_count
+  FROM devices d
+ WHERE d.id = $1 AND d.home_id IS NOT NULL`,
 
   // Envanter ayni sifreli degere (sonraki sahiplenme / pano degisimi envanter anahtarini esas alir).
   localKeyInventory: 'UPDATE device_inventory SET local_key_enc = $2, updated_at = CURRENT_TIMESTAMP WHERE device_uuid = $1',
@@ -200,6 +219,11 @@ UPDATE devices
   localKeyAudit: `
 INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
 VALUES ('local_key_rotated', $1, $2, NULL, 'system', NULL, $3::jsonb)`,
+
+  // pano-5: local_key_rotated / local_key_mismatch (anahtarsiz).
+  localKeyAuditEvent: `
+INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
+VALUES ($1, $2, $3, NULL, 'system', NULL, $4::jsonb)`,
 });
 
 // ------------------------------------------------------------------------------
@@ -295,6 +319,7 @@ class DeviceReconciler {
     this._homes = new Map(); // topicId -> { homeId, devices:Map<deviceId,lastLiveMs>, budgets:Map, timer, touched, logs:Map }
     this._stopped = false;
     this._lastGcAt = 0;
+    this._lkMismatchSeen = new Set(); // pano-5: (cihaz, iz) basina bir kez uyumsuzluk kaydi
     this.counters = {
       checks: 0,
       published: 0,
@@ -307,6 +332,7 @@ class DeviceReconciler {
       skippedNotConnected: 0,
       runtimeSynced: 0,
       localKeyRotated: 0,
+      localKeyMismatch: 0,
       errors: 0,
     };
   }
@@ -358,7 +384,7 @@ class DeviceReconciler {
     const t = this.now();
     let home = this._homes.get(topicId);
     if (!home) {
-      home = { homeId: homeId || null, devices: new Map(), budgets: new Map(), timer: null, touched: t, logs: new Map(), disconnectedRetries: 0, echoCheckAfter: 0 };
+      home = { homeId: homeId || null, devices: new Map(), budgets: new Map(), timer: null, touched: t, logs: new Map(), disconnectedRetries: 0, echoCheckAfter: 0, awaitingKey: new Map() };
       this._homes.set(topicId, home);
     }
     home.touched = t;
@@ -385,6 +411,26 @@ class DeviceReconciler {
     if (this._stopped || !this._cfgSync || !args || !args.deviceId) return;
     this._cfgQueue
       .push(`cfg:${args.deviceId}`, 'cfg', () => this._cfgSync.onLiveState(args), { coalesce: true })
+      .catch(() => {});
+  }
+
+  /**
+   * pano-5 (g): panonun canli state'teki yerel anahtar izi (lk_fp, firmware 1.3.1). Kopru gecerli iz icin her canli
+   * state'te cagirir; `changed` (veritabanindaki iz degisti) ya da bu cihaz icin bekleyen bir onay yoksa HIC is yapilmaz
+   * (ek sorgu yok). Is ev seridinde (kontrollerle sirali) calisir. ASLA firlatmaz.
+   */
+  onLocalKeyFp({ topicId, homeId, deviceId, fp, changed = true } = {}) {
+    if (this._stopped || !this.publishSys || typeof topicId !== 'string' || !topicId || !deviceId || !isValidFingerprint(fp)) return;
+    let home = this._homes.get(topicId);
+    if (!home) {
+      if (!changed) return;
+      home = { homeId: homeId || null, devices: new Map(), budgets: new Map(), timer: null, touched: this.now(), logs: new Map(), disconnectedRetries: 0, echoCheckAfter: 0, awaitingKey: new Map() };
+      this._homes.set(topicId, home);
+    }
+    if (homeId) home.homeId = homeId;
+    if (!changed && !home.awaitingKey.has(deviceId)) return;
+    this._queue
+      .push(topicId, `lkfp:${deviceId}`, () => this._handleLocalKeyFp(topicId, home, deviceId, fp), { coalesce: true })
       .catch(() => {});
   }
 
@@ -521,7 +567,7 @@ class DeviceReconciler {
     this.counters.checks += 1;
     let home = this._homes.get(topicId);
     if (!home) {
-      home = { homeId: null, devices: new Map(), budgets: new Map(), timer: null, touched: this.now(), logs: new Map(), disconnectedRetries: 0, echoCheckAfter: 0 };
+      home = { homeId: null, devices: new Map(), budgets: new Map(), timer: null, touched: this.now(), logs: new Map(), disconnectedRetries: 0, echoCheckAfter: 0, awaitingKey: new Map() };
       this._homes.set(topicId, home);
     }
     // Bir turun hatasi digerini etkilemez.
@@ -780,6 +826,28 @@ class DeviceReconciler {
   async _syncLocalKey(topicId, home, row, tag, t) {
     const key = `local_key|${row.device_id}`;
     const intentKey = String(row.pending_enc); // yeni bekleyen anahtar = yeni niyet (butce sifirlanir); loglanmaz
+    // pano-5 (g): iz bildiren panoda kanit state'teki yeni anahtar izidir (PUBACK degil). Yayindan sonra
+    // LOCAL_KEY_CONFIRM_MS beklenir; onay (onLocalKeyFp) gelmezse deneme sayilir ve ustel beklemeyle yeniden yayinlanir.
+    const fpCapable = isValidFingerprint(row.key_fp);
+    const awaiting = home.awaitingKey.get(row.device_id);
+    if (awaiting && (!fpCapable || awaiting.pendingEnc !== row.pending_enc)) home.awaitingKey.delete(row.device_id);
+    else if (awaiting) {
+      if (t < awaiting.until) {
+        this._schedule(topicId, home, awaiting.until - t);
+        return;
+      }
+      home.awaitingKey.delete(row.device_id);
+      const e = this._recordAttempt(home, key, intentKey, t);
+      this._log('warn', `yerel_anahtar ${tag} cihaz=${row.device_uuid} deneme=${e.attempts}/${MAX_ATTEMPTS} sonuc=onay_gelmedi `
+        + '(state\'te yeni anahtar izi gorulmedi); bekleyen anahtar korunur');
+      if (e.attempts < MAX_ATTEMPTS) this._schedule(topicId, home, e.nextAt - t);
+      else {
+        this.counters.exhausted += 1;
+        this._logOnce(home, `local_key|exhausted|${row.device_id}`, 'warn',
+          `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=deneme_hakki_bitti (${MAX_ATTEMPTS}/${MAX_ATTEMPTS}); bekleyen anahtar korunur`);
+      }
+      return;
+    }
     const status = this._canAttempt(this._entry(home, key, intentKey), t);
     if (!status.ok) {
       if (status.reason === 'backoff') {
@@ -829,7 +897,16 @@ class DeviceReconciler {
       return;
     }
 
-    // PUBACK: CAS takas + envanter + denetim TEK transaction'da (kilit sirasi: envanter -> cihaz).
+    if (fpCapable) {
+      // pano-5 (g): takas YAPILMAZ; pano yeni anahtarin izini state'te bildirince onLocalKeyFp kesinlestirir.
+      home.awaitingKey.set(row.device_id, { pendingEnc: row.pending_enc, until: t + LOCAL_KEY_CONFIRM_MS });
+      this._schedule(topicId, home, LOCAL_KEY_CONFIRM_MS);
+      this._log('log', `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=iletildi (state'te yeni anahtar izi bekleniyor)`);
+      return;
+    }
+
+    // Eski firmware (iz yok): kanit PUBACK. CAS takas + envanter + denetim TEK transaction'da (kilit sirasi: envanter ->
+    // cihaz). Onceki anahtar saklanmaz (bkz. SQL.localKeySwap).
     let swapped;
     try {
       swapped = await this._inTransaction(async (q) => {
@@ -852,6 +929,65 @@ class DeviceReconciler {
     if (swapped) this.counters.localKeyRotated += 1;
     this._log('log', `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=${swapped ? 'uygulandi' : 'isaret_zaten_degismis'}`);
   }
+
+  /** Sifreli anahtarin izi (cozulemezse null). Anahtar bellekte kalir, loglanmaz. */
+  _fpOf(enc, deviceUuid) {
+    if (!enc) return null;
+    try {
+      const k = this.secretBox.decrypt(enc);
+      return k ? localKeyFingerprint(k, deviceUuid) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * pano-5 (g): panonun bildirdigi iz hangi anahtara uyuyor?
+   *  - bekleyen -> CAS takas kesinlesir (via:'state')
+   *  - gecerli -> tutarli, is yok
+   *  - hicbiri (onceki anahtar dahil) -> (cihaz, iz) basina bir kez uyari + local_key_mismatch denetimi (anahtarsiz).
+   *    Onceki anahtara GERI DONUS YOKTUR (inceleme): sunucu onceki anahtari saklamaz; takasi kacirmis panonun kurtarma
+   *    yolu seri konsol RESETKEY + FACTORYINIT'tir.
+   */
+  async _handleLocalKeyFp(topicId, home, deviceId, fp) {
+    if (this._stopped) return;
+    try {
+      const res = await this.db.query(SQL.localKeyRow, [deviceId]);
+      const row = res && res.rows && res.rows[0];
+      if (!row) return;
+      if (row.home_id) home.homeId = row.home_id;
+      const tag = `home=${shortId(home.homeId)}`;
+      const homeId = row.home_id || home.homeId || null;
+
+      if (row.pending_enc && this._fpOf(row.pending_enc, row.device_uuid) === fp) {
+        const swapped = await this._inTransaction(async (q) => {
+          await q(SQL.localKeyLockInventory, [row.device_uuid]);
+          const r = await q(SQL.localKeySwap, [row.device_id, row.pending_enc]);
+          if (!r || !r.rowCount) return false;
+          await q(SQL.localKeyInventory, [row.device_uuid, row.pending_enc]);
+          await q(SQL.localKeyAuditEvent, ['local_key_rotated', row.device_uuid, homeId, JSON.stringify({ via: 'state' })]);
+          return true;
+        });
+        home.awaitingKey.delete(deviceId);
+        home.budgets.delete(`local_key|${deviceId}`);
+        if (swapped) this.counters.localKeyRotated += 1;
+        this._log('log', `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=${swapped ? 'uygulandi (pano dogruladi)' : 'isaret_zaten_degismis'}`);
+        return;
+      }
+      if (this._fpOf(row.current_enc, row.device_uuid) === fp) return; // tutarli
+
+      const mk = `${deviceId}|${fp}`;
+      if (this._lkMismatchSeen.has(mk)) return;
+      if (this._lkMismatchSeen.size >= MAX_MISMATCH_KEYS) this._lkMismatchSeen.clear();
+      this._lkMismatchSeen.add(mk);
+      this.counters.localKeyMismatch += 1;
+      this._log('warn', `yerel_anahtar ${tag} cihaz=${row.device_uuid} sonuc=uyumsuz (panonun anahtar izi sunucudaki anahtarlarla eslesmiyor)`);
+      await this.db.query(SQL.localKeyAuditEvent, ['local_key_mismatch', row.device_uuid, homeId, JSON.stringify({ via: 'state' })]);
+    } catch (err) {
+      this.counters.errors += 1;
+      this._logOnce(home, `error|local_key_fp|${deviceId}|${errorKind(err)}`, 'warn', `yerel_anahtar izi kontrol hatasi: ${errorKind(err)}`);
+    }
+  }
 }
 
 function createDeviceReconciler(deps) {
@@ -871,5 +1007,6 @@ module.exports = {
     INTENT_MAX_AGE_SEC,
     RUNTIME_MARKER_MAX_AGE_MS,
     MAX_CONCURRENT_HOMES,
+    LOCAL_KEY_CONFIRM_MS,
   }),
 };

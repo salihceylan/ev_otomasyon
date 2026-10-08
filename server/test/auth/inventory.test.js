@@ -276,3 +276,85 @@ test('listeleme: sayfalama siniri (en fazla 100), gecersiz durum filtresi 400', 
   assert.deepStrictEqual(listCall.params.slice(-2), [100, 0]);
   assert.strictEqual((await request(app).get('/api/v1/admin/inventory?status=HACK').set('Authorization', T(superUser))).status, 400);
 });
+
+// ---- servis_kurulum-9 / atolye-7 / atolye-8 / bireysel-7 ----
+const flatLinked = new Set(); // site_flats.device_uuid (migration 035)
+const pinLockAudits = [];
+fakeDb.on(/SELECT to_regclass\(\$1\) AS t/, (p) => [{ t: p[0] === 'public.site_flats' ? 'public.site_flats' : null }]);
+fakeDb.on(/SELECT 1 FROM site_flats WHERE device_uuid = \$1/, (p) => (flatLinked.has(p[0]) ? [{ '?column?': 1 }] : []));
+fakeDb.on(/UPDATE device_inventory\s+SET failed_attempts = 0, locked_until = NULL/, (p) => {
+  const d = devices.get(p[0]);
+  if (!d) return [];
+  d.failed_attempts = 0;
+  d.locked_until = null;
+  return [{ device_uuid: d.device_uuid }];
+});
+fakeDb.on(/INSERT INTO device_audit_logs/, (p) => {
+  pinLockAudits.push({ event: p[0], device_uuid: p[1], actor_user_id: p[3], actor_role: p[4], details: p[6] });
+  return [];
+});
+
+test('servis_kurulum-9: super_user liste/tekil yanitinda claimed_home_id VAR; service_user yanitinda YOK', async () => {
+  const myHome = crypto.randomUUID();
+  staffHomes.set(staff.id, new Set([myHome]));
+  addDevice('AHBU-S3-CH01', { status: 'CLAIMED', claimed_home_id: myHome });
+  const sup = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(superUser));
+  const item = sup.body.data.items.find((i) => i.device_uuid === 'AHBU-S3-CH01');
+  assert.strictEqual(item.claimed_home_id, myHome);
+  const supOne = await request(app).get('/api/v1/admin/inventory/AHBU-S3-CH01').set('Authorization', T(superUser));
+  assert.strictEqual(supOne.body.data.claimed_home_id, myHome);
+
+  const st = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(staff));
+  const sItem = st.body.data.items.find((i) => i.device_uuid === 'AHBU-S3-CH01');
+  assert.ok(sItem && !('claimed_home_id' in sItem), 'service_user kapsami degismez');
+  const stOne = await request(app).get('/api/v1/admin/inventory/AHBU-S3-CH01').set('Authorization', T(staff));
+  assert.strictEqual(stOne.status, 200);
+  assert.ok(!('claimed_home_id' in stOne.body.data));
+});
+
+test('atolye-7: daireye bagli kart silinemez (409 DEVICE_LINKED_TO_FLAT); bagli degilse silinir', async () => {
+  const del = (uuid) => request(app).delete(`/api/v1/admin/inventory/${uuid}`).set('Authorization', T(superUser));
+  addDevice('AHBU-S3-FL01');
+  flatLinked.add('AHBU-S3-FL01');
+  const r = await del('AHBU-S3-FL01');
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(r.body.code, 'DEVICE_LINKED_TO_FLAT');
+  assert.strictEqual(r.body.message, 'Kart bir daireye bağlı; önce daireden ayırın.');
+  assert.ok(devices.has('AHBU-S3-FL01'));
+  flatLinked.delete('AHBU-S3-FL01');
+  assert.strictEqual((await del('AHBU-S3-FL01')).status, 200);
+});
+
+test('atolye-8: daireye bagli kart REVOKED -> IN_STOCK yapilamaz (409 DEVICE_LINKED_TO_FLAT); diger gecisler etkilenmez', async () => {
+  const patch = (uuid, status) => request(app).patch(`/api/v1/admin/inventory/${uuid}/status`).set('Authorization', T(superUser)).send({ status });
+  addDevice('AHBU-S3-FL02', { status: 'REVOKED' });
+  flatLinked.add('AHBU-S3-FL02');
+  const r = await patch('AHBU-S3-FL02', 'IN_STOCK');
+  assert.strictEqual(r.status, 409);
+  assert.strictEqual(r.body.code, 'DEVICE_LINKED_TO_FLAT');
+  assert.strictEqual(devices.get('AHBU-S3-FL02').status, 'REVOKED');
+  addDevice('AHBU-S3-FL03', { status: 'IN_STOCK' });
+  flatLinked.add('AHBU-S3-FL03');
+  assert.strictEqual((await patch('AHBU-S3-FL03', 'SUSPENDED')).status, 200, 'askiya alma serbest');
+});
+
+test('bireysel-7: PIN kilidini kaldirma - yalniz super_user; sayaclar sifirlanir, anahtar/PIN degismez; denetim kaydi', async () => {
+  const d = addDevice('AHBU-S3-PL01', { failed_attempts: 5, locked_until: new Date(Date.now() + 600e3), pin_hash: 'pin-ozeti', local_key_enc: 'anahtar-sifreli' });
+  const url = '/api/v1/admin/inventory/AHBU-S3-PL01/clear-pin-lock';
+  for (const who of [T(staff), T(user), SVC]) {
+    assert.strictEqual((await request(app).post(url).set('Authorization', who).send({})).status, 403);
+  }
+  assert.strictEqual(d.failed_attempts, 5, 'yetkisiz istekte dokunulmaz');
+  const r = await request(app).post(url).set('Authorization', T(superUser)).send({});
+  assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  assert.deepStrictEqual(r.body.data, { device_uuid: 'AHBU-S3-PL01', cleared: true });
+  assert.strictEqual(d.failed_attempts, 0);
+  assert.strictEqual(d.locked_until, null);
+  assert.strictEqual(d.pin_hash, 'pin-ozeti');
+  assert.strictEqual(d.local_key_enc, 'anahtar-sifreli');
+  const a = pinLockAudits.find((x) => x.event === 'inventory_pin_lock_cleared' && x.device_uuid === 'AHBU-S3-PL01');
+  assert.ok(a, 'denetim kaydi');
+  assert.strictEqual(a.actor_user_id, superUser.id);
+  assert.strictEqual((await request(app).post('/api/v1/admin/inventory/AHBU-S3-YOK9/clear-pin-lock').set('Authorization', T(superUser)).send({})).status, 404);
+  assert.strictEqual((await request(app).post('/api/v1/admin/inventory/gecersiz/clear-pin-lock').set('Authorization', T(superUser)).send({})).status, 400);
+});

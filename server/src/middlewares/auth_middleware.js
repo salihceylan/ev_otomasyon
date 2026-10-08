@@ -32,7 +32,8 @@
 //       gecerlidir (staff = home_users kaydi olan kalici servis personeli).
 //     - Misafir: valid_from <= simdi <= valid_until; disindaysa 403 GUEST_EXPIRED
 //       (valid_until bos olan misafir de suresi dolmus sayilir - fail-closed).
-//     - Basarida req.homeAccess = { home_id, role, is_super, is_service_session, valid_until }.
+//     - Basarida req.homeAccess = { home_id, role, is_super, is_service_session, valid_until, installer_expires_at? }.
+//       installer_expires_at yalniz ev rolu service_user iken dolu olabilir (sureli kurulum penceresi).
 //       role: ev bazli rol | 'super_user' | 'service_session'. is_super yalnizca super_user
 //       istisnasi ile girildiyse true'dur.
 //
@@ -501,6 +502,8 @@ function requireHomeAccess(allowedRoles = ALL_HOME_ACCESS_ROLES) {
         is_super: false,
         is_service_session: false,
         valid_until: role === 'guest' ? membership.valid_until : null,
+        // Sureli servis uyeliginin (kurulum penceresi) bitisi (uyelik-6): MQTT kimligi bu andan sonra gecerli kalmaz.
+        installer_expires_at: role === 'service_user' ? membership.installer_expires_at || null : null,
       };
       return next();
     } catch (err) {

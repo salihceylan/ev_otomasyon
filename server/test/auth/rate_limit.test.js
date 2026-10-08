@@ -123,6 +123,24 @@ test('rate_limit: limitKey IPv6 adresini /64 onekine indirger; IPv4 ve ::ffff: e
   assert.strictEqual(limitKey(null), 'unknown');
 });
 
+test('rate_limit: limitKey48 IPv4 tam adres, ::ffff: eslemesi IPv4, IPv6 /48 onekine indirger (ev_uyelik-1)', () => {
+  const { limitKey48 } = require('../../src/middlewares/rate_limit');
+  assert.strictEqual(typeof limitKey48, 'function');
+  assert.strictEqual(limitKey48({ ip: '1.2.3.4' }), '1.2.3.4', 'IPv4 aynen (tam adres)');
+  assert.strictEqual(limitKey48({ ip: '::ffff:10.0.0.5' }), '10.0.0.5', 'IPv4-mapped -> IPv4');
+  assert.strictEqual(limitKey48({ ip: '2001:db8:1:2::1' }), '2001:db8:1::/48');
+  assert.strictEqual(limitKey48({ ip: '2001:db8:1:ffff:aaaa:bbbb:cccc:dddd' }), '2001:db8:1::/48');
+  assert.strictEqual(limitKey48({ ip: '2001:0DB8:0001:0002::32' }), '2001:db8:1::/48', 'bastaki sifirlar ve buyuk harf ayni onek');
+  assert.strictEqual(limitKey48({ ip: '2001:db8::1' }), '2001:db8:0::/48');
+  assert.strictEqual(limitKey48({ ip: 'fe80::1%eth0' }), 'fe80:0:0::/48', 'bolge kimligi atilir');
+  assert.strictEqual(limitKey48({ ip: '64:ff9b::192.0.2.1' }), '64:ff9b:0::/48', 'gomulu IPv4 kuyrugu');
+  // ayni /48 icindeki farkli /64'ler ayni anahtar; farkli /48 farkli anahtar
+  assert.strictEqual(limitKey48({ ip: '2001:db8:1:2::1' }), limitKey48({ ip: '2001:db8:1:3::1' }));
+  assert.notStrictEqual(limitKey48({ ip: '2001:db8:1::1' }), limitKey48({ ip: '2001:db8:2::1' }));
+  assert.strictEqual(limitKey48({}), 'unknown');
+  assert.strictEqual(limitKey48(null), 'unknown');
+});
+
 test('rate_limit: keys() sayac anahtarlarini dondurur (bellek denetimi)', () => {
   const l = rateLimit({ max: 5 });
   l.consume('a');

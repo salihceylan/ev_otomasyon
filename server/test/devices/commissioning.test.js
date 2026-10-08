@@ -250,7 +250,9 @@ test('yerel anahtar: owner/resident/staff/servis oturumu alir; misafir ve super 
   for (const access of ['owner', 'resident', 'service_user', 'service_session']) {
     const ctx = setup();
     const r = await ctx.deviceService.getLocalKey({ actor: ctx.actor(access), homeId: ctx.home.id, deviceUuid: UUID.toLowerCase() });
-    assert.deepStrictEqual(r, { local_key: 'YerelAnahtar12345' }, access);
+    // pano-5: + local_key_fp (panonun lk_fp'siyle karsilastirma icin; anahtar degil)
+    const { localKeyFingerprint } = require('../../src/utils/local_key_fp');
+    assert.deepStrictEqual(r, { local_key: 'YerelAnahtar12345', local_key_fp: localKeyFingerprint('YerelAnahtar12345', UUID) }, access);
     const audit = ctx.world.state.device_audit_logs.find((a) => a.event === 'local_key_read');
     assert.ok(audit, 'okuma denetlenmeli');
     assert.strictEqual(audit.device_uuid, UUID);
@@ -344,4 +346,29 @@ test('cihaz kimligi yeniden uretimi: kick istisna firlatirsa yeni kimlik YINE do
   const rows = ctx.world.state.mqtt_credentials.filter((c) => c.kind === 'device');
   assert.strictEqual(rows.length, 1);
   assert.ok(bcrypt.compareSync(r.password, rows[0].password_hash));
+});
+
+// ---- servis_kurulum-10: basarili devreye alma bagli site dairesini 'handed_over' yapar ----
+test('servis_kurulum-10: tests_passed=true -> karta bagli daire handed_over (planned/written/installed); basarisiz test geri cekmez', async () => {
+  const ctx = setup();
+  const { state } = ctx.world;
+  const flat = { id: 'f-1', site_id: 's-1', block: 'A', number: '1', status: 'installed', device_uuid: UUID };
+  const other = { id: 'f-2', site_id: 's-1', block: 'A', number: '2', status: 'written', device_uuid: 'AHBU-S3-0002' };
+  state.site_flats.push(flat, other);
+  await ctx.commission({ checks: ctx.checks({ relays: { ok: false, detail: 'role 3 yok' } }) });
+  assert.strictEqual(flat.status, 'installed', 'basarisiz devreye alma daireyi ilerletmez');
+  await ctx.commission();
+  assert.strictEqual(flat.status, 'handed_over');
+  assert.strictEqual(other.status, 'written', 'baska karta bagli daireye dokunulmaz');
+  // basarisiz test teslim edilmis daireyi GERI CEKMEZ
+  await ctx.commission({ checks: ctx.checks({ cloud: { ok: false, detail: 'yok' } }) });
+  assert.strictEqual(flat.status, 'handed_over');
+});
+
+test('servis_kurulum-10: migration 035 yoksa daire guncellemesi atlanir (devreye alma yine basarili)', async () => {
+  const ctx = setup();
+  ctx.world.state.schema035 = false;
+  const r = await ctx.commission();
+  assert.strictEqual(r.tests_passed, true);
+  assert.ok(!ctx.world.db.sqls().some((s) => s.includes("SET status = 'handed_over'")));
 });

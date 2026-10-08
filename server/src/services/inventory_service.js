@@ -79,6 +79,23 @@ function serialOf(row) {
   return row ? row.serial_no : null;
 }
 
+const LINKED_TO_FLAT_MESSAGE = 'Kart bir daireye bağlı; önce daireden ayırın.';
+
+/**
+ * Kart bir site dairesine bagli mi (atolye-7/8; migration 035 site_flats)? Tablo yoksa (035 uygulanmamis) false.
+ * Islem icinde 42P01 islemi bozacagi icin once katalog sorgulanir.
+ */
+async function isLinkedToFlat(q, deviceUuid) {
+  const t = await q.query('SELECT to_regclass($1) AS t', ['public.site_flats']);
+  if (!t.rows[0] || !t.rows[0].t) return false;
+  const r = await q.query('SELECT 1 FROM site_flats WHERE device_uuid = $1 LIMIT 1', [deviceUuid]);
+  return r.rows.length > 0;
+}
+
+function linkedToFlatError() {
+  return new HttpError(409, LINKED_TO_FLAT_MESSAGE, 'DEVICE_LINKED_TO_FLAT');
+}
+
 /** Servis personelinin kapsami: sahiplendirdigi veya servis uyesi oldugu evlerdeki cihazlar. */
 function scopeClause(actor, params) {
   if (!actor || actor.type !== 'service_user') return '';
@@ -189,10 +206,12 @@ class InventoryService {
     const countRes = await db.query(`SELECT COUNT(*)::int AS total ${base}${where}`, params);
     const listParams = params.slice();
     listParams.push(pageSize, pageOffset);
+    // super_user: claimed_home_id da doner (servis_kurulum-9: yaniti kaybolan claim'i daireden surdurebilsin)
+    const isSuper = Boolean(actor) && actor.type === 'super_user';
     const listRes = await db.query(
       `SELECT di.id, di.serial_no, di.device_uuid, di.mac_address, di.model, di.batch_no, di.status,
               di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at,
-              h.name AS claimed_home_name, u.email AS claimed_user_email
+              h.name AS claimed_home_name, u.email AS claimed_user_email${isSuper ? ', di.claimed_home_id' : ''}
          ${base}${where}
         ORDER BY di.serial_no DESC NULLS LAST, di.created_at DESC
         LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
@@ -212,12 +231,17 @@ class InventoryService {
     );
     const stats = statsRes.rows[0] || {};
 
-    const items = listRes.rows.map((row) => ({
-      ...row,
-      serial_no: serialOf(row),
-      // PIN'siz baglanti (PIN yalnizca fiziksel etikette).
-      qr_claim_url: `${publicUrl()}/claim?uid=${encodeURIComponent(row.device_uuid)}`,
-    }));
+    const items = listRes.rows.map((row) => {
+      const item = {
+        ...row,
+        serial_no: serialOf(row),
+        // PIN'siz baglanti (PIN yalnizca fiziksel etikette).
+        qr_claim_url: `${publicUrl()}/claim?uid=${encodeURIComponent(row.device_uuid)}`,
+      };
+      if (isSuper) item.claimed_home_id = row.claimed_home_id || null;
+      else delete item.claimed_home_id; // service_user kapsami degismez
+      return item;
+    });
 
     return {
       total: Number(countRes.rows[0] ? countRes.rows[0].total : 0),
@@ -239,9 +263,10 @@ class InventoryService {
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
     const params = [cleanUuid];
+    const isSuper = Boolean(actor) && actor.type === 'super_user';
     const r = await db.query(
       `SELECT di.id, di.serial_no, di.device_uuid, di.mac_address, di.model, di.batch_no, di.status,
-              di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at
+              di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at${isSuper ? ', di.claimed_home_id' : ''}
          FROM device_inventory di
         WHERE di.device_uuid = $1${scopeClause(actor, params)}`,
       params
@@ -250,6 +275,9 @@ class InventoryService {
     if (r.rows.length === 0) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
     const row = r.rows[0];
     row.serial_no = serialOf(row);
+    // servis_kurulum-9: yalniz super_user icin claimed_home_id (service_user kapsami degismez)
+    if (isSuper) row.claimed_home_id = row.claimed_home_id || null;
+    else delete row.claimed_home_id;
     return row;
   }
 
@@ -285,6 +313,9 @@ class InventoryService {
       if (target === 'CLAIMED' && !row.claimed_home_id) {
         throw new HttpError(409, 'Daireye bağlı olmayan cihaz sahiplenilmiş duruma alınamaz.', 'CONFLICT');
       }
+      // atolye-8: site dairesine bagli kart (orn. pano degisiminde iptal edilen eski kart) stoga ALINMAZ: once daireden
+      // ayrilmali; aksi halde baska eve sahiplenince dairenin sablonu/adi yanlis karta uygulanirdi.
+      if (target === 'IN_STOCK' && (await isLinkedToFlat(tx, cleanUuid))) throw linkedToFlatError();
 
       const upd = await tx.query(
         `UPDATE device_inventory
@@ -303,12 +334,14 @@ class InventoryService {
   }
 
   /**
-   * Etiket yeniden uretimi (yalnizca super_user - route kapisi): kayip/hasarli etiketin yerine YENI kurulum
-   * PIN'i + YENI yerel anahtar. Yalnizca IN_STOCK ve hicbir daireye baglanmamis / devreye alinmamis cihaz.
+   * Etiket yeniden uretimi (yalnizca super_user - route kapisi): kayip/hasarli etiketin yerine YENI kurulum PIN'i.
+   * Yalnizca IN_STOCK ve hicbir daireye baglanmamis / devreye alinmamis / site dairesine bagli olmayan cihaz.
    *  - Eski PIN ozeti uzerine yazilir -> eski etiketteki PIN GECERSIZ olur; PIN deneme sayaci/kilidi sifirlanir.
-   *  - Yerel anahtar secret_box ile sifreli saklanir; yetim `devices` satiri (home_id bos) varsa anahtari esitlenir.
-   *  - Yanitta PIN ve anahtar BIR KEZ doner (+ PIN'li qr_claim_url); hicbiri loglanmaz / denetim kaydina yazilmaz.
-   *  - Denetim: device_audit_logs 'inventory_label_reissued' + device_inventory.label_reissue_count (migration 029).
+   *  - Yerel anahtar DEGISMEZ (atolye-2): anahtar panoda (NVS) da yazilidir; yalniz sunucuda degistirmek pano ile
+   *    sunucunun anahtarini koparirdi. Envantere ve yetim `devices` satirina anahtar YAZILMAZ.
+   *  - Yanitta PIN BIR KEZ doner (+ PIN'li qr_claim_url); loglanmaz / denetim kaydina yazilmaz.
+   *  - Denetim: device_audit_logs 'inventory_label_reissued' {reissue_count, key_changed:false}
+   *    + device_inventory.label_reissue_count (migration 029).
    *  - Envanter satiri FOR UPDATE ile kilitlenir: es zamanli claim / yeniden uretim siralanir.
    * @param {string} device_uuid
    * @param {{userId?:string, role?:string, ip?:string}} [actor]
@@ -317,16 +350,8 @@ class InventoryService {
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
 
-    const box = getSecretBox();
-    if (!box || typeof box.isConfigured !== 'function' || !box.isConfigured()) {
-      const err = new HttpError(503, 'Cihaz anahtarı üretilemiyor (sunucu yapılandırması eksik).', 'SERVICE_UNAVAILABLE');
-      err.expose = true;
-      throw err;
-    }
     const newPin = generateNumericPin(6); // crypto.randomInt
     const pinHash = hashPin(newPin);
-    const newKey = box.generateLocalKey();
-    const newKeyEnc = box.encrypt(newKey);
 
     const row = await db.withTransaction(async (tx) => {
       const cur = await tx.query(
@@ -347,31 +372,22 @@ class InventoryService {
       if (inv.claimed_home_id || Boolean(inv.attached)) {
         throw new HttpError(409, 'Cihaz bir daireye bağlı veya devreye alınmış; etiketi yeniden üretilemez. Acil sıfırlama kullanın.', 'CONFLICT');
       }
+      // atolye-8: site dairesine bagli kartin etiketi yenilenmez (once daireden ayrilmali)
+      if (await isLinkedToFlat(tx, cleanUuid)) throw linkedToFlatError();
 
       const upd = await tx.query(
         `UPDATE device_inventory
             SET pin_hash = $1,
-                local_key_enc = $2,
                 failed_attempts = 0,
                 locked_until = NULL,
                 label_reissued_at = NOW(),
                 label_reissue_count = label_reissue_count + 1,
                 updated_at = CURRENT_TIMESTAMP
-          WHERE id = $3 AND status = 'IN_STOCK'
+          WHERE id = $2 AND status = 'IN_STOCK'
           RETURNING id, serial_no, device_uuid, mac_address, model, batch_no, status, label_reissued_at, label_reissue_count`,
-        [pinHash, newKeyEnc, inv.id]
+        [pinHash, inv.id]
       );
       if (upd.rows.length === 0) throw new HttpError(409, 'Cihaz durumu bu sırada değişti. Lütfen tekrar deneyin.', 'CONFLICT');
-
-      // Yetim cihaz kaydi (acil sifirlamadan kalan; home_id bos): sonraki sahiplenmede envanter anahtari esas alinir,
-      // yine de iki kayit ayni anahtari tasisin. Yeni etiket anahtari ESASTIR: onceki bir acil sifirlamadan kalan
-      // BEKLEYEN yerel anahtar (devices.local_key_pending_enc, SERVIS-01) bu guncellemeyle NULL'lanir (migration 032
-      // tetikleyicisi trg_devices_pending_key_superseded: sahipsiz kayitta bekleyene dokunmadan anahtar degisirse
-      // bekleyen temizlenir), yoksa uzlastirici sonradan eski bekleyeni panoya iletip etiket anahtarini ezerdi.
-      await tx.query(
-        'UPDATE devices SET local_key_enc = $1, updated_at = CURRENT_TIMESTAMP WHERE device_uuid = $2 AND home_id IS NULL',
-        [newKeyEnc, cleanUuid]
-      );
 
       await tx.query(
         `INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
@@ -383,7 +399,7 @@ class InventoryService {
           actor.userId || null,
           actor.role || 'super_user',
           actor.ip || null,
-          JSON.stringify({ reissue_count: Number(upd.rows[0].label_reissue_count) || 1 }),
+          JSON.stringify({ reissue_count: Number(upd.rows[0].label_reissue_count) || 1, key_changed: false }),
         ]
       );
       const out = upd.rows[0];
@@ -394,10 +410,35 @@ class InventoryService {
     return {
       device: row,
       setup_pin: newPin,
-      local_key: newKey,
       qr_claim_url: `${publicUrl()}/claim?uid=${encodeURIComponent(cleanUuid)}&pin=${newPin}`,
-      message: 'Etiket yeniden üretildi. Eski PIN artık geçersiz; yeni PIN ve yerel anahtar yalnızca şimdi gösterilir.',
+      message: 'Etiket yeniden üretildi. Eski PIN artık geçersiz; yeni PIN yalnızca şimdi gösterilir. Yerel anahtar değişmedi.',
     };
+  }
+
+  /**
+   * bireysel-7: kurulum PIN'i deneme kilidini kaldirir (yalniz super_user - route kapisi). PIN ve yerel anahtar
+   * DEGISMEZ; yalniz yanlis-deneme sayaci ve kilit sifirlanir. Denetim: 'inventory_pin_lock_cleared'.
+   * @returns {Promise<{device_uuid:string, cleared:true}>}
+   */
+  async clearPinLock(device_uuid, actor = {}) {
+    const cleanUuid = normalizeUuid(device_uuid);
+    if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
+    return db.withTransaction(async (tx) => {
+      const upd = await tx.query(
+        `UPDATE device_inventory
+            SET failed_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE device_uuid = $1
+          RETURNING device_uuid`,
+        [cleanUuid]
+      );
+      if (!upd.rows || upd.rows.length === 0) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
+      await tx.query(
+        `INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        ['inventory_pin_lock_cleared', cleanUuid, null, actor.userId || null, actor.role || 'super_user', actor.ip || null, null]
+      );
+      return { device_uuid: upd.rows[0].device_uuid, cleared: true };
+    });
   }
 
   /** Silme (yalnizca super_user). CLAIMED/INSTALLED veya daireye bagli cihaz silinemez. */
@@ -422,6 +463,8 @@ class InventoryService {
       if (row.claimed_home_id || Number(row.attached || 0) > 0) {
         throw new HttpError(409, 'Cihaz hâlâ bir daireye bağlı; silinemez.', 'CONFLICT');
       }
+      // atolye-7: site dairesine bagli kart silinmez (daire kaydi sahipsiz karta isaret etmesin)
+      if (await isLinkedToFlat(tx, cleanUuid)) throw linkedToFlatError();
       await tx.query('DELETE FROM devices WHERE device_uuid = $1 AND home_id IS NULL', [cleanUuid]);
       await tx.query('DELETE FROM device_inventory WHERE id = $1', [row.id]);
       return { success: true, message: `Cihaz (${cleanUuid}) envanterden silindi.` };

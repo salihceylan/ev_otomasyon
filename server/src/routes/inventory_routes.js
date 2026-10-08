@@ -9,7 +9,10 @@
 //   PATCH  /:uuid/status  YALNIZCA super_user (JWT)
 //   DELETE /:uuid         YALNIZCA super_user (JWT)
 //   POST   /:uuid/reissue-label  YALNIZCA super_user (JWT; API anahtari KABUL EDILMEZ). Yalniz IN_STOCK ve
-//                                hicbir daireye baglanmamis cihaz: yeni PIN + yeni yerel anahtar (BIR KEZ), eski PIN gecersiz.
+//                                hicbir daireye baglanmamis cihaz: yeni PIN (BIR KEZ), eski PIN gecersiz. Yerel anahtar
+//                                DEGISMEZ ve yanitta YOKTUR (atolye-2).
+//   POST   /:uuid/clear-pin-lock YALNIZCA super_user (JWT): PIN deneme kilidi/sayaci sifirlanir; PIN ve anahtar
+//                                degismez (bireysel-7). Saatte 30.
 
 const express = require('express');
 const inventoryService = require('../services/inventory_service');
@@ -25,6 +28,13 @@ const reissueLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
   keyGenerator: (req) => `inventory-reissue:${req.inventoryActor && req.inventoryActor.userId ? req.inventoryActor.userId : clientIp(req)}`,
+});
+
+// PIN kilidi kaldirma: kullanici basina saatte 30 (bireysel-7)
+const clearLockLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  keyGenerator: (req) => `inventory-clear-lock:${req.inventoryActor && req.inventoryActor.userId ? req.inventoryActor.userId : clientIp(req)}`,
 });
 
 function noStore(res) {
@@ -88,8 +98,24 @@ router.post(
       role: actor.type === 'super_user' ? 'super_user' : null,
       ip: clientIp(req),
     });
-    noStore(res); // tek seferlik PIN + yerel anahtar
+    noStore(res); // tek seferlik PIN
     return successResponse(res, result, result.message, 200);
+  })
+);
+
+// bireysel-7: PIN deneme kilidini kaldirma (yalniz super_user; PIN/anahtar degismez)
+router.post(
+  '/:uuid/clear-pin-lock',
+  requireInventoryAccess({ allowApiKey: false, allowStaff: false }),
+  clearLockLimiter,
+  asyncHandler(async (req, res) => {
+    const actor = req.inventoryActor || {};
+    const result = await inventoryService.clearPinLock(req.params.uuid, {
+      userId: actor.userId || null,
+      role: actor.type === 'super_user' ? 'super_user' : null,
+      ip: clientIp(req),
+    });
+    return successResponse(res, result, 'Kurulum PIN kilidi kaldırıldı.');
   })
 );
 
@@ -103,4 +129,5 @@ router.delete(
 );
 
 router.reissueLimiter = reissueLimiter;
+router.clearLockLimiter = clearLockLimiter;
 module.exports = router;

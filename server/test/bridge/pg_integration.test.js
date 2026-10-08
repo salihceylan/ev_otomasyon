@@ -244,6 +244,24 @@ test('PG kopru: status - canli online/offline, retained last_seen ilerletmez', {
   });
 });
 
+test('PG kopru (guvenlik-6): iki panolu evde JSON status uid li -> yalniz o pano; uid siz status yok sayilir', { skip: SKIP }, async () => {
+  await withFixture({ devices: 2 }, async ({ db, fx }) => {
+    const bridge = new MqttBridge({ db, logger: silent, env: {} });
+    const [a, b] = fx.devices;
+    await db.query('UPDATE devices SET is_online = TRUE, last_seen_at = NOW() WHERE home_id = $1', [fx.homeId]);
+    // A'nin LWT'si (kucuk harfli uid de eslesir) B'yi cevrimdisi yapmaz
+    await bridge.handleIncomingMessage(`ev/${fx.topic}/status`, JSON.stringify({ status: 'offline', uid: a.device_uuid.toLowerCase() }), { retain: false });
+    assert.equal((await one(db, 'SELECT is_online FROM devices WHERE id = $1', [a.id])).is_online, false);
+    assert.equal((await one(db, 'SELECT is_online FROM devices WHERE id = $1', [b.id])).is_online, true, 'B etkilenmez');
+    // uid'siz eski yuk cok panolu evde yok sayilir
+    await bridge.handleIncomingMessage(`ev/${fx.topic}/status`, 'offline', { retain: false });
+    assert.equal((await one(db, 'SELECT is_online FROM devices WHERE id = $1', [b.id])).is_online, true, 'uid siz offline yok sayilir');
+    // state anahtari ({state:...}) ile cevrimici
+    await bridge.handleIncomingMessage(`ev/${fx.topic}/status`, JSON.stringify({ state: 'online', uid: a.device_uuid }), { retain: false });
+    assert.equal((await one(db, 'SELECT is_online FROM devices WHERE id = $1', [a.id])).is_online, true);
+  });
+});
+
 test('PG kopru: iki cihazli evde uid ile esleme; ev kilidi = bool_and(cihazlar)', { skip: SKIP }, async () => {
   await withFixture({ devices: 2 }, async ({ db, fx }) => {
     const bridge = new MqttBridge({ db, logger: silent, env: {} });
@@ -586,6 +604,54 @@ test('PG zamanlayici: olusturulmadan ONCE baslayan yuva telafi edilmez (schedule
     const r = await s.runTick(past);
     assert.equal(r.due, 0);
     assert.equal(bridge.published.length, 0);
+  });
+});
+
+test('PG kullanim-5: suresi dolan servis personelinin kurali creator_active=false ve CALISMAZ; owner PUT ustlenir -> zamanlayici yayinlar', { skip: SKIP }, async () => {
+  await withFixture({}, async ({ db, fx }) => {
+    await db.query('UPDATE devices SET is_online = TRUE WHERE id = $1', [fx.devices[0].id]);
+    const staff = (await db.query("INSERT INTO users (email, password_hash, full_name, role, is_active) VALUES ($1, 'x', 'Personel', 'service_user', TRUE) RETURNING id", [`st_${fx.tag}@example.invalid`])).rows[0].id;
+    try {
+      await db.query("INSERT INTO home_users (home_id, user_id, role, installer_expires_at) VALUES ($1, $2, 'service_user', NOW() + INTERVAL '1 hour')", [fx.homeId, staff]);
+      const svc = createService({ db });
+      // tek owner'li evde personelin olusturdugu kural owner adina kaydedilir (denetimde personel)
+      const forOwner = await svc.createRule(fx.homeId, staff, { channel: 4, action: 'on', hour: 9, minute: 0 }, { role: 'service_user', ip: '10.0.0.1' });
+      assert.equal(forOwner.created_by, fx.userId);
+      assert.equal(forOwner.creator_active, true);
+      const aud = await one(db, "SELECT actor_user_id, actor_role, details FROM device_audit_logs WHERE home_id = $1 AND event = 'scheduled_rule_created_for_owner'", [fx.homeId]);
+      assert.equal(aud.actor_user_id, staff);
+      assert.equal(aud.details.owner_id, fx.userId);
+      await svc.deleteRule(fx.homeId, forOwner.id);
+
+      // personelin (eski surum) kendi adina kurali + uyelik suresi doldu
+      const ruleId = (await db.query(
+        `INSERT INTO scheduled_rules (home_id, device_id, channel, channel_type, action, hour, minute, created_by)
+         VALUES ($1, NULL, 3, 'relay', 'on', 8, 30, $2) RETURNING id`, [fx.homeId, staff]
+      )).rows[0].id;
+      await db.query("UPDATE home_users SET installer_expires_at = NOW() - INTERVAL '1 minute' WHERE home_id = $1 AND user_id = $2", [fx.homeId, staff]);
+      const listed = (await svc.listRules(fx.homeId)).find((r) => r.id === Number(ruleId));
+      assert.equal(listed.creator_active, false, 'listede yetkisiz sahip gorunur');
+      const bridge = fakeBridge();
+      const r1 = await scopedScheduler(db, fx, bridge, SLOT).runTick(SLOT);
+      assert.equal(r1.sent, 0);
+      assert.equal((await one(db, 'SELECT status FROM scheduled_rule_runs WHERE rule_id = $1', [ruleId])).status, 'skipped_creator');
+
+      // owner duzenler (yeniden etkinlestirme) -> ustlenme + denetim
+      const upd = await svc.updateRule(fx.homeId, Number(ruleId), { enabled: true, label: 'Sabah' }, { userId: fx.userId, role: 'owner' });
+      assert.equal(upd.created_by, fx.userId);
+      assert.equal(upd.creator_active, true);
+      const adopted = await one(db, "SELECT actor_user_id, details FROM device_audit_logs WHERE home_id = $1 AND event = 'scheduled_rule_adopted'", [fx.homeId]);
+      assert.equal(adopted.actor_user_id, fx.userId);
+      assert.equal(adopted.details.rule_id, Number(ruleId));
+      await db.query('DELETE FROM scheduled_rule_runs WHERE rule_id = $1', [ruleId]);
+      await db.query('UPDATE scheduled_rules SET last_run_at = NULL WHERE id = $1', [ruleId]);
+      const r2 = await scopedScheduler(db, fx, bridge, SLOT).runTick(SLOT);
+      assert.equal(r2.sent, 1, JSON.stringify(r2));
+      assert.equal(bridge.published.length, 1);
+    } finally {
+      await db.query('DELETE FROM home_users WHERE user_id = $1', [staff]).catch(() => {});
+      await db.query('DELETE FROM users WHERE id = $1', [staff]).catch(() => {});
+    }
   });
 });
 

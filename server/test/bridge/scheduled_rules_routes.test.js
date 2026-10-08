@@ -466,3 +466,17 @@ test('WP-L D3: PUT {enabled:true} kanali artik panjur olan kapali role kuralini 
   const okRes = await call(app, 'PUT', '/scheduled-rules/5', OWNER, { enabled: false });
   assert.equal(okRes.status, 200);
 });
+
+test('kullanim-5: POST ev rolunu, PUT duzenleyeni (kullanici + ev rolu) servise gecirir; super uyeliksiz super_user', async () => {
+  const { app, service } = build({ memberships: MEMBERS });
+  assert.equal((await call(app, 'POST', '/scheduled-rules', STAFF, BODY)).status, 201);
+  const c = service.calls.find((x) => x.name === 'createRule');
+  assert.equal(c.args[1], 'u-staff');
+  assert.equal(c.args[3].role, 'service_user');
+  assert.equal((await call(app, 'PUT', '/scheduled-rules/5', OWNER, { enabled: true })).status, 200);
+  const u = service.calls.find((x) => x.name === 'updateRule');
+  assert.deepEqual([u.args[3].userId, u.args[3].role], ['u-owner', 'owner']);
+  assert.equal((await call(app, 'PUT', '/scheduled-rules/5', SUPER, { enabled: true })).status, 200);
+  const s = service.calls.filter((x) => x.name === 'updateRule').pop();
+  assert.deepEqual([s.args[3].userId, s.args[3].role], ['u-super', 'super_user']);
+});

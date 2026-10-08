@@ -95,6 +95,9 @@ class AccountDeletionService {
   get authMiddleware() {
     return this._deps.authMiddleware || require('../middlewares/auth_middleware');
   }
+  get rotation() {
+    return this._deps.rotation || require('./local_key_rotation');
+  }
 
   /**
    * Bos (uyesiz + cihazsiz) tek-sahipli evi `tx` icinde siler; yonetici kalici silme sirasi: MQTT ev kimlikleri
@@ -103,10 +106,12 @@ class AccountDeletionService {
    */
   async _releaseEmptyHome(tx, homeId) {
     const r = await this.mqtt.revokeHomeAccess({ homeId, includeDevice: true, tx });
-    await this.serviceTokens.revokeHomeServiceAccess(homeId, tx, 'home_deleted');
+    const svc = await this.serviceTokens.revokeHomeServiceAccess(homeId, tx, 'home_deleted');
     await this.homeCleanup.cleanupHome(tx, homeId, { keepEndpoints: false });
     await tx.query('DELETE FROM homes WHERE id = $1', [homeId]);
-    return r && Array.isArray(r.usernames) ? r.usernames : [];
+    const names = r && Array.isArray(r.usernames) ? r.usernames.slice() : [];
+    if (svc && Array.isArray(svc.mqtt_usernames)) names.push(...svc.mqtt_usernames);
+    return names;
   }
 
   /**
@@ -204,11 +209,25 @@ class AccountDeletionService {
       const appCredentialCount = usernames.length;
 
       // Ev uyelikleri
-      const memberships = await q('DELETE FROM home_users WHERE user_id = $1 RETURNING home_id', [userId]);
+      const memberships = await q('DELETE FROM home_users WHERE user_id = $1 RETURNING home_id, role', [userId]);
 
       // Bos tek-sahipli evler: kimsenin erisimi kopmaz -> ev silinir (cihaz kimligi dahil MQTT, servis PIN/oturum)
       for (const homeId of emptyHomeIds) {
         usernames.push(...(await this._releaseEmptyHome(tx, homeId)));
+      }
+
+      // pano-6: KALAN evlerde owner/resident olarak panonun yerel anahtarini biliyordu -> bekleyen yolla dondurulur (tek
+      // panolu ev). Bos birakilip silinen evler HARIC; misafir anahtari okuyamaz.
+      const rotateHomeIds = [
+        ...new Set(
+          (memberships.rows || [])
+            .filter((m) => (m.role === 'owner' || m.role === 'resident') && !emptyHomeIds.includes(m.home_id))
+            .map((m) => m.home_id)
+        ),
+      ];
+      const rotations = [];
+      for (const homeId of rotateHomeIds) {
+        rotations.push(await this.rotation.scheduleRotation(homeId, { tx, reason: 'member_deleted' }));
       }
 
       // Push token'lar (tablo 030 ile gelir; yoksa atlanir)
@@ -224,11 +243,19 @@ class AccountDeletionService {
           WHERE status = 'PENDING' AND (from_user_id = $1 OR target_identifier = ANY($2::text[]))`,
         [userId, identifiers]
       );
-      await q(
+      const sessions = await q(
         `UPDATE service_sessions SET revoked_at = NOW(), revoked_reason = 'account_deleted'
-          WHERE revoked_at IS NULL AND service_token_id IN (SELECT id FROM service_tokens WHERE created_by = $1)`,
+          WHERE revoked_at IS NULL AND service_token_id IN (SELECT id FROM service_tokens WHERE created_by = $1)
+          RETURNING home_id`,
         [userId]
       );
+      const sessionHomes = [...new Set((sessions.rows || []).map((r) => r.home_id).filter(Boolean))];
+      // Iptal edilen servis oturumlarinin evlerindeki servis oturumu MQTT kimlikleri (uyelik-6; kick COMMIT sonrasi)
+      for (const homeId of sessionHomes) {
+        if (typeof this.mqtt.revokeServiceSessionAccess !== 'function') break;
+        const r = await this.mqtt.revokeServiceSessionAccess({ homeId, tx });
+        if (r && Array.isArray(r.usernames)) usernames.push(...r.usernames);
+      }
       await q('UPDATE service_tokens SET revoked_at = NOW() WHERE created_by = $1 AND revoked_at IS NULL AND used_at IS NULL', [userId]);
       await q('DELETE FROM scheduled_rules WHERE created_by = $1', [userId]);
 
@@ -292,15 +319,20 @@ class AccountDeletionService {
         usernames,
         released: (memberships.rows || []).length,
         releasedHomes: emptyHomeIds.length,
+        sessionsRevoked: (sessions.rows || []).length,
+        rotations,
       };
     });
+    if (outcome.rotations.length > 0) this.rotation.afterCommit(outcome.rotations); // pano-6: COMMIT sonrasi uzlastirici
 
     // --- 3) Commit SONRASI: onbellek + acik MQTT baglantilari (hata silmeyi bozmaz) ---
     const warnings = [];
     const mw = this.authMiddleware;
     if (mw && typeof mw.invalidateUserAuthCache === 'function') mw.invalidateUserAuthCache(userId);
-    // Silinen evlerin servis (PIN) oturumlari: onbellekteki oturum da hemen duser
-    if (outcome.releasedHomes > 0 && mw && typeof mw.invalidateServiceSessionCache === 'function') mw.invalidateServiceSessionCache();
+    // Silinen evlerin / kullanicinin PIN'iyle acilmis servis (PIN) oturumlari: onbellekteki oturum da hemen duser
+    if ((outcome.releasedHomes > 0 || outcome.sessionsRevoked > 0) && mw && typeof mw.invalidateServiceSessionCache === 'function') {
+      mw.invalidateServiceSessionCache();
+    }
     if (outcome.usernames.length > 0) {
       try {
         const kick = await this.mqtt.kickUsernames(outcome.usernames);

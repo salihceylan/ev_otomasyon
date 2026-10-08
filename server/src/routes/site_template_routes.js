@@ -11,14 +11,15 @@
 //   DELETE /sites/:siteId                           yumusak silme (dairesine kart bagliysa 409 SITE_HAS_DEVICES)
 //   GET    /sites/:siteId/flats                     daireler (+ last_write)
 //   POST   /sites/:siteId/flats/bulk                {block, from, to, flat_type?, template_id?}
-//   PATCH  /sites/:siteId/flats/:flatId             {flat_type, template_id, status, block, number}
+//   PATCH  /sites/:siteId/flats/:flatId             {flat_type, template_id, status, block, number} (durum yalniz ileri)
 //   DELETE /sites/:siteId/flats/:flatId
 //   PUT    /sites/:siteId/flats/:flatId/device      {device_uuid} | {device_uuid:null}
-//   GET    /templates?site_id=&include_global=1
+//   GET    /templates?site_id=&include_global=1      (site_id yoksa yalniz genel sablonlar)
 //   POST   /templates                               {site_id, body} -> sablon + surum 1
 //   POST   /templates/validate                      {body} -> {ok:true} | 422 TEMPLATE_INVALID {error, path}
 //   GET    /templates/:id                           guncel surum + body
-//   PUT    /templates/:id                           {body} -> yeni surum (ayni govde: mevcut surum, created:false)
+//   PUT    /templates/:id                           {body, base_version?} -> yeni surum (ayni govde: created:false;
+//                                                    eski base_version + farkli govde: 409 TEMPLATE_CHANGED)
 //   DELETE /templates/:id                           yumusak
 //   GET    /templates/:id/versions                  surum listesi
 //   GET    /templates/:id/versions/:version         surum govdesi
@@ -95,7 +96,7 @@ function createRouter(deps = {}) {
   }));
 
   router.patch('/sites/:siteId/flats/:flatId', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.updateFlat(req.params.siteId, req.params.flatId, body(req)), 'Daire güncellendi.');
+    return successResponse(res, await svc.updateFlat(req.params.siteId, req.params.flatId, body(req), actorOf(req)), 'Daire güncellendi.');
   }));
 
   router.delete('/sites/:siteId/flats/:flatId', ...guard, asyncHandler(async (req, res) => {
@@ -105,7 +106,7 @@ function createRouter(deps = {}) {
   router.put('/sites/:siteId/flats/:flatId/device', ...guard, asyncHandler(async (req, res) => {
     const b = body(req);
     const deviceUuid = Object.prototype.hasOwnProperty.call(b, 'device_uuid') ? b.device_uuid : undefined;
-    const flat = await svc.linkFlatDevice(req.params.siteId, req.params.flatId, deviceUuid);
+    const flat = await svc.linkFlatDevice(req.params.siteId, req.params.flatId, deviceUuid, actorOf(req));
     return successResponse(res, flat, deviceUuid ? 'Kart daireye bağlandı.' : 'Kart bağlantısı kaldırıldı.');
   }));
 

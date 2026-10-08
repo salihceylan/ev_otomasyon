@@ -52,18 +52,8 @@ const RUN_LOG_RETENTION_DAYS = 30;
 const DEVICE_EVENT_RETENTION_DAYS = 90;
 const WARN_INTERVAL_MS = 10 * 60 * 1000;
 
-const AUTHORIZED_HOME_ROLES = new Set(['owner', 'resident', 'service_user']);
-// Hesap durumu sutunu (users.account_status) opsiyoneldir; bilinen engelli degerler:
-const BLOCKED_ACCOUNT_STATUSES = new Set([
-  'suspended',
-  'frozen',
-  'disabled',
-  'deleted',
-  'locked',
-  'banned',
-  'inactive',
-  'blocked',
-]);
+// Kural sahibinin yetkisi (saf; kural servisi de kullanir: kullanim-5 creator_active / ustlenme)
+const { isCreatorAuthorized } = require('./utils/rule_creator');
 
 // ------------------------------------------------------------------------------
 // Saf zaman yardimcilari
@@ -225,20 +215,6 @@ function ruleToCommand(rule, slotMs) {
   return null;
 }
 
-/** Kural sahibi calistirma aninda hala kural yonetmeye yetkili mi? */
-function isCreatorAuthorized(row, nowMs = Date.now()) {
-  if (!row) return false; // kullanici silinmis
-  if (row.is_active === false) return false;
-  const status = row.account_status ? String(row.account_status).toLowerCase() : null;
-  if (status && BLOCKED_ACCOUNT_STATUSES.has(status)) return false;
-  if (row.global_role === 'super_user') return true;
-  if (!AUTHORIZED_HOME_ROLES.has(row.home_role)) return false;
-  if (row.home_role === 'service_user' && row.installer_expires_at) {
-    const exp = toMs(row.installer_expires_at);
-    if (exp !== null && exp < nowMs) return false; // suresi dolmus gecici servis erisimi
-  }
-  return true;
-}
 
 class TimeoutError extends Error {
   constructor(label) {
@@ -300,9 +276,11 @@ const SQL = Object.freeze({
     'FROM users u LEFT JOIN home_users hu ON hu.user_id = u.id AND hu.home_id = $1 ' +
     'WHERE u.id = $2',
   // Faz 2 F2.A.4: evde acik gaz alarmi (gas_alarm) AYNI sorguda okunur (ek sorgu yok; alarms_home_open_idx).
+  // guvenlik-1: yalniz HALA bu evde olan panonun satiri sayilir (evden ayrilmis panonun kapanmamis satiri bastirmaz).
   devices:
     'SELECT id, home_id, is_online, ' +
-    "EXISTS (SELECT 1 FROM alarms a WHERE a.home_id = devices.home_id AND a.kind = 'gas' AND a.status IN ('latched', 'fault', 'silenced')) AS gas_alarm " +
+    'EXISTS (SELECT 1 FROM alarms a JOIN devices ad ON ad.id = a.device_id AND ad.home_id = a.home_id ' +
+    "WHERE a.home_id = devices.home_id AND a.kind = 'gas' AND a.status IN ('latched', 'fault', 'silenced')) AS gas_alarm " +
     'FROM devices ' +
     'WHERE home_id = $1 AND ($2::uuid IS NULL OR id = $2::uuid)',
   // WP-L D4: atesleme aninda kuralin kanal(lar)inin guncel uc nokta tipi (cozulen cihaz).

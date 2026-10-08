@@ -46,6 +46,13 @@ function createRouter(deps = {}) {
     return req.user && (req.user.id || req.user.sub) ? String(req.user.id || req.user.sub) : null;
   }
 
+  /** Etkin ev rolu (super uyeliksiz gecerse 'super_user'). */
+  function homeRoleOf(req) {
+    const a = req.homeAccess || {};
+    if (a.is_super === true || (req.user && req.user.role === 'super_user' && !a.role)) return 'super_user';
+    return a.role || null;
+  }
+
   function fail(res, status, message, code, extra) {
     const body = { success: false, message, code, error: message };
     if (extra) Object.assign(body, extra);
@@ -127,7 +134,8 @@ function createRouter(deps = {}) {
     try {
       const userId = userIdOf(req);
       if (!userId) return fail(res, 401, 'Oturum doğrulanamadı', 'INVALID_TOKEN');
-      const rule = await service.createRule(req.scheduledHomeId, userId, req.body);
+      // kullanim-5: ev rolu servise (personelin tek sahipli evde kurdugu kural sahip adina kaydedilir)
+      const rule = await service.createRule(req.scheduledHomeId, userId, req.body, { role: homeRoleOf(req), ip: req.ip || null });
       return res.status(201).json({ success: true, message: 'Zamanlı kural oluşturuldu', data: { rule }, rule });
     } catch (err) {
       return sendError(res, err, 'CREATE');
@@ -137,7 +145,12 @@ function createRouter(deps = {}) {
   // PUT /homes/:homeId/scheduled-rules/:ruleId
   router.put('/:homeId/scheduled-rules/:ruleId', ...guard, parseRuleId, writeLimiter, requireJsonObject, async (req, res) => {
     try {
-      const rule = await service.updateRule(req.scheduledHomeId, req.ruleId, req.body);
+      // kullanim-5: duzenleyen (yetkisi biten sahibin kuralini ustlenir)
+      const rule = await service.updateRule(req.scheduledHomeId, req.ruleId, req.body, {
+        userId: userIdOf(req),
+        role: homeRoleOf(req),
+        ip: req.ip || null,
+      });
       return res.status(200).json({ success: true, message: 'Zamanlı kural güncellendi', data: { rule }, rule });
     } catch (err) {
       return sendError(res, err, 'UPDATE');

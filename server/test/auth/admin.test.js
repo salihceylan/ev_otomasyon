@@ -69,6 +69,13 @@ fakeDb.on(/DELETE FROM users WHERE id = \$1/, (p) => {
   return [];
 });
 fakeDb.on(/UPDATE (home_invitations SET used_by|home_transfers SET accepted_by|users SET created_by_user_id) = NULL/, () => []);
+// uyelik-13: personel rolunden dusurulen hesabin servis uyelikleri
+fakeDb.on(/DELETE FROM home_users WHERE user_id = \$1 AND role = 'service_user'/, (p) => {
+  for (let i = memberships.length - 1; i >= 0; i--) {
+    if (memberships[i].user_id === p[0] && memberships[i].role === 'service_user') memberships.splice(i, 1);
+  }
+  return [];
+});
 fakeDb.on(/UPDATE service_tokens SET revoked_at|UPDATE service_sessions SET revoked_at/, () => []);
 fakeDb.on(/FROM homes h JOIN home_users hu ON h\.id = hu\.home_id|FROM commissioning_logs cl\s+LEFT JOIN homes h/, () => []);
 
@@ -307,6 +314,26 @@ test('parola atama ve rol degisimi de TUM evlerdeki uygulama MQTT kimliklerini i
   mqttCalls.length = 0;
   assert.strictEqual((await api('patch', `/users/${b.id}`, T(super1), { full_name: 'Sadece Ad' })).status, 200);
   assert.deepStrictEqual(mqttCalls, []);
+});
+
+test('uyelik-13: rolu user a dusurulen servis sorumlusunun ev bazli servis uyelikleri silinir; personel rolunde kalanlarinki korunur', async () => {
+  const st = store.addUser({ role: 'service_user', email: 'dusurulen.personel@example.com', password_hash: hash });
+  const keep = store.addUser({ role: 'service_user', email: 'terfi.personel@example.com', password_hash: hash });
+  memberships.push(
+    { home_id: 'ev-s1', user_id: st.id, role: 'service_user' },
+    { home_id: 'ev-s2', user_id: st.id, role: 'service_user' },
+    { home_id: 'ev-s3', user_id: st.id, role: 'resident' },
+    { home_id: 'ev-s1', user_id: keep.id, role: 'service_user' }
+  );
+  assert.strictEqual((await api('patch', `/users/${st.id}`, T(super1), { role: 'user' })).status, 200);
+  assert.deepStrictEqual(
+    memberships.filter((m) => m.user_id === st.id).map((m) => `${m.home_id}:${m.role}`),
+    ['ev-s3:resident'],
+    'yalniz servis uyelikleri silindi'
+  );
+  // personel rolunde kalan (service_user -> super_user) etkilenmez
+  assert.strictEqual((await api('patch', `/users/${keep.id}`, T(super1), { role: 'super_user' })).status, 200);
+  assert.deepStrictEqual(memberships.filter((m) => m.user_id === keep.id).map((m) => m.role), ['service_user']);
 });
 
 // ---- S1 (plan §5d-1): oturumlar toplu iptal edilince push belirteci de COMMIT SONRASI kapanir ----

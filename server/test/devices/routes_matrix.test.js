@@ -458,8 +458,9 @@ test('mqtt-credentials: yanit yalnizca sozlesme alanlarini icerir (ic alanlar si
   const res = await send('post', `/api/v1/homes/${HOME_A}/mqtt-credentials`, ACTORS.owner.header, {});
   assert.deepStrictEqual(
     Object.keys(res.body.data).sort(),
-    ['client_id', 'expires_at', 'host', 'password', 'port', 'topic_id', 'username']
+    ['client_id', 'expires_at', 'expires_in', 'host', 'password', 'port', 'topic_id', 'username']
   );
+  assert.ok(Number.isInteger(res.body.data.expires_in) && res.body.data.expires_in >= 0, 'kullanim-10: tam sayi sn');
   assert.ok(!JSON.stringify(res.body).includes('gizli-ic-alan'));
 });
 

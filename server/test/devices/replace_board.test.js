@@ -381,3 +381,133 @@ test('kick istisna firlatirsa (ag/EMQX) degisim yine tamamlanir: uyari doner', a
   assert.ok(r.warnings.some((w) => /Eski pano bağlantısı atılamadı/.test(w)), JSON.stringify(r.warnings));
   assert.strictEqual(ctx.newInv.status, 'CLAIMED', 'islem commit edildi');
 });
+
+// ---- kullanim-4 / guvenlik-1 / atolye-8: pano degisiminde kurallar, acik alarmlar, daire baglantisi ----
+test('kullanim-4: zamanli kurallar ayni tx te yeni cihaza tasinir; baska evin kuralina dokunulmaz; denetimde rules_migrated', async () => {
+  const ctx = await setup();
+  const { state } = ctx.world;
+  const r1 = { id: 'r-1', home_id: ctx.home.id, device_id: ctx.oldDev.id, updated_at: null };
+  const r2 = { id: 'r-2', home_id: ctx.home.id, device_id: null, updated_at: null }; // ev geneli kural
+  const r3 = { id: 'r-3', home_id: 'baska-ev', device_id: ctx.oldDev.id, updated_at: null };
+  state.scheduled_rules.push(r1, r2, r3);
+  await ctx.replace();
+  const newDev = state.devices.find((d) => d.device_uuid === NEW);
+  assert.strictEqual(r1.device_id, newDev.id, 'kural yeni panoyu gosterir');
+  assert.ok(r1.updated_at);
+  assert.strictEqual(r2.device_id, null, 'cihazsiz kural aynen');
+  assert.strictEqual(r3.device_id, ctx.oldDev.id, 'baska ev etkilenmez');
+  const audit = state.device_audit_logs.find((a) => a.event === 'board_replaced');
+  assert.strictEqual(audit.details.rules_migrated, 1);
+  const migrateSql = ctx.world.db.find('UPDATE scheduled_rules SET device_id = $1');
+  assert.strictEqual(migrateSql.length, 1);
+  assert.ok(migrateSql[0].tx !== null, 'ayni transaction');
+});
+
+test('guvenlik-1: eski panonun ACIK alarm satirlari lost/detached olur (gaz bastirmasi kalkar); kapali satirlara dokunulmaz', async () => {
+  const ctx = await setup();
+  const { state } = ctx.world;
+  const open = { id: 1, device_id: ctx.oldDev.id, home_id: ctx.home.id, kind: 'gas', status: 'latched', ack_requested_at: new Date(), ack_requested_by: 'x' };
+  const silenced = { id: 2, device_id: ctx.oldDev.id, home_id: ctx.home.id, kind: 'water', status: 'silenced' };
+  const cleared = { id: 3, device_id: ctx.oldDev.id, home_id: ctx.home.id, kind: 'gas', status: 'cleared', cleared_by: 'device' };
+  const otherDev = { id: 4, device_id: 'baska-cihaz', home_id: ctx.home.id, kind: 'gas', status: 'latched' };
+  state.alarms.push(open, silenced, cleared, otherDev);
+  await ctx.replace();
+  for (const a of [open, silenced]) {
+    assert.strictEqual(a.status, 'lost', `alarm ${a.id}`);
+    assert.strictEqual(a.cleared_by, 'detached');
+    assert.ok(a.cleared_at);
+    assert.strictEqual(a.ack_requested_at, null);
+    assert.strictEqual(a.ack_requested_by, null);
+  }
+  assert.strictEqual(cleared.status, 'cleared');
+  assert.strictEqual(cleared.cleared_by, 'device');
+  assert.strictEqual(otherDev.status, 'latched', 'baska cihazin alarmi korunur');
+});
+
+test('atolye-8 (inceleme): yeni kart BASKA bir daireye bagliysa super olmayan 409 DEVICE_LINKED_TO_FLAT, hicbir sey degismez', async () => {
+  for (const access of ['owner', 'service_user', 'service_session']) {
+    const ctx = await setup();
+    const { state } = ctx.world;
+    const flatA = { id: 'flat-a', device_uuid: OLD, status: 'installed', template_id: null };
+    const flatB = { id: 'flat-b', device_uuid: NEW, status: 'written', template_id: 'tpl-b' };
+    state.site_flats.push(flatA, flatB);
+    const actor = ctx.actorFor(access, access === 'service_session' ? { userId: null, globalRole: 'service_session', sessionId: 'sess-1' } : {});
+    const e = await expectHttp(ctx.replace({}, actor), 409, 'DEVICE_LINKED_TO_FLAT');
+    assert.strictEqual(e.message, 'Kart bir daireye bağlı; önce daireden ayırın.', access);
+    assert.strictEqual(flatA.device_uuid, OLD, `${access}: degistirilen daire aynen`);
+    assert.strictEqual(flatB.device_uuid, NEW, `${access}: diger dairenin karti aynen`);
+    assert.strictEqual(flatB.status, 'written');
+    assert.strictEqual(ctx.newInv.status, 'IN_STOCK', `${access}: yeni kart sahiplenilmedi`);
+    assert.strictEqual(ctx.oldDev.home_id, ctx.home.id, `${access}: eski pano evde kalir`);
+    assert.ok(!state.devices.some((d) => d.device_uuid === NEW), `${access}: yeni cihaz kaydi olusmadi`);
+    assert.ok(!ctx.world.db.sqls().some((s) => s.startsWith('UPDATE site_flats')), `${access}: daire yazimi yok`);
+  }
+});
+
+test('atolye-8 (inceleme): super_user gecersiz kilarsa diger daire KARTSIZ ve planned olur (kartsiz written/installed/handed_over kalmaz) + uyari', async () => {
+  for (const otherStatus of ['written', 'installed', 'handed_over', 'planned']) {
+    const ctx = await setup();
+    const { state } = ctx.world;
+    const flatA = { id: 'flat-a', device_uuid: OLD, status: 'installed', template_id: null };
+    const flatB = { id: 'flat-b', device_uuid: NEW, status: otherStatus, template_id: 'tpl-b' };
+    state.site_flats.push(flatA, flatB);
+    const r = await ctx.replace({}, ctx.actorFor('super_user', { globalRole: 'super_user' }));
+    assert.strictEqual(flatA.device_uuid, NEW, 'dairenin karti yeni pano');
+    assert.strictEqual(flatA.status, 'installed', 'installed karta bagli kalir');
+    assert.strictEqual(flatB.device_uuid, null, `${otherStatus}: diger dairenin bagi kalkti`);
+    assert.strictEqual(flatB.status, 'planned', `${otherStatus}: diger daire planned`);
+    assert.ok((r.warnings || []).some((w) => w.includes('başka bir daireye bağlıydı')), JSON.stringify(r.warnings));
+  }
+});
+
+test('atolye-7 (inceleme): degistirilen dairede written, yeni kartin BU dairenin sablonuyla basarili yazimi yoksa planned; varsa korunur', async () => {
+  // yazim yok -> planned
+  let ctx = await setup();
+  const flatA = { id: 'flat-a', device_uuid: OLD, status: 'written', template_id: 'tpl-a' };
+  ctx.world.state.site_flats.push(flatA);
+  await ctx.replace();
+  assert.strictEqual(flatA.device_uuid, NEW);
+  assert.strictEqual(flatA.status, 'planned');
+
+  // baska sablonla basarili / ayni sablonla hatali yazim -> yine planned
+  ctx = await setup();
+  const flatB = { id: 'flat-b', device_uuid: OLD, status: 'written', template_id: 'tpl-a' };
+  ctx.world.state.site_flats.push(flatB);
+  ctx.world.state.template_writes.push(
+    { id: 1, device_uuid: NEW, template_id: 'tpl-x', version: 1, result: 'ok', created_at: new Date() },
+    { id: 2, device_uuid: NEW, template_id: 'tpl-a', version: 1, result: 'error', created_at: new Date() }
+  );
+  await ctx.replace();
+  assert.strictEqual(flatB.status, 'planned');
+
+  // sablonsuz written daire -> planned
+  ctx = await setup();
+  const flatN = { id: 'flat-n', device_uuid: OLD, status: 'written', template_id: null };
+  ctx.world.state.site_flats.push(flatN);
+  await ctx.replace();
+  assert.strictEqual(flatN.status, 'planned');
+
+  // yeni karta bu dairenin sablonu basariyla yazilmis -> written korunur
+  ctx = await setup();
+  const flatC = { id: 'flat-c', device_uuid: OLD, status: 'written', template_id: 'tpl-a' };
+  ctx.world.state.site_flats.push(flatC);
+  ctx.world.state.template_writes.push({ id: 3, device_uuid: NEW, template_id: 'tpl-a', version: 2, result: 'ok', created_at: new Date() });
+  await ctx.replace();
+  assert.strictEqual(flatC.device_uuid, NEW);
+  assert.strictEqual(flatC.status, 'written');
+
+  // handed_over karta bagli kalir; bag kaldirilmadiysa uyari yok
+  ctx = await setup();
+  const flatD = { id: 'flat-d', device_uuid: OLD, status: 'handed_over', template_id: 'tpl-a' };
+  ctx.world.state.site_flats.push(flatD);
+  const r = await ctx.replace();
+  assert.strictEqual(flatD.device_uuid, NEW);
+  assert.strictEqual(flatD.status, 'handed_over');
+  assert.ok(!(r.warnings || []).some((w) => w.includes('başka bir daireye')), 'uyari yalniz bag kaldirildiysa');
+
+  // migration 035 yoksa daire islemi atlanir
+  ctx = await setup();
+  ctx.world.state.schema035 = false;
+  await ctx.replace();
+  assert.ok(!ctx.world.db.sqls().some((s) => s.startsWith('UPDATE site_flats') || s.includes('FROM site_flats')));
+});

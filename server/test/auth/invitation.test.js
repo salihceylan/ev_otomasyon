@@ -247,6 +247,103 @@ test('uye cikarma: resident / misafir / staff / servis oturumu / yabanci 403', a
   assert.ok(store.member(HOME.id, target.id));
 });
 
+// ---- pano-6: owner/resident cikarilinca yerel anahtar BEKLEYEN yolla doner (tek panolu ev); misafirde donmez ----
+test('pano-6: sakin cikarilinca tek panolu evde rotasyon (ayni tx, COMMIT sonrasi uzlastirici); misafir cikarilinca rotasyon yok', async () => {
+  const { LocalKeyRotation } = require('../../src/services/local_key_rotation');
+  const reconciles = [];
+  const fakeBox = { generateLocalKey: () => 'YeniAnahtar0000', encrypt: (k) => `enc(${k.length})` };
+  InvitationService.setLocalKeyRotation(new LocalKeyRotation({ secretBox: fakeBox, requestReconcile: (t) => reconciles.push(t), logger: { warn() {}, log() {}, error() {} } }));
+  try {
+    const home = store.addHome({ name: 'Anahtar Evi' });
+    const own = store.addUser();
+    const res1 = store.addUser();
+    const g1 = store.addUser();
+    store.addMember(home, own, 'owner');
+    store.addMember(home, res1, 'resident');
+    store.addMember(home, g1, 'guest', { valid_from: new Date(Date.now() - 1000), valid_until: new Date(Date.now() + 3600e3) });
+    const dev = store.addDevice(home);
+
+    const rg = await request(app).delete(`/api/v1/homes/${home.id}/members/${g1.id}`).set('Authorization', T(own));
+    assert.strictEqual(rg.status, 200);
+    assert.strictEqual(dev.local_key_pending_enc, null, 'misafir anahtari okuyamaz: rotasyon yok');
+    assert.deepStrictEqual(reconciles, []);
+
+    const rr = await request(app).delete(`/api/v1/homes/${home.id}/members/${res1.id}`).set('Authorization', T(own));
+    assert.strictEqual(rr.status, 200, JSON.stringify(rr.body));
+    assert.ok(dev.local_key_pending_enc, 'bekleyen anahtar yazildi');
+    const a = store.audits.filter((x) => x.event === 'local_key_rotation_scheduled' && x.home_id === home.id);
+    assert.strictEqual(a.length, 1);
+    assert.deepStrictEqual(a[0].details, { reason: 'member_removed' });
+    assert.deepStrictEqual(reconciles, [home.mqtt_username]);
+  } finally {
+    InvitationService.setLocalKeyRotation(undefined);
+  }
+});
+
+// ---- ev_uyelik-6: uretilmis davetleri listeleme ve iptal ----
+const listInv = (who, homeId = HOME.id) => request(app).get(`/api/v1/homes/${homeId}/invitations`).set('Authorization', who);
+const delInv = (who, id, homeId = HOME.id) => request(app).delete(`/api/v1/homes/${homeId}/invitations/${id}`).set('Authorization', who);
+
+test('ev_uyelik-6: davet listesi - owner/super 200 (kod DONMEZ, yalniz kullanilmamis + suresi dolmamis, yeniden eskiye), no-store', async () => {
+  const a = (await invite(T(owner), { role: 'resident' })).body.data;
+  const b = (await invite(T(owner), { role: 'guest', duration_hours: 2, guest_name: 'Komsu' })).body.data;
+  const used = (await invite(T(owner), { role: 'resident' })).body.data;
+  store.invitations.find((i) => i.id === used.id).is_used = true; // kullanilmis (katilim IP sinirini harcamadan)
+  const res = await listInv(T(owner));
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.headers['cache-control'], 'no-store');
+  const ids = res.body.data.map((i) => i.id);
+  assert.ok(ids.includes(a.id) && ids.includes(b.id), 'aktif davetler listelenir');
+  assert.ok(!ids.includes(used.id), 'kullanilmis davet listelenmez');
+  for (const item of res.body.data) {
+    assert.deepStrictEqual(Object.keys(item).sort(), ['created_at', 'expires_at', 'guest_name', 'guest_valid_from', 'guest_valid_until', 'id', 'role']);
+  }
+  const s = JSON.stringify(res.body);
+  assert.ok(!s.includes(a.code) && !s.includes(b.code), 'kod donmez');
+  const created = res.body.data.map((i) => new Date(i.created_at).getTime());
+  assert.deepStrictEqual(created, [...created].sort((x, y) => y - x), 'yeniden eskiye');
+  assert.strictEqual((await listInv(T(superUser))).status, 200);
+  // baska evin davetleri sizmaz
+  assert.deepStrictEqual((await listInv(T(otherOwner), OTHER.id)).body.data.filter((i) => ids.includes(i.id)), []);
+});
+
+test('ev_uyelik-6: davet listesi/iptali - resident, misafir, staff, servis oturumu, yabanci 403', async () => {
+  const inv = (await invite(T(owner), { role: 'resident' })).body.data;
+  for (const who of [T(resident), T(guest), T(staff), SVC, T(stranger), T(otherOwner)]) {
+    assert.strictEqual((await listInv(who)).status, 403);
+    assert.strictEqual((await delInv(who, inv.id)).status, 403);
+  }
+  assert.ok(store.invitations.some((i) => i.id === inv.id), 'davet silinmedi');
+});
+
+test('ev_uyelik-6: davet iptali - owner 200 {id} + denetim; iptal sonrasi katilim 404; kullanilmis/bilinmeyen 404; gecersiz kimlik 400', async () => {
+  const inv = (await invite(T(owner), { role: 'resident' })).body.data;
+  const res = await delInv(T(owner), inv.id);
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.deepStrictEqual(res.body.data, { id: inv.id });
+  assert.strictEqual(res.headers['cache-control'], 'no-store');
+  assert.ok(!store.invitations.some((i) => i.id === inv.id));
+  const audit = store.audits.find((x) => x.event === 'invitation_revoked' && x.home_id === HOME.id);
+  assert.ok(audit, 'denetim kaydi');
+  assert.ok(!JSON.stringify(audit).includes(inv.code), 'kod denetimde yok');
+  const j = await join(T(stranger), inv.code);
+  assert.strictEqual(j.status, 404, 'iptal edilen kodla katilim yok');
+  assert.strictEqual((await delInv(T(owner), inv.id)).status, 404, 'tekrar iptal 404');
+
+  const used = (await invite(T(owner), { role: 'resident' })).body.data;
+  store.invitations.find((i) => i.id === used.id).is_used = true;
+  assert.strictEqual((await delInv(T(owner), used.id)).status, 404, 'kullanilmis davet iptal edilemez');
+  assert.ok(store.invitations.some((i) => i.id === used.id), 'kullanilmis davet gecmisi korunur');
+  assert.strictEqual((await delInv(T(owner), 'gecersiz-kimlik')).status, 400);
+  // baska evin daveti bu ev uzerinden iptal edilemez
+  const foreign = (await request(app).post(`/api/v1/homes/${OTHER.id}/invitations`).set('Authorization', T(otherOwner)).send({ role: 'resident' })).body.data;
+  assert.strictEqual((await delInv(T(owner), foreign.id)).status, 404);
+  assert.ok(store.invitations.some((i) => i.id === foreign.id));
+  // super de iptal edebilir
+  const s2 = (await invite(T(owner), { role: 'resident' })).body.data;
+  assert.strictEqual((await delInv(T(superUser), s2.id)).status, 200);
+});
+
 test('sahte DB: eslesmeyen SQL yok', () => {
   assert.deepStrictEqual(store.unmatched, []);
 });

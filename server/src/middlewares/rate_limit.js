@@ -55,6 +55,21 @@ function clientIp(req) {
  * Ornek: '2001:db8:1:2::1' -> '2001:db8:1:2::/64'.
  */
 function limitKey(req) {
+  return prefixKey(req, 4, '/64');
+}
+
+/**
+ * Ag obegi anahtari (ev_uyelik-1): IPv4 (ve ::ffff: eslemesi) TAM adres; IPv6 /48 onekine (ilk 3 hextet) indirgenir.
+ * Tek bir IPv6 kurumu/abonesi tipik olarak bir /48 alir (65536 adet /64): /64 sayaci ayni /48 icinde /64 dondurerek
+ * asilabilirdi. YALNIZ hatali deneme butceleri icin (servis PIN); dogru istekleri sinirlamak icin kullanilmaz.
+ * Ornek: '2001:db8:1:2::1' -> '2001:db8:1::/48'.
+ */
+function limitKey48(req) {
+  return prefixKey(req, 3, '/48');
+}
+
+/** IPv6 adresinin ilk `hextets` grubu + sonek; IPv4 / bilinmeyen / gecersiz adres aynen. */
+function prefixKey(req, hextets, suffix) {
   const ip = clientIp(req);
   if (ip === 'unknown' || net.isIPv4(ip)) return ip;
   const addr = ip.split('%')[0]; // bolge kimligi (fe80::1%eth0)
@@ -69,7 +84,7 @@ function limitKey(req) {
   const headParts = head ? head.split(':') : [];
   const tailParts = tail ? tail.split(':') : [];
   const groups = tail === null ? headParts : [...headParts, ...Array(8 - headParts.length - tailParts.length).fill('0'), ...tailParts];
-  return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(':')}::/64`;
+  return `${groups.slice(0, hextets).map((g) => parseInt(g, 16).toString(16)).join(':')}::${suffix}`;
 }
 
 function defaultMessage(retryAfterSec) {
@@ -241,3 +256,4 @@ module.exports = rateLimit;
 module.exports.rateLimit = rateLimit;
 module.exports.clientIp = clientIp;
 module.exports.limitKey = limitKey;
+module.exports.limitKey48 = limitKey48;

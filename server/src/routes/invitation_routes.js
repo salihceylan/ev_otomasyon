@@ -7,6 +7,8 @@
 // baglandigi icin router.use, kendisine ait olmayan isteklere de 401 donerdi.
 //
 //   POST   /homes/:homeId/invitations           owner | super_user   (CONTRACTS §1.4 "Uye davet")
+//   GET    /homes/:homeId/invitations           owner | super_user   aktif davetler (kod DONMEZ; ev_uyelik-6)
+//   DELETE /homes/:homeId/invitations/:id       owner | super_user   kullanilmamis daveti iptal (ev_uyelik-6)
 //   POST   /homes/join                          giris yapmis kullanici (servis oturumu HARIC)
 //   GET    /homes/:homeId/members               super | staff | owner | resident | gecerli misafir
 //   DELETE /homes/:homeId/members/:targetUserId owner | super_user   (CONTRACTS §1.4 "Uye cikar")
@@ -66,6 +68,34 @@ router.post(
     );
     res.setHeader('Cache-Control', 'no-store');
     return successResponse(res, invitation, 'Davet kodu oluşturuldu.', 201);
+  })
+);
+
+// GET /homes/:homeId/invitations - kullanilmamis, suresi dolmamis davetler (kod DONMEZ; ev_uyelik-6)
+router.get(
+  '/homes/:homeId/invitations',
+  authenticateToken,
+  requireHomeAccess(HOME_ROLE_SETS.MEMBERS),
+  asyncHandler(async (req, res) => {
+    const list = await InvitationService.listInvitations(req.homeAccess.home_id);
+    res.setHeader('Cache-Control', 'no-store');
+    return successResponse(res, list);
+  })
+);
+
+// DELETE /homes/:homeId/invitations/:invitationId - kullanilmamis daveti iptal eder (ev_uyelik-6)
+router.delete(
+  '/homes/:homeId/invitations/:invitationId',
+  authenticateToken,
+  requireHomeAccess(HOME_ROLE_SETS.MEMBERS),
+  asyncHandler(async (req, res) => {
+    const result = await InvitationService.revokeInvitation(
+      req.homeAccess.home_id,
+      { userId: req.user.id, role: req.homeAccess.role, ip: clientIp(req) },
+      req.params.invitationId
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    return successResponse(res, result, 'Davet iptal edildi.');
   })
 );
 

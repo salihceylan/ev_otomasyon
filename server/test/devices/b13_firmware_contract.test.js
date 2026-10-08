@@ -69,11 +69,12 @@ test('yerel anahtar: uretilen HER anahtar firmware biçimine uyar (8..32 karakte
   for (const good of ['abcdefgh', 'x'.repeat(32), '!@#$%^&*()_+-=', 'A1b2C3d4']) assert.ok(secretBox.isValidLocalKey(good), good);
 });
 
-test('sys yuku (acil sifirlama): {cmd:"set_local_key", local_key, id} - alan adi local_key (key takma adi YOK), anahtar firmware biçiminde ve DB ile ayni', async () => {
+test('sys yuku (acil sifirlama, stoga donus): {cmd:"set_local_key", local_key, id} - alan adi local_key (key takma adi YOK), anahtar firmware biçiminde ve DB ile ayni', async () => {
   const ctx = await setup();
   const r = await ctx.deviceService.emergencyReset({
     actor: ctx.staff, deviceUuid: UID, confirmUid: UID, reason: 'Kiraci ulasilamiyor, daire teslim alindi',
   });
+  assert.strictEqual(r.action, 'UNCLAIMED');
   assert.strictEqual(r.local_key_publish, 'published');
   assert.strictEqual(ctx.bridge.topics.length, 1);
   const sys = ctx.bridge.topics[0];
@@ -84,7 +85,30 @@ test('sys yuku (acil sifirlama): {cmd:"set_local_key", local_key, id} - alan adi
   assert.match(sys.obj.local_key, FIRMWARE_LOCAL_KEY);
   assert.match(sys.obj.id, FIRMWARE_ID);
   assert.strictEqual(secretBox.decrypt(ctx.inv.local_key_enc), sys.obj.local_key, 'cihaza giden anahtar envanterdeki yeni anahtarla ayni olmali');
-  assert.ok(!('local_key' in r) || r.local_key_publish !== 'published', 'cihaza iletildiyse yanitta anahtar donmez');
+  assert.strictEqual(r.local_key, sys.obj.local_key, 'stoga donuste anahtar yanitta bir kez (pano yenilenirken RESETKEY + FACTORYINIT)');
+});
+
+test('acil sifirlama DEVIR (pano-5): yeni anahtar BEKLEYEN yazilir (firmware bicimi); commit sonrasi sys yayini YOK, uzlastirici iletir', async () => {
+  const ctx = await setup();
+  ctx.newOwner.email_verified = true;
+  const r = await ctx.deviceService.emergencyReset({
+    actor: ctx.staff, deviceUuid: UID, confirmUid: UID, reason: 'Kiraci ulasilamiyor, daire teslim alindi', newOwnerIdentifier: ctx.newOwner.email,
+  });
+  assert.strictEqual(r.action, 'REASSIGNED');
+  assert.strictEqual(r.local_key_publish, 'pending');
+  assert.strictEqual(ctx.bridge.topics.length, 0, 'commit sonrasi sys set_local_key yayini YOK');
+  const dev = ctx.world.state.devices.find((d) => d.device_uuid === UID);
+  const pending = secretBox.decrypt(dev.local_key_pending_enc);
+  assert.match(pending, FIRMWARE_LOCAL_KEY, 'bekleyen anahtar firmware biciminde');
+  assert.ok(!('local_key' in r), 'bekleyen anahtar yanitta donmez');
+});
+
+test('sys yuku (uzlastirici): {cmd:"set_local_key", local_key, id} - alan adi local_key (key takma adi YOK), anahtar firmware biçiminde', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'src', 'services', 'device_reconciler.js'), 'utf8');
+  assert.match(src, /cmd: 'set_local_key', local_key: localKey, id: this\.newCommandId\(\)/);
+  assert.ok(!/\{\s*cmd: 'set_local_key',\s*key:/.test(src), 'backend `key` takma adini kullanmaz');
+  assert.match('A1b2C3d4E5f6G7h8', FIRMWARE_LOCAL_KEY);
+  assert.match('abcDEF123_-', FIRMWARE_ID);
 });
 
 // ------------------------------------------------------------------------------------------------

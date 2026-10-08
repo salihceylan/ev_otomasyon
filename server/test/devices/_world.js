@@ -180,6 +180,13 @@ function createWorld({ clock = createClock() } = {}) {
     site_flats: [],
     install_template_versions: [],
     template_writes: [],
+    // uyelik-1: on-hesap etkisizlestirmesi (auth_service.revokeAllUserSessions) icin oturum tablolari
+    refresh_tokens: [],
+    service_tokens: [],
+    service_sessions: [],
+    // kullanim-4 / guvenlik-1: pano degisimi / stoga donuste kural tasima ve acik alarm kapatma
+    scheduled_rules: [],
+    alarms: [],
   };
   const db = new FakeDb();
   const now = () => clock.now();
@@ -230,6 +237,80 @@ function createWorld({ clock = createClock() } = {}) {
       is_active: true, account_status: 'pending_invite', created_by_user_id: createdBy,
     });
     return [copy(row)];
+  });
+
+  // uyelik-1: auth_service.neutralizeUnverifiedAccount + revokeAllUserSessions (gercek modul SQL'i)
+  db.on('UPDATE users SET password_hash = $2, token_version = token_version + 1, must_change_password = FALSE, password_changed_at = NULL', (ctx) => {
+    const u = state.users.find((x) => x.id === ctx.params[0] && x.email_verified === false);
+    if (!u) return [];
+    patch(ctx, u, {
+      password_hash: ctx.params[1], token_version: (u.token_version || 1) + 1, must_change_password: false, password_changed_at: null,
+      account_status: u.account_status === 'active' ? 'pending_invite' : u.account_status,
+    });
+    return [{ id: u.id }];
+  });
+  db.on('UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = $2 WHERE user_id = $1 AND revoked_at IS NULL', (ctx) => {
+    const rows = state.refresh_tokens.filter((r) => r.user_id === ctx.params[0] && !r.revoked_at);
+    for (const r of rows) patch(ctx, r, { revoked_at: now(), revoked_reason: ctx.params[1] });
+    return { rows: [], rowCount: rows.length };
+  });
+  db.on("DELETE FROM mqtt_credentials WHERE user_id = $1 AND kind = 'app' RETURNING username", (ctx) => {
+    const removed = removeRows(ctx, state.mqtt_credentials, (c) => c.user_id === ctx.params[0] && c.kind === 'app');
+    for (const c of removed) removeRows(ctx, state.mqtt_acl, (a) => a.credential_id === c.id);
+    return removed.map((c) => ({ username: c.username }));
+  });
+  db.on('UPDATE service_tokens SET revoked_at = NOW() WHERE created_by = $1 AND revoked_at IS NULL AND used_at IS NULL', (ctx) => {
+    const rows = state.service_tokens.filter((t) => t.created_by === ctx.params[0] && !t.revoked_at && !t.used_at);
+    for (const r of rows) patch(ctx, r, { revoked_at: now() });
+    return { rows: [], rowCount: rows.length };
+  });
+  db.on('UPDATE service_sessions SET revoked_at = NOW(), revoked_reason = $2 WHERE revoked_at IS NULL AND service_token_id IN (SELECT id FROM service_tokens WHERE created_by = $1) RETURNING id, home_id', (ctx) => {
+    const tokenIds = state.service_tokens.filter((t) => t.created_by === ctx.params[0]).map((t) => t.id);
+    const rows = state.service_sessions.filter((x) => !x.revoked_at && tokenIds.includes(x.service_token_id));
+    for (const r of rows) patch(ctx, r, { revoked_at: now(), revoked_reason: ctx.params[1] });
+    return rows.map((r) => ({ id: r.id, home_id: r.home_id }));
+  });
+
+  // ------------------------------------------------------------------ pano-6: yerel anahtar rotasyonu + servis oturumu
+  // (genel 'expires_at <= NOW()' MQTT kimlik temizligi isleyicisinden ONCE kayitli olmali: ilk eslesen kazanir)
+  db.on('SELECT id, device_uuid, local_key_pending_enc FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', ({ params }) =>
+    state.devices
+      .filter((d) => d.home_id === params[0])
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((d) => ({ id: d.id, device_uuid: d.device_uuid, local_key_pending_enc: d.local_key_pending_enc || null }))
+  );
+  db.on('UPDATE devices SET local_key_pending_enc = $2, local_key_pending_at = NOW() WHERE id = $1 AND local_key_pending_enc IS NULL', (ctx) => {
+    const d = state.devices.find((x) => x.id === ctx.params[0] && !x.local_key_pending_enc);
+    if (!d) return { rows: [], rowCount: 0 };
+    patch(ctx, d, { local_key_pending_enc: ctx.params[1], local_key_pending_at: now() });
+    return { rows: [], rowCount: 1 };
+  });
+  db.on('UPDATE service_sessions SET local_key_read_at = NOW() WHERE id = $1', (ctx) => {
+    const s = state.service_sessions.find((x) => x.id === ctx.params[0]);
+    if (!s) return { rows: [], rowCount: 0 };
+    patch(ctx, s, { local_key_read_at: now() });
+    return { rows: [], rowCount: 1 };
+  });
+  const endedRead = (x) =>
+    x.local_key_read_at && !x.key_rotated_at && (x.revoked_at || new Date(x.expires_at).getTime() <= now().getTime());
+  db.on('SELECT DISTINCT home_id FROM service_sessions WHERE local_key_read_at IS NOT NULL AND key_rotated_at IS NULL AND (revoked_at IS NOT NULL OR expires_at <= NOW())', ({ sql, params }) => {
+    const scoped = sql.endsWith('AND home_id = $1');
+    const ids = [...new Set(state.service_sessions.filter((x) => endedRead(x) && (!scoped || x.home_id === params[0])).map((x) => x.home_id))];
+    return ids.map((home_id) => ({ home_id }));
+  });
+  db.on('UPDATE service_sessions SET key_rotated_at = NOW() WHERE home_id = $1 AND local_key_read_at IS NOT NULL AND key_rotated_at IS NULL AND (revoked_at IS NOT NULL OR expires_at <= NOW())', (ctx) => {
+    const hit = state.service_sessions.filter((x) => x.home_id === ctx.params[0] && endedRead(x));
+    for (const x of hit) patch(ctx, x, { key_rotated_at: now() });
+    return { rows: [], rowCount: hit.length };
+  });
+
+  // bireysel-3: ayni sahibin yeniden sahiplenmesi (yaniti kaybolan claim)
+  db.on("FROM devices d JOIN homes h ON h.id = d.home_id JOIN home_users hu ON hu.home_id = d.home_id AND hu.user_id = $2 AND hu.role = 'owner' WHERE d.device_uuid = $1", ({ params }) => {
+    const dev = state.devices.find((d) => d.device_uuid === params[0] && d.home_id);
+    if (!dev) return [];
+    if (!state.home_users.some((m) => m.home_id === dev.home_id && m.user_id === params[1] && m.role === 'owner')) return [];
+    const home = state.homes.find((h) => h.id === dev.home_id);
+    return [{ home_id: dev.home_id, name: home ? home.name : null }];
   });
 
   // ------------------------------------------------------------------ kilitler
@@ -584,6 +665,10 @@ function createWorld({ clock = createClock() } = {}) {
   db.on("DELETE FROM mqtt_credentials WHERE home_id = $1 AND user_id = $2 AND kind = 'app'", (ctx) =>
     deleteCreds(ctx, (c) => c.home_id === ctx.params[0] && c.user_id === ctx.params[1] && c.kind === 'app')
   );
+  // uyelik-6: servis (PIN) oturumu kimlikleri (user_id bos) - genel 'app' isleyicisinden ONCE (alt dize eslesmesi)
+  db.on("DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'app' AND user_id IS NULL", (ctx) =>
+    deleteCreds(ctx, (c) => c.home_id === ctx.params[0] && c.kind === 'app' && (c.user_id === null || c.user_id === undefined))
+  );
   db.on("DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'app'", (ctx) =>
     deleteCreds(ctx, (c) => c.home_id === ctx.params[0] && c.kind === 'app')
   );
@@ -788,6 +873,13 @@ function createWorld({ clock = createClock() } = {}) {
     return [{ id: home.id, peace_notification_enabled: home.peace_notification_enabled, peace_notification_time: home.peace_notification_time }];
   });
   db.on('FROM homes WHERE id = $1', ({ params }) => copies(state.homes.filter((h) => h.id === params[0])));
+  // atolye-7: kartin dairenin sablonuyla basarili yazimi var mi (pano degisimi)
+  db.on("SELECT id FROM template_writes WHERE device_uuid = $1 AND template_id = $2 AND result = 'ok' LIMIT 1", ({ params }) =>
+    state.template_writes
+      .filter((w) => w.device_uuid === params[0] && w.template_id === params[1] && w.result === 'ok')
+      .slice(0, 1)
+      .map((w) => ({ id: w.id }))
+  );
   db.on('SELECT 1', () => [{ '?column?': 1 }]);
   db.on('SELECT count(*) AS count FROM endpoints WHERE home_id = $1', ({ params }) => [
     { count: String(state.endpoints.filter((e) => e.home_id === params[0]).length) },
@@ -924,6 +1016,49 @@ function createWorld({ clock = createClock() } = {}) {
       flat_id: flat.id, block: flat.block, number: flat.number, status: flat.status, site_name: site.name,
       template_id: w ? w.template_id : null, version: w ? w.version : null, template_body: v ? JSON.parse(JSON.stringify(v.body)) : null,
     }];
+  });
+  // kullanim-4: pano degisiminde zamanli kurallar yeni cihaza
+  db.on('UPDATE scheduled_rules SET device_id = $1, updated_at = CURRENT_TIMESTAMP WHERE home_id = $2 AND device_id = $3 RETURNING id', (ctx) => {
+    const [newId, homeId, oldId] = ctx.params;
+    const rows = state.scheduled_rules.filter((r) => r.home_id === homeId && r.device_id === oldId);
+    for (const r of rows) patch(ctx, r, { device_id: newId, updated_at: now() });
+    return rows.map((r) => ({ id: r.id }));
+  });
+  // guvenlik-1: ayrilan panonun ACIK alarmlari 'lost' / 'detached'
+  db.on("UPDATE alarms SET status = 'lost', cleared_at = CURRENT_TIMESTAMP, cleared_by = 'detached'", (ctx) => {
+    const rows = state.alarms.filter((a) => a.device_id === ctx.params[0] && !['cleared', 'lost'].includes(a.status));
+    for (const a of rows) {
+      patch(ctx, a, { status: 'lost', cleared_at: now(), cleared_by: 'detached', ack_requested_at: null, ack_requested_by: null, updated_at: now() });
+    }
+    return { rows: [], rowCount: rows.length };
+  });
+  // atolye-8: pano degisiminde daire baglantisi yeni karta
+  db.on('SELECT id, status FROM site_flats WHERE device_uuid = $1', async (ctx) => {
+    const rows = state.site_flats.filter((f) => f.device_uuid === ctx.params[0]);
+    if (ctx.sql.includes('FOR UPDATE')) for (const f of rows) await ctx.lock(`site_flats:${f.id}`);
+    return rows.map((f) => ({ id: f.id, status: f.status }));
+  });
+  db.on("UPDATE site_flats SET device_uuid = NULL, status = 'planned', updated_at = NOW() WHERE device_uuid = $1", (ctx) => {
+    const rows = state.site_flats.filter((f) => f.device_uuid === ctx.params[0]);
+    for (const f of rows) patch(ctx, f, { device_uuid: null, status: 'planned' });
+    return { rows: [], rowCount: rows.length };
+  });
+  db.on('UPDATE site_flats SET device_uuid = $1, updated_at = NOW() WHERE device_uuid = $2', (ctx) => {
+    const rows = state.site_flats.filter((f) => f.device_uuid === ctx.params[1]);
+    for (const f of rows) patch(ctx, f, { device_uuid: ctx.params[0] });
+    return rows.map((f) => ({ id: f.id, status: f.status, template_id: f.template_id || null }));
+  });
+  db.on("UPDATE site_flats SET status = 'planned', updated_at = NOW() WHERE id = $1 AND status = 'written'", (ctx) => {
+    const flat = state.site_flats.find((f) => f.id === ctx.params[0] && f.status === 'written');
+    if (flat) patch(ctx, flat, { status: 'planned' });
+    return { rows: [], rowCount: flat ? 1 : 0 };
+  });
+
+  // servis_kurulum-10: basarili devreye alma bagli daireyi teslim eder
+  db.on("UPDATE site_flats SET status = 'handed_over'", (ctx) => {
+    const rows = state.site_flats.filter((f) => f.device_uuid === ctx.params[0] && ['planned', 'written', 'installed'].includes(f.status));
+    for (const f of rows) patch(ctx, f, { status: 'handed_over' });
+    return { rows: [], rowCount: rows.length };
   });
   db.on("UPDATE site_flats SET status = 'installed'", (ctx) => {
     const flat = state.site_flats.find((f) => f.id === ctx.params[0] && ['planned', 'written'].includes(f.status));

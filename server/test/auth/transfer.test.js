@@ -22,7 +22,7 @@ const { errorHandler } = require('../../src/middlewares/error_handler');
 auth.configureAuthMiddleware({ cacheTtlMs: 0 });
 
 const calls = [];
-TransferService.setDependencies({
+const deps = {
   mqtt_credential_service: {
     revokeHomeAccess: async (args) => { calls.push(['revokeHomeAccess', args.homeId, Boolean(args.tx), Boolean(args.includeDevice)]); return { revoked: 2, usernames: ['a_old1', 'a_old2'] }; },
     kickUsernames: async (names) => { calls.push(['kick', names]); return { kicked: names.length, failed: 0, skipped: false }; },
@@ -30,7 +30,8 @@ TransferService.setDependencies({
   home_cleanup: {
     cleanupHome: async (tx, homeId, opts) => { calls.push(['cleanupHome', homeId, Boolean(tx && tx.query), opts]); return { cleaned: {}, skipped: [] }; },
   },
-});
+};
+TransferService.setDependencies(deps);
 
 const app = express();
 app.use(express.json());
@@ -123,6 +124,72 @@ test('kabul: hedef kullanici devralir; eski aile cikar; servis/MQTT/temizlik yal
   const sqls = fakeDb.calls.slice(before).map((c) => c.text).join('\n');
   assert.ok(!/refresh_tokens/.test(sqls), 'baska evlerdeki oturumlar dusmemeli');
   assert.ok(!/token_version\s*=\s*token_version\s*\+\s*1/.test(sqls), 'token_version artirilmamali');
+});
+
+test('uyelik-6: devirde evin servis oturumu MQTT kimligi (user_id bos) ayni tx te silinir ve COMMIT sonrasi atma listesine eklenir', async () => {
+  const { home, owner } = setupHome();
+  const svcCred = store.addMqttCred({ home_id: home.id, user_id: null });
+  const otherCred = store.addMqttCred({ home_id: crypto.randomUUID(), user_id: null });
+  const target = store.addUser({ email: 'devralan.mqtt@example.com' });
+  const code = (await initiate(T(owner), home.id, { target_identifier: 'devralan.mqtt@example.com' })).body.data.transfer_code;
+  const res = await accept(T(target), code);
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.ok(!store.mqttCreds.includes(svcCred), 'servis oturumu kimligi silindi');
+  assert.ok(store.mqttCreds.includes(otherCred), 'baska evin kimligi korunur');
+  const kick = calls.find((c) => c[0] === 'kick');
+  assert.ok(kick && kick[1].includes(svcCred.username), 'atma listesinde');
+  assert.ok(kick[1].includes('a_old1') && kick[1].includes('a_old2'));
+});
+
+test('pano-6: devir kabulunde tek panolu evin yerel anahtari BEKLEYEN yolla doner (ayni tx); COMMIT sonrasi uzlastirici; cok panolu evde donmez', async () => {
+  const { LocalKeyRotation } = require('../../src/services/local_key_rotation');
+  const reconciles = [];
+  const fakeBox = { generateLocalKey: () => 'YeniAnahtar0000', encrypt: (k) => `enc(${k.length})` };
+  const rotation = new LocalKeyRotation({ secretBox: fakeBox, requestReconcile: (t) => reconciles.push(t), logger: { warn() {}, log() {}, error() {} } });
+  TransferService.setDependencies({ ...deps, local_key_rotation: rotation });
+  try {
+    const { home, owner } = setupHome();
+    const dev = store.addDevice(home);
+    const target = store.addUser({ email: 'devralan.anahtar@example.com' });
+    const code = (await initiate(T(owner), home.id, { target_identifier: 'devralan.anahtar@example.com' })).body.data.transfer_code;
+    const res = await accept(T(target), code);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.ok(dev.local_key_pending_enc, 'bekleyen anahtar yazildi');
+    const a = store.audits.filter((x) => x.event === 'local_key_rotation_scheduled' && x.home_id === home.id);
+    assert.strictEqual(a.length, 1);
+    assert.deepStrictEqual(a[0].details, { reason: 'home_transfer' });
+    assert.deepStrictEqual(reconciles, [home.mqtt_username]);
+
+    const multi = setupHome();
+    const d1 = store.addDevice(multi.home);
+    const d2 = store.addDevice(multi.home);
+    const target2 = store.addUser({ email: 'devralan.cok@example.com' });
+    const code2 = (await initiate(T(multi.owner), multi.home.id, { target_identifier: 'devralan.cok@example.com' })).body.data.transfer_code;
+    assert.strictEqual((await accept(T(target2), code2)).status, 200);
+    assert.ok(!d1.local_key_pending_enc && !d2.local_key_pending_enc, 'cok panolu evde rotasyon yok');
+    assert.deepStrictEqual(reconciles, [home.mqtt_username]);
+  } finally {
+    TransferService.setDependencies(deps);
+  }
+});
+
+test('ev_uyelik-2: kabul eden hesap servis personeli ya da super yonetici ise 403; devir PENDING kalir, uyelikler degismez', async () => {
+  for (const role of ['service_user', 'super_user']) {
+    const { home, owner, resident } = setupHome();
+    const target = store.addUser({ email: `personel.devir.${role}@example.com`, role });
+    const code = (await initiate(T(owner), home.id, { target_identifier: `personel.devir.${role}@example.com` })).body.data.transfer_code;
+    const membersBefore = JSON.stringify(store.members.filter((m) => m.home_id === home.id));
+    calls.length = 0;
+    const res = await accept(T(target), code);
+    assert.strictEqual(res.status, 403, `${role}: ${JSON.stringify(res.body)}`);
+    assert.strictEqual(res.body.code, 'FORBIDDEN');
+    assert.strictEqual(res.body.message, 'Servis personeli ve yönetici hesapları daire sahibi olamaz. Devri bir müşteri hesabına yapın.');
+    const tr = store.transfers.filter((x) => x.home_id === home.id).at(-1);
+    assert.strictEqual(tr.status, 'PENDING', 'devir beklemede kalir');
+    assert.strictEqual(JSON.stringify(store.members.filter((m) => m.home_id === home.id)), membersBefore, 'uyelikler degismedi');
+    assert.ok(store.member(home.id, owner.id) && store.member(home.id, resident.id));
+    assert.deepStrictEqual(calls, [], 'MQTT/temizlik cagrisi yok');
+  }
 });
 
 test('kabul: hedefle eslesmeyen kullanici 403 ve hedef kimlik SIZDIRILMAZ; devir beklemede kalir', async () => {

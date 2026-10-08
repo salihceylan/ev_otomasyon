@@ -99,6 +99,7 @@ const FW_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$/;
 const TPL_SCHEMA_RETRY_MS = 5 * 60 * 1000; // 035 yoksa tpl yazimi bu sure denenmez (Faz 1 inceleme 7)
 const TPL_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/; // state.tpl.id (Faz 1)
 const LAST_ID_RE = /^[A-Za-z0-9_.:-]{1,24}$/;
+const LK_FP_RE = /^[0-9a-f]{8}$/; // pano-5: state.lk_fp (firmware 1.3.1) yerel anahtar izi
 
 const MAX_PAYLOAD_BYTES = 64 * 1024; // gelen mesaj ust siniri
 const MAX_EVENT_BYTES = 4 * 1024; // olay yuku ust siniri (cfg_dump parcasi <= 3,5 KB + zarf; tasarim §3.4)
@@ -160,12 +161,35 @@ function parseIncomingTopic(topic) {
 }
 
 /** `status` yuku: yalnizca "online" / "offline" (buyuk-kucuk harf duyarsiz). Aksi null. */
+/**
+ * `status` yuku (guvenlik-6, CONTRACTS 3): duz 'online'/'offline' (eski firmware; buyuk/kucuk harf duyarsiz) ya da
+ * JSON {status|state: 'online'|'offline', uid?} (firmware 1.3.1: baglanti, LWT ve yeniden baslatma oncesi yayin).
+ * @returns {{online:boolean, uid:string|null}|null}  uid buyuk harfe normalize; gecersiz yuk / uid -> null
+ */
 function parseStatusPayload(text) {
   if (typeof text !== 'string') return null;
-  const t = text.trim().toLowerCase();
-  if (t === 'online') return true;
-  if (t === 'offline') return false;
-  return null;
+  const t = text.trim();
+  const low = t.toLowerCase();
+  if (low === 'online') return { online: true, uid: null };
+  if (low === 'offline') return { online: false, uid: null };
+  if (!t.startsWith('{')) return null;
+  let obj;
+  try {
+    obj = JSON.parse(t);
+  } catch (_) {
+    return null;
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const raw = obj.status !== undefined ? obj.status : obj.state;
+  if (typeof raw !== 'string') return null;
+  const st = raw.trim().toLowerCase();
+  if (st !== 'online' && st !== 'offline') return null;
+  let uid = null;
+  if (obj.uid !== undefined && obj.uid !== null) {
+    if (typeof obj.uid !== 'string' || !UID_RE.test(obj.uid.trim())) return null;
+    uid = obj.uid.trim().toUpperCase();
+  }
+  return { online: st === 'online', uid };
 }
 
 function isIntInRange(v, min, max) {
@@ -199,6 +223,7 @@ function validateStatePayload(obj) {
     skipped: 0,
     safety: null, // v:3 guvenlik ekleri (caps / last_rej varsa; utils/safety_payload.parseStateSafety)
     tpl: null, // Faz 1 (v1.3.0+): yuklu kurulum sablonu {id, ver} (CONTRACTS §3e); yoksa null
+    lkFp: null, // pano-5 (1.3.1+): yerel anahtar izi (8 kucuk harf hex); yoksa / gecersizse null
   };
 
   if (obj.uid !== undefined) {
@@ -267,6 +292,12 @@ function validateStatePayload(obj) {
     const t = obj.tpl;
     const id = t && typeof t === 'object' && !Array.isArray(t) && typeof t.id === 'string' ? t.id.trim().toLowerCase() : '';
     if (TPL_ID_RE.test(id) && isIntInRange(t.ver, 1, 2147483647)) out.tpl = { id, ver: t.ver };
+    else skipped++;
+  }
+
+  // pano-5: yerel anahtar izi (provizyonsuz / eski panoda alan hic yok = gecerli).
+  if (obj.lk_fp !== undefined) {
+    if (typeof obj.lk_fp === 'string' && LK_FP_RE.test(obj.lk_fp)) out.lkFp = obj.lk_fp;
     else skipped++;
   }
 
@@ -615,6 +646,20 @@ const STATUS_UPDATE_SQL =
   'last_seen_at = CASE WHEN $2::boolean AND NOT $3::boolean THEN CURRENT_TIMESTAMP ELSE d.last_seen_at END ' +
   'FROM homes h ' +
   'WHERE d.home_id = h.id AND h.mqtt_username = $1 ' +
+  'AND (d.is_online IS DISTINCT FROM $2::boolean OR ($2::boolean AND NOT $3::boolean))';
+
+// pano-5 (f): panonun bildirdigi yerel anahtar izi; yalniz degisince yazilir (kalp atisinda satir yazimi yok).
+const LOCAL_KEY_FP_SQL =
+  'UPDATE devices SET local_key_fp = $2, local_key_fp_at = CURRENT_TIMESTAMP ' +
+  'WHERE id = $1 AND local_key_fp IS DISTINCT FROM $2';
+
+// guvenlik-6: uid'li status YALNIZ o panoyu gunceller (cok panolu evde A'nin LWT'si B'yi cevrimdisi yapmaz).
+const STATUS_UPDATE_UID_SQL =
+  'UPDATE devices d ' +
+  'SET is_online = $2::boolean, ' +
+  'last_seen_at = CASE WHEN $2::boolean AND NOT $3::boolean THEN CURRENT_TIMESTAMP ELSE d.last_seen_at END ' +
+  'FROM homes h ' +
+  'WHERE d.home_id = h.id AND h.mqtt_username = $1 AND upper(d.device_uuid) = upper($4::text) ' +
   'AND (d.is_online IS DISTINCT FROM $2::boolean OR ($2::boolean AND NOT $3::boolean))';
 
 const SWEEP_OFFLINE_SQL =
@@ -1063,10 +1108,10 @@ class MqttBridge {
    * (burada olusturulmaz): end() sonrasi biten, onceden baslamis bir state isi yeni servis kurmaz.
    * @param {'onLiveState'|'onOffline'} method
    */
-  _notifyLayoutSync(method, arg) {
+  _notifyLayoutSync(method, ...args) {
     try {
       const s = this._layoutSync;
-      if (s && typeof s[method] === 'function') s[method](arg);
+      if (s && typeof s[method] === 'function') s[method](...args);
     } catch (err) {
       // Yalniz hata turu: ileti ad / kimlik tasiyabilir.
       this._warnOnce('layout-notify', `Yerlesim esitleme bildirimi hatasi: ${err && err.name ? err.name : 'bilinmiyor'}`);
@@ -1225,14 +1270,14 @@ class MqttBridge {
       }
 
       if (parsed.kind === 'status') {
-        const online = parseStatusPayload(text);
-        if (online === null) {
+        const st = parseStatusPayload(text);
+        if (st === null) {
           this.counters.invalid++;
           this._warnOnce(`badstatus:${parsed.topicId}`, `Gecersiz status yuku atildi [${parsed.topicId}]`);
           return;
         }
         this.counters.status++;
-        await this._queue.push(parsed.topicId, 'status', () => this._processStatus(parsed.topicId, online, retain));
+        await this._queue.push(parsed.topicId, 'status', () => this._processStatus(parsed.topicId, st.online, retain, st.uid));
         return;
       }
 
@@ -1284,7 +1329,10 @@ class MqttBridge {
       // Kapanisa girer: kuyruk birlestirmesi en yeni mesajin degerini + yerlesimini birlikte kullanir.
       try {
         const layout = this._layoutSyncEnabled ? this._extractLayout(obj) : null;
-        await this._queue.push(parsed.topicId, 'state', () => this._processState(parsed.topicId, check.value, retain, layout), {
+        // guvenlik-6: birlestirme pano basina (state:<uid>): cok panolu evde B'nin state'i A'nin bekleyen state'ini yutmaz;
+        // ertelenen cfg bekleyicisi kendi panosunun state'i yazilinca cozulur.
+        const stateKind = check.value.uid ? `state:${check.value.uid}` : 'state';
+        await this._queue.push(parsed.topicId, stateKind, () => this._processState(parsed.topicId, check.value, retain, layout), {
           coalesce: true,
         });
       } finally {
@@ -1318,14 +1366,55 @@ class MqttBridge {
     }
   }
 
-  async _processStatus(topicId, online, retain) {
+  /**
+   * pano-5 (f): canli state'in lk_fp'si devices.local_key_fp'ye (yalniz degisince). COMMIT sonrasi, ana islemden ayri;
+   * ASLA firlatmaz. 42703/42P01 (migration 037 yok): uyari + bir sure denenmez (sablon yazimiyla ayni desen). Yazim
+   * basarili olunca uzlastirici bilgilendirilir (changed = iz degisti; bekleyen onay yoksa uzlastirici is yapmaz).
+   */
+  async _writeLocalKeyFp(topicId, device, v, live) {
+    if (!live || !v || !v.lkFp || !device || !device.device_id) return;
+    if (this._lkFpSchemaRetryAt && this.now() < this._lkFpSchemaRetryAt) return;
+    let changed = false;
     try {
-      await this.db.query(STATUS_UPDATE_SQL, [topicId, online, retain]);
-      // Canli LWT/offline: cevrimici donem biter (retained 'offline' bayat olabilir: sayilmaz).
-      if (!online && !retain && this._reconcileEnabled) this._notifyReconciler('onOffline', topicId);
+      const r = await this.db.query(LOCAL_KEY_FP_SQL, [device.device_id, v.lkFp]);
+      this._lkFpSchemaRetryAt = 0;
+      changed = Boolean(r && r.rowCount > 0);
+    } catch (err) {
+      if (err && (err.code === '42703' || err.code === '42P01')) {
+        this._lkFpSchemaRetryAt = this.now() + TPL_SCHEMA_RETRY_MS;
+        this._warnOnce('lkfp-schema', 'devices.local_key_fp kolonu yok (migration 037 uygulanmamis); anahtar izi atlandi.');
+        return;
+      }
+      this.counters.dbErrors++;
+      this._warnOnce(`db-lkfp:${topicId}`, `Anahtar izi yazilamadi [${topicId}]: ${err && err.message ? err.message : 'bilinmiyor'}`);
+      return;
+    }
+    if (this._reconcileEnabled) {
+      this._notifyReconciler('onLocalKeyFp', { topicId, homeId: device.home_id, deviceId: device.device_id, fp: v.lkFp, changed });
+    }
+  }
+
+  async _processStatus(topicId, online, retain, uid = null) {
+    try {
+      if (uid) {
+        await this.db.query(STATUS_UPDATE_UID_SQL, [topicId, online, retain, uid]);
+      } else {
+        // guvenlik-6: uid'siz (eski firmware) status hangi panonun oldugunu soylemez: cok panolu evde YOK SAYILIR
+        // (cevrimicilik canli state'ten ve 120 sn supurucuden gelir); tek panolu evde eski davranis.
+        const res = await this.db.query(RESOLVE_HOME_SQL, [topicId]);
+        const boards = ((res && res.rows) || []).filter((r) => r.device_id).length;
+        if (boards > 1) {
+          this.counters.ignored++;
+          this._warnOnce(`status-multi:${topicId}`, `Cok panolu evde uid'siz status yok sayildi [${topicId}]`);
+          return;
+        }
+        await this.db.query(STATUS_UPDATE_SQL, [topicId, online, retain]);
+      }
+      // Canli LWT/offline: cevrimici donem biter (retained 'offline' bayat olabilir: sayilmaz). Bildirim uid'li.
+      if (!online && !retain && this._reconcileEnabled) this._notifyReconciler('onOffline', topicId, uid);
       // Yerlesim esitleme (WP-L): evin cihaz onbellegi atilir; yeni kimlikle donen pano ilk canli state'te hemen
       // kontrol edilir (acil sifirlama / pano degisimi sonrasi tohum sablonu RECHECK_MS boyunca kalmasin).
-      if (!online && !retain) this._notifyLayoutSync('onOffline', topicId);
+      if (!online && !retain) this._notifyLayoutSync('onOffline', topicId, uid);
     } catch (err) {
       this.counters.dbErrors++;
       this._warnOnce('db-status', `Status guncelleme hatasi [${topicId}]: ${err.message}`);
@@ -1403,6 +1492,8 @@ class MqttBridge {
           reported: typeof v.childLock === 'boolean' ? v.childLock : null,
         });
       }
+      // pano-5 (f): yalniz CANLI state'in yerel anahtar izi (COMMIT sonrasi, hata yalitimli; uzlastirici bildirimi icinde).
+      await this._writeLocalKeyFp(topicId, device, v, !retain);
       // Yerlesim esitleme (WP-L): yalniz CANLI state + gecerli yerlesim; COMMIT sonrasi, hata yalitimli. Bayat
       // retained mesaj satir degistirmez. (Canli state'te deviceUpdate her zaman dolu: yukaridaki erken donus atlamaz.)
       if (!retain && layout) {

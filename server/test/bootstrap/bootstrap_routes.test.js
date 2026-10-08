@@ -60,21 +60,42 @@ test('401 govdesi sabit (neden sizmaz)', async () => {
   assert.deepEqual(Object.keys(DENIED_BODY).sort(), ['code', 'message', 'success']);
 });
 
-test('oran siniri: ayni kart icin saatte 6 (7. istek 429, servis cagrilmaz); kart kimligi buyuk/kucuk harf duyarsiz', async () => {
+test('oran siniri (bireysel-6): ayni kart icin saatte 20 DOGRULANMIS istek (21. istek 429, servis cagrilmaz); kart kimligi buyuk/kucuk harf duyarsiz', async () => {
   const { app, calls } = build();
-  for (let i = 0; i < 6; i += 1) {
+  for (let i = 0; i < 20; i += 1) {
     const uuid = i % 2 ? BODY.device_uuid.toLowerCase() : BODY.device_uuid;
     const r = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', `198.51.100.${i + 1}`).send({ ...BODY, device_uuid: uuid });
     assert.equal(r.status, 202, `istek ${i + 1}`);
   }
-  const r7 = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '198.51.100.99').send(BODY);
-  assert.equal(r7.status, 429);
-  assert.equal(r7.body.code, 'RATE_LIMITED');
-  assert.ok(r7.headers['retry-after']);
-  assert.equal(calls.length, 6);
+  const r21 = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '198.51.100.99').send(BODY);
+  assert.equal(r21.status, 429);
+  assert.equal(r21.body.code, 'RATE_LIMITED');
+  assert.ok(Number(r21.headers['retry-after']) > 0);
+  assert.equal(calls.length, 20);
   // baska kart etkilenmez
   const other = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '198.51.100.99').send({ ...BODY, device_uuid: 'AHBU-S3-000001' });
   assert.equal(other.status, 202);
+});
+
+test('oran siniri (bireysel-6): imzasi dogrulanmayan (401) istekler kart butcesini HARCAMAZ; 7 sahte istekten sonra gecerli istek gecer', async () => {
+  let forged = true;
+  const { app, calls } = build(() => (forged ? { http: 401, body: DENIED_BODY } : { http: 202, body: { status: 'pending' } }));
+  for (let i = 0; i < 7; i += 1) {
+    const r = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', `198.51.101.${i + 1}`).send(BODY);
+    assert.equal(r.status, 401, `sahte ${i + 1}`);
+  }
+  forged = false;
+  const ok = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '198.51.101.50').send(BODY);
+  assert.equal(ok.status, 202, 'gecerli istek hala kabul edilir');
+  assert.equal(calls.length, 8);
+  // cok sayida sahte istek de (IP siniri altinda kaldigi surece) karti kilitlemez
+  forged = true;
+  for (let i = 0; i < 25; i += 1) {
+    await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', `198.51.102.${i + 1}`).send(BODY);
+  }
+  forged = false;
+  const still = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '198.51.101.51').send(BODY);
+  assert.equal(still.status, 202);
 });
 
 test('oran siniri: ayni IP icin saatte 60 (farkli kartlarla 61. istek 429)', async () => {

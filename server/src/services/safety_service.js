@@ -136,7 +136,18 @@ class SafetyService {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
     const device = await this.deviceService._findHomeDevice(homeId, isUuid ? { id: ref } : { uuid: ref.toUpperCase() });
     const cfg = await this.alarms.getConfig({ deviceId: device.id, module: 'safety' });
-    if (!cfg) throw httpError(404, 'Panonun güvenlik yapılandırması henüz sunucuya ulaşmadı.', 'CONFIG_NOT_AVAILABLE');
+    if (!cfg) {
+      // guvenlik-3: kopya yok -> panodan iste (cfg_get, en iyi caba; hata yutulur), yine 404 (istemci kisa aralikla yeniden okur)
+      try {
+        const sync = this.cfgSync;
+        if (sync && typeof sync._requestConfig === 'function') {
+          await sync._requestConfig({ topicId: device.topic_id, deviceId: device.id, uid: String(device.device_uuid || '').toUpperCase() });
+        }
+      } catch (_) {
+        /* en iyi caba */
+      }
+      throw httpError(404, 'Panonun güvenlik yapılandırması henüz sunucuya ulaşmadı.', 'CONFIG_NOT_AVAILABLE');
+    }
     const out = { device_uuid: String(device.device_uuid || '').toUpperCase(), ...cfg };
     // Faz 2 F2.D.6: state_rev (panonun son bildirdigi rev), next_base_rev (kuyruk varsa son oge + 1) ve bekleyen ozeti
     // (yalniz safety_config yetkilisine; deger/ad icermez).

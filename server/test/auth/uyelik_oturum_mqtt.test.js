@@ -153,6 +153,51 @@ test('logout-all: TUM evlerdeki uygulama MQTT kimlikleri ayni transaction\'da si
   assert.strictEqual((await post('refresh', { refresh_token: me.refresh_token })).status, 401);
 });
 
+/** Kullanicinin urettigi kullanilmamis PIN + kullanilmis PIN ile acik servis oturumu + o evin oturum kimligi. */
+function seedServiceAccess(userId) {
+  const homeId = crypto.randomUUID();
+  const unused = { id: crypto.randomUUID(), home_id: homeId, created_by: userId, used_at: null, revoked_at: null };
+  const used = { id: crypto.randomUUID(), home_id: homeId, created_by: userId, used_at: new Date(), revoked_at: null };
+  store.serviceTokens.push(unused, used);
+  const session = { id: crypto.randomUUID(), home_id: homeId, service_token_id: used.id, revoked_at: null, revoked_reason: null };
+  store.serviceSessions.push(session);
+  const sessionCred = store.addMqttCred(null, { home_id: homeId, kind: 'app', user_id: null });
+  const otherHomeCred = store.addMqttCred(null, { home_id: crypto.randomUUID(), kind: 'app', user_id: null });
+  return { unused, used, session, sessionCred, otherHomeCred };
+}
+
+test('uyelik-7: logout-all kullanicinin urettigi kullanilmamis PIN i ve bu PIN lerle acilmis servis oturumlarini kapatir; oturum MQTT kimligi silinir + atilir', async () => {
+  const me = await register('mqtt.servis.pin@example.com');
+  const sa = seedServiceAccess(me.id);
+  const res = await post('logout-all', {}, me.access_token);
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.ok(sa.unused.revoked_at, 'kullanilmamis PIN iptal');
+  assert.strictEqual(sa.used.revoked_at, null, 'kullanilmis PIN satirina dokunulmaz (oturum ayrica kapanir)');
+  assert.ok(sa.session.revoked_at, 'acik servis oturumu iptal');
+  assert.strictEqual(sa.session.revoked_reason, 'logout_all');
+  assert.ok(!store.mqttCreds.includes(sa.sessionCred), 'o evin servis oturumu MQTT kimligi silindi');
+  assert.ok(store.mqttCreds.includes(sa.otherHomeCred), 'baska evin kimligi KALIR');
+  assert.ok(kickedClientIds().includes(`cid-${sa.sessionCred.username}`), 'baglanti atildi');
+});
+
+test('uyelik-7: parola degisimi de servis PIN/oturumlarini kapatir; role_changed DOKUNMAZ', async () => {
+  const me = await register('mqtt.servis.rol@example.com');
+  const sa = seedServiceAccess(me.id);
+  const r = await authService.revokeAllUserSessions(me.id, { reason: 'role_changed' });
+  assert.strictEqual(r.serviceSessionsRevoked, false);
+  assert.strictEqual(sa.unused.revoked_at, null, 'role_changed: PIN korunur');
+  assert.strictEqual(sa.session.revoked_at, null, 'role_changed: oturum korunur');
+  assert.ok(store.mqttCreds.includes(sa.sessionCred));
+
+  const login = await post('login', { email: 'mqtt.servis.rol@example.com', password: PW });
+  assert.strictEqual(login.status, 200, JSON.stringify(login.body));
+  const ch = await post('change-password', { current_password: PW, new_password: 'Yeni-Parola-2026x' }, login.body.data.access_token);
+  assert.strictEqual(ch.status, 200, JSON.stringify(ch.body));
+  assert.ok(sa.unused.revoked_at && sa.session.revoked_at, 'parola degisimi: PIN ve oturum kapandi');
+  assert.strictEqual(sa.session.revoked_reason, 'password_changed');
+  assert.ok(!store.mqttCreds.includes(sa.sessionCred));
+});
+
 test('change-password: diger cihazlarin uygulama MQTT kimlikleri silinir + atilir; bu cihaza yeni oturum doner', async () => {
   const me = await register('mqtt.degis@example.com');
   const seed = seedCreds(me.id);

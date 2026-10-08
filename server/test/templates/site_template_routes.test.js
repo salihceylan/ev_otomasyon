@@ -142,7 +142,9 @@ test('eski /api oneki de calisir; parametreler servise aynen gider', async () =>
   const { app, svc } = build();
   const res = await request(app).put(`/api/sites/${SITE}/flats/${FLAT}/device`).set('x-test-user', ACTORS.staff).send({ device_uuid: null });
   assert.equal(res.status, 200);
-  assert.deepEqual(svc.calls[0].args, [SITE, FLAT, null]);
+  assert.deepEqual(svc.calls[0].args.slice(0, 3), [SITE, FLAT, null]);
+  // atolye-8: aktor (super_user IN_STOCK olmayan karti baglayabilir) servise gider
+  assert.equal(svc.calls[0].args[3].globalRole, 'service_user');
   const r2 = await request(app).get(`/api/v1/templates?site_id=${SITE}&include_global=1`).set('x-test-user', ACTORS.super);
   assert.equal(r2.status, 200);
   assert.deepEqual(svc.calls[1].args, [{ siteId: SITE, includeGlobal: true }]);

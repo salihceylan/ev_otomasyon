@@ -186,6 +186,7 @@ test('bolge olaylari (aid yok) bolgenin acik HIRSIZ satirini bulmaz (findAlarm k
 // ------------------------------------------------------------------------------
 function liveDb(openRows) {
   return scriptedDb([
+    { match: /WHERE device_id = \$1 AND home_id <> \$2/, reply: () => ({ rows: [], rowCount: 0 }) }, // guvenlik-1
     { match: /^SELECT id, aid, zone, kind, status, ack_requested_at/, reply: () => ({ rows: openRows, rowCount: openRows.length }) },
     { match: /^INSERT INTO alarms/, reply: () => ({ rows: [{ id: 77 }], rowCount: 1 }) },
     { match: /SET status = 'lost'/, reply: (p) => ({ rows: [{ id: p[0] }], rowCount: 1 }) },
@@ -204,22 +205,25 @@ async function live(rows, s, caps = CAPS) {
   return { db, r };
 }
 
+// guvenlik-1: her canli state'te calisan 'baska evdeki acik satir -> lost' toplu sorgusu (home_id <> $2) satir karari degildir
+const rowVerdicts = (db) => db.calls.filter((c) => /SET status = 'cleared'|SET status = 'lost'/.test(c.text) && !/home_id <> \$2/.test(c.text));
+
 test('KRITIK: bolge uzlastirmasi hirsiz satirini kapatmaz (zones[] tam ve bos olsa da)', async () => {
   const { db } = await live([INTR_ROW], summary({ mode: 'away', st: 'alarm', ok: true, aid: '9f3a11c0-7', srcs: ['d5'] }));
-  assert.equal(db.calls.filter((c) => /SET status = 'cleared'|SET status = 'lost'/.test(c.text)).length, 0);
+  assert.equal(rowVerdicts(db).length, 0);
 });
 
 test('arm uzlastirmasi: st != alarm -> cleared (device_state); arm yok -> lost; arm.ok=false -> lost; baska aid -> cleared', async () => {
   let { db } = await live([INTR_ROW], summary({ mode: 'off', st: 'idle', ok: true, aid: null, srcs: [] }));
   assert.deepEqual(db.calls.find((c) => /SET status = 'cleared'/.test(c.text)).params, [41, 'device_state']);
   ({ db } = await live([INTR_ROW], summary(null)));
-  assert.ok(db.calls.find((c) => /SET status = 'lost'/.test(c.text)), 'arm yok -> lost');
+  assert.ok(rowVerdicts(db).find((c) => /SET status = 'lost'/.test(c.text)), 'arm yok -> lost');
   ({ db } = await live([INTR_ROW], summary({ mode: 'away', st: 'alarm', ok: false, aid: '9f3a11c0-7', srcs: [] })));
-  assert.ok(db.calls.find((c) => /SET status = 'lost'/.test(c.text)), 'ok=false -> lost');
+  assert.ok(rowVerdicts(db).find((c) => /SET status = 'lost'/.test(c.text)), 'ok=false -> lost');
   ({ db } = await live([INTR_ROW], summary({ mode: 'away', st: 'alarm', ok: true, aid: '9f3a11c0-9', srcs: ['d5'] })));
   assert.deepEqual(db.calls.find((c) => /SET status = 'cleared'/.test(c.text)).params, [41, 'device_state']);
   ({ db } = await live([INTR_ROW], summary({ mode: 'away', st: 'unknown', ok: true, aid: null, srcs: [] })));
-  assert.equal(db.calls.filter((c) => /SET status = 'cleared'|SET status = 'lost'/.test(c.text)).length, 0, 'bilinmeyen durum: dokunma');
+  assert.equal(rowVerdicts(db).length, 0, 'bilinmeyen durum: dokunma');
 });
 
 test('arm uzlastirmasi: olayi kaybolmus alarm state\'ten acilir (origin state, kind intrusion, bolge kaynak sensorunden)', async () => {

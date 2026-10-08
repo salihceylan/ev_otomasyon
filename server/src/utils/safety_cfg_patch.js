@@ -386,6 +386,65 @@ function nextBaseRev(q, stateRev) {
   return Number.isInteger(stateRev) ? stateRev : null;
 }
 
+/**
+ * guvenlik-4: cevrimdisi kuyruga eklenecek yama, kopya + kuyruktaki yamalar SIRAYLA uygulanmis zincire gore anlamli mi?
+ * Eylemci silmede firmware kalanlari yeniden numaralar (a3 -> a2): zincirdeki "a2" kopyadaki "a2" olmayabilir. Kimlik
+ * izlenir; belirsiz / bulunamayan hedef ve ayni roleye ikinci kimliksiz ekleme reddedilir (yanlis vana silinmesin).
+ * @returns {null|'missing_target'|'renumbered'|'duplicate_relay'}
+ */
+function chainConflict(body, items, patch) {
+  const doc = isObj(body) ? body : {};
+  // eylemci izleri: {id (zincirdeki), orig (kopyadaki kimlik; zincirde eklendiyse null), relay}
+  let acts = (Array.isArray(doc.actuators) ? doc.actuators.filter(isObj) : []).map((a) => ({ id: a.id, orig: a.id, relay: a.relay }));
+  const sensors = new Set((Array.isArray(doc.sensors) ? doc.sensors.filter(isObj) : []).map((x) => x.id));
+  const renum = () => {
+    acts = acts.map((a, i) => ({ ...a, id: `a${i + 1}` }));
+  };
+  const step = (p) => {
+    if (!isObj(p)) return;
+    if (isObj(p.del)) {
+      if (typeof p.del.sensor === 'string') sensors.delete(p.del.sensor);
+      if (typeof p.del.actuator === 'string') {
+        acts = acts.filter((a) => a.id !== p.del.actuator);
+        renum();
+      }
+      return;
+    }
+    const set = isObj(p.set) ? p.set : {};
+    if (isObj(set.sensor) && typeof set.sensor.id === 'string') sensors.add(set.sensor.id);
+    if (isObj(set.actuator)) {
+      const id = typeof set.actuator.id === 'string' ? set.actuator.id : null;
+      const i = id ? acts.findIndex((a) => a.id === id) : -1;
+      if (i >= 0) acts[i] = { ...acts[i], relay: set.actuator.relay };
+      else if (!id || id === `a${acts.length + 1}`) acts.push({ id: `a${acts.length + 1}`, orig: null, relay: set.actuator.relay });
+    }
+  };
+  for (const it of items || []) step(it && it.patch);
+
+  if (!isObj(patch)) return null;
+  if (isObj(patch.del)) {
+    if (typeof patch.del.sensor === 'string' && !sensors.has(patch.del.sensor)) return 'missing_target';
+    if (typeof patch.del.actuator === 'string') {
+      const a = acts.find((x) => x.id === patch.del.actuator);
+      if (!a) return 'missing_target';
+      if (a.orig !== patch.del.actuator) return 'renumbered';
+    }
+    return null;
+  }
+  const set = isObj(patch.set) ? patch.set : {};
+  if (isObj(set.actuator)) {
+    const id = typeof set.actuator.id === 'string' ? set.actuator.id : null;
+    if (id) {
+      const a = acts.find((x) => x.id === id);
+      if (a && a.orig !== id) return 'renumbered';
+      return null;
+    }
+    // kimliksiz ekleme: ayni role zincirde (kuyruktaki eklemelerle) zaten eklendiyse ikinci kez eklenmez
+    if (acts.some((a) => a.orig === null && a.relay === set.actuator.relay)) return 'duplicate_relay';
+  }
+  return null;
+}
+
 /** GET yanitindaki ozet: deger ve AD icermez. */
 function pendingSummary(q) {
   return ((q && q.items) || []).map((it) => {
@@ -401,6 +460,7 @@ module.exports = {
   buildSysPayload,
   sysPayloadBytes,
   applyPatch,
+  chainConflict,
   parsePending,
   serializePending,
   inflightActive,

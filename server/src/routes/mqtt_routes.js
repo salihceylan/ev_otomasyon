@@ -5,8 +5,10 @@
 //
 //   POST /:homeId/mqtt-credentials
 //     Uyelik + (misafir) sure dogrulanir (requireHomeAccess). Yanit (CONTRACTS §1.5):
-//       { host, port, username, password, client_id, expires_at, topic_id }
-//     SALT-OKUNUR kimlik: yalnizca ev/{t}/state ve ev/{t}/status aboneligi. Sure = min(12 saat, misafir bitisi).
+//       { host, port, username, password, client_id, expires_at, expires_in, topic_id }
+//     expires_in: sunucuda hesaplanan kalan sure (tam sayi sn; kullanim-10).
+//     SALT-OKUNUR kimlik: yalnizca ev/{t}/state ve ev/{t}/status aboneligi. Sure = min(12 saat, misafir bitisi /
+//     servis oturumu bitisi / servis sorumlusunun kurulum penceresi sonu).
 //     Istemci sure dolmadan yeniler. Komutlar MQTT'den degil REST'ten (POST /devices/:id/command) gider.
 // ==============================================================================
 
@@ -60,6 +62,9 @@ function createRouter(deps = {}) {
         }
       } else if (actor.isServiceSession) {
         validUntil = access.valid_until || (req.user && req.user.session_expires_at) || null;
+      } else if (access.role === 'service_user' && access.installer_expires_at) {
+        // Sureli servis uyeligi (uyelik-6): sure = min(12 saat, kurulum penceresi sonu)
+        validUntil = access.installer_expires_at;
       }
 
       const credential = await credentials.issueUserCredential({
@@ -67,6 +72,10 @@ function createRouter(deps = {}) {
         userId: actor.userId, // servis oturumunda null
         validUntil,
       });
+
+      // kullanim-10: kalan sure SUNUCU saatine gore (tam sayi sn); istemci telefon saatinden bagimsiz yeniler.
+      const expiresMs = new Date(credential.expires_at).getTime();
+      const expiresIn = Number.isFinite(expiresMs) ? Math.max(0, Math.floor((expiresMs - Date.now()) / 1000)) : 0;
 
       noStore(res);
       return successResponse(
@@ -78,6 +87,7 @@ function createRouter(deps = {}) {
           password: credential.password,
           client_id: credential.client_id,
           expires_at: credential.expires_at,
+          expires_in: expiresIn,
           topic_id: credential.topic_id,
         },
         'MQTT kimliği oluşturuldu.',

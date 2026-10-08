@@ -2,9 +2,9 @@
 
 // WP-B2 / gorev 4: POST /api/v1/admin/inventory/:uid/reissue-label
 //   - YALNIZ super_user (JWT); API anahtari / staff / diger roller reddedilir
-//   - YALNIZ IN_STOCK ve hicbir daireye baglanmamis / devreye alinmamis cihaz
-//   - yeni PIN + yeni yerel anahtar (secret_box ile SIFRELI saklanir); ESKI PIN GECERSIZ olur
-//   - yanitta PIN ve anahtar BIR KEZ + PIN'li qr_claim_url; denetim kaydi (sir icermez); ATOMIK
+//   - YALNIZ IN_STOCK ve hicbir daireye baglanmamis / devreye alinmamis cihaz; site dairesine bagli kart 409 (atolye-8)
+//   - YALNIZ yeni PIN; ESKI PIN GECERSIZ olur. Yerel anahtar DEGISMEZ (atolye-2: panodaki anahtarla kopmasin)
+//   - yanitta PIN BIR KEZ + PIN'li qr_claim_url; local_key YOK; denetim kaydi (sir icermez, key_changed:false); ATOMIK
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -59,7 +59,7 @@ test('yalnız super_user yeniden üretebilir: staff, resident, owner, normal kul
   assert.equal(inv.label_reissue_count, 0);
 });
 
-test('başarı: yeni PIN + yeni yerel anahtar BİR KEZ; qr_claim_url PIN\'li; eski PIN GEÇERSİZ; anahtar şifreli saklanır; sayaç/kilit sıfırlanır', async () => {
+test('başarı (atolye-2): YALNIZ yeni PIN BİR KEZ; qr_claim_url PIN\'li; eski PIN GEÇERSİZ; yerel anahtar DEĞİŞMEZ ve yanıtta YOK; sayaç/kilit sıfırlanır', async () => {
   const { inv, oldKey } = stockDevice();
   const oldEnc = inv.local_key_enc;
   assert.equal(inv.failed_attempts, 3);
@@ -71,25 +71,24 @@ test('başarı: yeni PIN + yeni yerel anahtar BİR KEZ; qr_claim_url PIN\'li; es
   assert.equal(r.body.success, true);
   const d = r.body.data;
   assert.match(d.setup_pin, /^\d{6}$/);
-  assert.match(d.local_key, /^[\x21-\x7E]{8,32}$/);
   assert.notEqual(d.setup_pin, OLD_PIN);
-  assert.notEqual(d.local_key, oldKey);
+  assert.ok(!('local_key' in d), 'yerel anahtar yanıtta YOK');
+  assert.deepEqual(Object.keys(d).sort(), ['device', 'message', 'qr_claim_url', 'setup_pin']);
   assert.equal(d.qr_claim_url, `https://evotomasyon.gudeteknoloji.com.tr/claim?uid=${encodeURIComponent(inv.device_uuid)}&pin=${d.setup_pin}`);
   assert.equal(d.device.device_uuid, inv.device_uuid);
   assert.equal(d.device.status, 'IN_STOCK');
   assert.equal(d.device.label_reissue_count, 1);
   assert.ok(d.device.label_reissued_at);
   assert.ok(!('pin_hash' in d.device) && !('local_key_enc' in d.device), 'özet/şifreli değer yanıtta yok');
-  assert.ok(d.message.includes('geçersiz'));
+  assert.equal(d.message, 'Etiket yeniden üretildi. Eski PIN artık geçersiz; yeni PIN yalnızca şimdi gösterilir. Yerel anahtar değişmedi.');
 
   // eski PIN geçersiz, yeni PIN geçerli (HMAC özeti)
   assert.equal(pin.verifyPin(OLD_PIN, inv.pin_hash), false);
   assert.equal(pin.verifyPin(d.setup_pin, inv.pin_hash), true);
-  // anahtar: şifreli ve yeni; düz metin hiçbir kayıtta yok
-  assert.notEqual(inv.local_key_enc, oldEnc);
-  assert.ok(inv.local_key_enc.startsWith('v1:'));
-  assert.equal(secretBox.decrypt(inv.local_key_enc), d.local_key);
-  assert.ok(!JSON.stringify(inv).includes(d.local_key) && !JSON.stringify(inv).includes(d.setup_pin));
+  // anahtar: AYNEN (panodaki anahtarla eşleşmeye devam eder)
+  assert.equal(inv.local_key_enc, oldEnc);
+  assert.equal(secretBox.decrypt(inv.local_key_enc), oldKey);
+  assert.ok(!JSON.stringify(inv).includes(d.setup_pin));
   // yanlış-PIN sayacı/kilidi sıfırlandı
   assert.equal(inv.failed_attempts, 0);
   assert.equal(inv.locked_until, null);
@@ -100,19 +99,29 @@ test('başarı: yeni PIN + yeni yerel anahtar BİR KEZ; qr_claim_url PIN\'li; es
   assert.equal(audit.actor_user_id, sup.id);
   assert.equal(audit.actor_role, 'super_user');
   assert.ok(audit.ip_address);
-  assert.deepEqual(audit.details, { reissue_count: 1 });
-  assert.ok(!JSON.stringify(audit).includes(d.setup_pin) && !JSON.stringify(audit).includes(d.local_key));
+  assert.deepEqual(audit.details, { reissue_count: 1, key_changed: false });
+  assert.ok(!JSON.stringify(audit).includes(d.setup_pin) && !JSON.stringify(audit).includes(oldKey));
 });
 
-test('tekrar yeniden üretim: sayaç artar, her seferinde farklı PIN/anahtar; öncekiler geçersiz; küçük harfli UID kabul edilir', async () => {
-  const { inv } = stockDevice();
+test('tekrar yeniden üretim: sayaç artar, her seferinde farklı PIN; öncekiler geçersiz; anahtar hep aynı; küçük harfli UID kabul edilir', async () => {
+  const { inv, oldKey } = stockDevice();
   const a = (await reissue(inv.device_uuid)).body.data;
   const b = (await reissue(inv.device_uuid.toLowerCase())).body.data;
   assert.equal(b.device.label_reissue_count, 2);
-  assert.notEqual(a.local_key, b.local_key);
   assert.equal(pin.verifyPin(b.setup_pin, inv.pin_hash), true);
   if (a.setup_pin !== b.setup_pin) assert.equal(pin.verifyPin(a.setup_pin, inv.pin_hash), false, 'ilk yeniden üretimin PIN\'i de geçersiz');
-  assert.equal(secretBox.decrypt(inv.local_key_enc), b.local_key);
+  assert.equal(secretBox.decrypt(inv.local_key_enc), oldKey);
+});
+
+test('atolye-8: site dairesine bağlı kartın etiketi yenilenemez (409 DEVICE_LINKED_TO_FLAT); hiçbir şey değişmez', async () => {
+  const { inv } = stockDevice();
+  state.site_flats.push({ id: uid(), device_uuid: inv.device_uuid });
+  const before = JSON.stringify(inv);
+  const r = await reissue(inv.device_uuid);
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, 'DEVICE_LINKED_TO_FLAT');
+  assert.equal(r.body.message, 'Kart bir daireye bağlı; önce daireden ayırın.');
+  assert.equal(JSON.stringify(inv), before);
 });
 
 test('durum kısıtı: IN_STOCK dışı (CLAIMED/INSTALLED/SUSPENDED/REVOKED) 409; hiçbir şey değişmez', async () => {
@@ -140,39 +149,37 @@ test('provizyon/claim kısıtı: daireye bağlı, sahiplenilmiş veya devreye al
   const c = stockDevice();
   const dev = h.device(null, { uuid: c.inv.device_uuid, commissioned: true });
   assert.equal((await reissue(c.inv.device_uuid)).status, 409);
-  // yetim cihaz kaydı (acil sıfırlamadan kalan; bağlı değil): İZİNLİ ve anahtarı eşitlenir
+  // yetim cihaz kaydı (acil sıfırlamadan kalan; bağlı değil): İZİNLİ; anahtarına DOKUNULMAZ (atolye-2)
   dev.is_commissioned = false;
   dev.is_claimed = false;
+  dev.local_key_enc = c.inv.local_key_enc;
+  dev.local_key_pending_enc = 'bekleyen-anahtar';
   const r = await reissue(c.inv.device_uuid);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(dev.local_key_enc, c.inv.local_key_enc, 'yetim cihaz kaydı da aynı anahtarı taşır');
-  assert.equal(secretBox.decrypt(dev.local_key_enc), r.body.data.local_key);
+  assert.equal(dev.local_key_enc, c.inv.local_key_enc, 'yetim cihaz anahtarı aynen');
+  assert.equal(dev.local_key_pending_enc, 'bekleyen-anahtar', 'bekleyen anahtar aynen');
 });
 
-test('bilinmeyen cihaz 404; geçersiz kimlik 400; ortam anahtarı yoksa 503 (anahtar üretilemez)', async () => {
+test('bilinmeyen cihaz 404; geçersiz kimlik 400; LOCAL_KEY_SECRET yoksa da çalışır (anahtar üretilmez)', async () => {
   assert.equal((await reissue('AHBU-YOKTUR-999')).status, 404);
   assert.equal((await reissue('gecersiz')).status, 400);
   assert.equal((await reissue('AHBU-')).status, 400, 'UID biçimi (AHBU-xxx, en az 3 karakter)');
   const { inv } = stockDevice();
   const saved = process.env.LOCAL_KEY_SECRET;
-  const savedErr = console.error;
   process.env.LOCAL_KEY_SECRET = '';
-  console.error = () => {}; // 5xx yanıtlar için hata yakalayıcı yığını loglar (beklenen)
   try {
     const r = await reissue(inv.device_uuid);
-    assert.equal(r.status, 503);
-    assert.equal(r.body.code, 'SERVICE_UNAVAILABLE');
-    assert.equal(inv.pin_hash, pin.hashPin(OLD_PIN), 'PIN değişmedi');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(pin.verifyPin(r.body.data.setup_pin, inv.pin_hash), true);
   } finally {
     process.env.LOCAL_KEY_SECRET = saved;
-    console.error = savedErr;
   }
 });
 
-test('ATOMİK: yetim cihaz anahtarı güncellenirken hata olursa envanter satırı DA geri alınır (PIN değişmez)', async () => {
+test('ATOMİK: denetim kaydı yazılırken hata olursa envanter satırı DA geri alınır (PIN değişmez)', async () => {
   const { inv } = stockDevice();
   const before = JSON.stringify(inv);
-  const hook = { matcher: (sql) => sql.startsWith('UPDATE devices SET local_key_enc'), fn: () => { throw new Error('beklenen test hatası'); } };
+  const hook = { matcher: (sql) => sql.startsWith('INSERT INTO device_audit_logs'), fn: () => { throw new Error('beklenen test hatası'); } };
   world.db.handlers.unshift(hook);
   try {
     await assert.rejects(inventoryService.reissueLabel(inv.device_uuid, { userId: sup.id, role: 'super_user', ip: '1.2.3.4' }), /beklenen test hatası/);
@@ -191,7 +198,8 @@ test('yazmalar TEK transaction içinde ve envanter satırı FOR UPDATE ile kilit
   const log = world.db.log.slice(start);
   assert.ok(log.some((l) => l.sql.includes('FOR UPDATE OF di') && l.tx !== null));
   const writes = log.filter((l) => /^(INSERT|UPDATE|DELETE)/.test(l.sql));
-  assert.equal(writes.length, 3);
+  assert.equal(writes.length, 2, 'envanter PIN guncellemesi + denetim kaydi (cihaz anahtarina yazim YOK)');
+  assert.ok(!writes.some((l) => /local_key/.test(l.sql)), 'yerel anahtara yazim yok');
   assert.ok(writes.every((l) => l.tx !== null && l.tx === writes[0].tx));
 });
 

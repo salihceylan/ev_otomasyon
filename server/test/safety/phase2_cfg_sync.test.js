@@ -32,6 +32,7 @@ function world({ online = true, stateRev = 7, copyRev = 7, copy = true, pending 
     audits: [],
     queries: [],
     members,
+    sessions: [], // guvenlik-5: {id, home_id, revoked_at, expires_at}
   };
   const run = async (text, params) => {
     w.queries.push({ text, params });
@@ -47,6 +48,14 @@ function world({ online = true, stateRev = 7, copyRev = 7, copy = true, pending 
     if (text === SQL.access) {
       const id = params[0];
       return { rows: id in w.members ? [{ id, is_active: true, account_status: null, global_role: 'user', member: w.members[id] }] : [] };
+    }
+    // guvenlik-5: servis (PIN) oturumu ogeleri
+    if (SQL.sessionById && text === SQL.sessionById) {
+      return { rows: w.sessions.filter((x) => x.id === params[0] && x.home_id === params[1]).map((x) => ({ revoked_at: x.revoked_at, expires_at: x.expires_at })) };
+    }
+    if (SQL.sessionRevokedSince && text === SQL.sessionRevokedSince) {
+      const since = Date.parse(params[1]);
+      return { rows: [{ revoked: w.sessions.some((x) => x.home_id === params[0] && x.revoked_at && Date.parse(x.revoked_at) >= since) }] };
     }
     if (text === SQL.audit) {
       w.audits.push({ event: params[0], device_uuid: params[1], home_id: params[2], actor_user_id: params[3], actor_role: params[4], ip: params[5], details: JSON.parse(params[6]) });
@@ -235,7 +244,7 @@ test('cevrimdisi: kuyruga eklenir (202 queued, sira, 24 sa omur); base_rev zinci
   assert.deepEqual(r1, { queued: true, position: 1, expires_at: new Date(T0 + 24 * 3600 * 1000).toISOString(), command_id: 'q-1' });
   assert.equal(b.sys.length, 0);
   assert.equal(w.cfg.pending.items.length, 1);
-  assert.deepEqual(w.cfg.pending.items[0], { id: 'q-1', base_rev: 7, patch: { set: { zone: { id: 1, name: 'Gizli Mutfak' } } }, by: 'u-owner', role: 'owner', at: new Date(T0).toISOString(), loosening: false });
+  assert.deepEqual(w.cfg.pending.items[0], { id: 'q-1', base_rev: 7, patch: { set: { zone: { id: 1, name: 'Gizli Mutfak' } } }, by: 'u-owner', role: 'owner', at: new Date(T0).toISOString(), loosening: false, sid: null });
   await rejects(sync.patch({ actor: OWNER, homeId: HOME, device: DEVICE({ is_online: false }), body: ZONE_BODY(7, 'q-2') }), 409, 'CONFIG_CHANGED_ON_DEVICE');
   const r2 = await sync.patch({ actor: OWNER, homeId: HOME, device: DEVICE({ is_online: false }), body: ZONE_BODY(8, 'q-2') });
   assert.equal(r2.position, 2);
@@ -554,4 +563,156 @@ test('RG-2: yavas yapilandirma kuyrugu isleri ev uzlastirmasini bekletmez (ayri 
   r.stop();
   r.onSafetyState({ topicId: 'h_a', deviceId: 'dev-a' });
   assert.equal(r.stats().safety_cfg_queue.pending, 0, 'durdurulmus uzlastirici yapilandirma isi almaz');
+});
+
+// ------------------------------------------------------------------------------
+// guvenlik-4: cevrimdisi kuyruga ekleme ZINCIR olarak dogrulanir (kopya + kuyruktaki yamalar sirayla)
+// ------------------------------------------------------------------------------
+const THREE_ACTS = [
+  { id: 'a1', relay: 5, kind: 'valve', close_mode: 'energize', medium: 'water', zones: [1], fb_di: 0, fb_closed_active: 1, fb_timeout_s: 60, run_limit_s: 0, exproof: false, name: 'Ana vana' },
+  { id: 'a2', relay: 6, kind: 'siren', close_mode: 'energize', medium: 'none', zones: [1], fb_di: 0, fb_closed_active: 1, fb_timeout_s: 60, run_limit_s: 180, exproof: false, name: 'Siren' },
+  { id: 'a3', relay: 7, kind: 'fan', close_mode: 'energize', medium: 'none', zones: [1], fb_di: 0, fb_closed_active: 1, fb_timeout_s: 60, run_limit_s: 0, exproof: false, name: 'Fan' },
+];
+const CHAIN_TEXT = 'Bekleyen değişikliklerle çelişiyor; kuyruğu iptal edip planı yeniden gönderin.';
+function offlineChainWorld() {
+  _resetEmptyCache();
+  const w = world({ online: false });
+  w.cfg.body.actuators = JSON.parse(JSON.stringify(THREE_ACTS));
+  return w;
+}
+const OFF = () => DEVICE({ is_online: false });
+
+test('guvenlik-4: kuyrukta "del a2" varken ikinci "del a2" (a3 kaymasi) 409 CONFIG_CHANGED_ON_DEVICE; kuyruk degismez', async () => {
+  const w = offlineChainWorld();
+  const sync = make(w, bridgeStub());
+  await sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 7, id: 'q-1', del: { actuator: 'a2' } } });
+  const before = JSON.stringify(w.cfg.pending);
+  const e = await rejects(sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 8, id: 'q-2', del: { actuator: 'a2' } } }), 409, 'CONFIG_CHANGED_ON_DEVICE');
+  assert.equal(e.message, CHAIN_TEXT);
+  assert.equal(JSON.stringify(w.cfg.pending), before, 'kuyruk degismez');
+  // a3 artik zincirde yok (a2'ye kaydi): eski kimlikle silme de 409
+  await rejects(sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 8, id: 'q-3', del: { actuator: 'a3' } } }), 409, 'CONFIG_CHANGED_ON_DEVICE');
+  // kaymis kimlige kimlikli guncelleme de belirsiz: 409
+  await rejects(sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 8, id: 'q-4', set: { actuator: { id: 'a2', relay: 7, kind: 'fan' } } } }), 409, 'CONFIG_CHANGED_ON_DEVICE');
+  assert.equal(w.cfg.pending.items.length, 1);
+});
+
+test('guvenlik-4: ayni roleye kimliksiz ikinci ekleme 409; ayni sensoru ikinci kez silme 409', async () => {
+  const w = offlineChainWorld();
+  const sync = make(w, bridgeStub());
+  await sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 7, id: 'q-1', set: { actuator: { relay: 9, kind: 'siren' } } } });
+  await rejects(sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 8, id: 'q-2', set: { actuator: { relay: 9, kind: 'siren' } } } }), 409, 'CONFIG_CHANGED_ON_DEVICE');
+  assert.equal(w.cfg.pending.items.length, 1);
+  await sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 8, id: 'q-3', del: { sensor: 'd3' } } });
+  await rejects(sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: 9, id: 'q-4', del: { sensor: 'd3' } } }), 409, 'CONFIG_CHANGED_ON_DEVICE');
+  assert.equal(w.cfg.pending.items.length, 2);
+});
+
+test('guvenlik-4: gecerli zincir kuyruga girer (a3 silinince a2 kaymaz; farkli roleye ekleme; kimlikli guncelleme)', async () => {
+  const w = offlineChainWorld();
+  const sync = make(w, bridgeStub());
+  const ok = (rev, id, body) => sync.patch({ actor: OWNER, homeId: HOME, device: OFF(), body: { base_rev: rev, id, ...body } });
+  assert.equal((await ok(7, 'q-1', { del: { actuator: 'a3' } })).queued, true);
+  assert.equal((await ok(8, 'q-2', { del: { actuator: 'a2' } })).queued, true);
+  assert.equal((await ok(9, 'q-3', { set: { actuator: { relay: 9, kind: 'siren' } } })).queued, true);
+  assert.equal((await ok(10, 'q-4', { set: { actuator: { relay: 10, kind: 'fan' } } })).queued, true);
+  assert.equal((await ok(11, 'q-5', { set: { actuator: { id: 'a1', relay: 5, kind: 'valve', medium: 'water', zones: [1], name: 'Ana' } } })).queued, true);
+  assert.deepEqual(w.cfg.pending.items.map((i) => i.id), ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']);
+});
+
+// ------------------------------------------------------------------------------
+// guvenlik-5: iptal edilen / suresi dolan servis (PIN) oturumunun kuyruktaki yamalari uygulanmaz
+// ------------------------------------------------------------------------------
+const SID = '22222222-2222-4222-8222-222222222222';
+const SVC_SESSION = { userId: null, access: 'service_session', isServiceSession: true, sessionId: SID, ip: '203.0.113.9' };
+
+test('guvenlik-5: kuyruk ogesi servis oturumu kimligini (sid) tasir; kullanici ogesinde sid null', async () => {
+  _resetEmptyCache();
+  const w = world({ online: false });
+  const sync = make(w, bridgeStub());
+  await sync.patch({ actor: SVC_SESSION, homeId: HOME, device: DEVICE({ is_online: false }), body: ZONE_BODY(7, 'q-1') });
+  await sync.patch({ actor: OWNER, homeId: HOME, device: DEVICE({ is_online: false }), body: ZONE_BODY(8, 'q-2') });
+  assert.deepEqual(w.cfg.pending.items.map((i) => [i.id, i.by, i.role, i.sid]), [['q-1', null, 'service_session', SID], ['q-2', 'u-owner', 'owner', null]]);
+});
+
+test('guvenlik-5: oturum iptal edildikten sonraki canli state servis oturumu yamasini (ve sonrakileri) revoked ile dusurur; gecerli oturumunki uygulanir', async () => {
+  // gecerli oturum: uygulanir
+  _resetEmptyCache();
+  const sItem = (id, rev, over = {}) => ITEM(id, rev, { by: null, role: 'service_session', sid: SID, ...over });
+  const w = world({ pending: { v: 1, items: [sItem('q1', 7)] } });
+  w.sessions.push({ id: SID, home_id: HOME, revoked_at: null, expires_at: new Date(T0 + 3600e3).toISOString() });
+  const b = bridgeStub();
+  await make(w, b).onLiveState(LIVE(7));
+  assert.deepEqual(b.sys.map((x) => x.obj.id), ['q1'], 'gecerli oturumun yamasi gider');
+
+  // iptal edilmis oturum: oge ve sonrakiler duser
+  _resetEmptyCache();
+  const w2 = world({ pending: { v: 1, items: [ITEM('q0', 7), sItem('q1', 8), ITEM('q2', 9)] } });
+  w2.sessions.push({ id: SID, home_id: HOME, revoked_at: new Date(T0 - 1000).toISOString(), expires_at: new Date(T0 + 3600e3).toISOString() });
+  let rev = 8;
+  const b2 = bridgeStub({ outcome: () => ({ ok: true, cfg: { rev: rev++, crc: '0000000b' } }) });
+  await make(w2, b2).onLiveState(LIVE(7));
+  assert.deepEqual(b2.sys.map((x) => x.obj.id), ['q0']);
+  assert.equal(w2.cfg.pending, null, 'q1 (iptal edilmis oturum) ve q2 duser');
+  assert.ok(w2.audits.find((x) => x.event === 'safety_config_pending_dropped' && x.details.reason === 'revoked' && x.details.count === 2));
+
+  // suresi dolmus oturum ve kaydi olmayan oturum da duser
+  for (const sess of [{ id: SID, home_id: HOME, revoked_at: null, expires_at: new Date(T0 - 1).toISOString() }, null]) {
+    _resetEmptyCache();
+    const w3 = world({ pending: { v: 1, items: [sItem('q1', 7)] } });
+    if (sess) w3.sessions.push(sess);
+    const b3 = bridgeStub();
+    await make(w3, b3).onLiveState(LIVE(7));
+    assert.deepEqual(b3.sys, [], 'yayin yok');
+    assert.equal(w3.cfg.pending, null);
+  }
+});
+
+test('guvenlik-5: sid SIZ eski servis oturumu ogesi, ogenin zamanindan sonra evde iptal edilen oturum varsa duser', async () => {
+  _resetEmptyCache();
+  const old = ITEM('q1', 7, { by: null, role: 'service_session' }); // sid yok (eski oge)
+  const w = world({ pending: { v: 1, items: [old] } });
+  w.sessions.push({ id: SID, home_id: HOME, revoked_at: new Date(T0 + 1000).toISOString(), expires_at: new Date(T0 + 3600e3).toISOString() });
+  w.now = T0 + 2000;
+  const b = bridgeStub();
+  await make(w, b).onLiveState(LIVE(7));
+  assert.deepEqual(b.sys, []);
+  assert.equal(w.cfg.pending, null);
+
+  // ogeden ONCE iptal edilmis baska oturum: oge kalir ve gonderilir
+  _resetEmptyCache();
+  const w2 = world({ pending: { v: 1, items: [ITEM('q1', 7, { by: null, role: 'service_session' })] } });
+  w2.sessions.push({ id: SID, home_id: HOME, revoked_at: new Date(T0 - 5000).toISOString(), expires_at: new Date(T0 + 3600e3).toISOString() });
+  const b2 = bridgeStub();
+  await make(w2, b2).onLiveState(LIVE(7));
+  assert.deepEqual(b2.sys.map((x) => x.obj.id), ['q1']);
+});
+
+// ------------------------------------------------------------------------------
+// guvenlik-3: bos (yapilandirilmamis) panoya buluttan yapilandirma
+// ------------------------------------------------------------------------------
+test('guvenlik-3: GET safety-config kopya yokken cfg_get ister (force) ve yine 404 CONFIG_NOT_AVAILABLE doner', async () => {
+  const { SafetyService } = require('../../src/services/safety_service');
+  const asked = [];
+  const cfgSync = { _requestConfig: async (a) => { asked.push(a); }, view: async () => ({}) };
+  const deviceService = { _findHomeDevice: async () => ({ id: DEV, device_uuid: 'ahbu-s3-1a2b3c', is_online: true, topic_id: TOPIC, caps: ['cfg'] }) };
+  const alarms = { getConfig: async () => null };
+  const svc = new SafetyService({ deviceService, alarmService: alarms, cfgSync });
+  await rejects(svc.getSafetyConfig({ actor: { access: 'owner' }, homeId: HOME, deviceRef: UID }), 404, 'CONFIG_NOT_AVAILABLE');
+  assert.deepEqual(asked, [{ topicId: TOPIC, deviceId: DEV, uid: UID }]);
+  // istek hatasi 404'u bozmaz
+  const svc2 = new SafetyService({ deviceService, alarmService: alarms, cfgSync: { _requestConfig: async () => { throw new Error('x'); }, view: async () => ({}) } });
+  await rejects(svc2.getSafetyConfig({ actor: { access: 'owner' }, homeId: HOME, deviceRef: UID }), 404, 'CONFIG_NOT_AVAILABLE');
+});
+
+test('guvenlik-3: state cfg yok + present:false (eski firmware bos pano) + kopya var -> yama kopyanin rev i ile kabul edilir', async () => {
+  const w = world({ stateRev: null, copyRev: 0 });
+  w.device.safety_state = { present: false };
+  const b = bridgeStub({ outcome: { ok: true, cfg: { rev: 1, crc: '00000001' } } });
+  const out = await make(w, b).patch({ actor: OWNER, homeId: HOME, device: DEVICE(), body: ZONE_BODY(0, 'c-0') });
+  assert.deepEqual(out, { applied: true, rev: 1, crc: '00000001', command_id: 'c-0' });
+  assert.equal(b.sys[0].obj.base_rev, 0);
+  // present bilinmiyorsa (alan yok) eskisi gibi 409 CONFIG_NOT_AVAILABLE
+  const w2 = world({ stateRev: null, copyRev: 0 });
+  await rejects(make(w2, bridgeStub()).patch({ actor: OWNER, homeId: HOME, device: DEVICE(), body: ZONE_BODY(0) }), 409, 'CONFIG_NOT_AVAILABLE');
 });

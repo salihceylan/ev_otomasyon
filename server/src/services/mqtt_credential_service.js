@@ -17,6 +17,8 @@
 //   revokeHomeAccess({ homeId })           daire devri / acil sifirlama
 //   revokeAllUserAccess({ userId })        oturumlarin toplu iptali (logout-all, parola degisimi/sifirlama,
 //                                          dondurma, rol degisimi) / yonetici kalici silmesi: TUM evler
+//   revokeServiceSessionAccess({ homeId }) servis (PIN) oturumu kimlikleri (user_id bos): servis erisimi kapatma,
+//                                          oturum iptali / cikisi (uyelik-6)
 //
 // `tx` verilirse DB islemleri cagiranin transaction'inda yapilir ve ag cagrisi olan "kick"
 // (EMQX REST ile baglanti atma) YAPILMAZ: sonuctaki `usernames` ile commit SONRASI
@@ -343,6 +345,21 @@ class MqttCredentialService {
     const res = includeDevice
       ? await q(`DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind IN ('app', 'device') RETURNING username`, [homeId])
       : await q(`DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'app' RETURNING username`, [homeId]);
+    return this._finishRevoke(res.rows, tx);
+  }
+
+  /**
+   * Evin servis (PIN) oturumu uygulama kimliklerini (user_id BOS) siler (uyelik-6): "servis erisimini kapat", servis
+   * oturumu iptali / cikisi. Kullanici ve cihaz kimliklerine dokunulmaz. `tx` yoksa baglantilar hemen atilir.
+   * @returns {{revoked:number, usernames:string[], kick?:object}}
+   */
+  async revokeServiceSessionAccess({ homeId, tx = null } = {}) {
+    if (!homeId) throw new TypeError('revokeServiceSessionAccess: homeId zorunludur.');
+    const q = this._query(tx);
+    const res = await q(
+      `DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'app' AND user_id IS NULL RETURNING username`,
+      [homeId]
+    );
     return this._finishRevoke(res.rows, tx);
   }
 

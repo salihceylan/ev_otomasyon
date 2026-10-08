@@ -134,6 +134,17 @@ test('devir önizleme: yalnız HEDEF hesap görür; başka hesap 403 ve hiçbir 
   await rejects(run(stranger, byPhone), 403, 'FORBIDDEN');
 });
 
+test('ev_uyelik-2: devir önizleme - hedef hesap servis personeli ya da süper yönetici ise 403 FORBIDDEN (açıklayıcı mesaj); devir değişmez', async () => {
+  for (const role of ['service_user', 'super_user']) {
+    const staffTarget = h.user({ email: `personel.hedef.${role}@example.test`, role });
+    const code = addTransfer(home, owner, `personel.hedef.${role}@example.test`);
+    const before = JSON.stringify(state.home_transfers);
+    const e = await rejects(run(staffTarget, code), 403, 'FORBIDDEN');
+    assert.equal(e.message, 'Servis personeli ve yönetici hesapları daire sahibi olamaz. Devri bir müşteri hesabına yapın.');
+    assert.equal(JSON.stringify(state.home_transfers), before, `${role}: devir PENDING kalir`);
+  }
+});
+
 test('devir önizleme: iptal/süresi dolmuş/tamamlanmış/bilinmeyen kod 410; devri başlatan kendi kodunu önizleyemez (400); kod tüketilmez', async () => {
   const target = h.user({ email: 'hedef2@example.test' });
   for (const [label, code] of [

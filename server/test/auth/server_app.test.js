@@ -99,6 +99,39 @@ test('404: sozlesme bicimi', async () => {
   assert.strictEqual(res.body.code, 'NOT_FOUND');
 });
 
+test('bireysel-9: etiket karekodu / sifirlama / giris baglantisi tarayicida statik Turkce sayfa; sorgu/yol YANSITILMAZ; guvenli basliklar', async () => {
+  const urls = [
+    '/claim?uid=AHBU-S3-ABC123&pin=123456',
+    '/reset-password?token=gizli-belirtec-degeri-777',
+    '/magic-login',
+    '/magic-login/gizli-sihirli-belirtec-888',
+  ];
+  for (const url of urls) {
+    const res = await request(app).get(url);
+    assert.strictEqual(res.status, 200, url);
+    assert.match(String(res.headers['content-type']), /^text\/html; charset=utf-8/i, url);
+    const body = res.text;
+    assert.ok(body.includes('Bu bağlantı AHBU uygulamasında açılmalıdır.'), url);
+    assert.ok(body.includes('Karekod Tara'), url);
+    for (const secret of ['AHBU-S3-ABC123', '123456', 'gizli-belirtec-degeri-777', 'gizli-sihirli-belirtec-888', 'uid=', 'pin=']) {
+      assert.ok(!body.includes(secret), `${url}: ${secret} yansitilmamali`);
+    }
+    assert.strictEqual(res.headers['cache-control'], 'no-store', url);
+    assert.strictEqual(res.headers['referrer-policy'], 'no-referrer', url);
+    assert.strictEqual(res.headers['x-content-type-options'], 'nosniff', url);
+    assert.strictEqual(res.headers['content-security-policy'], "default-src 'none'; style-src 'unsafe-inline'", url);
+  }
+  // API altindaki bilinmeyen yol JSON 404 kalir; GET /api/v1/auth/magic-login/:token 405 AYNEN
+  const api404 = await request(app).get('/api/v1/claim?uid=AHBU-S3-ABC123&pin=123456');
+  assert.strictEqual(api404.status, 404);
+  assert.strictEqual(api404.body.code, 'NOT_FOUND');
+  const m = await request(app).get('/api/v1/auth/magic-login/abc');
+  assert.strictEqual(m.status, 405);
+  assert.strictEqual(m.body.code, 'METHOD_NOT_ALLOWED');
+  // POST /claim (tarayici disi) sayfa uretmez
+  assert.strictEqual((await request(app).post('/claim').send({})).status, 404);
+});
+
 test('govde siniri 256 KB -> 413 PAYLOAD_TOO_LARGE', async () => {
   const big = { x: 'a'.repeat(300 * 1024) };
   const res = await request(app).post('/api/v1/auth/login').send(big);

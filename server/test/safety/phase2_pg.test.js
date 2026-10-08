@@ -294,3 +294,50 @@ test('PG yapilandirma: pano kazanir (kuyruk duser + bilgi push), suresi dolan, e
   const p = (await w.db.query("SELECT pending FROM device_configs WHERE device_id = $1 AND module = 'safety'", [w.deviceId])).rows[0];
   assert.equal(p.pending, null);
 });
+
+test('PG yapilandirma (guvenlik-5): iptal edilen servis oturumunun kuyruk ogesi duser; gecerli oturumunki gider; sid siz eski oge iptal sonrasi duser', { skip: SKIP }, async () => {
+  const w = await world({ online: false });
+  await seedConfig(w);
+  const { sync, sys } = cfgSync(w, { outcome: () => ({ ok: true, cfg: { rev: 8, crc: '0000000b' } }) });
+  const mkSession = async ({ revoked = false, expiresInS = 3600 } = {}) => (await w.db.query(
+    `INSERT INTO service_sessions (home_id, technician_name, expires_at, revoked_at)
+     VALUES ($1, 'Usta', NOW() + ($2::int * INTERVAL '1 second'), CASE WHEN $3::boolean THEN NOW() ELSE NULL END) RETURNING id`,
+    [w.homeId, expiresInS, revoked]
+  )).rows[0].id;
+  const dev = device(w, { is_online: false });
+  const { markPending } = require('../../src/services/safety_cfg_sync');
+  const live = () => sync.onLiveState({ topicId: w.topic, homeId: w.homeId, deviceId: w.deviceId, uid: w.uid, caps: ['cfg'], summary: { cfg: { rev: 7, crc: 'x' } } });
+  const setOnline = (on) => w.db.query('UPDATE devices SET is_online = $2 WHERE id = $1', [w.deviceId, on]);
+  const pendingOf = async () => (await w.db.query("SELECT pending FROM device_configs WHERE device_id = $1 AND module = 'safety'", [w.deviceId])).rows[0].pending;
+
+  // (1) oturum kuyruga ekledi, sonra iptal edildi -> canli state'te 'revoked' ile duser
+  const sid = await mkSession();
+  await sync.patch({ actor: { userId: null, access: 'service_session', sessionId: sid }, homeId: w.homeId, device: dev, body: { base_rev: 7, set: { zone: { id: 1, name: 'S1' } } } });
+  assert.equal((await pendingOf()).items[0].sid, sid);
+  await w.db.query('UPDATE service_sessions SET revoked_at = NOW() WHERE id = $1', [sid]);
+  await setOnline(true);
+  markPending(w.deviceId);
+  await live();
+  assert.equal(sys.length, 0, 'iptal edilmis oturumun yamasi gitmez');
+  assert.equal(await pendingOf(), null);
+
+  // (2) gecerli oturum -> gider
+  await setOnline(false);
+  const sid2 = await mkSession();
+  await sync.patch({ actor: { userId: null, access: 'service_session', sessionId: sid2 }, homeId: w.homeId, device: dev, body: { base_rev: 7, set: { zone: { id: 1, name: 'S2' } } } });
+  await setOnline(true);
+  markPending(w.deviceId);
+  await live();
+  assert.equal(sys.length, 1, 'gecerli oturumun yamasi gider');
+
+  // (3) sid'siz ESKI oge: ogeden sonra iptal edilen oturum varsa duser
+  const at = new Date(Date.now() - 60 * 1000).toISOString();
+  await w.db.query("UPDATE device_configs SET pending = $2::jsonb WHERE device_id = $1 AND module = 'safety'", [
+    w.deviceId, JSON.stringify({ v: 1, items: [{ id: 'old1', base_rev: 7, patch: { set: { zone: { id: 1, name: 'S3' } } }, by: null, role: 'service_session', at, loosening: false }] }),
+  ]);
+  await mkSession({ revoked: true });
+  markPending(w.deviceId);
+  await live();
+  assert.equal(sys.length, 1, 'eski oge gitmedi');
+  assert.equal(await pendingOf(), null);
+});

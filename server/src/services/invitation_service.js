@@ -40,6 +40,16 @@ function getMqttCredentialService() {
   }
 }
 
+/** pano-6: yerel anahtar rotasyonu servisi (testte enjekte edilebilir; undefined = varsayilan modul). */
+let localKeyRotationOverride;
+function getLocalKeyRotation() {
+  if (localKeyRotationOverride !== undefined) return localKeyRotationOverride;
+  return require('./local_key_rotation');
+}
+
+/** Panonun yerel anahtarini okuyabilen ev rolleri (role_matrix LOCAL_KEY; misafir okuyamaz). */
+const KEY_HOLDER_ROLES = Object.freeze(['owner', 'resident']);
+
 async function kickAfterCommit(usernames) {
   const svc = getMqttCredentialService();
   if (!svc || typeof svc.kickUsernames !== 'function' || !usernames || usernames.length === 0) return null;
@@ -104,6 +114,11 @@ class InvitationService {
   /** Test icin MQTT kimlik servisini enjekte eder (null = yok). undefined ile sifirlanir. */
   static setMqttCredentialService(svc) {
     mqttCredentialOverride = svc;
+  }
+
+  /** Test icin yerel anahtar rotasyonu servisini enjekte eder (null = kapali). undefined ile sifirlanir (pano-6). */
+  static setLocalKeyRotation(svc) {
+    localKeyRotationOverride = svc;
   }
 
   /**
@@ -205,6 +220,66 @@ class InvitationService {
     const err = new HttpError(503, 'Davet kodu şu anda üretilemedi. Lütfen tekrar deneyin.', 'SERVICE_UNAVAILABLE');
     err.expose = true;
     throw err;
+  }
+
+  /**
+   * ev_uyelik-6: evin KULLANILMAMIS ve suresi dolmamis davetleri (yeniden eskiye). Kod DONMEZ (yalniz ozeti saklanir).
+   * Yetki route katmaninda (requireHomeAccess MEMBERS: owner / super_user).
+   */
+  static async listInvitations(homeId) {
+    if (!isUuid(String(homeId || ''))) throw new HttpError(400, 'Geçersiz istek.', 'VALIDATION');
+    const r = await db.query(
+      `SELECT id, role, expires_at, guest_valid_from, guest_valid_until, guest_name, created_at
+         FROM home_invitations
+        WHERE home_id = $1 AND is_used = FALSE AND expires_at > NOW()
+        ORDER BY created_at DESC`,
+      [homeId]
+    );
+    return (r.rows || []).map((row) => ({
+      id: row.id,
+      role: row.role,
+      expires_at: row.expires_at,
+      guest_valid_from: row.guest_valid_from || null,
+      guest_valid_until: row.guest_valid_until || null,
+      guest_name: row.guest_name || null,
+      created_at: row.created_at,
+    }));
+  }
+
+  /**
+   * ev_uyelik-6: kullanilmamis daveti iptal eder (satir silinir; kod artik katilimda 404). Kullanilmis davet gecmisi
+   * korunur (404). Denetim kaydi 'invitation_revoked' (kod/ozet YOK).
+   * @param {string} homeId
+   * @param {{userId:string, role?:string, ip?:string}} actor
+   * @param {string} invitationId
+   * @returns {Promise<{id:string}>}
+   */
+  static async revokeInvitation(homeId, actor, invitationId) {
+    if (!isUuid(String(invitationId || ''))) throw new HttpError(400, 'Geçersiz davet kimliği.', 'VALIDATION');
+    if (!isUuid(String(homeId || ''))) throw new HttpError(400, 'Geçersiz istek.', 'VALIDATION');
+    return db.withTransaction(async (tx) => {
+      const del = await tx.query(
+        `DELETE FROM home_invitations
+          WHERE id = $1 AND home_id = $2 AND is_used = FALSE
+          RETURNING id`,
+        [invitationId, homeId]
+      );
+      if (!del.rows || del.rows.length === 0) throw new HttpError(404, 'Davet bulunamadı veya kullanılmış.', 'NOT_FOUND');
+      await tx.query(
+        `INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          'invitation_revoked',
+          null,
+          homeId,
+          (actor && actor.userId) || null,
+          (actor && actor.role) || null,
+          (actor && actor.ip) || null,
+          JSON.stringify({ invitation_id: del.rows[0].id }),
+        ]
+      );
+      return { id: del.rows[0].id };
+    });
   }
 
   /**
@@ -412,9 +487,14 @@ class InvitationService {
         const revoked = await mqtt.revokeUserAccess({ homeId, userId: targetUserId, tx });
         usernames = (revoked && revoked.usernames) || [];
       }
-      return { usernames };
+      // pano-6: cikarilan owner/resident panonun yerel anahtarini biliyor -> bekleyen yolla dondurulur (tek panolu ev)
+      let rotation = null;
+      const rotationSvc = KEY_HOLDER_ROLES.includes(targetRole) ? getLocalKeyRotation() : null;
+      if (rotationSvc) rotation = await rotationSvc.scheduleRotation(homeId, { tx, reason: 'member_removed' });
+      return { usernames, rotation, rotationSvc };
     });
 
+    if (outcome.rotationSvc) outcome.rotationSvc.afterCommit(outcome.rotation); // COMMIT sonrasi uzlastirici (en iyi caba)
     const kick = await kickAfterCommit(outcome.usernames);
     const result = { message: 'Kullanıcı evden çıkarıldı ve erişimi iptal edildi.' };
     if (kick && (kick.skipped || kick.failed > 0)) {

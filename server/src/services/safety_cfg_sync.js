@@ -63,7 +63,14 @@ const SQL = Object.freeze({
   audit:
     'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
     'VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)',
+  // guvenlik-5: servis (PIN) oturumunun kuyruktaki ogesi: oturum iptal / suresi dolmus ise oge (ve sonrakiler) duser
+  sessionById: 'SELECT revoked_at, expires_at FROM service_sessions WHERE id = $1 AND home_id = $2',
+  // sid tasimayan ESKI oge: ogenin zamanindan sonra evde iptal edilen bir servis oturumu varsa duser
+  sessionRevokedSince:
+    'SELECT EXISTS (SELECT 1 FROM service_sessions WHERE home_id = $1 AND revoked_at IS NOT NULL AND revoked_at >= $2::timestamptz) AS revoked',
 });
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Surec geneli "kuyruk bos" onbellegi: REST (safety_service) ve kopru uzlastiricisi ayni sureci paylasir.
 const emptyCache = new Map(); // deviceId -> dogrulama zamani (ms)
@@ -121,6 +128,7 @@ const REJECT_MAP = Object.freeze({
   armed: [409, 'INTRUSION_ARMED', ARMED_TEXT],
 });
 const CHANGED_TEXT = 'Pano yapılandırması bu arada değişti; güncel hali okunup yeniden denenmeli.';
+const CHAIN_CONFLICT_TEXT = 'Bekleyen değişikliklerle çelişiyor; kuyruğu iptal edip planı yeniden gönderin.'; // guvenlik-4
 
 class SafetyCfgSync {
   /**
@@ -201,7 +209,12 @@ class SafetyCfgSync {
         if (!row) return { kind: 'not_available' };
         const dr = await q(SQL.device, [device.id]);
         const dev = (dr && dr.rows && dr.rows[0]) || {};
-        const st = stateCfgOf(dev.safety_state);
+        let st = stateCfgOf(dev.safety_state);
+        // guvenlik-3: sahadaki eski firmware yapilandirilmamis panoda state'e cfg yazmaz (present:false); kopya varsa taban
+        // kopyanin rev'i olur (pano base_rev'i kendisi dogrular; uyusmazlik cfg_conflict olur).
+        if (!st && caps.includes('cfg') && isObj(dev.safety_state) && dev.safety_state.present === false && Number.isInteger(Number(row.rev))) {
+          st = { rev: Number(row.rev), crc: typeof row.crc === 'string' ? row.crc : null };
+        }
         if (!st) return { kind: 'not_available' };
         const queue = P.parsePending(row.pending);
         const copyRev = Number(row.rev);
@@ -233,8 +246,12 @@ class SafetyCfgSync {
         const expected = P.nextBaseRev(queue, st.rev);
         if (v.baseRev !== expected) return { kind: 'changed', st: { rev: expected, crc: st.crc }, copyRev };
         if (queue.items.length >= P.MAX_PENDING_ITEMS) return { kind: 'full' };
+        // guvenlik-4: yeni yama kopya + kuyruktaki yamalar zincirine gore dogrulanir (yeniden numaralanan / bulunamayan
+        // hedef, ayni roleye ikinci kimliksiz ekleme): kuyruga ALINMAZ.
+        if (P.chainConflict(row.body, queue.items, v.patch)) return { kind: 'chain_conflict' };
         queue.items.push({
           id, base_rev: v.baseRev, patch: v.patch, by: (actor && actor.userId) || null, role: (actor && actor.access) || null, at: nowIso, loosening,
+          sid: (actor && actor.sessionId) || null, // guvenlik-5: servis (PIN) oturumu kimligi (iptal edilince oge duser)
         });
         await q(SQL.setPending, [device.id, JSON.stringify(P.serializePending(queue))]);
         await this._audit(q, {
@@ -257,6 +274,7 @@ class SafetyCfgSync {
     if (pre.kind === 'armed') throw httpError(409, ARMED_TEXT, 'INTRUSION_ARMED');
     if (pre.kind === 'pending') throw httpError(409, 'Bu pano için bekleyen yapılandırma değişiklikleri var.', 'CONFIG_PENDING');
     if (pre.kind === 'full') throw httpError(409, 'Bekleyen değişiklik sınırı doldu.', 'CONFIG_QUEUE_FULL');
+    if (pre.kind === 'chain_conflict') throw httpError(409, CHAIN_CONFLICT_TEXT, 'CONFIG_CHANGED_ON_DEVICE');
     if (pre.kind === 'changed') {
       if (pre.copyRev !== pre.st.rev) await this._requestConfig({ topicId, deviceId: device.id, uid });
       throw httpError(409, CHANGED_TEXT, 'CONFIG_CHANGED_ON_DEVICE', { data: { rev: pre.st.rev, crc: pre.st.crc, copy_rev: pre.copyRev } });
@@ -418,11 +436,36 @@ class SafetyCfgSync {
     if (this._attempts.size > 5000) this._attempts.clear();
   }
 
+  /**
+   * guvenlik-5: servis (PIN) oturumunun kuyruktaki ogesi hala gecerli mi? sid varsa oturum satiri (yok / iptal / suresi
+   * dolmus -> gecersiz; service_user installer_expires_at kuralıyla tutarli); sid yoksa (eski oge) ogenin zamanindan sonra
+   * evde iptal edilen bir servis oturumu varsa gecersiz.
+   */
+  async _sessionItemOk(q, homeId, item) {
+    if (item.sid !== undefined && item.sid !== null) {
+      if (typeof item.sid !== 'string' || !UUID_RE.test(item.sid)) return false;
+      const r = await q(SQL.sessionById, [item.sid, homeId]);
+      const s = r && r.rows && r.rows[0];
+      if (!s || s.revoked_at) return false;
+      const exp = s.expires_at ? new Date(s.expires_at).getTime() : NaN;
+      return Number.isFinite(exp) && exp > this.now();
+    }
+    const r = await q(SQL.sessionRevokedSince, [homeId, item.at]);
+    return !(r && r.rows && r.rows[0] && r.rows[0].revoked === true);
+  }
+
   async _firstRevoked(q, homeId, items) {
     const cache = new Map();
     for (let i = 0; i < items.length; i += 1) {
       const by = items[i].by;
-      if (!by) continue; // servis oturumu (kullanicisiz): rol istek aninda denetlendi; 24 sa omur sinirlar
+      if (!by) {
+        // servis (PIN) oturumu (kullanicisiz): oturum iptal edildi / suresi doldu ise oge ve sonrakiler duser (guvenlik-5)
+        if (items[i].role !== 'service_session') continue;
+        const key = items[i].sid ? `sid:${items[i].sid}` : `at:${items[i].at}`;
+        if (!cache.has(key)) cache.set(key, await this._sessionItemOk(q, homeId, items[i]));
+        if (!cache.get(key)) return i;
+        continue;
+      }
       if (!cache.has(by)) {
         const r = await q(SQL.access, [by, homeId]);
         const u = r && r.rows && r.rows[0];

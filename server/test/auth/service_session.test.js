@@ -29,6 +29,25 @@ const { errorHandler, asyncHandler } = require('../../src/middlewares/error_hand
 
 auth.configureAuthMiddleware({ cacheTtlMs: 0, now: () => clock });
 
+// uyelik-6 / uyelik-12: servis oturumu MQTT kimlikleri (user_id bos) GERCEK MqttCredentialService ile silinir;
+// baglanti atma (EMQX REST) sahte fetch ile kaydedilir.
+const { MqttCredentialService } = require('../../src/services/mqtt_credential_service');
+const kicked = [];
+const mqttSvc = new MqttCredentialService({
+  db: fakeDb,
+  env: { EMQX_API_URL: 'http://emqx.test.invalid', EMQX_API_KEY: 'k', EMQX_API_SECRET: 's' },
+  logger: { warn() {}, error() {}, log() {} },
+  fetch: async (url, init = {}) => {
+    const u = new URL(url);
+    if ((init.method || 'GET') === 'GET') {
+      return { ok: true, status: 200, json: async () => ({ data: [{ clientid: u.searchParams.get('username') }] }) };
+    }
+    kicked.push(decodeURIComponent(u.pathname.split('/').pop()));
+    return { ok: true, status: 204, json: async () => ({}) };
+  },
+});
+if (typeof serviceTokenService.setMqttCredentialService === 'function') serviceTokenService.setMqttCredentialService(mqttSvc);
+
 const HOME = store.addHome({ name: 'Servis Evi' });
 const OTHER = store.addHome({ name: 'Komsu Evi' });
 const owner = store.addUser({ full_name: 'Ev Sahibi' });
@@ -67,6 +86,86 @@ const login = (pin, name = 'Ali Usta') => request(app).post('/api/v1/auth/servic
 test.beforeEach(() => {
   authRoutes.limiters.serviceLogin.reset();
   serviceRoutes.pinLimiter.reset();
+  if (authRoutes.serviceLoginFailures) {
+    authRoutes.serviceLoginFailures.net.reset();
+    authRoutes.serviceLoginFailures.all.reset();
+  }
+});
+
+// ev_uyelik-1: dagitik kaba kuvvete karsi YALNIZ hatali denemeleri sayan ag (/48) ve genel butce.
+// Farkli istemci adresleri icin ayri uygulama: trust proxy + X-Forwarded-For (yalniz bu test uygulamasinda).
+const proxApp = express();
+proxApp.set('trust proxy', true);
+proxApp.use(express.json());
+proxApp.use('/api/v1/auth', authRoutes);
+proxApp.use(errorHandler);
+const loginFrom = (ip, pin) =>
+  request(proxApp).post('/api/v1/auth/service-login').set('X-Forwarded-For', ip).send({ service_pin: pin, technician_name: 'Usta' });
+const wrongPinFor = (pin) => String((Number(pin) + 1) % 1000000).padStart(6, '0');
+
+test('ev_uyelik-1: genel butce (100 / 15 dk) dolunca YALNIZ bu pencerede >= 3 hatasi olan aglar engellenir; taze ag dogru PIN ile girer (DoS yok); yalniz 401 ler sayilir', async () => {
+  assert.ok(authRoutes.serviceLoginFailures, 'router.serviceLoginFailures disa acik olmali');
+  const pin = await newPin();
+  const wrong = wrongPinFor(pin);
+  // bicimi gecersiz PIN (400) butceyi harcamaz
+  assert.strictEqual((await loginFrom('198.51.100.250', '12ab56')).status, 400);
+  const warns = [];
+  const origWarn = console.warn;
+  console.warn = (...a) => warns.push(a.join(' '));
+  try {
+    for (let i = 0; i < 100; i++) {
+      const r = await loginFrom(`10.${Math.floor(i / 200)}.${i % 200}.${(i % 7) + 1}`, wrong);
+      assert.strictEqual(r.status, 401, `deneme ${i + 1}: ${r.status}`);
+    }
+    // genel butce doldu: bu pencerede 3 hatali denemesi olan ag ENGELLENIR (dogru PIN dahil; PIN tuketilmez)
+    for (let i = 0; i < 3; i++) assert.strictEqual((await loginFrom('198.51.100.7', wrong)).status, 401, `saldirgan deneme ${i + 1}`);
+    const blocked = await loginFrom('198.51.100.7', pin);
+    assert.strictEqual(blocked.status, 429, JSON.stringify(blocked.body));
+    assert.strictEqual(blocked.body.code, 'RATE_LIMITED');
+    assert.match(blocked.body.message, /servis PIN/);
+    assert.ok(Number(blocked.headers['retry-after']) > 0);
+    assert.ok(
+      store.tokens.some((t) => !t.used_at && !t.revoked_at && t.created_by === owner.id && t.home_id === HOME.id),
+      'bloklanan istek PIN i TUKETMEDI'
+    );
+    // esigin altinda (bu pencerede 1 hatasi olan) ag denemeye devam eder
+    assert.strictEqual((await loginFrom('10.0.0.1', wrong)).status, 401);
+    // taze ag (bu pencerede hatasi yok) dogru PIN ile GIRER: genel butce tek basina gecici teknisyeni kilitlemez
+    const fresh = await loginFrom('203.0.113.77', pin);
+    assert.strictEqual(fresh.status, 200, JSON.stringify(fresh.body));
+  } finally {
+    console.warn = origWarn;
+  }
+  const budgetWarns = warns.filter((w) => w.includes('Servis PIN genel hata butcesi doldu'));
+  assert.strictEqual(budgetWarns.length, 1, 'pencere basina BIR kez uyari');
+  assert.ok(!budgetWarns[0].includes(wrong) && !budgetWarns[0].includes('10.0.'), 'uyari PIN/IP icermez');
+});
+
+test('ev_uyelik-1: ayni /48 in farkli /64 lerinden 21. hatali deneme 429; baska /48 etkilenmez', async () => {
+  const pin = await newPin();
+  const wrong = wrongPinFor(pin);
+  for (let i = 0; i < 20; i++) {
+    const r = await loginFrom(`2001:db8:77:${(i + 1).toString(16)}::1`, wrong);
+    assert.strictEqual(r.status, 401, `deneme ${i + 1}`);
+  }
+  const blocked = await loginFrom('2001:db8:77:ff::9', wrong);
+  assert.strictEqual(blocked.status, 429);
+  assert.strictEqual(blocked.body.code, 'RATE_LIMITED');
+  const other = await loginFrom('2001:db8:78:1::1', pin);
+  assert.strictEqual(other.status, 200, 'baska /48 den dogru PIN gecer');
+});
+
+test('ev_uyelik-1: sinirin altinda dogru PIN 200; basari ag sayacini sifirlar, genel sayaci sifirlamaz', async () => {
+  const { net, all } = authRoutes.serviceLoginFailures;
+  const pin = await newPin();
+  const wrong = wrongPinFor(pin);
+  for (let i = 0; i < 5; i++) assert.strictEqual((await loginFrom('192.0.2.10', wrong)).status, 401);
+  assert.strictEqual(net.peek('svc-pin-fail:192.0.2.10').count, 5);
+  assert.strictEqual(all.peek('svc-pin-fail:all').count, 5);
+  const ok = await loginFrom('192.0.2.10', pin);
+  assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  assert.strictEqual(net.peek('svc-pin-fail:192.0.2.10').count, 0, 'ag sayaci sifirlandi');
+  assert.strictEqual(all.peek('svc-pin-fail:all').count, 5, 'genel sayac korunur');
 });
 
 test('PIN uretimi: kullanici basina saatte 10 -> 429', async () => {
@@ -178,6 +277,94 @@ test('revokeHomeServiceAccess: acik oturum aninda 401 SERVICE_SESSION_EXPIRED, k
   assert.strictEqual(res.status, 401);
   assert.strictEqual(res.body.code, 'SERVICE_SESSION_EXPIRED');
   assert.strictEqual((await login(pinB)).status, 401);
+});
+
+test('uyelik-6: servis erisimini kapat -> evin servis oturumu MQTT kimlikleri (user_id bos) silinir ve atilir; yanit yalniz sayilar', async () => {
+  assert.strictEqual(typeof serviceTokenService.setMqttCredentialService, 'function');
+  const svcCred = store.addMqttCred({ home_id: HOME.id, user_id: null });
+  const ownerCred = store.addMqttCred({ home_id: HOME.id, user_id: owner.id });
+  const otherCred = store.addMqttCred({ home_id: OTHER.id, user_id: null });
+  kicked.length = 0;
+  const pin = await newPin();
+  await login(pin);
+  const res = await request(app).post(`/api/v1/homes/${HOME.id}/service-access/revoke`).set('Authorization', `Bearer ${tok(owner)}`);
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.deepStrictEqual(Object.keys(res.body.data).sort(), ['revoked_pins', 'revoked_sessions']);
+  assert.ok(!JSON.stringify(res.body).includes(svcCred.username), 'kullanici adi yanitta yok');
+  assert.ok(!store.mqttCreds.includes(svcCred), 'servis oturumu kimligi silindi');
+  assert.ok(store.mqttCreds.includes(ownerCred) && store.mqttCreds.includes(otherCred), 'kullanici ve baska ev kimligi korunur');
+  assert.deepStrictEqual(kicked, [svcCred.username], 'baglanti atildi');
+});
+
+test('uyelik-12: servis oturumu Bearer ile cikis -> oturum iptal (self_logout), sonraki istek 401, oturum MQTT kimligi silinir', async () => {
+  const pin = await newPin();
+  const t = (await login(pin)).body.data.access_token;
+  const sid = jwt.decode(t).sid;
+  const cred = store.addMqttCred({ home_id: HOME.id, user_id: null });
+  kicked.length = 0;
+  const out = await request(app).post('/api/v1/auth/logout').set('Authorization', `Bearer ${t}`).send({});
+  assert.strictEqual(out.status, 200, JSON.stringify(out.body));
+  const row = store.sessions.find((x) => x.id === sid);
+  assert.ok(row.revoked_at, 'oturum iptal');
+  assert.strictEqual(row.revoked_reason, 'self_logout');
+  const after = await request(app).post(`/api/v1/homes/${HOME.id}/commission-test`).set('Authorization', `Bearer ${t}`);
+  assert.strictEqual(after.status, 401);
+  assert.strictEqual(after.body.code, 'SERVICE_SESSION_EXPIRED');
+  assert.ok(!store.mqttCreds.includes(cred), 'servis oturumu MQTT kimligi silindi');
+  assert.deepStrictEqual(kicked, [cred.username]);
+});
+
+test('uyelik-12: belirtecsiz / gecersiz belirtecli / kullanici belirtecli govdesiz cikis 200 ve hicbir sey iptal edilmez', async () => {
+  const pin = await newPin();
+  const t = (await login(pin)).body.data.access_token;
+  const sid = jwt.decode(t).sid;
+  assert.strictEqual((await request(app).post('/api/v1/auth/logout').send({})).status, 200);
+  assert.strictEqual((await request(app).post('/api/v1/auth/logout').set('Authorization', 'Bearer bozuk.belirtec.degeri').send({})).status, 200);
+  assert.strictEqual((await request(app).post('/api/v1/auth/logout').set('Authorization', `Bearer ${tok(owner)}`).send({})).status, 200);
+  assert.strictEqual(store.sessions.find((x) => x.id === sid).revoked_at, null, 'baska cikis servis oturumuna dokunmaz');
+  assert.strictEqual((await request(app).post(`/api/v1/homes/${HOME.id}/commission-test`).set('Authorization', `Bearer ${t}`)).status, 200);
+});
+
+test('pano-6: yerel anahtari OKUMUS servis oturumu owner iptaliyle ya da kendi cikisiyla bitince o evin anahtari hemen BEKLEYEN yolla doner', async () => {
+  const { LocalKeyRotation } = require('../../src/services/local_key_rotation');
+  const reconciles = [];
+  const fakeBox = { generateLocalKey: () => 'YeniAnahtar0000', encrypt: (k) => `enc(${k.length})` };
+  serviceTokenService.setLocalKeyRotation(new LocalKeyRotation({ secretBox: fakeBox, requestReconcile: (t) => reconciles.push(t), logger: { warn() {}, log() {}, error() {} } }));
+  try {
+    const mk = () => {
+      const home = store.addHome({ name: `Anahtar Evi ${store.homes.size}` });
+      const own = store.addUser();
+      store.addMember(home, own, 'owner');
+      return { home, own, dev: store.addDevice(home) };
+    };
+    // (1) owner iptali
+    const a = mk();
+    const ta = (await login(await newPin(a.home.id, a.own))).body.data.access_token;
+    const rowA = store.sessions.find((x) => x.id === jwt.decode(ta).sid);
+    rowA.local_key_read_at = new Date(clock); // oturum anahtari okudu (GET local-key isaretler)
+    const res = await request(app).post(`/api/v1/homes/${a.home.id}/service-access/revoke`).set('Authorization', `Bearer ${tok(a.own)}`);
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+    assert.ok(a.dev.local_key_pending_enc, 'iptal sonrasi rotasyon');
+    assert.ok(rowA.key_rotated_at, 'oturum isaretlendi');
+    const audA = store.audits.filter((x) => x.event === 'local_key_rotation_scheduled' && x.home_id === a.home.id);
+    assert.deepStrictEqual(audA.map((x) => x.details), [{ reason: 'service_session_ended' }]);
+
+    // (2) kendi cikisi
+    const b = mk();
+    const tb = (await login(await newPin(b.home.id, b.own))).body.data.access_token;
+    store.sessions.find((x) => x.id === jwt.decode(tb).sid).local_key_read_at = new Date(clock);
+    assert.strictEqual((await request(app).post('/api/v1/auth/logout').set('Authorization', `Bearer ${tb}`).send({})).status, 200);
+    assert.ok(b.dev.local_key_pending_enc, 'kendi cikisi sonrasi rotasyon');
+
+    // (3) anahtari okumamis oturum: rotasyon yok
+    const c = mk();
+    await login(await newPin(c.home.id, c.own));
+    assert.strictEqual((await request(app).post(`/api/v1/homes/${c.home.id}/service-access/revoke`).set('Authorization', `Bearer ${tok(c.own)}`)).status, 200);
+    assert.strictEqual(c.dev.local_key_pending_enc, null);
+    assert.deepStrictEqual(reconciles, [a.home.mqtt_username, b.home.mqtt_username]);
+  } finally {
+    serviceTokenService.setLocalKeyRotation(undefined);
+  }
 });
 
 test('owner "servis erisimini kapat" ucu ayni etkiyi yapar', async () => {

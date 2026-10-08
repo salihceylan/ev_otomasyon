@@ -71,8 +71,9 @@ function createWorld({ clock = createClock() } = {}) {
     password_resets: [],
     phone_otp_codes: [],
     device_claim_otps: [],
+    site_flats: [], // atolye-8: daireye bagli kart (envanter islemleri 409 DEVICE_LINKED_TO_FLAT)
   };
-  const flags = { pushTokensTable: true };
+  const flags = { pushTokensTable: true, siteFlatsTable: true };
   const db = new FakeDb();
   const now = () => clock.now();
   let seq = 0;
@@ -199,11 +200,12 @@ function createWorld({ clock = createClock() } = {}) {
         return { id: u.id, email: u.email, full_name: u.full_name, phone: u.phone || null, account_status: u.account_status };
       })
   );
-  const targetColumns = (u) => ({ id: u.id, email: u.email, full_name: u.full_name, phone: u.phone || null, role: u.role, is_active: u.is_active, account_status: u.account_status });
-  db.on('SELECT id, email, full_name, phone, role, is_active, account_status FROM users WHERE LOWER(email) = $1', ({ params }) =>
+  const targetColumns = (u) => ({ id: u.id, email: u.email, full_name: u.full_name, phone: u.phone || null, role: u.role, is_active: u.is_active, account_status: u.account_status, email_verified: u.email_verified });
+  // uyelik-1: hedef sorgusu email_verified'i de okur (dogrulanmamis on-hesap etkisizlestirilir)
+  db.on('SELECT id, email, full_name, phone, role, is_active, account_status, email_verified FROM users WHERE LOWER(email) = $1', ({ params }) =>
     s.users.filter((u) => String(u.email).toLowerCase() === params[0]).map(targetColumns)
   );
-  db.on('SELECT id, email, full_name, phone, role, is_active, account_status FROM users WHERE phone = $1', ({ params }) =>
+  db.on('SELECT id, email, full_name, phone, role, is_active, account_status, email_verified FROM users WHERE phone = $1', ({ params }) =>
     s.users.filter((u) => u.phone && u.phone === params[0]).map(targetColumns)
   );
   db.on('SELECT 1 FROM users WHERE phone = $1', ({ params }) => (s.users.some((u) => u.phone === params[0]) ? [{ '?column?': 1 }] : []));
@@ -285,7 +287,7 @@ function createWorld({ clock = createClock() } = {}) {
     (ctx) => {
       const [homeId, keepStaff] = ctx.params;
       const removed = removeRows(ctx, s.home_users, (m) => m.home_id === homeId && !(keepStaff && m.user_id === keepStaff && m.role === 'service_user'));
-      return removed.map((m) => ({ user_id: m.user_id }));
+      return removed.map((m) => ({ user_id: m.user_id, role: m.role }));
     }
   );
   db.on("INSERT INTO home_users (home_id, user_id, role) VALUES ($1, $2, 'owner') ON CONFLICT (home_id, user_id) DO UPDATE", (ctx) => {
@@ -303,6 +305,22 @@ function createWorld({ clock = createClock() } = {}) {
     for (const r of rows) patch(ctx, r, { claimed_by_user_id: ctx.params[0] });
     return { rows: [], rowCount: rows.length };
   });
+  // pano-6: yerel anahtar rotasyonu (local_key_rotation.scheduleRotation)
+  db.on('SELECT id, device_uuid, local_key_pending_enc FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', ({ params }) =>
+    s.devices
+      .filter((d) => d.home_id === params[0])
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((d) => ({ id: d.id, device_uuid: d.device_uuid, local_key_pending_enc: d.local_key_pending_enc || null }))
+  );
+  db.on('UPDATE devices SET local_key_pending_enc = $2, local_key_pending_at = NOW() WHERE id = $1 AND local_key_pending_enc IS NULL', (ctx) => {
+    const d = s.devices.find((x) => x.id === ctx.params[0] && !x.local_key_pending_enc);
+    if (!d) return { rows: [], rowCount: 0 };
+    patch(ctx, d, { local_key_pending_enc: ctx.params[1], local_key_pending_at: now() });
+    return { rows: [], rowCount: 1 };
+  });
+  db.on((sql) => sql === 'SELECT mqtt_username FROM homes WHERE id = $1', ({ params }) =>
+    s.homes.filter((h) => h.id === params[0]).map((h) => ({ mqtt_username: h.mqtt_username }))
+  );
   db.on('UPDATE devices SET claimed_by = $1 WHERE home_id = $2', (ctx) => {
     const rows = s.devices.filter((d) => d.home_id === ctx.params[1]);
     for (const r of rows) patch(ctx, r, { claimed_by: ctx.params[0] });
@@ -321,6 +339,10 @@ function createWorld({ clock = createClock() } = {}) {
   });
   // mqtt_credential_service.revokeHomeAccess / hesap silme
   const deleteCreds = (ctx, pred) => removeRows(ctx, s.mqtt_credentials, pred).map((c) => ({ username: c.username }));
+  // uyelik-6: servis (PIN) oturumu kimlikleri (user_id bos)
+  db.on("DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'app' AND user_id IS NULL RETURNING username", (ctx) =>
+    deleteCreds(ctx, (c) => c.home_id === ctx.params[0] && c.kind === 'app' && !c.user_id)
+  );
   db.on("DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'app' RETURNING username", (ctx) =>
     deleteCreds(ctx, (c) => c.home_id === ctx.params[0] && c.kind === 'app')
   );
@@ -396,9 +418,14 @@ function createWorld({ clock = createClock() } = {}) {
       .sort((a, b) => (a.name < b.name ? -1 : 1));
   });
   db.on('DELETE FROM home_users WHERE user_id = $1 RETURNING home_id', (ctx) =>
-    removeRows(ctx, s.home_users, (m) => m.user_id === ctx.params[0]).map((m) => ({ home_id: m.home_id }))
+    removeRows(ctx, s.home_users, (m) => m.user_id === ctx.params[0]).map((m) => ({ home_id: m.home_id, role: m.role }))
   );
-  db.on('SELECT to_regclass($1) AS t', ({ params }) => [{ t: params[0] === 'public.push_tokens' && flags.pushTokensTable ? 'public.push_tokens' : null }]);
+  db.on('SELECT to_regclass($1) AS t', ({ params }) => {
+    if (params[0] === 'public.push_tokens') return [{ t: flags.pushTokensTable ? 'public.push_tokens' : null }];
+    if (params[0] === 'public.site_flats') return [{ t: flags.siteFlatsTable ? 'public.site_flats' : null }];
+    return [{ t: null }];
+  });
+  db.on('SELECT 1 FROM site_flats WHERE device_uuid = $1', ({ params }) => s.site_flats.filter((f) => f.device_uuid === params[0]).map(() => ({ '?column?': 1 })));
   db.on('DELETE FROM push_tokens WHERE user_id = $1', (ctx) => ({ rows: [], rowCount: removeRows(ctx, s.push_tokens, (t) => t.user_id === ctx.params[0]).length }));
   db.on('DELETE FROM home_invitations WHERE created_by = $1 AND is_used = FALSE', (ctx) => ({
     rows: [], rowCount: removeRows(ctx, s.home_invitations, (i) => i.created_by === ctx.params[0] && !i.is_used).length,
@@ -412,7 +439,7 @@ function createWorld({ clock = createClock() } = {}) {
     const tokenIds = s.service_tokens.filter((t) => t.created_by === ctx.params[0]).map((t) => t.id);
     const rows = s.service_sessions.filter((x) => !x.revoked_at && tokenIds.includes(x.service_token_id));
     for (const r of rows) patch(ctx, r, { revoked_at: now(), revoked_reason: 'account_deleted' });
-    return { rows: [], rowCount: rows.length };
+    return { rows: rows.map((r) => ({ home_id: r.home_id })), rowCount: rows.length };
   });
   db.on('UPDATE service_tokens SET revoked_at = NOW() WHERE created_by = $1 AND revoked_at IS NULL AND used_at IS NULL', (ctx) => {
     const rows = s.service_tokens.filter((t) => t.created_by === ctx.params[0] && !t.revoked_at && !t.used_at);
@@ -430,6 +457,27 @@ function createWorld({ clock = createClock() } = {}) {
     rows: [], rowCount: removeRows(ctx, s.device_claim_otps, (r) => r.requested_by === ctx.params[0] || ctx.params[1].includes(r.target_identifier)).length,
   }));
   db.on('DELETE FROM refresh_tokens WHERE user_id = $1', (ctx) => ({ rows: [], rowCount: removeRows(ctx, s.refresh_tokens, (r) => r.user_id === ctx.params[0]).length }));
+  // uyelik-1: auth_service.neutralizeUnverifiedAccount + revokeAllUserSessions (gercek modul SQL'i)
+  db.on('UPDATE users SET password_hash = $2, token_version = token_version + 1, must_change_password = FALSE, password_changed_at = NULL', (ctx) => {
+    const u = s.users.find((x) => x.id === ctx.params[0] && x.email_verified === false);
+    if (!u) return [];
+    patch(ctx, u, {
+      password_hash: ctx.params[1], token_version: (u.token_version || 1) + 1, must_change_password: false, password_changed_at: null,
+      account_status: u.account_status === 'active' ? 'pending_invite' : u.account_status,
+    });
+    return [{ id: u.id }];
+  });
+  db.on('UPDATE refresh_tokens SET revoked_at = NOW(), revoked_reason = $2 WHERE user_id = $1 AND revoked_at IS NULL', (ctx) => {
+    const rows = s.refresh_tokens.filter((r) => r.user_id === ctx.params[0] && !r.revoked_at);
+    for (const r of rows) patch(ctx, r, { revoked_at: now(), revoked_reason: ctx.params[1] });
+    return { rows: [], rowCount: rows.length };
+  });
+  db.on('UPDATE service_sessions SET revoked_at = NOW(), revoked_reason = $2 WHERE revoked_at IS NULL AND service_token_id IN (SELECT id FROM service_tokens WHERE created_by = $1) RETURNING id, home_id', (ctx) => {
+    const tokenIds = s.service_tokens.filter((t) => t.created_by === ctx.params[0]).map((t) => t.id);
+    const rows = s.service_sessions.filter((x) => !x.revoked_at && tokenIds.includes(x.service_token_id));
+    for (const r of rows) patch(ctx, r, { revoked_at: now(), revoked_reason: ctx.params[1] });
+    return rows.map((r) => ({ id: r.id, home_id: r.home_id }));
+  });
   db.on((sql) => sql.startsWith('UPDATE users SET email = $2, full_name = $3, phone = NULL'), (ctx) => {
     const [id, email, fullName, hash] = ctx.params;
     const u = userById(id);
@@ -481,8 +529,12 @@ function createWorld({ clock = createClock() } = {}) {
     const row = insert(ctx, s.refresh_tokens, { id: uid(), user_id: userId, token_hash: tokenHash, family_id: familyId, expires_at: expiresAt, created_ip: ip, revoked_at: null, used_at: null });
     return [{ id: row.id }];
   });
-  db.on('FROM home_users hu JOIN homes h ON h.id = hu.home_id WHERE hu.user_id = $1', ({ params }) =>
-    s.home_users.filter((m) => m.user_id === params[0]).map((m) => {
+  // auth_service.listHomesForUser (uyelik-13: users ile birlesir; personel olmayan hesabin servis uyeligi listelenmez)
+  db.on('FROM home_users hu JOIN homes h ON h.id = hu.home_id JOIN users u ON u.id = hu.user_id WHERE hu.user_id = $1', ({ params }) =>
+    s.home_users.filter((m) => m.user_id === params[0]).filter((m) => {
+      const u = s.users.find((x) => x.id === m.user_id) || {};
+      return !(m.role === 'service_user' && !['service_user', 'super_user'].includes(u.role));
+    }).map((m) => {
       const h = homeById(m.home_id);
       return { id: h.id, name: h.name, address: h.address || null, mqtt_username: h.mqtt_username, timezone: 'Europe/Istanbul', role: m.role, valid_from: m.valid_from, valid_until: m.valid_until, installer_expires_at: m.installer_expires_at };
     })
@@ -496,6 +548,20 @@ function createWorld({ clock = createClock() } = {}) {
     await ctx.lock(`inv:${inv.id}`);
     const attached = s.devices.some((d) => d.device_uuid === inv.device_uuid && (d.home_id || d.is_claimed === true || d.is_commissioned === true));
     return [{ id: inv.id, status: inv.status, claimed_home_id: inv.claimed_home_id || null, attached }];
+  });
+  // atolye-2: yeniden uretim YALNIZ PIN'i yeniler (yerel anahtar degismez)
+  db.on((sql) => sql.startsWith('UPDATE device_inventory SET pin_hash = $1, failed_attempts = 0'), (ctx) => {
+    const [pinHash, id] = ctx.params;
+    const inv = s.device_inventory.find((i) => i.id === id && i.status === 'IN_STOCK');
+    if (!inv) return [];
+    patch(ctx, inv, {
+      pin_hash: pinHash, failed_attempts: 0, locked_until: null, label_reissued_at: now(),
+      label_reissue_count: (inv.label_reissue_count || 0) + 1,
+    });
+    return [{
+      id: inv.id, serial_no: inv.serial_no, device_uuid: inv.device_uuid, mac_address: inv.mac_address, model: inv.model,
+      batch_no: inv.batch_no, status: inv.status, label_reissued_at: inv.label_reissued_at, label_reissue_count: inv.label_reissue_count,
+    }];
   });
   db.on((sql) => sql.startsWith('UPDATE device_inventory SET pin_hash = $1, local_key_enc = $2'), (ctx) => {
     const [pinHash, enc, id] = ctx.params;
@@ -531,6 +597,7 @@ function createWorld({ clock = createClock() } = {}) {
     }))
   );
   db.on('SELECT id, email, phone FROM users WHERE id = $1', ({ params }) => copies(s.users.filter((u) => u.id === params[0])));
+  db.on('SELECT id, email, phone, role FROM users WHERE id = $1', ({ params }) => copies(s.users.filter((u) => u.id === params[0])));
 
   // ================================================================== olusturucular
   const h = {

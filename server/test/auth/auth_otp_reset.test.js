@@ -272,9 +272,9 @@ test('sifirlama: 5 hatali kod -> kilit (429); yeniden istek sayaci sifirlamaz', 
   assert.strictEqual(still.status, 429);
 });
 
-test('sifirlama: IP basina saatte 10 istek siniri (kimlikten bagimsiz)', async () => {
+test('sifirlama: IP basina saatte 50 istek siniri (kimlikten bagimsiz; ortak NAT icin uyelik-5)', async () => {
   useFakeSmtp();
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 50; i++) {
     const r = await post('forgot-password', { email: `ip-limit-${i}@example.com` });
     assert.strictEqual(r.status, 200);
   }
@@ -323,6 +323,37 @@ test('sihirli baglanti: GET oturum ACMAZ (405) ve token tuketilmez; POST tek kul
   assert.ok(ok.body.data.access_token);
   const again = await post('magic-login', { token });
   assert.strictEqual(again.status, 400);
+});
+
+test('uyelik-10: davet bekleyen hesapla magic-login -> 403 ACCOUNT_PENDING ve baglanti TUKETILMEZ (parola belirlemede kullanilir)', async () => {
+  useFakeSmtp();
+  const u = await makeUser('bekleyen-magic@example.com');
+  u.account_status = 'pending_invite';
+  await post('forgot-password', { email: 'bekleyen-magic@example.com' });
+  const token = decodeURIComponent(sentMails.pop().text.match(/#token=([^\s]+)/)[1]);
+  const res = await post('magic-login', { token });
+  assert.strictEqual(res.status, 403, JSON.stringify(res.body));
+  assert.strictEqual(res.body.code, 'ACCOUNT_PENDING');
+  const row = store.resets.filter((r) => r.identifier === 'bekleyen-magic@example.com').pop();
+  assert.strictEqual(row.used_at, null, 'baglanti gecerli kalir');
+  // ayni baglanti parola belirlemede calisir ve hesabi etkinlestirir
+  const set = await post('reset-password', { token, new_password: 'Yeni-Bekleyen-Parola-1' });
+  assert.strictEqual(set.status, 200, JSON.stringify(set.body));
+  assert.strictEqual(store.users.get(u.id).account_status, 'active');
+});
+
+test('uyelik-10: askidaki hesapla magic-login -> 403 ACCOUNT_DISABLED, baglanti tuketilmez; gecersiz baglanti 400', async () => {
+  useFakeSmtp();
+  const u = await makeUser('askida-magic@example.com');
+  await post('forgot-password', { email: 'askida-magic@example.com' });
+  const token = decodeURIComponent(sentMails.pop().text.match(/#token=([^\s]+)/)[1]);
+  u.account_status = 'suspended';
+  u.is_active = false;
+  const res = await post('magic-login', { token });
+  assert.strictEqual(res.status, 403);
+  assert.strictEqual(res.body.code, 'ACCOUNT_DISABLED');
+  assert.strictEqual(store.resets.filter((r) => r.identifier === 'askida-magic@example.com').pop().used_at, null);
+  assert.strictEqual((await post('magic-login', { token: 'z'.repeat(43) })).status, 400);
 });
 
 test('sifirlama baglantisi (token) ile yeni parola; ikinci kullanim reddedilir', async () => {

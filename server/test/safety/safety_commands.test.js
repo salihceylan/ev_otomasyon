@@ -185,3 +185,45 @@ test('RV-2: guvenlik destekli panoya (caps safety) duz role komutu uid ile gider
   await c.send('owner', { cmd: 'all_off' });
   assert.equal(c.published[0].cmd.uid, undefined, 'ev geneli komut butun panolara gider');
 });
+
+// ---- guvenlik-7: gaz alarmi surerken havalandirma fani kapatma yalniz safety_ack yetkisiyle ----
+function gasFanState(zoneSt) {
+  return safetyState({
+    zones: [{ id: 1, st: 'normal', aid: null }, { id: 2, st: zoneSt, kind: zoneSt === 'normal' ? null : 'gas', aid: zoneSt === 'normal' ? null : 'g1' }],
+    actuators: [
+      { id: 'a3', relay: 7, kind: 'valve', medium: 'gas', zones: [2], pos: 'closed', on: null, fb: null, fault: false },
+      { id: 'a4', relay: 8, kind: 'fan', medium: null, zones: [2], pos: null, on: true, fb: null, fault: false },
+      { id: 'a5', relay: 9, kind: 'fan', medium: null, zones: [1], pos: null, on: true, fb: null, fault: false },
+    ],
+  });
+}
+
+test('guvenlik-7: gaz kilidinde (latched/fault) misafirin fan off komutu 403; owner/resident/servis gecer', async () => {
+  for (const st of ['latched', 'fault']) {
+    const s = setup({ state: gasFanState(st) });
+    await assert.rejects(s.send('guest', { actuator: 'a4', to: 'off', uid: UID }), (err) => {
+      assert.equal(err.status, 403);
+      assert.equal(err.code, 'FORBIDDEN');
+      assert.equal(err.message, 'Gaz alarmı sürerken havalandırmayı yalnız ev sahibi/üyeleri durdurabilir.');
+      return true;
+    });
+    assert.equal(s.published.length, 0, `${st}: yayin yok`);
+    for (const role of ['owner', 'resident', 'service_user', 'service_session', 'super_user']) {
+      const ok = await s.send(role, { actuator: 'a4', to: 'off', uid: UID });
+      assert.equal(ok.delivered, true, `${st}/${role}`);
+    }
+  }
+});
+
+test('guvenlik-7: gaz alarmi yokken ya da fan baska (normal) bolgedeyse misafir fani kapatabilir; gazsiz kilit kisitlamaz', async () => {
+  const s = setup({ state: gasFanState('normal') });
+  assert.equal((await s.send('guest', { actuator: 'a4', to: 'off', uid: UID })).delivered, true);
+  const s2 = setup({ state: gasFanState('latched') });
+  assert.equal((await s2.send('guest', { actuator: 'a5', to: 'off', uid: UID })).delivered, true, 'fanin bolgesi normal');
+  const water = safetyState({
+    zones: [{ id: 1, st: 'latched', kind: 'water', aid: 'w1' }],
+    actuators: [{ id: 'a9', relay: 8, kind: 'fan', medium: null, zones: [1], pos: null, on: true, fb: null, fault: false }],
+  });
+  const s3 = setup({ state: water });
+  assert.equal((await s3.send('guest', { actuator: 'a9', to: 'off', uid: UID })).delivered, true, 'su alarmi fan kapatmayi kisitlamaz');
+});

@@ -46,7 +46,9 @@ const SQL = Object.freeze({
     'COALESCE(e.shutter_pair_index, (e.channel_index + 1) / 2) AS pair, ' +
     "e.name, COALESCE(e.room, '" + DEFAULT_ROOM + "') AS room, e.current_state, e.current_position, " +
     // Faz 2 F2.A.4: evde acik gaz alarmi (ilintisiz alt sorgu: PG bir kez hesaplar; alarms_home_open_idx)
-    "EXISTS (SELECT 1 FROM alarms a WHERE a.home_id = $1 AND a.kind = 'gas' AND a.status IN ('latched', 'fault', 'silenced')) AS gas_alarm " +
+    // guvenlik-1: yalniz HALA bu evde olan panonun satiri sayilir (evden ayrilmis panonun satiri bastirmaz)
+    'EXISTS (SELECT 1 FROM alarms a JOIN devices ad ON ad.id = a.device_id AND ad.home_id = a.home_id ' +
+    "WHERE a.home_id = $1 AND a.kind = 'gas' AND a.status IN ('latched', 'fault', 'silenced')) AS gas_alarm " +
     'FROM devices d ' +
     'LEFT JOIN endpoints e ON e.device_id = d.id ' +
     "AND ((e.type = 'light' AND e.actuator_type IS NULL AND e.current_state IS TRUE) OR (e.type = 'shutter' AND e.current_position >= $3)) " +

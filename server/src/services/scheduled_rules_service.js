@@ -21,6 +21,7 @@
 //   (A: transfer_service, B: emergency reset cagirabilir; ayni transaction icinde).
 
 const { HttpError, isUuid } = require('../utils/helpers');
+const { isCreatorAuthorized } = require('../utils/rule_creator');
 
 const MAX_RULES_PER_HOME = 50;
 const MAX_RELAY_CHANNEL = 40; // endpoints.channel_index CHECK 1..40
@@ -234,6 +235,18 @@ function normalizeDaysOut(v) {
   return Array.isArray(arr) ? arr.filter((d) => Number.isInteger(d)) : [];
 }
 
+/** kullanim-5: satirdaki kural sahibi yetki sutunlari (CREATOR_COLUMNS) -> isCreatorAuthorized girdisi. */
+function creatorOf(row) {
+  if (!row.created_by) return null;
+  return {
+    is_active: row.creator_is_active,
+    account_status: row.creator_account_status,
+    global_role: row.creator_global_role,
+    home_role: row.creator_home_role,
+    installer_expires_at: row.creator_installer_expires_at,
+  };
+}
+
 /** Veritabani satiri -> API nesnesi (snake_case). `created_by_name` yalnizca ad (e-posta DEGIL). */
 function mapRule(row) {
   return {
@@ -250,6 +263,8 @@ function mapRule(row) {
     enabled: row.enabled === true,
     created_by: row.created_by || null,
     created_by_name: row.created_by_name === undefined ? null : row.created_by_name,
+    // kullanim-5: kural sahibi hala yetkili mi (zamanlayici yetkisiz sahibin kuralini CALISTIRMAZ; listede gorunur olsun)
+    creator_active: isCreatorAuthorized(creatorOf(row)),
     last_run_at: toIso(row.last_run_at),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at),
@@ -259,8 +274,23 @@ function mapRule(row) {
 // ------------------------------------------------------------------------------
 // Servis
 // ------------------------------------------------------------------------------
+// kullanim-5: kural sahibinin yetki sutunlari (zamanlayicinin SQL.creator denetimiyle ayni kaynak); e-posta SECILMEZ.
+const CREATOR_COLUMNS =
+  "u.full_name AS created_by_name, u.is_active AS creator_is_active, to_jsonb(u) ->> 'account_status' AS creator_account_status, " +
+  'u.role AS creator_global_role, chu.role AS creator_home_role, chu.installer_expires_at AS creator_installer_expires_at';
 const SELECT_WITH_CREATOR =
-  'SELECT sr.*, u.full_name AS created_by_name FROM scheduled_rules sr LEFT JOIN users u ON u.id = sr.created_by';
+  `SELECT sr.*, ${CREATOR_COLUMNS} FROM scheduled_rules sr LEFT JOIN users u ON u.id = sr.created_by ` +
+  'LEFT JOIN home_users chu ON chu.user_id = sr.created_by AND chu.home_id = sr.home_id';
+// Kural sahibi tek satirda (ustlenme karari; zamanlayici SQL.creator ile ayni)
+const CREATOR_SQL =
+  "SELECT u.is_active, to_jsonb(u) ->> 'account_status' AS account_status, u.role AS global_role, " +
+  'hu.role AS home_role, hu.installer_expires_at ' +
+  'FROM users u LEFT JOIN home_users hu ON hu.user_id = u.id AND hu.home_id = $1 WHERE u.id = $2';
+const RULE_AUDIT_SQL =
+  'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
+  'VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)';
+// Ustlenebilecek (duzenleyen) ev rolleri: kural yonetimi yetkisi olanlar (servis personeli uyeligi gecerliyse rota gecirir)
+const ADOPTER_ROLES = new Set(['owner', 'resident', 'service_user', 'super_user']);
 
 function createService(deps = {}) {
   const getDb = () => deps.db || require('../db');
@@ -288,7 +318,14 @@ function createService(deps = {}) {
     }
   }
 
-  async function createRule(homeId, userId, input) {
+  /**
+   * @param {string} homeId
+   * @param {string} userId  istegi yapan
+   * @param {object} input
+   * @param {{role?:string, ip?:string}} [actor]  kullanim-5: istegi yapanin ev rolu (servis personeli tek sahipli evde
+   *                                            kurali sahip adina olusturur; denetimde gercek olusturan personel)
+   */
+  async function createRule(homeId, userId, input, actor = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       throw new ValidationError({ field: 'body', message: 'İstek gövdesi bir nesne olmalı' });
     }
@@ -328,6 +365,18 @@ function createService(deps = {}) {
       const chErr = checkChannelAgainstEndpoints(rule.channel_type, rule.channel, endpoints);
       if (chErr) throw new ValidationError(chErr);
 
+      // kullanim-5: servis personelinin (sureli uyelik) tek sahipli evde kurdugu kural sahibin adina kaydedilir: uyelik
+      // bitince kural sessizce durmaz. Cok sahipli / sahipsiz evde eskisi gibi personel.
+      let createdBy = userId;
+      let onBehalfOf = null;
+      if (actor && actor.role === 'service_user') {
+        const owners = await tx.query("SELECT user_id FROM home_users WHERE home_id = $1 AND role = 'owner'", [homeId]);
+        if (owners.rows.length === 1 && owners.rows[0].user_id && owners.rows[0].user_id !== userId) {
+          onBehalfOf = owners.rows[0].user_id;
+          createdBy = onBehalfOf;
+        }
+      }
+
       const ins = await tx.query(
         `WITH ins AS (
            INSERT INTO scheduled_rules
@@ -335,7 +384,8 @@ function createService(deps = {}) {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
            RETURNING *
          )
-         SELECT ins.*, u.full_name AS created_by_name FROM ins LEFT JOIN users u ON u.id = ins.created_by`,
+         SELECT ins.*, ${CREATOR_COLUMNS} FROM ins LEFT JOIN users u ON u.id = ins.created_by
+           LEFT JOIN home_users chu ON chu.user_id = ins.created_by AND chu.home_id = ins.home_id`,
         [
           homeId,
           rule.device_id,
@@ -347,14 +397,30 @@ function createService(deps = {}) {
           JSON.stringify(rule.days_of_week),
           rule.label,
           rule.enabled,
-          userId,
+          createdBy,
         ]
       );
+      if (onBehalfOf) {
+        await tx.query(RULE_AUDIT_SQL, [
+          'scheduled_rule_created_for_owner',
+          null,
+          homeId,
+          userId,
+          'service_user',
+          (actor && actor.ip) || null,
+          JSON.stringify({ rule_id: Number(ins.rows[0].id), owner_id: onBehalfOf }),
+        ]);
+      }
       return mapRule(ins.rows[0]);
     });
   }
 
-  async function updateRule(homeId, ruleId, input) {
+  /**
+   * @param {{userId?:string|null, role?:string, ip?:string}|null} [editor]  kullanim-5: duzenleyen. Kayitli sahip artik
+   *   yetkili degilse ve duzenleyen kural yonetebiliyorsa kural ona gecer (ustlenme; denetim 'scheduled_rule_adopted').
+   *   Servis personeli duzenlerse ve evin tek (yetkili) owner'i varsa kural owner adina ustlenilir (createRule gibi).
+   */
+  async function updateRule(homeId, ruleId, input, editor = null) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
       throw new ValidationError({ field: 'body', message: 'İstek gövdesi bir nesne olmalı' });
     }
@@ -413,6 +479,31 @@ function createService(deps = {}) {
       if ('days_of_week' in values) add('days_of_week', JSON.stringify(values.days_of_week), '::jsonb');
       if (scheduleChanged) sets.push('schedule_changed_at = CURRENT_TIMESTAMP', 'last_run_at = NULL');
 
+      // kullanim-5: ustlenme - kayitli sahip artik yetkili degil (uyelik / servis suresi bitti, hesap kapandi) ve duzenleyen
+      // kural yonetebiliyor: kural duzenleyene gecer (zamanlayici yeniden calistirir). Duzenleyen bilinmiyorsa yapilmaz.
+      // Duzenleyen SERVIS PERSONELIYSE (sureli uyelik) ve evin TEK owner'i yetkiliyse kural owner ADINA ustlenilir
+      // (createRule ile ayni kural; inceleme): personelin penceresi bitince kural yine sessizce durmasin. Denetimde gercek
+      // duzenleyen personel (actor) + owner_id / editor_id. Cok owner'li / owner'siz evde personel ustlenir.
+      let adopted = null; // { newCreator, onBehalfOf }
+      const editorId = editor && editor.userId ? String(editor.userId) : null;
+      if (editorId && ADOPTER_ROLES.has(editor.role) && String(before.created_by || '') !== editorId) {
+        const who = before.created_by ? await tx.query(CREATOR_SQL, [homeId, before.created_by]) : { rows: [] };
+        if (!isCreatorAuthorized((who && who.rows && who.rows[0]) || null)) {
+          let onBehalfOf = null;
+          if (editor.role === 'service_user') {
+            const owners = await tx.query("SELECT user_id FROM home_users WHERE home_id = $1 AND role = 'owner'", [homeId]);
+            const soleOwner = owners.rows.length === 1 && owners.rows[0].user_id ? String(owners.rows[0].user_id) : null;
+            if (soleOwner && soleOwner !== editorId && soleOwner !== String(before.created_by || '')) {
+              const ow = await tx.query(CREATOR_SQL, [homeId, soleOwner]);
+              if (isCreatorAuthorized((ow && ow.rows && ow.rows[0]) || null)) onBehalfOf = soleOwner;
+            }
+          }
+          const newCreator = onBehalfOf || editorId;
+          add('created_by', newCreator);
+          adopted = { newCreator, onBehalfOf };
+        }
+      }
+
       params.push(ruleId, homeId);
       const upd = await tx.query(
         `WITH upd AS (
@@ -420,10 +511,25 @@ function createService(deps = {}) {
            WHERE id = $${params.length - 1} AND home_id = $${params.length}
            RETURNING *
          )
-         SELECT upd.*, u.full_name AS created_by_name FROM upd LEFT JOIN users u ON u.id = upd.created_by`,
+         SELECT upd.*, ${CREATOR_COLUMNS} FROM upd LEFT JOIN users u ON u.id = upd.created_by
+           LEFT JOIN home_users chu ON chu.user_id = upd.created_by AND chu.home_id = upd.home_id`,
         params
       );
       if (upd.rows.length === 0) throw new HttpError(404, 'Kural bulunamadı', 'NOT_FOUND');
+      if (adopted) {
+        const details = adopted.onBehalfOf
+          ? { rule_id: Number(ruleId), owner_id: adopted.onBehalfOf, editor_id: editorId }
+          : { rule_id: Number(ruleId) };
+        await tx.query(RULE_AUDIT_SQL, [
+          'scheduled_rule_adopted',
+          null,
+          homeId,
+          editorId,
+          String(editor.role).slice(0, 30),
+          (editor && editor.ip) || null,
+          JSON.stringify(details),
+        ]);
+      }
       return mapRule(upd.rows[0]);
     });
   }

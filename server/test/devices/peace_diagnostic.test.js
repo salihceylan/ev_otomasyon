@@ -177,10 +177,45 @@ test('tanı: hicbir cihaz haberlesmiyorsa error; gecikmeli (<=300 sn) warning; h
   assert.strictEqual(r.diagnosis_level, 'error');
   assert.match(r.action_recommendation, /Wi-Fi/);
 
+  // bireysel-12: hic baglanmamis pano "uzun suredir cevrimdisi / guc kesik" DEGIL: ayri NEVER_SEEN (warning)
   ctx.dev.last_seen_at = null;
   r = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
-  assert.strictEqual(r.diagnosis_level, 'error');
+  assert.strictEqual(r.diagnosis_level, 'warning');
   assert.strictEqual(r.home_network.seconds_since_last_seen, null);
+  assert.strictEqual(r.home_network.status, 'NEVER_SEEN');
+});
+
+test('bireysel-12: hic gorulmemis pano -> NEVER_SEEN / warning, baslik ve kurulum odakli eylem adimlari', async () => {
+  const ctx = setup();
+  ctx.dev.last_seen_at = null;
+  ctx.dev.is_online = false;
+  const r = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.strictEqual(r.diagnosis_level, 'warning');
+  assert.strictEqual(r.diagnosis_title, 'Pano Henüz Buluta Hiç Bağlanmadı');
+  assert.strictEqual(r.devices[0].network_status, 'NEVER_SEEN');
+  assert.strictEqual(r.devices[0].level, 'warning');
+  assert.strictEqual(r.devices[0].seconds_since_last_seen, null);
+  assert.strictEqual(r.hardware_power.is_online, false);
+  assert.doesNotMatch(r.diagnosis_summary, /uzun süredir|Güç Kesik/i);
+  assert.match(r.action_recommendation, /Ethernet/);
+  assert.match(r.action_recommendation, /Wi-Fi/);
+  assert.match(r.action_recommendation, /10 dk/);
+  assert.match(r.action_recommendation, /v1\.3\.0/);
+  assert.match(r.action_recommendation, /yetkili servis/i);
+});
+
+test('bireysel-12: genel seviye - saglikli + hic gorulmemis warning (1 haberlesiyor); cevrimdisi + hic gorulmemis error', async () => {
+  const ctx = setup();
+  const second = ctx.world.helpers.addDevice({ home: ctx.home, uuid: 'AHBU-S3-0010', mac: 'E8:F6:0A:00:00:10', online: false });
+  ctx.dev.last_seen_at = new Date(ctx.world.clock.t - 10 * 1000);
+  second.last_seen_at = null;
+  let r = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.strictEqual(r.diagnosis_level, 'warning');
+  assert.match(r.diagnosis_summary, /2 panodan 1/);
+
+  ctx.dev.last_seen_at = new Date(ctx.world.clock.t - 3 * 3600 * 1000); // uzun suredir cevrimdisi
+  r = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.strictEqual(r.diagnosis_level, 'error', 'hicbir pano haberlesmiyor ve biri cevrimdisi');
 });
 
 test('tanı: broker kopuksa bulut DEGRADED; cihaz yoksa UNCLAIMED yonlendirmesi; bilinmeyen ev 404', async () => {

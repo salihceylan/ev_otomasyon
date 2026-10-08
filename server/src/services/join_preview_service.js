@@ -128,10 +128,14 @@ class JoinPreviewService {
     }
 
     // Hedef kimlik eslesmesi (kabul ile ayni kural); hedef SIZDIRILMAZ
-    const me = await this.db.query('SELECT id, email, phone FROM users WHERE id = $1', [userId]);
+    const me = await this.db.query('SELECT id, email, phone, role FROM users WHERE id = $1', [userId]);
     const user = me.rows[0];
     if (!user || !this._identityMatches(tr.target_identifier, user)) {
       throw httpError(403, 'Bu devir kodu hesabınız için geçerli değil.', 'FORBIDDEN');
+    }
+    // ev_uyelik-2: kabulle ayni kural (personel / yonetici hesabi daire sahibi olamaz)
+    if (user.role === 'service_user' || user.role === 'super_user') {
+      throw httpError(403, 'Servis personeli ve yönetici hesapları daire sahibi olamaz. Devri bir müşteri hesabına yapın.', 'FORBIDDEN');
     }
     return {
       kind: 'transfer',

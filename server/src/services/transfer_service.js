@@ -13,6 +13,8 @@
 //  - Yalnizca BU EVLE ilgili erisim iptal edilir: uyelikler, bu evin uygulama MQTT kimlikleri,
 //    servis PIN'leri/oturumlari, davetler, zamanli kurallar (homeCleanupHook). Kullanicilarin
 //    baska evlerdeki oturumlari DUSMEZ (refresh token'lara dokunulmaz).
+//  - pano-6: eski sakinler panonun yerel anahtarini bilir; anahtar ayni islemde BEKLEYEN yolla dondurulur (yalniz tek
+//    panolu ev; local_key_rotation) ve COMMIT sonrasi uzlastirici istenir.
 
 const db = require('../db');
 const { HttpError, generateCode, sha256Hex, isUuid } = require('../utils/helpers');
@@ -26,6 +28,9 @@ const CODE_LENGTH = 16;
 const TRANSFER_TTL_MS = 48 * 60 * 60 * 1000;
 
 const GENERIC_INVALID = 'Geçersiz veya süresi dolmuş devir kodu.';
+// ev_uyelik-2: devri kabul eden hesabin global rolu (baslatmada denetlenmez: hesap turu sizardi)
+const STAFF_ROLES = Object.freeze(['service_user', 'super_user']);
+const STAFF_TARGET_MESSAGE = 'Servis personeli ve yönetici hesapları daire sahibi olamaz. Devri bir müşteri hesabına yapın.';
 
 let overrides = {};
 
@@ -146,12 +151,14 @@ class TransferService {
         throw new HttpError(400, 'Kendi dairenizi kendinize devredemezsiniz.', 'VALIDATION');
       }
 
-      const uRes = await tx.query('SELECT id, email, phone FROM users WHERE id = $1', [newUserId]);
+      const uRes = await tx.query('SELECT id, email, phone, role FROM users WHERE id = $1', [newUserId]);
       const newUser = uRes.rows[0];
       if (!newUser || !transfer.target_identifier || !identityMatches(transfer.target_identifier, newUser)) {
         // Hedef kimlik SIZDIRILMAZ.
         throw new HttpError(403, 'Bu devir kodu hesabınız için geçerli değil.', 'FORBIDDEN');
       }
+      // ev_uyelik-2: personel / yonetici hesabi daire sahibi olamaz (devir PENDING kalir; hicbir yazim yapilmadi).
+      if (STAFF_ROLES.includes(newUser.role)) throw new HttpError(403, STAFF_TARGET_MESSAGE, 'FORBIDDEN');
 
       // Devri baslatan hala ev sahibi mi?
       const ownerRes = await tx.query(
@@ -185,20 +192,29 @@ class TransferService {
       );
       await tx.query('UPDATE devices SET claimed_by = $1 WHERE home_id = $2', [newUserId, transfer.home_id]);
 
+      // pano-6: eski aile panonun yerel anahtarini biliyor -> bekleyen yolla dondurulur (tek panolu ev; cihaz satirlari
+      // yukarida zaten kilitli)
+      const rotationSvc = optionalModule('local_key_rotation');
+      const rotation = rotationSvc && typeof rotationSvc.scheduleRotation === 'function'
+        ? await rotationSvc.scheduleRotation(transfer.home_id, { tx, reason: 'home_transfer' })
+        : null;
+
       // Yalnizca bu eve ait erisimler: servis PIN/oturum, uygulama MQTT kimlikleri, davet/kural temizligi.
       const service = await serviceTokenService.revokeHomeServiceAccess(transfer.home_id, tx, 'home_transfer');
-      let usernames = [];
+      // Servis oturumu MQTT kimlikleri (uyelik-6) + evin uygulama kimlikleri: COMMIT sonrasi hepsi atilir.
+      let usernames = Array.isArray(service && service.mqtt_usernames) ? service.mqtt_usernames.slice() : [];
       if (mqtt && typeof mqtt.revokeHomeAccess === 'function') {
         const revoked = await mqtt.revokeHomeAccess({ homeId: transfer.home_id, tx });
-        usernames = (revoked && revoked.usernames) || [];
+        usernames = usernames.concat((revoked && revoked.usernames) || []);
       }
       const cleanup = await homeCleanupHook(tx, transfer.home_id);
 
-      return { transfer, usernames, service, cleanup };
+      return { transfer, usernames, service, cleanup, rotation, rotationSvc };
     });
 
     // Commit SONRASI: ayni surecteki servis oturumu onbellegi ve acik MQTT baglantilari.
     invalidateServiceSessionCache();
+    if (outcome.rotationSvc && typeof outcome.rotationSvc.afterCommit === 'function') outcome.rotationSvc.afterCommit(outcome.rotation);
     let kickWarning = null;
     if (mqtt && typeof mqtt.kickUsernames === 'function' && outcome.usernames.length > 0) {
       try {
@@ -249,3 +265,4 @@ module.exports = TransferService;
 module.exports.normalizeTransferCode = normalizeTransferCode;
 module.exports.hashTransferCode = hashTransferCode;
 module.exports.homeCleanupHook = homeCleanupHook;
+module.exports.STAFF_TARGET_MESSAGE = STAFF_TARGET_MESSAGE;

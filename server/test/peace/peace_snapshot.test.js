@@ -208,7 +208,8 @@ test('F2.A.4: anlik goruntu evde acik gaz alarmini tasir (gasAlarm); sorgu tek, 
   const snap = await load(db, 'h1');
   assert.equal(snap.gasAlarm, true);
   assert.equal(calls.length, 1);
-  assert.match(S.snapshot, /EXISTS \(SELECT 1 FROM alarms a WHERE a\.home_id = \$1 AND a\.kind = 'gas' AND a\.status IN \('latched', 'fault', 'silenced'\)\) AS gas_alarm/);
+  // guvenlik-1: yalniz hala bu evde olan panonun satiri sayilir (devices ile birlesim)
+  assert.match(S.snapshot, /EXISTS \(SELECT 1 FROM alarms a JOIN devices ad ON ad\.id = a\.device_id AND ad\.home_id = a\.home_id WHERE a\.home_id = \$1 AND a\.kind = 'gas' AND a\.status IN \('latched', 'fault', 'silenced'\)\) AS gas_alarm/);
   const none = await load({ query: async () => ({ rows: [{ device_id: 'd1', live: true, endpoint_id: null }] }) }, 'h1');
   assert.equal(none.gasAlarm, false, 'kolon yoksa (eski sorgu/sahte) gaz alarmi yok sayilir');
 });

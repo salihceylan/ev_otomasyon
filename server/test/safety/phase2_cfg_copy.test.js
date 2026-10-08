@@ -81,3 +81,23 @@ test('bilgi push\'u metni: cfg_pending_dropped', () => {
   assert.equal(t.title, 'Bekleyen yapılandırma iptal edildi');
   assert.match(t.body, /panodaki yapılandırma geçerli/);
 });
+
+// guvenlik-3: yapilandirilmamis (present:false) panoda da kopya istenir (firmware 1.3.1 cfg{rev,crc} yazar); caps 'cfg' sart
+test('guvenlik-3: present:false (bos pano) + caps cfg -> kopya yoksa cfg_get istenir; caps cfg yoksa istenmez', async () => {
+  const h = setup(null);
+  const empty = { present: false, cfg: { rev: 0, crc: '00000000' } };
+  await h.svc.onLiveState({ topicId: 'h_t', homeId: 'h', deviceId: DEV, uid: UID, caps: ['safety', 'cfg'], summary: empty, prev: null, hadCaps: true });
+  await h.svc.idle();
+  assert.deepEqual(h.sys.map((x) => x.obj), [{ cmd: 'cfg_get', module: 'safety', uid: UID }]);
+
+  const h2 = setup(null);
+  await h2.svc.onLiveState({ topicId: 'h_t', homeId: 'h', deviceId: DEV, uid: UID, caps: ['safety'], summary: empty, prev: null, hadCaps: true });
+  await h2.svc.idle();
+  assert.equal(h2.sys.length, 0, 'cfg yetenegi yok: istek yok');
+
+  // ikinci (onbellekli) tur da ayni kosulu kullanir: kopya dogrulanana kadar dakikada bir
+  h.set(70_000);
+  await h.svc.onLiveState({ topicId: 'h_t', homeId: 'h', deviceId: DEV, uid: UID, caps: ['safety', 'cfg'], summary: empty, prev: empty, hadCaps: true });
+  await h.svc.idle();
+  assert.equal(h.sys.length, 2);
+});

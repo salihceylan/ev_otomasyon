@@ -283,6 +283,36 @@ test('revokeHomeAccess: evin TUM uygulama kimlikleri silinir; cihaz kimligi vars
   await assert.rejects(ctx.credentials.revokeHomeAccess({}), TypeError);
 });
 
+test('uyelik-6: revokeServiceSessionAccess yalniz evin servis (PIN) oturumu kimliklerini (user_id bos) siler; tx yoksa atar, tx varsa atmaz', async () => {
+  const ctx = setup();
+  enableEmqx();
+  const svcA = await ctx.credentials.issueUserCredential({ homeId: ctx.home.id, userId: null });
+  const svcB = await ctx.credentials.issueUserCredential({ homeId: ctx.home.id, userId: null });
+  const own = await ctx.credentials.issueUserCredential({ homeId: ctx.home.id, userId: ctx.owner.id });
+  const otherSvc = await ctx.credentials.issueUserCredential({ homeId: ctx.otherHome.id, userId: null });
+  const d = await ctx.credentials.issueDeviceCredential({ homeId: ctx.home.id, deviceId: ctx.dev.id });
+  ctx.timeline.length = 0;
+
+  assert.strictEqual(typeof ctx.credentials.revokeServiceSessionAccess, 'function');
+  const r = await ctx.credentials.revokeServiceSessionAccess({ homeId: ctx.home.id });
+  assert.strictEqual(r.revoked, 2);
+  assert.deepStrictEqual([...r.usernames].sort(), [svcA.username, svcB.username].sort());
+  assert.deepStrictEqual(
+    ctx.world.state.mqtt_credentials.map((c) => c.username).sort(),
+    [own.username, otherSvc.username, d.username].sort(),
+    'kullanici, cihaz ve baska evin kimligi korunur'
+  );
+  assert.deepStrictEqual(ctx.timeline.filter((x) => x.startsWith('kick:')).sort(), [`kick:${svcA.username}`, `kick:${svcB.username}`].sort());
+
+  const svcC = await ctx.credentials.issueUserCredential({ homeId: ctx.home.id, userId: null });
+  ctx.timeline.length = 0;
+  const r2 = await ctx.world.db.withTransaction((tx) => ctx.credentials.revokeServiceSessionAccess({ homeId: ctx.home.id, tx }));
+  assert.deepStrictEqual(r2.usernames, [svcC.username]);
+  assert.ok(!('kick' in r2));
+  assert.deepStrictEqual(ctx.timeline, [], 'tx modunda atma cagiranin isi');
+  await assert.rejects(ctx.credentials.revokeServiceSessionAccess({}), TypeError);
+});
+
 test('revokeDeviceCredential: yalniz cihaz kimligi', async () => {
   const ctx = setup();
   await ctx.credentials.issueUserCredential({ homeId: ctx.home.id, userId: ctx.owner.id });

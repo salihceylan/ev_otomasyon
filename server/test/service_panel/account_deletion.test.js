@@ -123,6 +123,43 @@ test('parola ile silme: anonimleştirme + tüm bağlı veriler iptal; e-posta/te
   assert.ok(!JSON.stringify(audit).includes(PASSWORD));
 });
 
+test('pano-6: kalan evdeki owner/resident hesabini silince o evin (tek panolu) yerel anahtari BEKLEYEN yolla doner; misafir uyeliginde donmez', async () => {
+  const { LocalKeyRotation } = env.SRC('services/local_key_rotation');
+  const reconciles = [];
+  const rotation = new LocalKeyRotation({ requestReconcile: (topicId) => reconciles.push(topicId), logger: { warn() {}, log() {}, error() {} } });
+  const svc = new AccountDeletionService({ mqtt: mqttWithKick(async () => ({ kicked: 0, failed: 0, skipped: false })), rotation });
+  const t = richUser();
+  const devX = h.device(t.homeX); // resident oldugu ev (tek pano)
+  const devShared1 = h.device(t.shared); // ortak sahip oldugu ev (iki pano)
+  const devShared2 = h.device(t.shared);
+  const guestHome = h.home({ name: 'Misafir Evi', owner: t.otherOwner });
+  h.member(guestHome, t.user, 'guest');
+  const devGuest = h.device(guestHome);
+  const r = await svc.deleteAccount({ userId: t.user.id, password: PASSWORD });
+  assert.equal(r.deleted, true);
+  assert.ok(devX.local_key_pending_enc, 'resident oldugu evde bekleyen anahtar');
+  assert.ok(!devShared1.local_key_pending_enc && !devShared2.local_key_pending_enc, 'cok panolu evde rotasyon yok');
+  assert.ok(!devGuest.local_key_pending_enc, 'misafir anahtari okuyamaz: rotasyon yok');
+  const a = state.device_audit_logs.filter((x) => x.event === 'local_key_rotation_scheduled' && x.home_id === t.homeX.id);
+  assert.equal(a.length, 1);
+  assert.deepEqual(a[0].details, { reason: 'member_deleted' });
+  assert.deepEqual(reconciles, [t.homeX.mqtt_username]);
+});
+
+test('uyelik-6: hesap silmede kullanicinin PIN iyle acilmis servis oturumunun evindeki servis oturumu MQTT kimligi silinir ve atilir', async () => {
+  const kicked = [];
+  const svc = new AccountDeletionService({ mqtt: mqttWithKick(async (l) => { kicked.push(...l); return { kicked: l.length, failed: 0, skipped: false }; }) });
+  const t = richUser();
+  const sessionCred = h.appCredential(t.shared, null); // servis oturumu kimligi (user_id bos)
+  const otherHomeSession = h.appCredential(t.homeX, null); // oturumu olmayan baska ev: dokunulmaz
+  const r = await svc.deleteAccount({ userId: t.user.id, password: PASSWORD });
+  assert.equal(r.deleted, true);
+  assert.ok(t.session.revoked_at, 'servis oturumu iptal');
+  assert.ok(!state.mqtt_credentials.includes(sessionCred), 'oturum kimligi silindi');
+  assert.ok(state.mqtt_credentials.includes(otherHomeSession), 'ilgisiz evin kimligi korunur');
+  assert.ok(kicked.includes(sessionCred.username), 'COMMIT sonrasi atildi');
+});
+
 test('silinen hesap: eski e-posta ve telefonla YENİDEN KAYIT mümkün (yeni hesap temiz); eski oturum/giriş geçersiz', async () => {
   const t = richUser(pwUser());
   const { user } = t;

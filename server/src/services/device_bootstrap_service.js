@@ -15,10 +15,13 @@
 //                                                           nonce tekrari / askida-iptal kart (NEDEN SOYLENMEZ: tek govde)
 //   (429: rota katmani; 5xx: veritabani hatasi vb. - 401'e cevrilmez)
 //
-// Anahtar adaylari: devices.local_key_enc, device_inventory.local_key_enc, devices.local_key_pending_enc. Tum adaylar
-// sabit zamanli karsilastirilir. YALNIZ bekleyen anahtar tuttuysa (pano yeni anahtari almis ama uzlastirici takasi
-// yazamamis) bekleyen anahtar asil anahtar yapilir: device_reconciler ile AYNI CAS takasi + envanter + `local_key_rotated`
-// denetimi (via:"bootstrap").
+// Anahtar adaylari YALNIZ: devices.local_key_enc, device_inventory.local_key_enc, devices.local_key_pending_enc. Tum
+// adaylar sabit zamanli karsilastirilir. YALNIZ bekleyen anahtar tuttuysa (pano yeni anahtari almis ama uzlastirici
+// takasi yazamamis) bekleyen anahtar asil anahtar yapilir: device_reconciler ile AYNI CAS takasi + envanter +
+// `local_key_rotated` denetimi (via:"bootstrap"). ONCEKI anahtar hicbir zaman aday DEGILDIR ve saklanmaz (inceleme):
+// uc internetten erisilebilir; eski anahtari bilen kisi (cikarilan uye, biten servis oturumu, acil sifirlamadan onceki
+// sahip) rotasyonu / sifirlamayi geri aldiramaz ve evin cihaz MQTT kimligini alamaz. Takasi kacirmis eski firmware'li
+// panonun kurtarma yolu seri konsol RESETKEY + FACTORYINIT'tir (CONTRACTS).
 //
 // Tekrar oynatma: (kart, nonce) device_bootstrap_nonces tablosunda (migration 036; surec yeniden baslasa ve coklu surecte
 // de gecerli). Kayit imza dogrulandiktan SONRA ayni islemde yazilir; 600 sn'den eski kayitlar her istekte silinir.
@@ -128,7 +131,8 @@ class DeviceBootstrapService {
       const inv = invRes.rows[0] || null;
       const dev = devRes.rows[0] || null;
 
-      // Sabit zamanli dogrulama: tum adaylar hesaplanir (bilinmeyen kartta sahte anahtarla ayni is).
+      // Sabit zamanli dogrulama: tum adaylar hesaplanir (bilinmeyen kartta sahte anahtarla ayni is). Onceki anahtar
+      // aday DEGILDIR (inceleme): yalniz gecerli (cihaz + envanter) ve bekleyen.
       const candidates = [
         { enc: dev && dev.local_key_enc, pending: false },
         { enc: inv && inv.local_key_enc, pending: false },
@@ -159,7 +163,8 @@ class DeviceBootstrapService {
       );
       if (!ins || !ins.rowCount) return { denied: true };
 
-      // Yalniz bekleyen anahtar tuttu: asil anahtar yap (uzlastirici ile ayni CAS takasi; envanter ayni degere).
+      // Yalniz bekleyen anahtar tuttu: asil anahtar yap (uzlastirici ile ayni CAS takasi; envanter ayni degere). Pano yeni
+      // anahtari imzasiyla KANITLADI; eski anahtar saklanmaz (inceleme: eski anahtar sahibi geri aldiramaz).
       let promoted = false;
       if (pendingOk && !currentOk && dev) {
         const sw = await tx.query(

@@ -191,12 +191,18 @@ test('stoga donus: yeni RASTGELE PIN (yanitta tek sefer), yeni yerel anahtar, uy
   assert.ok(!db.sqls().some((s) => /setup_pin\s*=\s*'/.test(s)), 'sabit setup_pin yazimi olmamali');
   assert.ok(!db.log.some((l) => l.sql.includes('UPDATE devices') && (l.params || []).includes('123456')));
 
-  // yeni yerel anahtar (eskisinden FARKLI) hem cihazda hem envanterde
+  // inceleme: STOGA DONUSTE yeni yerel anahtar (eskisinden FARKLI) HEMEN gecerli: cihaz + envanter; bekleyen / onceki
+  // anahtar yok. Eski sahibin bildigi anahtar sonraki musterinin panosunda gecerli KALMAZ (claim envanter anahtarini alir).
   assert.notStrictEqual(ctx.dev.local_key_enc, ctx.oldKeyEnc);
-  assert.strictEqual(ctx.dev.local_key_enc, ctx.inv.local_key_enc);
+  assert.notStrictEqual(ctx.inv.local_key_enc, ctx.oldKeyEnc, 'envanter anahtari artik eski anahtar degil');
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.dev.local_key_enc);
   const newKey = ctx.secretBox.decrypt(ctx.dev.local_key_enc);
   assert.strictEqual(newKey.length, 16);
   assert.notStrictEqual(newKey, 'EskiAnahtar123456');
+  assert.ok(!ctx.dev.local_key_pending_enc, 'bekleyen anahtar yok (iletim yolu: ev konusu kalmadi)');
+  assert.ok(!ctx.dev.local_key_prev_enc, 'onceki anahtar saklanmaz');
+  assert.strictEqual(r.local_key, newKey, 'anahtar yanitta bir kez (pano yenilenirken RESETKEY + FACTORYINIT)');
+  assert.strictEqual(r.local_key_publish, 'published');
 
   // uyelikler silindi; ev kabugu kalir ve ayarlari varsayilana doner
   assert.strictEqual(state.home_users.filter((m) => m.home_id === ctx.home.id).length, 0);
@@ -238,17 +244,20 @@ test('stoga donus: yeni RASTGELE PIN (yanitta tek sefer), yeni yerel anahtar, uy
   assert.ok(!dump.includes(newKey));
 });
 
-test('retained state/status BOS yayinla temizlenir; yerel anahtar ESKI kimlikle baglanti atilmadan ONCE iletilir', async () => {
+test('retained state/status BOS yayinla temizlenir; STOGA DONUSTE yeni (gecerli) anahtar ESKI kimlikle baglanti atilmadan ONCE iletilir; uzlastirici YOK', async () => {
   const ctx = await setup({ deviceOnline: true, emqx: true });
+  const rearmed = [];
+  ctx.bridge.requestReconcile = (topicId) => rearmed.push(topicId);
   const r = await ctx.reset(ctx.tech);
 
   assert.deepStrictEqual(ctx.bridge.cleared, [ctx.home.mqtt_username]);
   assert.strictEqual(ctx.bridge.topics.length, 1);
   assert.strictEqual(ctx.bridge.topics[0].topic, `ev/${ctx.home.mqtt_username}/sys`);
   assert.strictEqual(ctx.bridge.topics[0].obj.cmd, 'set_local_key');
-  assert.strictEqual(ctx.bridge.topics[0].obj.local_key.length, 16);
+  assert.strictEqual(ctx.bridge.topics[0].obj.local_key, r.local_key);
+  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), r.local_key, 'iletilen anahtar sunucudaki gecerli anahtar');
   assert.strictEqual(r.local_key_publish, 'published');
-  assert.ok(!('local_key' in r), 'iletilen anahtar yanitta tekrarlanmamali');
+  assert.deepStrictEqual(rearmed, [], 'bekleyen anahtar yok: uzlastirici istenmez');
 
   // sira: sys yayini -> baglanti atma (kick) -> retained temizligi
   const t = ctx.timeline;
@@ -349,10 +358,14 @@ test('yeni sahibe devir: eski aile cikarilir, yeni sahip owner olur, kanallar ye
   assert.strictEqual(log.new_owner_identifier, 'yeni.sahip@example.test');
 });
 
-test('devir hedefi telefonla da verilebilir', async () => {
+test('devir hedefi telefonla: yalniz yer tutucu e-postali (telefon-OTP) hesap; gercek e-postali hesap 400 (uyelik-1)', async () => {
   const ctx = await setup();
-  const r = await ctx.reset(ctx.root, { newOwnerIdentifier: '+90 555 777 88 99' });
-  assert.strictEqual(r.new_owner.id, ctx.newbie.id);
+  // kayitta telefon dogrulanmaz: telefonla bulunan gercek e-postali hesap baskasinin olabilir
+  const e = await expectHttp(ctx.reset(ctx.root, { newOwnerIdentifier: '+90 555 777 88 99' }), 400, 'VALIDATION');
+  assert.strictEqual(e.message, 'Bu numara e-postalı bir hesaba kayıtlı; atama için hesabın e-posta adresini girin.');
+  const otpUser = ctx.world.helpers.addUser({ email: 'phone_905557770000@ahbu.local', phone: '+905557770000', full_name: 'Sakin' });
+  const r = await ctx.reset(ctx.root, { newOwnerIdentifier: '+90 555 777 00 00' });
+  assert.strictEqual(r.new_owner.id, otpUser.id);
 });
 
 test('servis personeli KENDINI yeni sahip yapamaz (403); bilinmeyen 404; pasif hesap 409; evsiz cihaza sahip atanamaz 409', async () => {
@@ -407,16 +420,16 @@ test('commit sonrasi yan etki hatalari YUTULMAZ: yanitta warnings + partial; yan
   assert.strictEqual(r.action, 'UNCLAIMED');
   assert.match(r.setup_pin, /^\d{6}$/, 'islem commit edildi; PIN yine doner');
   assert.strictEqual(r.partial, true);
-  // SERVIS-01: yayin basarisiz -> TELAFI: panodaki gercek (eski) anahtar gecerli kalir, yenisi BEKLEYEN; anahtar donmez
-  assert.strictEqual(r.local_key_publish, 'pending');
-  assert.ok(!('local_key' in r), 'bekleyen anahtar yanitta donmez (uzlastirici otomatik iletir)');
-  assert.strictEqual(ctx.dev.local_key_enc, ctx.oldKeyEnc);
-  assert.strictEqual(ctx.inv.local_key_enc, ctx.oldKeyEnc);
-  assert.ok(ctx.dev.local_key_pending_enc, 'yeni anahtar bekleyen');
-  // fx2 S-1: bekleyen anahtar UYARI DEGIL (bilgi: local_key_publish 'pending'); partial diger gercek hatalardan
-  assert.ok(r.warnings.length >= 2, JSON.stringify(r.warnings));
+  // stoga donus: yayin basarisiz olsa da yeni anahtar sunucuda GECERLI (cihaz + envanter); yanitta bir kez + seri konsol
+  // (RESETKEY + FACTORYINIT) yonergesi uyarisi
+  assert.strictEqual(r.local_key_publish, 'failed');
+  assert.ok(ctx.secretBox.isValidLocalKey(r.local_key));
+  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), r.local_key);
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.dev.local_key_enc);
+  assert.ok(!ctx.dev.local_key_pending_enc, 'bekleyen yok');
+  assert.ok(r.warnings.length >= 3, JSON.stringify(r.warnings));
   const w = r.warnings.join(' | ');
-  assert.doesNotMatch(w, /yerel anahtar/i);
+  assert.match(w, /RESETKEY/);
   assert.match(w, /bağlantı/i);
   assert.match(w, /Retained/);
   // kimlikler yine de silindi (yeni baglanti engellendi)
@@ -430,16 +443,16 @@ test('EMQX yonetim API ayari yoksa uyari doner (sessizce gecilmez)', async () =>
   assert.strictEqual(r.partial, true);
 });
 
-test('cihaz cevrimdisiysa yeni yerel anahtar BEKLEYEN olur: mevcut anahtar gecerli kalir, yanitta anahtar DONMEZ + uyari (SERVIS-01)', async () => {
+test('STOGA DONUS + pano cevrimdisi: yeni anahtar yine HEMEN gecerli; yayin denenmez (skipped_offline); anahtar yanitta bir kez', async () => {
   const ctx = await setup({ deviceOnline: false, emqx: true });
   const r = await ctx.reset(ctx.tech);
-  assert.strictEqual(r.local_key_publish, 'pending');
+  assert.strictEqual(r.local_key_publish, 'skipped_offline');
   assert.strictEqual(ctx.bridge.topics.length, 0);
-  assert.ok(!('local_key' in r));
-  assert.strictEqual(ctx.dev.local_key_enc, ctx.oldKeyEnc, 'panodaki gercek anahtar gecerli kalir (LAN sihirbazi baglanabilir)');
-  assert.strictEqual(ctx.inv.local_key_enc, ctx.oldKeyEnc);
-  assert.ok(ctx.secretBox.isValidLocalKey(ctx.secretBox.decrypt(ctx.dev.local_key_pending_enc)));
-  // fx2 S-1: bekleyen anahtar icin uyari YOK; uyari yalniz gercek sorun (cocuk kilidi komutu gonderilemedi)
+  assert.ok(ctx.secretBox.isValidLocalKey(r.local_key));
+  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), r.local_key);
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.dev.local_key_enc, 'envanter = yeni anahtar');
+  assert.ok(!ctx.dev.local_key_pending_enc, 'bekleyen yok');
+  // istemci notu local_key_publish'ten uretir; tek gercek uyari cocuk kilidi
   assert.ok(!r.warnings.some((x) => /yerel anahtar/i.test(x)), JSON.stringify(r.warnings));
   assert.ok(r.warnings.includes('Pano çevrimdışı; çocuk kilidi sıfırlama komutu gönderilemedi. Pano yerelde kilitli kalmış olabilir.'), JSON.stringify(r.warnings));
   assert.strictEqual(r.child_lock_reset, 'skipped_offline', 'cocuk kilidi davranisi degismedi');
@@ -513,4 +526,50 @@ test('_publishSys: kopru publishSys saglamiyorsa publishToTopic(ev/{t}/sys) yede
   await svc._publishSys('h_0123456789abcdef', { cmd: 'set_local_key', local_key: 'x' });
   assert.deepStrictEqual(published, [{ topic: 'ev/h_0123456789abcdef/sys', obj: { cmd: 'set_local_key', local_key: 'x' } }]);
   assert.strictEqual(base.bridge.topics.length, 0, 'varsayilan kopru kullanilmadi');
+});
+
+// ---- inceleme (pano-5 bulgusu): stoga donus anahtari bekleyen BIRAKMAZ ----
+test('cok panolu evde STOGA DONUS: set_local_key ev konusundan YAYINLANMAZ (kardes panonun anahtari degisirdi); anahtar gecerli + yanitta', async () => {
+  const ctx = await setup({ deviceOnline: true, emqx: true });
+  const sibKeyEnc = ctx.secretBox.encrypt('KardesAnahtar1234');
+  const sib = ctx.world.helpers.addDevice({
+    home: ctx.home, uuid: 'AHBU-S3-0009', mac: 'E8:F6:0A:00:00:09', claimedBy: ctx.owner, online: true, local_key_enc: sibKeyEnc,
+  });
+  const r = await ctx.reset(ctx.tech);
+  assert.strictEqual(r.action, 'UNCLAIMED');
+  assert.strictEqual(ctx.bridge.topics.filter((t) => t.obj && t.obj.cmd === 'set_local_key').length, 0);
+  assert.strictEqual(r.local_key_publish, 'skipped');
+  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), r.local_key);
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.dev.local_key_enc);
+  assert.strictEqual(sib.local_key_enc, sibKeyEnc, 'kardes panonun anahtari degismez');
+});
+
+test('stoga donusten sonra yeni musterinin sahiplenmesi YENI anahtari alir (eski sahibin anahtari yeni dairede gecersiz)', async () => {
+  const ctx = await setup();
+  const r = await ctx.reset(ctx.tech);
+  const buyer = ctx.world.helpers.addUser({ email: 'alici2@example.test' });
+  await ctx.deviceService.claimDevice({ actor: ctx.act(buyer), deviceUuid: UUID, setupPin: r.setup_pin });
+  assert.notStrictEqual(ctx.dev.home_id, ctx.home.id);
+  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), r.local_key);
+  assert.notStrictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), 'EskiAnahtar123456');
+  assert.ok(!ctx.dev.local_key_pending_enc);
+});
+
+// ---- guvenlik-1: stoga donuste acik alarmlar kapanir; yeni sahibe devirde (ayni ev + pano) korunur ----
+test('guvenlik-1: STOGA DONUS (UNCLAIMED) panonun acik alarmlarini lost/detached yapar; DEVIR (REASSIGNED) dokunmaz', async () => {
+  const ctx = await setup();
+  const a = { id: 1, device_id: ctx.dev.id, home_id: ctx.home.id, kind: 'gas', status: 'latched', ack_requested_at: new Date(), ack_requested_by: 'u' };
+  ctx.world.state.alarms.push(a);
+  const r = await ctx.reset(ctx.tech);
+  assert.strictEqual(r.action, 'UNCLAIMED');
+  assert.strictEqual(a.status, 'lost');
+  assert.strictEqual(a.cleared_by, 'detached');
+  assert.strictEqual(a.ack_requested_at, null);
+
+  const ctx2 = await setup();
+  const b = { id: 2, device_id: ctx2.dev.id, home_id: ctx2.home.id, kind: 'gas', status: 'latched' };
+  ctx2.world.state.alarms.push(b);
+  const r2 = await ctx2.reset(ctx2.root, { newOwnerIdentifier: ctx2.newbie.email });
+  assert.strictEqual(r2.action, 'REASSIGNED');
+  assert.strictEqual(b.status, 'latched', 'ayni ev ve pano: alarm gecerli kalir');
 });

@@ -4,8 +4,11 @@
 // ya da kopru broker'a bagli degil) panodaki GERCEK anahtar gecerli kalir (devices + envanter DEGISMEZ); yeni anahtar
 // BEKLEYEN olarak (devices.local_key_pending_enc) yazilir ve pano buluta baglaninca uzlastirici iletir. Boylece servis
 // sihirbazi 6. adimda LAN'dan mevcut anahtarla baglanip yeni bulut kimligini yazabilir (cikmaz sokak yok).
-// Cevrimici + bagli kopruda bugunku yol korunur; commit sonrasi yayin basarisizsa TELAFI: gecerli anahtar eskisine,
-// bekleyen yenisine cekilir. Yanit: local_key_publish 'published' | 'pending' | 'skipped'; 'pending' iken local_key YOK.
+// pano-5: cevrimici + bagli kopruda da ayni yol (commit sonrasi dogrudan yayin ve TELAFI kalkti; anahtar her zaman
+// uzlastiriciyla iletilir). Yanit: local_key_publish 'pending' | 'skipped'; 'pending' iken local_key YOK.
+// inceleme: bekleyen yol YALNIZ yeni sahibe devirde (REASSIGNED; pano ayni evde kalir, uzlastirici iletebilir). STOGA
+// DONUSTE (UNCLAIMED) ev bagi kalmaz: bekleyen hic iletilemezdi ve eski anahtar envanterde kalip sonraki musteriye
+// gecerdi. Orada yeni anahtar HEMEN gecerli (cihaz + envanter), yanitta bir kez doner.
 // (fx2 S-1) 'pending' HATA DEGILDIR: bekleyen anahtar icin warnings'e uyari EKLENMEZ ve tek basina partial=true yapmaz;
 // baska gercek uyari (or. cocuk kilidi) varsa partial onlar yuzunden true kalir.
 // (fx2 S-2) Cocuk kilidi komutu gonderilemezse uyari NEDENE gore yazilir (kopru kopuk: "Bulut bağlantısı yok"; pano
@@ -69,9 +72,6 @@ const CHILD_LOCK_BRIDGE_REASSIGNED =
   'Bulut bağlantısı yok; çocuk kilidi sıfırlama komutu gönderilemedi. Kilit, pano bağlandığında otomatik kaldırılacak.';
 const CHILD_LOCK_OFFLINE_UNCLAIMED =
   'Pano çevrimdışı; çocuk kilidi sıfırlama komutu gönderilemedi. Pano yerelde kilitli kalmış olabilir.';
-const FAILED_WARNING =
-  'Yeni yerel anahtar panoya iletilemedi; anahtar yalnız bu yanıtta gösterilir. Panoya seri konsoldan RESETKEY ve ' +
-  'ardından FACTORYINIT ile (fabrika aracı) yazılabilir.';
 
 const sysPublishes = (ctx) => ctx.bridge.topics.filter((t) => t.obj && t.obj.cmd === 'set_local_key');
 
@@ -112,12 +112,17 @@ test('pano CEVRIMDISI (devir): mevcut anahtar korunur, yeni anahtar bekleyen; ya
   assert.strictEqual(r.partial, true);
 });
 
-test('pano CEVRIMDISI (stoga donus): ayni kural; PIN yine bir kez doner', async () => {
+test('pano CEVRIMDISI (stoga donus): bekleyen YOK; yeni anahtar hemen gecerli, yanitta bir kez (skipped_offline); PIN bir kez', async () => {
   const ctx = await setup({ online: false });
   const r = await ctx.reset();
   assert.strictEqual(r.action, 'UNCLAIMED');
   assert.match(r.setup_pin, /^\d{6}$/);
-  assertPending(ctx, r);
+  assert.strictEqual(r.local_key_publish, 'skipped_offline');
+  assert.ok(ctx.secretBox.isValidLocalKey(r.local_key));
+  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), r.local_key);
+  assert.strictEqual(ctx.inv.local_key_enc, ctx.dev.local_key_enc);
+  assert.ok(!ctx.dev.local_key_pending_enc, 'bekleyen yazilmaz');
+  assert.deepStrictEqual(ctx.rearmed, [], 'uzlastirici gerekmez');
   assert.deepStrictEqual(r.warnings, [CHILD_LOCK_OFFLINE_UNCLAIMED], 'stoga donuste niyet yazilacak ev yok');
 });
 
@@ -166,58 +171,27 @@ test('cevrimici + bagli kopru: cocuk kilidi yayinlanir; niyet YAZILMAZ ve DB kil
   assert.strictEqual(ctx.dev.child_lock_enabled, false);
 });
 
-test('M1-04: TELAFI CAS negatif yolu - yayin penceresinde cihaz anahtari BASKA yazimla degistiyse telafi hicbir sey degistirmez; yanit failed + anahtar + seri konsol yonergesi', async () => {
+test('pano-5: cevrimici + bagli kopru + baska uyari yok -> pending (yayin YOK), warnings/partial YOK; tek islem (telafi yok)', async () => {
   const ctx = await setup({ online: true });
-  const OTHER = ctx.secretBox.encrypt('BaskaYazim987654');
-  ctx.bridge.publishSys = async () => {
-    ctx.dev.local_key_enc = OTHER; // es zamanli yazim taklidi (ikinci sifirlama / etiket yenileme)
-    throw new Error('broker down');
-  };
-  const r = await ctx.reset({ newOwnerIdentifier: 'yeni.sahip@example.test' });
-  assert.strictEqual(r.local_key_publish, 'failed');
-  assert.ok(ctx.secretBox.isValidLocalKey(r.local_key), 'gecerli anahtar yanitta bir kez doner');
-  assert.ok(r.warnings.includes(FAILED_WARNING), JSON.stringify(r.warnings));
-  assert.ok(!r.warnings.some((w) => /yerinde elle/.test(w)));
-  assert.strictEqual(r.partial, true);
-  // telafi transaction'i BUTUNUYLE geri alindi: envanter yeni anahtarda kalir, cihaz satirina dokunulmaz
-  assert.strictEqual(ctx.secretBox.decrypt(ctx.inv.local_key_enc), r.local_key, 'envanter geri cekilmez');
-  assert.strictEqual(ctx.dev.local_key_enc, OTHER, 'cihaz satirindaki baska yazim korunur');
-  assert.strictEqual(ctx.dev.local_key_pending_enc, null, 'bekleyen yazilmaz');
-  assert.deepStrictEqual(ctx.rearmed, [], 'pending olmadi: uzlastirici kurulmaz');
-});
-
-test('S-1: cevrimici + bagli kopru + yayin basarisiz (TELAFI) ve baska uyari yok -> pending, warnings/partial YOK', async () => {
-  const ctx = await setup({ online: true });
-  ctx.bridge.failSys = true;
-  const r = await ctx.reset({ newOwnerIdentifier: 'yeni.sahip@example.test' });
-  assert.strictEqual(r.local_key_publish, 'pending');
-  assert.ok(!('warnings' in r), JSON.stringify(r.warnings));
-  assert.ok(!('partial' in r));
-});
-
-test('cevrimici + bagli kopru + yayin BASARISIZ: TELAFI - gecerli anahtar eskisine, yeni anahtar bekleyene; yanit pending', async () => {
-  const ctx = await setup({ online: true });
-  ctx.bridge.failSys = true;
+  ctx.bridge.failSys = true; // yayin denenmedigi icin etkisiz
   const r = await ctx.reset({ newOwnerIdentifier: 'yeni.sahip@example.test' });
   assertPending(ctx, r);
-  assert.strictEqual(ctx.world.db.commits, 2, 'ana islem + telafi islemi');
+  assert.ok(!('warnings' in r), JSON.stringify(r.warnings));
+  assert.ok(!('partial' in r));
+  assert.strictEqual(sysPublishes(ctx).length, 0, 'commit sonrasi set_local_key yayini YOK');
+  assert.strictEqual(ctx.world.db.commits, 1, 'tek islem (telafi islemi kalkti)');
   assert.deepStrictEqual(ctx.rearmed, [ctx.home.mqtt_username]);
 });
 
-test('cevrimici + bagli kopru + yayin basarili: bugunku yol (yeni anahtar gecerli, bekleyen YOK, yanit published)', async () => {
+test('pano-5: onceki cevrimdisi sifirlamadan kalan bekleyen anahtar YENISIYLE degisir (cevrimici panoda da); gecerli anahtar korunur', async () => {
   const ctx = await setup({ online: true });
-  ctx.dev.local_key_pending_enc = ctx.secretBox.encrypt('OncekiBekleyen12'); // onceki cevrimdisi sifirlamadan kalan
+  ctx.dev.local_key_pending_enc = ctx.secretBox.encrypt('OncekiBekleyen12');
   ctx.dev.local_key_pending_at = new Date();
+  const before = ctx.dev.local_key_pending_enc;
   const r = await ctx.reset({ newOwnerIdentifier: 'yeni.sahip@example.test' });
-  assert.strictEqual(r.local_key_publish, 'published');
-  assert.ok(!('local_key' in r));
-  const sent = sysPublishes(ctx);
-  assert.strictEqual(sent.length, 1);
-  assert.strictEqual(ctx.secretBox.decrypt(ctx.dev.local_key_enc), sent[0].obj.local_key);
-  assert.strictEqual(ctx.inv.local_key_enc, ctx.dev.local_key_enc);
-  assert.strictEqual(ctx.dev.local_key_pending_enc, null, 'yeni anahtar gecerli oldu: eski bekleyen silinir');
-  assert.strictEqual(ctx.dev.local_key_pending_at, null);
-  assert.deepStrictEqual(ctx.rearmed, []);
+  assertPending(ctx, r);
+  assert.notStrictEqual(ctx.dev.local_key_pending_enc, before);
+  assert.strictEqual(sysPublishes(ctx).length, 0);
 });
 
 test('ust uste ikinci cevrimdisi sifirlama: bekleyen anahtar YENISIYLE degisir, gecerli anahtar yine ayni', async () => {

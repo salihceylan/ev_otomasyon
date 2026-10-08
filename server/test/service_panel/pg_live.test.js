@@ -86,15 +86,15 @@ function getCtx() {
     };
 
     const helpers = {
-      async user({ role = 'user', email, phone = null, password = null, social = false, name = 'Test Kisi', status = 'active' } = {}) {
+      async user({ role = 'user', email, phone = null, password = null, social = false, name = 'Test Kisi', status = 'active', verified = false } = {}) {
         const n = ++seq;
         const mail = email || `u${n}-${TAG}@${DOMAIN}`;
         const hash = await bcrypt.hash(password || crypto.randomBytes(16).toString('hex'), 4);
         const r = await q(
-          `INSERT INTO users (email, password_hash, full_name, role, phone, is_active, account_status, password_changed_at, google_id)
-           VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8)
+          `INSERT INTO users (email, password_hash, full_name, role, phone, is_active, account_status, password_changed_at, google_id, email_verified)
+           VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8, $9)
            RETURNING id, email, role, token_version`,
-          [mail, hash, name, role, phone, status, password ? new Date() : null, social ? `g-${TAG}-${n}` : null]
+          [mail, hash, name, role, phone, status, password ? new Date() : null, social ? `g-${TAG}-${n}` : null, verified === true]
         );
         created.users.add(r.rows[0].id);
         const u = { ...r.rows[0], password, name, phone };
@@ -493,7 +493,8 @@ test('PG Home Admin atama: sahibe ulasilamiyor -> yalniz super ZORLAYABILIR (ger
   const h = c.helpers;
   const sup = await h.user({ role: 'super_user' });
   const t = await richHome(c, { ownerEmail: `phone_${TAG}${++seq}@ahbu.local` });
-  const target = await h.user({ name: 'Zorla Hedef' });
+  // uyelik-1: dogrulanmamis e-posta hedefi guvenlik icin sifirlanir; bu senaryo dogrulanmis ETKIN hesabi sinar
+  const target = await h.user({ name: 'Zorla Hedef', verified: true });
   const body = { full_name: 'Zorla Hedef', email: target.email };
 
   // yer tutucu e-posta -> OTP gonderilemez
@@ -580,12 +581,19 @@ test('PG Home Admin atama: hedef kisitlari (kendini atayamaz, servis/super hesab
   assert.equal(invalid.status, 400);
   assert.equal(await h.count('home_users', `home_id = $1 AND role = 'owner' AND user_id = $2`, [t.home.id, t.owner.id]), 1);
 
-  // telefonla MEVCUT hesap bulunur
+  // uyelik-1: YALNIZ telefonla verilen hedef GERCEK e-postali hesaba denk gelirse 400 (kayitta telefon dogrulanmaz)
   const phone = uniquePhone();
-  const byPhone = await h.user({ phone, name: 'Telefonlu Hesap' });
-  const okPhone = await post(c, url, sup.token, force({ full_name: 'Telefonlu Hesap', phone }));
+  await h.user({ phone, name: 'Telefonlu Hesap' });
+  const realMail = await post(c, url, sup.token, force({ full_name: 'Telefonlu Hesap', phone }));
+  assert.equal(realMail.status, 400, JSON.stringify(realMail.body));
+  assert.equal(realMail.body.message, 'Bu numara e-postalı bir hesaba kayıtlı; atama için hesabın e-posta adresini girin.');
+  // telefonla MEVCUT (yer tutucu e-postali, telefon-OTP ile acilmis) hesap bulunur ve sifirlanmaz
+  const phone2 = uniquePhone();
+  const byPhone = await h.user({ phone: phone2, name: 'Telefon Hesabi', email: `phone_${phone2.replace(/\D/g, '')}@ahbu.local` });
+  const okPhone = await post(c, url, sup.token, force({ full_name: 'Telefon Hesabi', phone: phone2 }));
   assert.equal(okPhone.status, 200, JSON.stringify(okPhone.body));
   assert.equal(okPhone.body.data.new_owner.id, byPhone.id);
+  assert.equal(okPhone.body.data.new_owner.account_status, 'active', 'telefon hesabi sifirlanmaz');
 });
 
 test('PG Home Admin atama: ATOMIK - devir ortasinda hata olursa hicbir degisiklik kalmaz (OTP de tuketilmez)', { skip: SKIP }, async () => {
@@ -802,20 +810,22 @@ test('PG etiket yeniden uretimi: yalniz super; IN_STOCK; eski PIN gecersiz, yeni
   const r = await post(c, `/api/v1/admin/inventory/${uuid}/reissue-label`, sup.token, {});
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.headers['cache-control'], 'no-store');
-  const { setup_pin: newPin, local_key: newKey, qr_claim_url: url, device } = r.body.data;
+  // atolye-2: etiket yeniden uretimi YALNIZ PIN uretir; yerel anahtar DEGISMEZ ve yanitta YOK
+  const { setup_pin: newPin, qr_claim_url: url, device } = r.body.data;
+  assert.ok(!('local_key' in r.body.data), 'yanitta local_key yok');
+  const newKey = require('../../src/utils/secret_box').decrypt(oldKeyEnc); // panodaki anahtar aynen
   assert.match(newPin, /^\d{6}$/);
-  assert.match(newKey, /^[\x21-\x7E]{8,32}$/);
   assert.ok(url.includes(`uid=${uuid}`) && url.includes(`pin=${newPin}`));
   assert.equal(device.label_reissue_count, 1);
   assert.notEqual(newPin, '111111');
-  // anahtar sifreli saklandi ve degisti
+  // anahtar degismedi
   const inv = await h.one('SELECT * FROM device_inventory WHERE device_uuid = $1', [uuid]);
-  assert.notEqual(inv.local_key_enc, oldKeyEnc);
-  assert.equal(require('../../src/utils/secret_box').decrypt(inv.local_key_enc), newKey);
+  assert.equal(inv.local_key_enc, oldKeyEnc, 'yerel anahtar degismez');
   assert.ok(!JSON.stringify(inv).includes(newPin) && !JSON.stringify(inv).includes(newKey), 'duz metin saklanmadi');
-  // denetim: PIN/anahtar degeri yok
+  // denetim: PIN/anahtar degeri yok; key_changed:false
   const audit = await h.one(`SELECT * FROM device_audit_logs WHERE event = 'inventory_label_reissued' AND device_uuid = $1`, [uuid]);
   assert.equal(audit.actor_user_id, sup.id);
+  assert.equal(audit.details.key_changed, false);
   assert.ok(!JSON.stringify(audit).includes(newPin) && !JSON.stringify(audit).includes(newKey));
 
   // ESKI PIN artik gecersiz; YENI PIN ile sahiplenilir
@@ -827,7 +837,7 @@ test('PG etiket yeniden uretimi: yalniz super; IN_STOCK; eski PIN gecersiz, yeni
   // sahiplenilen cihaza etiket yeniden uretilemez
   const claimedRe = await post(c, `/api/v1/admin/inventory/${uuid}/reissue-label`, sup.token, {});
   assert.equal(claimedRe.status, 409);
-  // yerel anahtar yeniden uretilen anahtardir (envanter anahtari sahiplenmede korunur)
+  // yerel anahtar etiketten bagimsiz: envanterdeki (degismeyen) anahtar sahiplenmede korunur
   const dev = await h.one('SELECT local_key_enc FROM devices WHERE device_uuid = $1', [uuid]);
   assert.equal(require('../../src/utils/secret_box').decrypt(dev.local_key_enc), newKey);
   // bilinmeyen cihaz 404, gecersiz kimlik 400

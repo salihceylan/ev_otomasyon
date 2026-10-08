@@ -162,6 +162,34 @@ test('google: dogrulanmamis e-postali mevcut hesaba baglanirken eski parola ve o
   assert.ok(store.refresh.filter((r) => r.user_id === victim.id && r.token_hash === 'x').every((r) => r.revoked_at));
 });
 
+test('uyelik-8: e-posta+sifreyle kayitli dogrulanmamis hesap Google ile baglaninca password_changed_at NULL, hesap sifresiz sayilir', async () => {
+  const { isPasswordless } = require('../../src/services/account_deletion_service');
+  const pw = 'Kayit-Parolasi-2026';
+  const u0 = store.addUser({
+    email: 'kayitli-dogrulanmamis@example.com', password_hash: await bcrypt.hash(pw, 4), email_verified: false,
+    password_changed_at: new Date(Date.now() - 86400000),
+  });
+  const res = await post('google', { id_token: googleToken({ sub: 'g-sifresiz', email: 'kayitli-dogrulanmamis@example.com' }) });
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  const u = store.users.get(u0.id);
+  assert.strictEqual(u.password_changed_at, null, 'bilinen parola artik yok');
+  assert.strictEqual(u.must_change_password, false);
+  assert.strictEqual(isPasswordless(u), true, 'hesap silme SİL onayiyla calisir');
+});
+
+test('uyelik-8: must_change_password=TRUE dogrulanmamis hesap Google ile girince bayrak FALSE', async () => {
+  const u0 = store.addUser({
+    email: 'zorunlu-degisim@example.com', password_hash: await bcrypt.hash('Gecici-Parola-2026', 4), email_verified: false,
+    must_change_password: true, password_changed_at: new Date(),
+  });
+  const res = await post('google', { id_token: googleToken({ sub: 'g-zorunlu', email: 'zorunlu-degisim@example.com' }) });
+  assert.strictEqual(res.status, 200, JSON.stringify(res.body));
+  assert.strictEqual(res.body.data.user.must_change_password, false);
+  const u = store.users.get(u0.id);
+  assert.strictEqual(u.must_change_password, false);
+  assert.strictEqual(u.password_changed_at, null);
+});
+
 test('google: dogrulanmis e-postali mevcut hesaba parola korunarak baglanir', async () => {
   const pw = 'Mesru-Parola-2026';
   const owner = store.addUser({ email: 'dogru@example.com', password_hash: await bcrypt.hash(pw, 4), email_verified: true });

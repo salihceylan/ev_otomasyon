@@ -334,6 +334,20 @@ test('nginx: dengeli, dogru sonlanan direktifler, TLS/HSTS/sinirlar, yalniz 127.
   assert.doesNotMatch(joined, /\$proxy_add_x_forwarded_for/);
 });
 
+test('bireysel-9: nginx uygulama baglantilari (/claim, /reset-password, /magic-login) erisim gunlugune YAZILMAZ ve uygulamaya proxy edilir', () => {
+  const text = read('nginx', 'evotomasyon.gudeteknoloji.com.tr.conf');
+  const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  for (const head of ['location = /claim {', 'location = /reset-password {', 'location ^~ /magic-login {']) {
+    const start = code.indexOf(head);
+    assert.ok(start >= 0, `${head} blogu olmali`);
+    const block = code.slice(start, code.indexOf('}', start) + 1);
+    assert.match(block, /access_log off;/, `${head}: PIN/belirtec iceren sorgu dizgesi gunluge dusmemeli`);
+    assert.match(block, /proxy_pass http:\/\/127\.0\.0\.1:5000;/, head);
+    assert.match(block, /proxy_set_header X-Forwarded-For \$remote_addr;/, head);
+    assert.match(block, /limit_req zone=evotomasyon_api burst=40 nodelay;/, head);
+  }
+});
+
 // ------------------------------------------------------------------------------
 // betikler
 // ------------------------------------------------------------------------------
