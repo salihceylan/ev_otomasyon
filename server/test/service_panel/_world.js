@@ -490,8 +490,9 @@ function createWorld({ clock = createClock() } = {}) {
   });
 
   // ================================================================== hesap kurulum daveti (auth_service.issueUserCode)
+  // auth_service USER_COLS (039: terms_version to_jsonb ile, 039'suz veritabaninda da calissin)
   db.on(
-    'SELECT id, email, full_name, phone, role, is_active, account_status, token_version, must_change_password, email_verified, google_id, apple_id FROM users WHERE id = $1',
+    "SELECT id, email, full_name, phone, role, is_active, account_status, token_version, must_change_password, email_verified, google_id, apple_id, (to_jsonb(users) ->> 'terms_version')::int AS terms_version FROM users WHERE id = $1",
     ({ params }) => copies(s.users.filter((u) => u.id === params[0]))
   );
   db.on('UPDATE password_resets SET used_at = NOW() WHERE identifier = $1 AND used_at IS NULL', (ctx) => {

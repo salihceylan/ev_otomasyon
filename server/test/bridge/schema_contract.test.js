@@ -167,8 +167,10 @@ test('SOZLESME kapsami: kopru/zamanlayici/servis kolonlari gercekten denetleniyo
     homes: ['child_lock_enabled', 'mqtt_username', 'timezone'],
     scheduled_rules: ['channel', 'channel_type', 'days_of_week', 'last_run_at', 'schedule_changed_at', 'created_by'],
     scheduled_rule_runs: ['attempts', 'command_id', 'rule_id', 'slot_at', 'status'],
-    users: ['is_active', 'role'],
+    users: ['is_active', 'role', 'terms_version', 'terms_accepted_at'],
     home_users: ['installer_expires_at', 'role'],
+    // 039 (yasal metin kabulleri): services/legal_service.js
+    legal_acceptances: ['accepted_at', 'document', 'ip_address', 'user_agent', 'user_id', 'version'],
   };
   for (const [table, cols] of Object.entries(need)) {
     for (const c of cols) assert.ok(r.refs.get(table) && r.refs.get(table).has(c), `${table}.${c} denetim kapsaminda degil`);

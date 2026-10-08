@@ -18,6 +18,9 @@
 //    + saatte 5; deneme sayaci ATOMIK ve yeniden gonderimle SIFIRLANMAZ; kod/token LOG'LANMAZ;
 //    debug_* alanlari yalnizca ALLOW_DEBUG_OTP=true VE NODE_ENV!=='production'.
 //  - Sihirli baglanti GET ile oturum ACMAZ: POST + tek kullanim.
+//  - Yasal metinler (migration 039, services/legal_service): disari donen kullanici nesnesi `legal`
+//    {terms_accepted_version, terms_current_version, terms_status, needs_acceptance} tasir. Kayitta accept_terms_version
+//    guncel surumse kabul hesapla AYNI transaction'da yazilir; farkliysa 409 LEGAL_VERSION_MISMATCH, hesap ACILMAZ.
 
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
@@ -29,6 +32,8 @@ const pin = require('../utils/pin');
 const mailer = require('../utils/mailer');
 // Yalniz saf yardimci (modul yuklenirken db/auth_service gerektirmez; silme servisi auth_service'i tembel kullanir).
 const { isPlaceholderEmail } = require('./account_deletion_service');
+// Saf yardimcilar + varsayilan belge servisi (modul yuklenirken db gerektirmez).
+const { legalUserState, parseVersionInput, getDefaultLegalService } = require('./legal_service');
 
 // ---------------------------------------------------------------------------
 // Sabitler
@@ -52,8 +57,11 @@ const DEFAULT_APP_PUBLIC_URL = 'https://evotomasyon.gudeteknoloji.com.tr';
 const EMAIL_RE = /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[^\s@<>()[\]\\,;:"]{2,}$/;
 const BCRYPT_HASH_RE = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 
+// terms_version (migration 039) to_jsonb ile okunur: 039 uygulanmamis veritabaninda da giris / kayit / profil sorgulari
+// calisir (alan NULL; yanlis dagitim sirasinda kimlik yolu kopmasin). Yazim yolu (legal_service) kolonu dogrudan kullanir
+// ve sema-sozlesme denetcisi onu denetler. Tum USER_COLS sorgulari tabloyu takma adsiz `users` olarak anar.
 const USER_COLS = `id, email, full_name, phone, role, is_active, account_status, token_version,
-  must_change_password, email_verified, google_id, apple_id`;
+  must_change_password, email_verified, google_id, apple_id, (to_jsonb(users) ->> 'terms_version')::int AS terms_version`;
 
 // bcrypt cost: uretimde HER ZAMAN 12. Yalnizca NODE_ENV=test iken BCRYPT_TEST_COST ile
 // testleri hizlandirmak icin dusurulebilir.
@@ -164,7 +172,8 @@ function isValidCodeFormat(code) {
   return typeof code === 'string' && /^\d{6}$/.test(code.trim());
 }
 
-function publicUser(user) {
+/** @param {object} legal  AuthService._legalState(user) (legal_service.legalUserState) */
+function publicUser(user, legal) {
   return {
     id: user.id,
     // Teslim edilemeyen yer tutucu e-posta disari VERILMEZ (istemci "Belirtilmedi" gosterir); DB satiri aynen kalir.
@@ -174,6 +183,7 @@ function publicUser(user) {
     role: user.role || 'user',
     must_change_password: Boolean(user.must_change_password),
     email_verified: Boolean(user.email_verified),
+    legal,
   };
 }
 
@@ -245,6 +255,29 @@ class AuthService {
     this._pushService = undefined;
     // undefined: varsayilan mqtt_credential_service modulu; null: bilincli devre disi (modul yok / test)
     this._mqttCredentials = undefined;
+    // Yasal metin servisi (legal_service); server.js createApp() uygulamanin ornegini verir. Yoksa varsayilan (server/legal).
+    this._legal = null;
+  }
+
+  /** server.js createApp() ve testler: publicUser.legal ve kayittaki sozlesme kabulu bu servisi kullanir. */
+  setLegalService(svc) {
+    this._legal = svc || null;
+  }
+
+  _getLegal() {
+    return this._legal || getDefaultLegalService();
+  }
+
+  /** publicUser.legal. Belge servisi hata verse de giris / profil BOZULMAZ (alanlar null, onay istenmez). */
+  _legalState(user) {
+    let terms = null;
+    try {
+      terms = this._getLegal().getTermsState();
+    } catch (err) {
+      console.warn(`[AUTH] Yasal metin durumu okunamadi (${(err && err.name) || 'hata'}); legal alanlari bos donuyor.`);
+      terms = null;
+    }
+    return legalUserState(user, terms);
   }
 
   // ----------------------------- DI / test ---------------------------------
@@ -497,14 +530,14 @@ class AuthService {
     const userId = principal && typeof principal === 'object' ? principal.id : principal;
     const user = await this._findUserById(db, userId);
     if (!user) throw httpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
-    return { user: publicUser(user), homes: await this.listHomesForUser(user.id) };
+    return { user: publicUser(user, this._legalState(user)), homes: await this.listHomesForUser(user.id) };
   }
 
   async _buildUserAuthResponse(user, { ip, tx } = {}) {
     const { tokens } = await this._issueSession(user, { ip, tx });
     return {
       ...tokens,
-      user: publicUser(user),
+      user: publicUser(user, this._legalState(user)),
       homes: await this.listHomesForUser(user.id),
     };
   }
@@ -536,7 +569,12 @@ class AuthService {
     return this._buildUserAuthResponse(user, { ip });
   }
 
-  async register({ full_name, email, password, phone } = {}, { ip } = {}) {
+  /**
+   * Yeni hesap. `accept_terms_version` (istege bagli): guncel Kullanici Sozlesmesi surumu olmali; kabul kaydi hesapla
+   * AYNI transaction'da yazilir (kabul yazilamazsa hesap da acilmaz). Farkli surum (ya da sozlesme yuklu degil) 409
+   * LEGAL_VERSION_MISMATCH + data.current_version ve hesap ACILMAZ; bozuk bicim 400. Alan yoksa hesap kabulsuz acilir.
+   */
+  async register({ full_name, email, password, phone, accept_terms_version } = {}, { ip, userAgent } = {}) {
     const name = normalizeFullName(full_name);
     if (!name) throw httpError(400, 'Ad soyad en az 2 karakter olmalıdır.', 'VALIDATION');
     const cleanEmail = normalizeEmail(email);
@@ -547,6 +585,9 @@ class AuthService {
       if (!cleanPhone) throw httpError(400, 'Geçerli bir telefon numarası giriniz.', 'VALIDATION');
     }
     validatePassword(password);
+    const termsVersion = parseVersionInput(accept_terms_version, { optional: true });
+    const legal = termsVersion === null ? null : this._getLegal();
+    if (legal) legal.assertCurrentTermsVersion(termsVersion); // 409: hesap kontrolunden ONCE (istemci surumu yeniler)
 
     const existingEmail = await db.query('SELECT id FROM users WHERE LOWER(email) = $1', [cleanEmail]);
     if (existingEmail.rows.length > 0) {
@@ -560,15 +601,21 @@ class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(password, bcryptCost());
-    let user;
-    try {
-      const ins = await db.query(
+    const createUser = async (q) => {
+      const ins = await q.query(
         `INSERT INTO users (full_name, email, password_hash, phone, role, is_active, account_status, password_changed_at)
          VALUES ($1, $2, $3, $4, 'user', TRUE, 'active', NOW())
          RETURNING ${USER_COLS}`,
         [name, cleanEmail, passwordHash, cleanPhone]
       );
-      user = ins.rows[0];
+      const row = ins.rows[0];
+      if (!legal) return row;
+      const accepted = await legal.recordAcceptance(q, { userId: row.id, document: 'terms', version: termsVersion, ip, userAgent });
+      return { ...row, terms_version: accepted.version };
+    };
+    let user;
+    try {
+      user = legal ? await db.withTransaction(createUser) : await createUser(db);
     } catch (err) {
       if (err && err.code === '23505') {
         throw httpError(409, 'Bu e-posta veya telefon zaten kayıtlı.', 'CONFLICT');

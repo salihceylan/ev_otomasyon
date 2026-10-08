@@ -136,7 +136,8 @@ function corsMiddleware() {
 
 /**
  * Express uygulamasini olusturur (dinlemez).
- * @param {{db?:object, mqttBridge?:object}} [deps]
+ * @param {{db?:object, mqttBridge?:object, pushService?:object, legalService?:object}} [deps]
+ *   legalService: services/legal_service ornegi (varsayilan: server/legal dizini; testler kendi belgelerini verir)
  */
 function createApp(deps = {}) {
   const db = deps.db || require('./db');
@@ -224,6 +225,20 @@ function createApp(deps = {}) {
   // --- Kimlik ---------------------------------------------------------------
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/auth', authRoutes);
+
+  // --- Yasal metinler (migration 039; belgeler server/legal/<slug>.md) -------
+  // Okuma kimliksiz, kabul kullanici JWT'si; kimlik route bazli (router.use YOK). '/api/v1' altindaki diger
+  // yonlendiricilerden ONCE baglanir. Ayni ornek auth_service'e verilir (publicUser.legal); sayfa '/yasal/:slug'
+  // asagida. Eksik / gecersiz belge sunucuyu durdurmaz (liste bos, needs_acceptance false).
+  const { createLegalService } = require('./services/legal_service');
+  const { createLegalRouter, createLegalPageHandler } = require('./routes/legal_routes');
+  const legalService = deps.legalService || createLegalService({ db });
+  app.locals.legalService = legalService;
+  if (typeof authService.setLegalService === 'function') authService.setLegalService(legalService);
+  const legalRouter = createLegalRouter({ legal: legalService });
+  app.locals.legalRouter = legalRouter;
+  app.use('/api/v1', legalRouter);
+  app.use('/api', legalRouter);
 
   // --- Ev listesi (GET /api/v1/homes ve eski /api/homes) ---------------------
   const handleGetHomes = asyncHandler(async (req, res) => {
@@ -318,6 +333,10 @@ function createApp(deps = {}) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(APP_LINK_PAGE);
   });
+
+  // --- Yasal metin sayfalari (kimliksiz; public, max-age=300; bilinmeyen slug 404 HTML) ------------------------------
+  // '/yasal', '/yasal/' ve ic ice yollar da tarayiciya JSON degil 404 HTML sayfasi doner (slug yok -> bulunamadi).
+  app.get(['/yasal', '/yasal/:slug', '/yasal/*'], createLegalPageHandler({ legal: legalService }));
 
   // --- 404 + global hata yakalayici -----------------------------------------
   app.use(notFoundHandler);
@@ -438,6 +457,13 @@ function start(options = {}) {
   server.headersTimeout = 20 * 1000;
   server.requestTimeout = 30 * 1000;
   server.keepAliveTimeout = 65 * 1000;
+
+  // Yasal metinler acilista bir kez yuklenir: eksik / gecersiz belge HEMEN loglanir (load() firlatmaz; sunucu baslar).
+  try {
+    if (app.locals.legalService && typeof app.locals.legalService.load === 'function') app.locals.legalService.load();
+  } catch (err) {
+    console.error('[SERVER] Yasal metinler yuklenemedi:', err && err.message);
+  }
 
   // MQTT koprusu. Guvenlik alarm push'u (WP-S3) icin ayni push servisi kopruye enjekte edilir (gece hatirlatmasiyla ortak).
   if (typeof mqttBridge.setPushService === 'function') mqttBridge.setPushService(app.locals.pushService);

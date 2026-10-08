@@ -97,7 +97,8 @@ router.use((req, res, next) => {
   next();
 });
 
-// POST /auth/register
+// POST /auth/register. accept_terms_version (istege bagli): guncel Kullanici Sozlesmesi surumu -> kabul hesapla ayni
+// transaction'da kaydedilir; farkli surum 409 LEGAL_VERSION_MISMATCH (hesap acilmaz). Ayrinti: auth_service.register.
 router.post('/register', limiters.register, asyncHandler(async (req, res) => {
   const result = await authService.register(
     {
@@ -105,8 +106,9 @@ router.post('/register', limiters.register, asyncHandler(async (req, res) => {
       email: str(pick(req.body, ['email'])),
       password: pick(req.body, ['password']),
       phone: str(pick(req.body, ['phone'])),
+      accept_terms_version: pick(req.body, ['accept_terms_version', 'acceptTermsVersion']),
     },
-    { ip: clientIp(req) }
+    { ip: clientIp(req), userAgent: req.get('user-agent') }
   );
   return successResponse(res, result, 'Kayıt başarıyla tamamlandı.', 201);
 }));

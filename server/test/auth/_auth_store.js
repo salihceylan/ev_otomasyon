@@ -1,7 +1,7 @@
 'use strict';
 
 // Kimlik tablolari icin bellek ici sahte veri deposu (users, refresh_tokens, password_resets,
-// phone_otp_codes, push_tokens). auth_service'in kullandigi SQL ifadelerini (sirali regex eslemesi ile)
+// phone_otp_codes, push_tokens, legal_acceptances). auth_service'in kullandigi SQL ifadelerini (sirali regex eslemesi ile)
 // davranissal olarak taklit eder; boylece rotation / deneme sayaci / tek kullanim gibi
 // ozellikler gercek akisla sinanir. `now` enjekte edilebilir (DB NOW()).
 
@@ -27,6 +27,9 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     // uyelik-7: kullanicinin urettigi servis PIN'leri ve bunlarla acilmis servis oturumlari
     serviceTokens: [], // { id, home_id, created_by, used_at, revoked_at }
     serviceSessions: [], // { id, home_id, service_token_id, revoked_at, revoked_reason }
+    // yasal metin kabulleri (legal_service.recordAcceptance): { id, user_id, document, version, accepted_at, ip_address, user_agent }
+    legalAcceptances: [],
+    failLegalInsert: false, // true: kabul yazimi hata verir (kayit atomikligi testi)
     seq: 1,
   };
 
@@ -48,11 +51,14 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       apple_id: null,
       password_hash: null,
       created_by_user_id: null,
+      terms_version: null,
+      terms_accepted_at: null,
       ...fields,
     };
     s.users.set(u.id, u);
     return u;
   };
+  s.acceptancesOf = (userId) => s.legalAcceptances.filter((a) => a.user_id === userId);
 
   s.addPushToken = (userId, fields = {}) => {
     const t = { id: crypto.randomUUID(), user_id: userId, token: `tok-${s.seq++}-${crypto.randomBytes(12).toString('hex')}`, disabled_at: null, ...fields };
@@ -195,6 +201,37 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       const hit = s.pushTokens.filter((t) => t.user_id === p[0] && !t.disabled_at);
       hit.forEach((t) => { t.disabled_at = NOW(); });
       return { rows: [], rowCount: hit.length };
+    }],
+
+    // ---------------- legal_acceptances (legal_service.recordAcceptance) ----------------
+    [/SELECT version, accepted_at FROM legal_acceptances\s+WHERE user_id = \$1 AND document = \$2\s+ORDER BY accepted_at DESC, id DESC\s+LIMIT 1/, (p) =>
+      s.legalAcceptances
+        .filter((a) => a.user_id === p[0] && a.document === p[1])
+        .sort((a, b) => b.accepted_at - a.accepted_at || b.id - a.id)
+        .slice(0, 1)
+        .map((a) => ({ version: a.version, accepted_at: a.accepted_at }))],
+    [/INSERT INTO legal_acceptances \(user_id, document, version, ip_address, user_agent\)/, (p) => {
+      if (s.failLegalInsert) {
+        const e = new Error('legal_acceptances yazilamadi (test)');
+        e.code = '23514';
+        throw e;
+      }
+      if (!s.users.has(p[0])) {
+        const e = new Error('insert or update on table "legal_acceptances" violates foreign key constraint');
+        e.code = '23503';
+        throw e;
+      }
+      const row = { id: s.seq++, user_id: p[0], document: p[1], version: p[2], ip_address: p[3], user_agent: p[4], accepted_at: NOW() };
+      s.legalAcceptances.push(row);
+      return [{ id: row.id, accepted_at: row.accepted_at }];
+    }],
+    [/UPDATE users SET terms_version = \$2, terms_accepted_at = now\(\) WHERE id = \$1/, (p) => {
+      const u = s.users.get(p[0]);
+      if (u) {
+        u.terms_version = p[1];
+        u.terms_accepted_at = NOW();
+      }
+      return { rows: [], rowCount: u ? 1 : 0 };
     }],
 
     // ---------------- users ----------------
