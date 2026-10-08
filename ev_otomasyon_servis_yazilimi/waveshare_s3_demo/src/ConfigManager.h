@@ -15,6 +15,8 @@ public:
   // Değişmeyen anahtarlar NVS'e YAZILMAZ (uygulama katmanında karşılaştırılır; IDF'in özdeş değeri atlayıp atlamadığına
   // güvenilmez): yalnızca değişen değerler flash'a yazılır. Yine de nadir değişiklikte çağırın.
   bool save();
+  // v1.3.0 şablon uygulaması: canlı RAM'e dokunmadan adayı NVS'e yazar (yalnız değişen anahtarlar). false = en az bir yazma başarısız.
+  bool saveCandidate(const SystemConfig& c);
   // Uygulama ayarlarını varsayılana çeker ve NVS'teki uygulama anahtarlarını (ek modül dahil) ile
   // "ahbu_auto"/"ahbu_pos" ad alanlarını SİLER. Kimlik/provizyon alanları (local_key, ap_pass, MQTT
   // sunucu/kimlik) KORUNUR: uzaktan "sıfırla" cihazı sahipsiz bırakmamalı (fiziksel RESETKEY ayrı).
@@ -70,6 +72,7 @@ private:
   ConfigManager();
   void applyDefaults();
   bool eraseAppKeys();
+  bool writeAll(const SystemConfig& c);   // save()/saveCandidate() ortak gövdesi (ConfigLock altında)
   void restoreApPass(const char* old);   // provisionIfEmpty geri alma adımı
   Preferences prefs;
   SemaphoreHandle_t _mutex;

@@ -1,6 +1,6 @@
 // safety/SafetyCfgApi.cpp - Güvenlik yapılandırması yamasının JSON ayrıştırıcısı (bkz. SafetyCfgApi.h).
 #include "safety/SafetyCfgApi.h"
-#include "NetUtil.h"
+#include "Utf8Util.h"   // NetUtil::isCleanUtf8 (saf: PC testlerinde de derlenir)
 #include <string.h>
 
 namespace safety {
@@ -87,39 +87,38 @@ uint8_t actKindOf(const char* s) {
   return 0;
 }
 
-const char* parseSensor(JsonObject o, CfgEdit& e) {
+const char* parseSensorInto(JsonObject o, SensorConfig& sens) {
   static const char* const K[] = {"id", "kind", "zone", "active_open", "flags", "confirm_ms", "name"};
   if (!onlyKeys(o, K, sizeof(K) / sizeof(K[0]))) return "bad_field";
   const char* id = nullptr;
   const char* kind = nullptr;
   int32_t zone = 0;
-  if (getStr(o, "id", id) != FS_OK || !parseSensorId(id, e.sens.src, e.sens.index)) return "bad_id";
-  if (getStr(o, "kind", kind) != FS_OK || (e.sens.kind = sensorKindOf(kind)) == 0) return "bad_kind";
+  if (getStr(o, "id", id) != FS_OK || !parseSensorId(id, sens.src, sens.index)) return "bad_id";
+  if (getStr(o, "kind", kind) != FS_OK || (sens.kind = sensorKindOf(kind)) == 0) return "bad_kind";
   if (getInt(o, "zone", zone) != FS_OK || zone < 0 || zone > MAX_ZONES) return "bad_zone";
-  e.sens.zone = (uint8_t)zone;
-  if (getFlag(o, "active_open", e.sens.active_open) == FS_BAD) return "bad_value";
+  sens.zone = (uint8_t)zone;
+  if (getFlag(o, "active_open", sens.active_open) == FS_BAD) return "bad_value";
   int32_t v = 0;
   Fs f = getInt(o, "flags", v);
   if (f == FS_BAD || (f == FS_OK && (v < 0 || v > SF_ALL))) return "bad_value";
-  e.sens.flags = (f == FS_OK) ? (uint8_t)v : defaultFlags(e.sens.kind);
+  sens.flags = (f == FS_OK) ? (uint8_t)v : defaultFlags(sens.kind);
   f = getInt(o, "confirm_ms", v);
   if (f == FS_BAD || (f == FS_OK && (v < 0 || v > 60000))) return "bad_value";
-  e.sens.confirm_ms = (f == FS_OK) ? (uint16_t)v : defaultConfirmMs(e.sens.kind);
+  sens.confirm_ms = (f == FS_OK) ? (uint16_t)v : defaultConfirmMs(sens.kind);
   const char* name = nullptr;
   f = getStr(o, "name", name);
-  if (f == FS_BAD || (f == FS_OK && !copyName(name, e.sens.name, NAME_LEN))) return "bad_name";
-  e.op = EditOp::SET_SENSOR;
+  if (f == FS_BAD || (f == FS_OK && !copyName(name, sens.name, NAME_LEN))) return "bad_name";
   return nullptr;
 }
 
-const char* parseActuator(JsonObject o, CfgEdit& e) {
+const char* parseActuatorInto(JsonObject o, ActuatorConfig& a, uint8_t& actIndex, bool allowId) {
   static const char* const K[] = {"id", "relay", "relay2", "kind", "close_mode", "medium", "zones", "fb_di", "fb_closed_active",
                                   "fb_timeout_s", "run_limit_s", "exproof", "name"};
   if (!onlyKeys(o, K, sizeof(K) / sizeof(K[0]))) return "bad_field";
-  ActuatorConfig& a = e.act;
+  if (!allowId && o.containsKey("id")) return "bad_field";   // sablon eylemcisi: sira = a1.. ("id" YOK)
   const char* s = nullptr;
   Fs f = getStr(o, "id", s);
-  if (f == FS_BAD || (f == FS_OK && !parseActuatorId(s, e.actIndex))) return "bad_id";
+  if (f == FS_BAD || (f == FS_OK && !parseActuatorId(s, actIndex))) return "bad_id";
   int32_t v = 0;
   if (getInt(o, "relay", v) != FS_OK || v < 1 || v > MAX_RELAYS) return "bad_relay";
   a.relay = (uint8_t)v;
@@ -174,11 +173,40 @@ const char* parseActuator(JsonObject o, CfgEdit& e) {
   const char* name = nullptr;
   f = getStr(o, "name", name);
   if (f == FS_BAD || (f == FS_OK && !copyName(name, a.name, NAME_LEN))) return "bad_name";
-  e.op = EditOp::SET_ACTUATOR;
   return nullptr;
 }
 
 }  // namespace
+
+// ---- Ortak öğe ayrıştırıcıları (yama + şablon; v1.3.0 İP-2.3) ----
+const char* parseSensorItem(JsonObject o, SensorConfig& sens) {
+  memset(&sens, 0, sizeof(sens));
+  return parseSensorInto(o, sens);
+}
+
+const char* parseActuatorItem(JsonObject o, ActuatorConfig& act, uint8_t& actIndex, bool allowId) {
+  memset(&act, 0, sizeof(act));
+  actIndex = 0xFF;
+  return parseActuatorInto(o, act, actIndex, allowId);
+}
+
+const char* parseLightItem(JsonObject o, uint8_t& relay, LightOpt& light) {
+  static const char* const K[] = {"relay", "dimmable", "src", "addr", "ch"};
+  if (!onlyKeys(o, K, 5)) return "bad_field";
+  int32_t r = 0, src = 0, addr = 0, ch = 0;
+  uint8_t dim = 0;
+  if (getInt(o, "relay", r) != FS_OK || r < 1 || r > MAX_RELAYS) return "bad_relay";
+  if (getFlag(o, "dimmable", dim) == FS_BAD) return "bad_value";
+  if (getInt(o, "src", src) == FS_BAD || src < 0 || src > 2) return "bad_value";
+  if (getInt(o, "addr", addr) == FS_BAD || addr < 0 || addr > 247) return "bad_value";
+  if (getInt(o, "ch", ch) == FS_BAD || ch < 0 || ch > 255) return "bad_value";
+  relay = (uint8_t)r;
+  light.dimmable = dim;
+  light.dimmer_src = (uint8_t)src;
+  light.dimmer_addr = (uint8_t)addr;
+  light.dimmer_ch = (uint8_t)ch;
+  return nullptr;
+}
 
 bool parseSensorId(const char* s, uint8_t& src, uint8_t& index) {
   if (!s || (s[0] != 'd' && s[0] != 'b')) return false;
@@ -242,8 +270,16 @@ const char* parseCfgEdit(JsonObject root, CfgEdit& e, bool& hasBase, uint32_t& b
   }
   if (!item.value().is<JsonObject>()) return "bad_field";
   JsonObject o = item.value().as<JsonObject>();
-  if (!strcmp(what, "sensor")) return parseSensor(o, e);
-  if (!strcmp(what, "actuator")) return parseActuator(o, e);
+  if (!strcmp(what, "sensor")) {
+    const char* r = parseSensorInto(o, e.sens);
+    if (!r) e.op = EditOp::SET_SENSOR;
+    return r;
+  }
+  if (!strcmp(what, "actuator")) {
+    const char* r = parseActuatorInto(o, e.act, e.actIndex, true);
+    if (!r) e.op = EditOp::SET_ACTUATOR;
+    return r;
+  }
   if (!strcmp(what, "policy")) {
     static const char* const K[] = {"on", "dry_hold_ms"};
     if (!onlyKeys(o, K, 2)) return "bad_field";
@@ -289,22 +325,9 @@ const char* parseCfgEdit(JsonObject root, CfgEdit& e, bool& hasBase, uint32_t& b
     return nullptr;
   }
   if (!strcmp(what, "light")) {
-    static const char* const K[] = {"relay", "dimmable", "src", "addr", "ch"};
-    if (!onlyKeys(o, K, 5)) return "bad_field";
-    int32_t r = 0, src = 0, addr = 0, ch = 0;
-    uint8_t dim = 0;
-    if (getInt(o, "relay", r) != FS_OK || r < 1 || r > MAX_RELAYS) return "bad_relay";
-    if (getFlag(o, "dimmable", dim) == FS_BAD) return "bad_value";
-    if (getInt(o, "src", src) == FS_BAD || src < 0 || src > 2) return "bad_value";
-    if (getInt(o, "addr", addr) == FS_BAD || addr < 0 || addr > 247) return "bad_value";
-    if (getInt(o, "ch", ch) == FS_BAD || ch < 0 || ch > 255) return "bad_value";
-    e.lightRelay = (uint8_t)r;
-    e.light.dimmable = dim;
-    e.light.dimmer_src = (uint8_t)src;
-    e.light.dimmer_addr = (uint8_t)addr;
-    e.light.dimmer_ch = (uint8_t)ch;
-    e.op = EditOp::SET_LIGHT;
-    return nullptr;
+    const char* r = parseLightItem(o, e.lightRelay, e.light);
+    if (!r) e.op = EditOp::SET_LIGHT;
+    return r;
   }
   return "bad_field";
 }

@@ -10,6 +10,9 @@
 #include "safety/SafetyManager.h"
 #include "safety/SafetyCfgApi.h"
 #include "safety/SafetyCfgJson.h"
+#include "NetLink.h"
+#include "template/TemplateApply.h"
+#include "template/TemplateStore.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 #include <esp_timer.h>
@@ -435,7 +438,8 @@ enum LoopJobType : uint8_t {
   JOB_RS485_RELAY,      // SmartAutomation::rs485ControlExtRelay (yalniz loopTask)
   JOB_CONFIG_APPLY,     // dogrulanmis yapilandirmayi canliya uygula
   JOB_RS485_BAUD,       // cfg.rs485_baud + rs485Begin
-  JOB_FACTORY_RESET     // ConfigManager::resetToDefaults
+  JOB_FACTORY_RESET,    // ConfigManager::resetToDefaults
+  JOB_TEMPLATE_APPLY    // v1.3.0: kurulum sablonu (tpl::applyOnLoop; NVS + canli ayni loopTask isinde)
 };
 enum LoopJobResult : uint8_t { JR_OK = 0, JR_FAILED = 1, JR_BUSY_SHUTTER = 2 };
 enum JobStatus : uint8_t { JS_DONE, JS_BUSY, JS_NOT_STARTED, JS_STILL_RUNNING };
@@ -448,8 +452,10 @@ struct LoopJob {
   uint8_t action;
   uint32_t baud;
   SystemConfig* cfg;      // JOB_CONFIG_APPLY: gecici kopya. Is KABUL edilince sahiplik loopTask'a gecer (orada free edilir)
+  tpl::TplCandidate* tpl; // JOB_TEMPLATE_APPLY: aday. Sahiplik cfg ile ayni kural (loopTask free eder)
   volatile uint8_t result;
   char response[96];
+  tpl::ApplyOutcome tplOut;   // JOB_TEMPLATE_APPLY sonucu (g_job statik: web gorevi vazgecse de yazim gecerli bellege)
 };
 LoopJob g_job;            // statik depolama: sifir baslatilir (state = 0)
 
@@ -492,9 +498,10 @@ uint8_t applyConfigOnLoop(SystemConfig* tmp) {
 // JS_DONE: result/response gecerli. JS_BUSY / JS_NOT_STARTED: is kabul EDILMEDI (cfg sahipligi cagirandadir).
 // JS_STILL_RUNNING: loopTask isi aldi ama beklenen surede bitirmedi (cfg'yi o free eder; sonuc bilinmiyor).
 JobStatus runLoopJob(uint8_t type, uint8_t slaveId, uint8_t channel, uint8_t action, uint32_t baud,
-                     SystemConfig* cfg, uint8_t& result, String* response) {
+                     SystemConfig* cfg, uint8_t& result, String* response, tpl::TplCandidate* tplCand = nullptr) {
   if (g_job.state == 3) g_job.state = 0;   // onceki (zaman asimina ugramis) isin artigi
   if (g_job.state != 0) return JS_BUSY;
+  g_job.tpl = tplCand;
   g_job.type = type;
   g_job.slaveId = slaveId;
   g_job.channel = channel;
@@ -556,7 +563,23 @@ void WebPortal::loop() {
     }
     case JOB_FACTORY_RESET:
       result = ConfigManager::instance().resetToDefaults() ? JR_OK : JR_FAILED;
+      {
+        tpl::TplRecord none;           // NVS "ahbu_tpl" resetToDefaults'ta silindi; RAM kopyası da (yeniden başlatmaya dek) "şablon yok"
+        tpl::tplRecordClear(none);
+        tpl::TemplateStore::setRam(none, 0);
+      }
       break;
+    case JOB_TEMPLATE_APPLY: {
+      tpl::TplCandidate* c = g_job.tpl;
+      g_job.tpl = nullptr;
+      if (c) {
+        g_job.tplOut = tpl::applyOnLoop(*c, true);
+        memset(c, 0, sizeof(*c));   // aday, kimlik alanlarinin kopyasini tasir
+        free(c);
+        result = JR_OK;
+      }
+      break;
+    }
     default:
       break;
   }
@@ -633,6 +656,10 @@ void WebPortal::setupRoutes() {
   route("/api/events", HTTP_GET, &WebPortal::handleApiEvents, Access::KEYED);
   route("/api/safety/config", HTTP_GET, &WebPortal::handleApiSafetyConfigGet, Access::KEYED);
   route("/api/safety/config", HTTP_POST, &WebPortal::handleApiSafetyConfigPost, Access::KEYED);
+
+  // Kurulum sablonu (v1.3.0, CONTRACTS 3e / docs/contracts/template/README.md): KEYED
+  route("/api/template/apply", HTTP_POST, &WebPortal::handleApiTemplateApply, Access::KEYED);
+  route("/api/template", HTTP_GET, &WebPortal::handleApiTemplateGet, Access::KEYED);
 
   route("/api/system/reboot", HTTP_POST, &WebPortal::handleApiReboot, Access::KEYED);
   route("/api/system/reset", HTTP_POST, &WebPortal::handleApiReset, Access::KEYED);
@@ -766,9 +793,12 @@ bool WebPortal::authorize() {
 // WiFi.softAPIP()/softAPSubnetMask(); STA alt agi cakisirsa (ev modemi de 192.168.4.0/24 ise) istemci AP sayilmaz.
 bool WebPortal::remoteOnSoftAp() {
   const uint32_t remote = (uint32_t)_server.client().remoteIP();
+  // v1.3.0: Ethernet alt agi AP alt agiyla cakisiyorsa da istemci AP sayilmaz (Ethernet yokken eski kararla ayni).
+  const netlink::EthState eth = NetLink::eth();
+  const bool ethUp = netlink::ethUp(eth);
   return ApAccess::clientOnSoftAp(WiFiManager::instance().isRecoveryApActive(), remote, (uint32_t)WiFi.softAPIP(),
                                   (uint32_t)WiFi.softAPSubnetMask(), (uint32_t)WiFi.localIP(),
-                                  (uint32_t)WiFi.subnetMask());
+                                  (uint32_t)WiFi.subnetMask(), ethUp ? eth.ip : 0u, ethUp ? eth.mask : 0u);
 }
 
 // AP_OR_KEYED uclar (wifi scan/connect/status): gecerli X-Device-Key YA DA AP kaynakli yetki (ApAccess, CONTRACTS 3d):
@@ -922,10 +952,16 @@ void WebPortal::sendFullStatus() {
   const bool staConnected = wm.isConnected();
   const IPAddress staIp = wm.getLocalIP();
   const IPAddress apIp = WiFi.softAPIP();
-  char staIpStr[16], apIpStr[16], ipStr[16];
+  char staIpStr[16], apIpStr[16], ipStr[16], ethIpStr[16];
   snprintf(staIpStr, sizeof(staIpStr), "%u.%u.%u.%u", staIp[0], staIp[1], staIp[2], staIp[3]);
   snprintf(apIpStr, sizeof(apIpStr), "%u.%u.%u.%u", apIp[0], apIp[1], apIp[2], apIp[3]);
-  snprintf(ipStr, sizeof(ipStr), "%s", staConnected ? staIpStr : apIpStr);
+  // "ip" = etkin arayuzun IP'si (Wi-Fi > Ethernet), ag yoksa AP IP'si (NetLinkCore::statusIp; Ethernet yokken eskisiyle ayni).
+  const netlink::EthState eth = NetLink::eth();
+  const bool ethUp = netlink::ethUp(eth);
+  netlink::ipToStr(netlink::statusIp(staConnected, (uint32_t)staIp, ethUp, eth.ip, (uint32_t)apIp), ipStr, sizeof(ipStr));
+  netlink::ipToStr(ethUp ? eth.ip : 0u, ethIpStr, sizeof(ethIpStr));
+  tpl::TplRecord tplRec;
+  tpl::TemplateStore::get(tplRec);
   const String staSsidRaw = staConnected ? wm.getSSID() : (v->staEnabled ? String(v->wifiSsid) : String(""));
   const String staSsid = NetUtil::sanitizeUtf8(staSsidRaw.c_str(), 32);
   const String uid = wm.getDeviceUid();
@@ -964,7 +1000,7 @@ void WebPortal::sendFullStatus() {
   const uint8_t nP = nR / 2;
   const uint8_t nD = (snap.totalDIs > MAX_TOTAL_DIS) ? (uint8_t)MAX_TOTAL_DIS : snap.totalDIs;
 
-  const size_t cap = JSON_OBJECT_SIZE(40) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
+  const size_t cap = JSON_OBJECT_SIZE(48) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
                      JSON_ARRAY_SIZE(nP) + (size_t)nP * JSON_OBJECT_SIZE(8) + JSON_ARRAY_SIZE(nD) +
                      (size_t)nD * JSON_OBJECT_SIZE(3) + 512;
   DynamicJsonDocument doc(cap);
@@ -1004,6 +1040,15 @@ void WebPortal::sendFullStatus() {
   doc["total_dis"] = v->totalDIs;
   doc["child_lock"] = snap.childLock;
   doc["last_id"] = (const char*)snap.lastId;
+  // v1.3.0 (CONTRACTS 3e): yalniz YENI alanlar; mevcut alanlar degismedi.
+  doc["eth_connected"] = ethUp;
+  doc["eth_ip"] = (const char*)ethIpStr;
+  doc["net_if"] = netlink::netIfName(netlink::activeIf(staConnected, ethUp));
+  if (tplRec.present) {
+    JsonObject t = doc.createNestedObject("tpl");
+    t["id"] = (const char*)tplRec.id;
+    t["ver"] = tplRec.ver;
+  }
 
   JsonArray rArr = doc.createNestedArray("relays");
   for (uint8_t i = 0; i < nR; i++) {
@@ -2122,4 +2167,100 @@ void WebPortal::handleApiSafetyConfigPost() {
     case safety::CfgResult::ARMED: sendError(409, "armed"); break;
     default: sendError(503, "busy"); break;
   }
+}
+
+// ============================================================================
+// Kurulum sablonu (v1.3.0, IP-2.5; docs/contracts/template/README.md "Kartta uygulama zarfi", CONTRACTS 3e). KEYED.
+// POST /api/template/apply {"template":{ahbu-template/1},"label":"..."} -> 200 {"ok":true,"template_id","version","rev"}
+//   400 {"error":<sablon kodu>,"path":...} | 403 local_loosen_forbidden (K-S4 LAN kurali) | 409 zone_latched / armed / busy /
+//   cfg_invalid (+detail) | 413 too_large | 507 storage | 503 busy. Ayristirma burada (web gorevi), uygulama loopTask'ta (JOB_TEMPLATE_APPLY):
+//   NVS + canli yapilandirma ayni loopTask isinde degisir ya da hicbiri degismez (tpl::applyOnLoop).
+// GET /api/template -> {"template_id":"..."|null,"version":N|0,"label":"...","applied_at_uptime_s":N|null}
+// ============================================================================
+void WebPortal::handleApiTemplateApply() {
+  auto sendOutcome = [this](const tpl::ApplyOutcome& o) {
+    if (o.r == tpl::ApplyResult::INVALID) {
+      if (strcmp(o.code, "too_large") == 0) { sendError(413, "too_large"); return; }
+      if (strcmp(o.code, "bad_json") == 0) { sendError(400, "invalid_json"); return; }
+      if (strcmp(o.code, "empty_body") == 0) { sendError(400, "empty_body"); return; }
+    }
+    if (o.r == tpl::ApplyResult::INTERNAL) { sendError(503, "busy"); return; }
+    const tpl::HttpErr h = tpl::httpOf(o.r);
+    DynamicJsonDocument d(384);
+    d["error"] = (const char*)o.code;
+    if (o.path[0]) d["path"] = (const char*)o.path;      // alan adlari istemciden gelebilir: ArduinoJson kacislar
+    if (o.detail[0]) d["detail"] = (const char*)o.detail;
+    String out;
+    serializeJson(d, out);
+    sendJson(h.status, out);
+  };
+
+  String body;
+  if (!readJsonBody(body)) return;
+  tpl::TplCandidate* cand = (tpl::TplCandidate*)malloc(sizeof(tpl::TplCandidate));
+  if (!cand) {
+    sendError(503, "busy");
+    return;
+  }
+  tpl::ApplyOutcome out;
+  memset(&out, 0, sizeof(out));
+  if (!tpl::parseBody(body.c_str(), body.length(), *cand, out)) {
+    memset(cand, 0, sizeof(*cand));
+    free(cand);
+    sendOutcome(out);
+    return;
+  }
+  body = String();   // ~24 KB gövde, uygulama süresince tutulmaz
+  char id[tpl::TPL_ID_LEN + 1];
+  memcpy(id, cand->templateId, sizeof(id));
+  const uint32_t ver = cand->version;
+
+  uint8_t jr = JR_FAILED;
+  const JobStatus js = runLoopJob(JOB_TEMPLATE_APPLY, 0, 0, 0, 0, nullptr, jr, nullptr, cand);
+  if (js == JS_BUSY || js == JS_NOT_STARTED) {   // is kabul edilmedi: aday bizde
+    memset(cand, 0, sizeof(*cand));
+    free(cand);
+    sendError(503, "busy");
+    return;
+  }
+  if (js == JS_STILL_RUNNING) {                  // loopTask isi aldi ama bitiremedi (adayi o free eder; sonuc bilinmiyor)
+    sendError(503, "busy");
+    return;
+  }
+  out = g_job.tplOut;
+  if (jr != JR_OK) {
+    sendError(503, "busy");
+    return;
+  }
+  if (out.r != tpl::ApplyResult::OK) {
+    sendOutcome(out);
+    return;
+  }
+  DynamicJsonDocument d(256);
+  d["ok"] = true;
+  d["template_id"] = (const char*)id;
+  d["version"] = ver;
+  d["rev"] = out.rev;
+  String resp;
+  serializeJson(d, resp);
+  sendJson(200, resp);
+}
+
+void WebPortal::handleApiTemplateGet() {
+  tpl::TplRecord r;
+  tpl::TemplateStore::get(r);
+  uint32_t at = 0;
+  const bool applied = tpl::TemplateStore::appliedUptime(at);
+  char label[32];
+  NetUtil::sanitizeInto(label, sizeof(label), r.present ? r.label : "");
+  DynamicJsonDocument d(256);
+  if (r.present) d["template_id"] = (const char*)r.id;
+  else d["template_id"] = nullptr;
+  d["version"] = r.present ? r.ver : 0u;
+  d["label"] = (const char*)label;
+  if (applied) d["applied_at_uptime_s"] = at;
+  else d["applied_at_uptime_s"] = nullptr;
+  String out;
+  serializeJson(d, out);
+  sendJson(200, out);
 }

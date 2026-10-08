@@ -48,6 +48,8 @@ struct DIConfig {
 // "ahbu_latch" (kilit kaydı, act_pos, açılış sayacı, çökme kaydı, siren birikimi) fabrika sıfırlamasında SİLİNMEZ.
 #define NVS_NS_SAFETY "ahbu_safety"
 #define NVS_NS_LATCH  "ahbu_latch"
+// v1.3.0 (K-Ş3): karta yazılmış kurulum şablonunun kimliği / sürümü / daire etiketi. Yapılandırmadır: fabrika sıfırlamasında SİLİNİR.
+#define NVS_NS_TPL    "ahbu_tpl"
 
 // Yerel erişim anahtarı / AP parolası sınırları (docs/CONTRACTS.md §3)
 #define LOCAL_KEY_MIN_LEN   8

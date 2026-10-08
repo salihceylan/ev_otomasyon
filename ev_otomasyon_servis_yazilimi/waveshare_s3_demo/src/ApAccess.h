@@ -58,6 +58,19 @@ inline bool clientOnSoftAp(bool apActive, uint32_t remoteIp, uint32_t apIp, uint
   return true;
 }
 
+// v1.3.0 (Ethernet, K-Ş1): Ethernet bağlıyken (ethIp != 0) Ethernet alt ağı AP alt ağıyla kesişiyorsa da (LAN 192.168.4.0/24) istemcinin
+// AP'de olduğu ağ konumundan anlaşılamaz -> AP istemcisi SAYILMAZ (STA kuralının aynısı; kapalı başarısızlık). Ethernet yoksa (ethIp = 0)
+// sonuç clientOnSoftAp ile birebir aynıdır.
+inline bool clientOnSoftAp(bool apActive, uint32_t remoteIp, uint32_t apIp, uint32_t apMask, uint32_t staIp, uint32_t staMask,
+                           uint32_t ethIp, uint32_t ethMask) {
+  if (!clientOnSoftAp(apActive, remoteIp, apIp, apMask, staIp, staMask)) return false;
+  if (ethIp != 0u) {
+    const bool overlap = (ethMask != 0u) ? subnetsOverlap(ethIp, ethMask, apIp, apMask) : sameSubnet(ethIp, apIp, apMask);
+    if (overlap) return false;
+  }
+  return true;
+}
+
 // AP kaynaklı (anahtarsız) yol: (a) ve (b) ve (c) HEPSİ. Provizyonsuz cihazda hiçbir koşulda açık değildir.
 inline bool apOrigin(bool clientOnAp, bool apIsWpa2, bool hasApPass, bool provisioned) {
   return provisioned && hasApPass && apIsWpa2 && clientOnAp;

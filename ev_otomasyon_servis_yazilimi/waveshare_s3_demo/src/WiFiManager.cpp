@@ -1,6 +1,8 @@
 #include "WiFiManager.h"
 #include "ConfigManager.h"
 #include "NetUtil.h"
+#include "NetLink.h"
+#include "EthLink.h"
 #include <esp_wifi.h>
 #include <esp_system.h>
 #include <esp_timer.h>
@@ -258,8 +260,12 @@ void WiFiManager::tick() {
   stepCandidate(now);
   stepSta(now);
 
-  // SNTP: GOT_IP sonrasi bir kez baslatilir (periyodik yenilemeyi lwIP SNTP kendisi yapar).
-  if (_sntpPending && isConnected()) {
+  // Ethernet: olay kacmissa (baglanti var, adres yok) IP durumu esp_netif'ten tamamlanir (v1.3.0).
+  EthLink::service();
+
+  // SNTP: herhangi bir arayuzde (Wi-Fi GOT_IP ya da Ethernet DHCP) adres alindiktan sonra bir kez baslatilir (periyodik yenilemeyi lwIP
+  // SNTP kendisi yapar). Karar NetLinkCore::sntpDue (Ethernet yokken bugunku "Wi-Fi bagli" kosuluyla ayni).
+  if (netlink::sntpDue(_sntpPending, isConnected(), NetLink::ethUp())) {
     _sntpPending = false;
     configTime(3 * 3600, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
     printf("[WiFiManager] SNTP zaman senkronizasyonu baslatildi.\r\n");
@@ -583,9 +589,10 @@ void WiFiManager::stepAp(uint32_t now) {
 
   NetUtil::ApPolicy::In in;
   in.allowed = !provisioned || passOk;
+  const bool ethUp = NetLink::ethUp();   // v1.3.0 (K-Ş1): Ethernet bagliyken kurtarma AP'si acilmaz (NetLinkCore::apPolicyConnected)
   {
     MutexGuard g(_mutex, 100);
-    in.connected = _connected;
+    in.connected = netlink::apPolicyConnected(_connected, ethUp);
     in.staConfigured = (_ssid.length() > 0);
   }
   in.apActive = _apActive;

@@ -1,5 +1,6 @@
 #include "ConfigManager.h"
 #include <string.h>
+#include <stdlib.h>
 
 using namespace sysconfig_detail;   // isAsciiRange, copyStr, terminate (SystemConfig.h)
 
@@ -216,7 +217,28 @@ bool ConfigManager::save() {
   if (!_prefsOk) return false;
 
   config.validate();   // hiçbir yazma yolu doğrulamasız NVS'e değer yazmaz
+  const bool ok = writeAll(config);
+  _generation = _generation + 1;
+  return ok;
+}
 
+// v1.3.0 (K-Ş3, şablon uygulama): canlı RAM'e DOKUNMADAN verilen yapılandırmayı NVS'e yazar (yalnız değişen anahtarlar). Çağıran
+// adayı doğrulamış olmalıdır; burada ayrıca kopya üzerinde validate() çalışır (canlı yapılandırma değişmez). Başarısız yazımda çağıran
+// eski yapılandırmayı aynı yolla geri yazar (template/TemplateApply).
+bool ConfigManager::saveCandidate(const SystemConfig& c) {
+  ConfigLock lk(*this);
+  if (!_prefsOk) return false;
+  SystemConfig* v = (SystemConfig*)malloc(sizeof(SystemConfig));
+  if (!v) return false;
+  memcpy(v, &c, sizeof(SystemConfig));
+  v->validate();
+  const bool ok = writeAll(*v);
+  memset(v, 0, sizeof(SystemConfig));   // kimlik alanları öbekte kalmasın
+  free(v);
+  return ok;
+}
+
+bool ConfigManager::writeAll(const SystemConfig& config) {
   bool ok = true;
   // NVS AŞINMA KORUMASI: yalnızca DEĞİŞEN değerler flash'a yazılır (okuma-karşılaştırma uygulama katmanındadır).
   auto putStr = [&](const char* key, const char* val) {
@@ -302,8 +324,6 @@ bool ConfigManager::save() {
   // "cfg_init" EN SON yazılır: yazma yarıda kalırsa (elektrik kesintisi) bir sonraki açılış
   // varsayılanlarla yeniden başlar, yarım yapılandırma "geçerli" sayılmaz.
   putBoolIfChanged("cfg_init", true);
-
-  _generation = _generation + 1;
   return ok;
 }
 
@@ -385,6 +405,7 @@ bool ConfigManager::resetToDefaults() {
   if (!clearNamespace(NVS_NS_AUTO)) ok = false;   // çocuk kilidi
   if (!clearNamespace(NVS_NS_POS)) ok = false;    // panjur konumları
   if (!clearNamespace(NVS_NS_SAFETY)) ok = false; // güvenlik yapılandırması (NVS_NS_LATCH bilinçli olarak SİLİNMEZ [Y-5])
+  if (!clearNamespace(NVS_NS_TPL)) ok = false;    // kurulum şablonu kaydı (v1.3.0): yapılandırma varsayılana döndü
   if (!save()) ok = false;
   _resetCount = _resetCount + 1;                  // SmartAutomation RAM'deki çocuk kilidini de sıfırlar
   return ok;

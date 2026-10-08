@@ -572,6 +572,18 @@ CfgOutcome SafetyManager::submitEdit(const CfgEdit& e, bool hasBase, uint32_t ba
   return finishEdit(o, curP, nextP);
 }
 
+bool SafetyManager::lockWriter(uint32_t timeoutMs) {
+  return writeMux_ && xSemaphoreTake(writeMux_, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+void SafetyManager::unlockWriter() {
+  if (writeMux_) xSemaphoreGive(writeMux_);
+}
+
+bool SafetyManager::applyReplacedOnLoop(const SafetyConfig& next, uint8_t via, uint64_t curLevels, uint32_t now_ms) {
+  return applyConfigOnLoop(next, via, curLevels, now_ms);
+}
+
 void SafetyManager::serviceConfig(uint32_t now_ms, uint64_t curLevels) {
   if (pendingState_ != 1) return;
   if (!__sync_bool_compare_and_swap(&pendingState_, (uint8_t)1, (uint8_t)3)) return;   // yazıcı vazgeçti

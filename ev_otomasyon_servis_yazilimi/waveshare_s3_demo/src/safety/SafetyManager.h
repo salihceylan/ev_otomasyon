@@ -113,6 +113,14 @@ public:
   // Tek öğeli yapılandırma yaması (§4.1). via: VIA_CLI / VIA_LAN / VIA_CLOUD / VIA_LOCAL_WEB. inLoop: çağıran loopTask (CLI) ise iş
   // satır içi uygulanır (curLevels gerekir); aksi halde loopTask'a postalanır ve en çok ~1,5 sn beklenir.
   CfgOutcome submitEdit(const CfgEdit& e, bool hasBase, uint32_t baseRev, uint8_t via, bool inLoop = false, uint64_t curLevels = 0);
+  // ---- Toplu değiştirme (v1.3.0 kurulum şablonu, İP-2.4; template/TemplateApply) ----
+  // Yazıcı kilidi (submitEdit ile aynı writeMux_): şablon uygulaması tek yama yazıcılarıyla yarışmaz. loopTask'tan kısa zaman aşımıyla alınır.
+  bool lockWriter(uint32_t timeoutMs);
+  void unlockWriter();
+  bool intrusionArmed() const { return intr_.mode() != ArmMode::OFF; }   // hırsız alarmı kurulu (home/away)
+  // Yalnız loopTask, yazıcı kilidi altında: NVS'e zaten yazılmış tam yapılandırmayı canlıya alır (applyConfigOnLoop; çalışma durumu kimliğe
+  // göre taşınır). false: kilitli bölgeye dokunuyor ya da yapılandırma kilidi alınamadı (çağıran NVS'i geri alır).
+  bool applyReplacedOnLoop(const SafetyConfig& next, uint8_t via, uint64_t curLevels, uint32_t now_ms);
   EventOutboxRtos& outbox() { return outbox_; }
   uint32_t bootCount() const { return bootCount_; }
   uint32_t bootNonce() const { return bn_; }

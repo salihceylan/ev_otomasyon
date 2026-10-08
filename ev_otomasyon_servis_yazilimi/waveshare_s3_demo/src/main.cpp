@@ -15,6 +15,12 @@
 #include "CliParse.h"
 #include "safety/SafetyManager.h"
 #include "safety/SafetyCfgApi.h"
+#include "NetUtil.h"
+#include "NetLink.h"
+#include "EthLink.h"
+#include "template/TplSerial.h"
+#include "template/TemplateApply.h"
+#include "template/TemplateStore.h"
 
 // Görev gözetleyici (TWDT) zaman aşımı: loopTask ve ilgili görevler bu sürede beslenmezse cihaz
 // kendini YENİDEN BAŞLATIR (EVOTOMASYON_TASKS: "hiçbir görev kilitlenmeyecek").
@@ -68,6 +74,7 @@ void setup() {
   printf("[BOOT] ConfigManager basliyor...\r\n");
   ConfigManager::instance().begin();
   printf("[BOOT] ConfigManager tamam.\r\n");
+  tpl::TemplateStore::begin();     // v1.3.0: karta yazılmış kurulum şablonu kaydı (NVS "ahbu_tpl")
 
   printf("[BOOT] SmartAutomation basliyor...\r\n");
   // Akıllı Otomasyon Yöneticisi (komut kuyruğu, interlock, panjur FSM, butonlar, RS485)
@@ -77,6 +84,9 @@ void setup() {
   // Wi-Fi/AP yaşam döngüsü (STA, kurtarma AP'si, AP parolası = ap_pass) tamamen WiFiManager'ındır.
   // (Eski kod burada sabit "waveshare" parolalı AP açıyordu; kaldırıldı.)
   WiFiManager::instance().begin();
+
+  // v1.3.0 (K-Ş1): W5500 Ethernet. Ayrı tek seferlik görevde başlar (bloklamaz); W5500 yoksa / kablo yoksa açılış etkilenmez.
+  EthLink::begin();
 
   // Web Sunucusunu Başlat
   WebPortal::instance().begin();
@@ -186,6 +196,16 @@ static void cliPrintStatus() {
     first = false;
   }
   Serial.printf("]\r\n");
+  // v1.3.0 (CONTRACTS 3e): YENİ satırlar en sonda; yukarıdaki satırlar fabrika aracı tarafından ayrıştırılır, DEĞİŞMEZ.
+  {
+    const netlink::EthState e = NetLink::eth();
+    char ip[16];
+    netlink::ipToStr(e.ip, ip, sizeof(ip));
+    Serial.printf("  - Ethernet: %s %s\r\n", netlink::ethUp(e) ? "bagli" : "yok", netlink::ethUp(e) ? ip : "-");
+    tpl::TplRecord r;
+    tpl::TemplateStore::get(r);
+    Serial.printf("  - Sablon: %s v%lu\r\n", r.present ? r.id : "-", (unsigned long)(r.present ? r.ver : 0));
+  }
 }
 
 // ---- Güvenlik katmanı (seri CLI = fiziksel erişim; spec §5.1.6, karar 7.2b-7/10, WP-F5) ----------------------------------
@@ -319,6 +339,92 @@ static void cliSafety(const String& cmd) {
   }
 }
 
+// ---- Kurulum şablonu (v1.3.0, İP-2.6; docs/contracts/template/README.md "Seri protokol", K-Ş5) -----------------------------------------
+// USB = fiziksel erişim: provizyon gerekmez, güvenlik tablosunu tamamen değiştirebilir (gevşetme yasağı yok; kilitli bölge / kurulu alarm /
+// panjur hareketi yine reddedilir). Çerçeveleme saf mantığı template/TplSerial.h (testli); uygulama tpl::applyOnLoop (bu görev = loopTask).
+// "TPL DATA" satırları yankılanmaz (handleCliLine). Yanıtlar araç tarafından ayrıştırılır: "OK tpl_*" / "ERR <kod> [path]" / "TPL <id|-> ...".
+static tpl::TplRx s_tplRx;
+
+static void tplFreeBuffer() {
+  uint8_t* b = s_tplRx.takeBuffer();
+  if (b) free(b);
+}
+
+static void cliTpl(const String& cmd) {
+  const String sub = cliWord(cmd, 1);
+  const uint32_t now = millis();
+  if (eq(sub, "BEGIN")) {
+    uint32_t size = 0, crc = 0;
+    const tpl::RxErr e = tpl::parseBeginArgs(cliWord(cmd, 2).c_str(), cliWord(cmd, 3).c_str(), size, crc);
+    if (e != tpl::RxErr::OK) {
+      Serial.printf("ERR %s\r\n", tpl::rxErrText(e));
+      return;
+    }
+    tplFreeBuffer();                     // önceki (yarım) aktarım silinir
+    s_tplRx.abort();
+    uint8_t* buf = (uint8_t*)malloc(size);
+    if (!buf) {
+      Serial.printf("ERR busy\r\n");
+      return;
+    }
+    s_tplRx.begin(size, crc, buf, now);
+    Serial.printf("OK tpl_begin\r\n");
+  } else if (eq(sub, "DATA")) {
+    const tpl::RxErr e = s_tplRx.data(cliWord(cmd, 2).c_str(), now);
+    if (e == tpl::RxErr::OK) {
+      Serial.printf("OK tpl_data %lu\r\n", (unsigned long)s_tplRx.got);
+    } else {
+      if (!s_tplRx.active) tplFreeBuffer();   // bozuk aktarım silindi
+      Serial.printf("ERR %s\r\n", tpl::rxErrText(e));
+    }
+  } else if (eq(sub, "COMMIT")) {
+    const uint32_t len = s_tplRx.size;
+    const tpl::RxErr e = s_tplRx.commit(now);
+    if (e != tpl::RxErr::OK) {
+      tplFreeBuffer();
+      Serial.printf("ERR %s\r\n", tpl::rxErrText(e));
+      return;
+    }
+    uint8_t* body = s_tplRx.takeBuffer();
+    tpl::TplCandidate* cand = (tpl::TplCandidate*)malloc(sizeof(tpl::TplCandidate));
+    tpl::ApplyOutcome o;
+    memset(&o, 0, sizeof(o));
+    if (!cand) {
+      free(body);
+      Serial.printf("ERR busy\r\n");
+      return;
+    }
+    const bool parsed = tpl::parseBody((const char*)body, len, *cand, o);
+    free(body);
+    if (parsed) o = tpl::applyOnLoop(*cand, false);
+    char id[tpl::TPL_ID_LEN + 1];
+    memcpy(id, cand->templateId, sizeof(id));
+    id[tpl::TPL_ID_LEN] = '\0';
+    const uint32_t ver = cand->version;
+    memset(cand, 0, sizeof(*cand));
+    free(cand);
+    if (o.r == tpl::ApplyResult::OK) {
+      Serial.printf("OK tpl_applied %s %lu\r\n", id, (unsigned long)ver);
+    } else {
+      const char* extra = o.path[0] ? o.path : o.detail;
+      if (extra[0]) Serial.printf("ERR %s %s\r\n", o.code, extra);
+      else Serial.printf("ERR %s\r\n", o.code);
+    }
+  } else if (eq(sub, "ABORT")) {
+    tplFreeBuffer();
+    s_tplRx.abort();
+    Serial.printf("OK tpl_abort\r\n");
+  } else if (eq(sub, "STATUS")) {
+    tpl::TplRecord r;
+    tpl::TemplateStore::get(r);
+    char label[32];
+    NetUtil::sanitizeInto(label, sizeof(label), r.present ? r.label : "");
+    Serial.printf("TPL %s %lu %s\r\n", r.present ? r.id : "-", (unsigned long)(r.present ? r.ver : 0), label);
+  } else {
+    Serial.printf("[CLI-HATA] Kullanim: TPL BEGIN <bayt> <crc32-hex8> | TPL DATA <base64> | TPL COMMIT | TPL ABORT | TPL STATUS\r\n");
+  }
+}
+
 static void cliHelp() {
   Serial.printf("[CLI] Komutlar: STATUS, MQTT, MQTT PUB, RELAY <n> [ON|OFF|TOGGLE], RELAY ALL ON|OFF,\r\n");
   Serial.printf("      SHUTTER <n> UP|DOWN|STOP|STEP|POS <0-100>, SHUTTER ALL UP|DOWN|STOP, DI, CFG,\r\n");
@@ -327,7 +433,8 @@ static void cliHelp() {
   Serial.printf("      BAUD <baud>, CHILDLOCK [ON|OFF|STATUS], AP [ON|OFF|STATUS] (servis AP'si, 10 dk),\r\n");
   Serial.printf("      FACTORYINIT <local_key> <ap_pass> (yalniz PROVIZYONSUZ cihazda), RESETKEY (yerel anahtari siler), REBOOT [FORCE],\r\n");
   Serial.printf("      SAFETY [STATUS], SAFETY TEST <bolge>, SAFETY ACK [bolge] [FORCE], SAFETY POLICY ON|OFF, SAFETY DEL <aN|dN|bN>,\r\n");
-  Serial.printf("      ARM [STATUS], ARM AWAY|HOME|OFF (hirsiz alarmi)\r\n");
+  Serial.printf("      ARM [STATUS], ARM AWAY|HOME|OFF (hirsiz alarmi),\r\n");
+  Serial.printf("      TPL BEGIN <bayt> <crc32> | TPL DATA <base64> | TPL COMMIT | TPL ABORT | TPL STATUS (kurulum sablonu)\r\n");
 }
 
 // ARM [STATUS] | ARM AWAY|HOME|OFF (Faz 2 F2.B.3): hirsiz alarmi kurma/cozme (fiziksel erisim). Sonuc ayni kuyruktan; ret "[GUVENLIK] Komut
@@ -401,6 +508,8 @@ static void handleCliLine(String cmd) {
   String first = cliWord(cmd, 0);
   if (eq(first, "FACTORYINIT")) {
     // (yankı yok)
+  } else if (eq(first, "TPL") && eq(cliWord(cmd, 1), "DATA")) {
+    // (yankı yok: şablon gövdesi günlüğe yansıtılmaz; K-Ş5)
   } else if (eq(first, "WIFI") && !eq(cliWord(cmd, 1), "CLEAR")) {
     Serial.printf("\r\n[CLI] Komut alindi: WIFI <ssid> <gizli>\r\n");
   } else {
@@ -420,6 +529,8 @@ static void handleCliLine(String cmd) {
     cliSafety(cmd);
   } else if (eq(first, "ARM")) {
     cliArm(cmd);
+  } else if (eq(first, "TPL")) {
+    cliTpl(cmd);
   } else if (eq(first, "MQTT")) {
     if (eq(cliWord(cmd, 1), "PUB")) {
       MqttManager::instance().triggerPublish();
@@ -778,6 +889,10 @@ static void handleSerialCli() {
 void loop() {
   esp_task_wdt_reset();                 // TWDT: loopTask her turda beslenir (bir tur en çok birkaç yüz ms sürer)
   handleSerialCli();
+  if (s_tplRx.poll(millis())) {          // TPL aktarımı 30 sn içinde COMMIT edilmedi: silinir (sonraki komut ERR tpl_timeout)
+    tplFreeBuffer();
+    Serial.printf("[TPL] Aktarim zaman asimina ugradi (30 sn); silindi.\r\n");
+  }
   SmartAutomation::instance().loop();
   WebPortal::instance().loop();
   vTaskDelay(pdMS_TO_TICKS(5));

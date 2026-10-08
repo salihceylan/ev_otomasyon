@@ -25,4 +25,11 @@ bool parseActuatorId(const char* s, uint8_t& idx0);                // "a1".."a16
 // Dönüş: nullptr (başarılı) ya da makine okunur neden ("bad_field", "bad_value", ...).
 const char* parseCfgEdit(JsonObject root, CfgEdit& e, bool& hasBase, uint32_t& baseRev, bool sysEnvelope);
 
+// Ortak öğe ayrıştırıcıları (v1.3.0 İP-2.3): tek öğeli yama (parseCfgEdit) ve kurulum şablonu (template/TemplateParse) AYNI kodla
+// sensör / eylemci / ışık nesnesi okur; çıktı önce sıfırlanır, varsayılanlar yukarıdaki gibidir. Dönüş: nullptr ya da neden.
+// allowId=false: eylemci nesnesinde "id" alanı yasaktır (şablonda sıra = a1..; "bad_field"). actIndex: "id" yoksa 0xFF.
+const char* parseSensorItem(JsonObject o, SensorConfig& sens);
+const char* parseActuatorItem(JsonObject o, ActuatorConfig& act, uint8_t& actIndex, bool allowId);
+const char* parseLightItem(JsonObject o, uint8_t& relay, LightOpt& light);
+
 }  // namespace safety

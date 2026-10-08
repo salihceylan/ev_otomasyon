@@ -5,6 +5,8 @@
 #include "WiFiManager.h"
 #include "NetUtil.h"
 #include "CaCerts.h"
+#include "NetLink.h"
+#include "template/TemplateStore.h"
 #include "safety/SafetyManager.h"
 #include "safety/SafetyCfgApi.h"
 #include "safety/SafetyCfgJson.h"
@@ -591,9 +593,10 @@ void MqttManager::taskLoop() {
       continue;
     }
 
-    const bool wifiOk = WiFiManager::instance().isConnected();
-    if (!wifiOk) {
-      // Wi-Fi koptu: yarim kalmis TLS soketi kapatilir (eski baglanti "bagli" gorunmesin)
+    // v1.3.0 (K-Ş1): ag = Wi-Fi VEYA Ethernet (NetLinkCore::mqttNetOk; Ethernet yokken eskisiyle ayni).
+    const bool netOk = netlink::mqttNetOk(WiFiManager::instance().isConnected(), NetLink::ethUp());
+    if (!netOk) {
+      // Ag koptu: yarim kalmis TLS soketi kapatilir (eski baglanti "bagli" gorunmesin)
       if (_connected || _secureClient.connected()) {
         dropConnection("Wi-Fi koptu", false);
         scheduleRetry(false);
@@ -897,7 +900,7 @@ bool MqttManager::publishState() {
   }
 
   // ArduinoJson havuzu: oge sayisindan hesaplanir (adlar kopyalanmaz: gecici goruntuye isaret eder)
-  const size_t cap = JSON_OBJECT_SIZE(12) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
+  const size_t cap = JSON_OBJECT_SIZE(16) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
                      JSON_ARRAY_SIZE(nS) + (size_t)nS * JSON_OBJECT_SIZE(5) + JSON_ARRAY_SIZE(nD) +
                      (size_t)nD * JSON_OBJECT_SIZE(2) + 64;
   DynamicJsonDocument doc(cap);
@@ -907,9 +910,13 @@ bool MqttManager::publishState() {
     return fail("bellek (JSON havuzu)");
   }
 
-  const IPAddress ipa = WiFiManager::instance().getLocalIP();
-  char ip[16];
-  snprintf(ip, sizeof(ip), "%u.%u.%u.%u", ipa[0], ipa[1], ipa[2], ipa[3]);
+  // "ip" = etkin arayuzun IP'si (Wi-Fi > Ethernet; ag yoksa 0.0.0.0) -- Ethernet yokken eskisiyle ayni (NetLinkCore::stateIp).
+  const NetLink::Snapshot ns = NetLink::snapshot();
+  char ip[16], ethIp[16];
+  netlink::ipToStr(netlink::stateIp(ns.wifiUp, ns.wifiIp, ns.ethUp, ns.ethIp), ip, sizeof(ip));
+  netlink::ipToStr(ns.ethIp, ethIp, sizeof(ethIp));
+  tpl::TplRecord tplRec;
+  tpl::TemplateStore::get(tplRec);
 
   const uint32_t seq = ++_seq;
   doc["v"] = 3;   // v:2'nin kati ust kumesi (spec 3.1); ek alanlar asagida nesnenin sonuna eklenir
@@ -921,6 +928,15 @@ bool MqttManager::publishState() {
   doc["child_lock"] = snap.childLock;
   // Bos "last_id" gonderilmez (backend [A-Za-z0-9_.:-]{1,24} bekler; bos deger "atlandi" sayilir)
   if (snap.lastId[0] != '\0') doc["last_id"] = (const char*)snap.lastId;
+  // v1.3.0 (CONTRACTS 3e): yeni alanlar; "tpl" yalniz sablon yukluyse.
+  doc["eth_connected"] = ns.ethUp;
+  doc["eth_ip"] = (const char*)ethIp;
+  doc["net_if"] = netlink::netIfName(ns.active);
+  if (tplRec.present) {
+    JsonObject t = doc.createNestedObject("tpl");
+    t["id"] = (const char*)tplRec.id;
+    t["ver"] = tplRec.ver;
+  }
 
   JsonArray rArr = doc.createNestedArray("relays");
   for (uint8_t i = 0; i < nR; i++) {

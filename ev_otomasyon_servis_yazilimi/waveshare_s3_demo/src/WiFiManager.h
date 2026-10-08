@@ -17,8 +17,13 @@
 // 1.2.1 (Faz 2): kapi/pencere/hareket hirsiz alarmi (kip off/home/away, cikis/giris gecikmesi, ARM_KEY, caps "intrusion", state safety.arm,
 // intrusion_alarm/intrusion_cleared/arm_changed olaylari, POST /api/arm, CLI ARM), siren VEYA'si (ayri butce), ContactBus; sys cfg_patch
 // basarisinda last_id yankisi ve "cfg_storage" ret kodu.
+// 1.3.0 (site/kurulum sablonu + Ethernet; plan 2026-10-08-site-sablon-kurulum.md Faz 2): W5500 Ethernet (EthLink, IDF esp_eth; DHCP),
+// NetLink (MQTT kapisi / SNTP / kurtarma AP politikasi / durum "ip" Wi-Fi VEYA Ethernet; Ethernet bagliyken kurtarma AP'si acilmaz),
+// durum + MQTT state yeni alanlar eth_connected / eth_ip / net_if / tpl; kurulum sablonu (ahbu-template/1): POST /api/template/apply
+// (KEYED, LAN gevsetme kurali K-S4), GET /api/template, seri TPL BEGIN/DATA/COMMIT/ABORT/STATUS, atomik ana + guvenlik yapilandirmasi
+// yazimi, NVS "ahbu_tpl"; STATUS'a "Ethernet:" ve "Sablon:" satirlari (eski satirlar ayni). DONANIMDA DENENMEDI.
 #ifndef FW_VERSION
-#define FW_VERSION "1.2.1"
+#define FW_VERSION "1.3.0"
 #endif
 
 // ============================================================================
@@ -80,6 +85,8 @@ public:
 
     // Manuel yeniden baglanma (geri cekilme sayacini sifirlar)
     void triggerReconnect();
+    // v1.3.0 (K-Ş1): herhangi bir arayüz (Ethernet dahil) adres aldığında SNTP isteği bırakır; wifi_task ağ varken başlatır.
+    void requestSntp() { _sntpPending = true; }
 
     // ---------------- Durum (Core 0 ve Core 1'den cagrilabilir) ----------------
     bool isConnected();

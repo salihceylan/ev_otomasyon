@@ -120,6 +120,9 @@ private:
   void handleApiEvents();
   void handleApiSafetyConfigGet();
   void handleApiSafetyConfigPost();
+  // v1.3.0 kurulum şablonu (İP-2.5, K-Ş3/K-Ş4): KEYED
+  void handleApiTemplateApply();
+  void handleApiTemplateGet();
   void postAndWait(DeviceCommand& c);     // kuyruk + en cok 1 sn last_id/last_rej yoklamasi -> {ok, id, rej?}
   bool latchBlocksRestart();               // kilit varken force=1 yoksa 409 gonderir
 
