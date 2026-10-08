@@ -81,8 +81,8 @@
    "💾 Etiketi Kaydet (PNG)" / "🖨️ Yazdır". Etiket gizlidir (PIN + parola içerir).
 
 ### 3.2 Firmware (1. sekme)
-1. Port seçin → "⚡ FİRMWARE'İ KARTA YÜKLE (FLASH)". **Ethernet, şablon ve kendi kendine bulut bağlantısı için v1.3.0
-   gerekir**; servis yazılımında "güncel" sürüm hâlâ v1.2.1 seçili (bkz. Bölüm 9, madde 3).
+1. Port seçin → "⚡ FİRMWARE'İ KARTA YÜKLE (FLASH)". **Ethernet, şablon ve kendi kendine bulut bağlantısı için v1.3.0+
+   gerekir**; servis yazılımında seçili sürüm v1.3.1'dir (kartta denendi).
 2. Yükleme bitince kayıt bekliyorsa provizyon **aynı USB'den otomatik** başlar.
 
 ### 3.3 Provizyon (3. sekme)

@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cihaz Kullanım Kitapçığı</title>
+<style>
+  :root { --ink:#14202b; --muted:#5b6b78; --line:#d5dde4; --accent:#0e7490; --warn:#b45309; --bad:#b91c1c; --ok:#047857; --bg:#ffffff; --soft:#f3f7fa; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:11pt/1.5 "Segoe UI", "Noto Sans", Arial, sans-serif; }
+  main { max-width: 820px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 24pt; margin: 0 0 4px; color: var(--accent); }
+  h2 { font-size: 15pt; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--accent); break-after: avoid; }
+  h3 { font-size: 12pt; margin: 18px 0 6px; break-after: avoid; }
+  p, li { margin: 4px 0; }
+  ol, ul { padding-left: 22px; }
+  a { color: var(--accent); }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .cover { border: 1px solid var(--line); border-radius: 10px; padding: 20px; background: var(--soft); }
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0; }
+  .flow div { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fff; font-size: 10pt; }
+  .flow b { display:block; color: var(--accent); margin-bottom: 4px; }
+  .box { border-left: 4px solid var(--accent); background: var(--soft); padding: 8px 12px; margin: 10px 0; break-inside: avoid; }
+  .box.warn { border-color: var(--warn); background: #fff7ed; }
+  .box.bad { border-color: var(--bad); background: #fef2f2; }
+  .box.ok { border-color: var(--ok); background: #ecfdf5; }
+  .box > :first-child { margin-top: 0; }
+  .box > :last-child { margin-bottom: 0; }
+  .cover .box { background: #fff; }
+  .cover .box.bad { background: #fef2f2; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 10pt; break-inside: auto; }
+  thead { display: table-header-group; }
+  th, td { border: 1px solid var(--line); padding: 5px 7px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); }
+  tr { break-inside: avoid; }
+  table.keep { break-inside: avoid; }
+  .roles th:not(:first-child), .roles td:not(:first-child) { text-align: center; width: 14%; }
+  .form th { font-weight: 600; }
+  .form td { height: 32px; background: #fff; }
+  .y { color: var(--ok); font-weight: 600; }
+  .n { color: var(--bad); }
+  code, .k { font-family: Consolas, monospace; font-size: 9.5pt; background: var(--soft); padding: 0 3px; border-radius: 3px; }
+  q { quotes: "\201C" "\201D" "\2018" "\2019"; }
+  q.b { font-weight: 600; }
+  var { font-style: italic; }
+  .tag { display: inline-block; font-size: 8.5pt; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 999px; padding: 0 7px; margin-left: 6px; vertical-align: 2px; }
+  .toc { break-inside: avoid; }
+  .toc ol { columns: 2; column-gap: 32px; margin: 6px 0 0; }
+  .toc li { break-inside: avoid; }
+  .toc a { color: var(--ink); text-decoration: none; }
+  footer { color: var(--muted); font-size: 9pt; margin-top: 30px; border-top: 1px solid var(--line); padding-top: 6px; }
+  @media (max-width: 640px) { .flow { grid-template-columns: 1fr 1fr; } .toc ol { columns: 1; } }
+  @page { size: A4; margin: 16mm 14mm; }
+  @page { @bottom-center { content: "Sayfa " counter(page) " / " counter(pages); font: 8.5pt "Segoe UI", Arial, sans-serif; color: #5b6b78; } }
+</style>
+</head>
+<body>
+<main>
+
+<section class="cover">
+  <h1>Cihaz Kullanım Kitapçığı</h1>
+  <p class="sub">AHBU Ev Otomasyonu · Pano, duvar butonları ve telefon uygulaması · Ekim 2026</p>
+  <p><b>Bu kitapçık ne için?</b> Evinizdeki AHBU panosunu ve telefon uygulamasını günlük hayatta nasıl kullanacağınızı; su, gaz,
+  duman ve hırsız alarmlarında ne yapacağınızı; ailenizi ve misafirlerinizi nasıl ekleyeceğinizi ve bir sorun çıktığında nereye
+  bakacağınızı anlatır.</p>
+  <p><b>Kimler için:</b> daire sakinleri ve ev sahipleri, aile üyeleri ve misafirler, panoyu satın alıp kendisi kuranlar. Ev sahibi,
+  aile üyesi ve misafirin yapabildikleri farklı olduğunda başlığın yanındaki etikette ya da metinde belirtilir.</p>
+  <p><b>Okuma ipucu:</b> ekrandaki yazılar uygulamada göründüğü gibi tırnak içinde verilmiştir; kalın yazılanlar dokunduğunuz düğmelerdir.
+  <var>Eğik</var> yazılan sayı ve adlar örnektir.</p>
+  <div class="flow">
+    <div><b>Pano</b>Evinizdeki kontrol kartı. Lambaları, panjurları, vanaları ve sireni yönetir; internet olmadan da çalışır.</div>
+    <div><b>Duvar butonları</b>Doğrudan panoya bağlıdır. Telefon ya da internet gerekmez.</div>
+    <div><b>Uygulama</b>Telefondan kontrol, alarmlar, aile ve misafir yönetimi.</div>
+    <div><b>Bulut</b>Evden uzaktayken kontrol, zamanlı kurallar ve davetler. İnternet gerekir.</div>
+  </div>
+  <div class="box bad">
+    <p><b>Acil durumda</b></p>
+    <ul>
+      <li><b>Gaz kokusu ya da gaz alarmı:</b> <q>Ortamı havalandırın. Elektrik anahtarlarına ve prizlere dokunmayın, ateş yakmayın. Kokuyu hâlâ alıyorsanız evden çıkın ve 187'yi arayın.</q></li>
+      <li><b>Duman ya da yangın:</b> <q>Evde biri varsa hemen dışarı çıkın ve 112'yi arayın.</q></li>
+      <li><b>Vana kapanmadıysa:</b> su için ana vanayı, gaz için sayaçtaki ana gaz vanasını elle kapatın (Bölüm 7.5).</li>
+    </ul>
+  </div>
+  <div class="box ok">
+    <p><b>Destek:</b> Güde Teknoloji (Zayıf Akım ve Teknoloji Sistemleri) · E-posta: <a href="mailto:bilgi@gudeteknoloji.com">bilgi@gudeteknoloji.com</a>
+    · Telefon: <a href="tel:+905437956044">+90 543 795 60 44</a> · Web: <a href="https://gudeteknoloji.com">gudeteknoloji.com</a>
+    · Adres: Yalı Mah. 6436 Sok. No:37/A Karşıyaka / İzmir</p>
+  </div>
+</section>
+
+<nav class="toc" aria-label="İçindekiler">
+  <h2>İçindekiler</h2>
+  <ol>
+    <li><a href="#s1">Sistemi tanıyın</a></li>
+    <li><a href="#s2">Uygulama ve hesabınız</a></li>
+    <li><a href="#s3">Eviniz servis kurulumuyla geldiyse</a></li>
+    <li><a href="#s4">Panoyu kendiniz kuruyorsanız</a></li>
+    <li><a href="#s5">Günlük kullanım</a></li>
+    <li><a href="#s6">Duvar butonları</a></li>
+    <li><a href="#s7">Su, gaz ve duman alarmları</a></li>
+    <li><a href="#s8">Hırsız alarmı</a></li>
+    <li><a href="#s9">Telefona alarm bildirimi ve Alarm Geçmişi</a></li>
+    <li><a href="#s10">Çocuk kilidi, elektrik kesintisi, güvenli kip</a></li>
+    <li><a href="#s11">Aile ve misafirler</a></li>
+    <li><a href="#s12">Servise geçici erişim (Servis PIN'i)</a></li>
+    <li><a href="#s13">İnternet yokken: Yerel Ağ Modu</a></li>
+    <li><a href="#s14">Ayarlar ve hesap işlemleri</a></li>
+    <li><a href="#s15">Sorun giderme</a></li>
+    <li><a href="#s16">Güvenli kullanım: yapmamanız gerekenler</a></li>
+    <li><a href="#s17">Kodlar ve geçerlilik süreleri</a></li>
+    <li><a href="#s18">Yasal metinler</a></li>
+    <li><a href="#s19">Destek ve iletişim</a></li>
+  </ol>
+</nav>
+
+<!-- ================================================================== 1 -->
+<h2 id="s1">1. Sistemi tanıyın</h2>
+<h3>1.1 Parçalar</h3>
+<table class="keep">
+  <thead><tr><th style="width:20%">Parça</th><th>Ne işe yarar?</th></tr></thead>
+  <tr><td>Pano</td><td>Evinizdeki kontrol kartıdır. Ana kartta 8 çıkış (röle) ve 8 giriş bulunur. Çıkışlara lamba, priz, panjur motoru, vana,
+  siren ve fan gibi cihazlar; girişlere duvar butonları ve sensörler bağlanır. Gerekirse ek modülle çıkış ve giriş sayısı artırılır.</td></tr>
+  <tr><td>Duvar butonları</td><td>Doğrudan panoya bağlıdır; internet ya da telefon olmadan çalışır (Bölüm 6).</td></tr>
+  <tr><td>Sensörler</td><td>Su baskını, gaz, duman, kapı, pencere ve hareket sensörleri. Evinizde hangilerinin bulunduğu kurulumunuza bağlıdır.</td></tr>
+  <tr><td>Uygulama</td><td>Telefonunuzdan kontrol, alarm takibi, aile ve misafir yönetimi. Giriş ekranında <q>AHBU OTOMASYON</q> ve
+  <q>Yapay Zeka Destekli Akıllı Yaşam</q> yazar.</td></tr>
+  <tr><td>Bulut</td><td>Evden uzaktayken uygulamayı panonuza bağlayan sunucu (evotomasyon.gudeteknoloji.com.tr). Uygulama sunucuya şifreli bağlantıyla ulaşır.</td></tr>
+</table>
+
+<h3>1.2 Çıkış türleri</h3>
+<ul>
+  <li><b>Lamba:</b> açılır ya da kapanır. Uygulamada lambalar yalnız açılıp kapatılır; parlaklık ayarı yoktur.</li>
+  <li><b>Priz:</b> lamba gibi açılıp kapanır; uygulama prizleri lambalardan ayrı tutar (Bölüm 5.7).</li>
+  <li><b>Panjur:</b> iki çıkış birlikte çalışır; biri yukarı, biri aşağı yön içindir.</li>
+  <li><b>Darbe çıkışı:</b> kısa bir süre (başlangıçta 1 saniye) çekip bırakır; örneğin kapı otomatiği için.</li>
+</ul>
+
+<h3>1.3 İnternet olmadan neler çalışır?</h3>
+<table class="keep">
+  <thead><tr><th style="width:50%">İnternet olmadan da çalışır (pano kendi başına)</th><th>İnternet ve bulut gerekir</th></tr></thead>
+  <tr>
+    <td><ul>
+      <li>Duvar butonları</li>
+      <li>Çocuk kilidi</li>
+      <li>Su, gaz ve duman alarmı: vanayı kapatma, siren, pano zili</li>
+      <li>Hırsız alarmı</li>
+      <li>Panonun Wi-Fi ayarı (Bölüm 4.3; hesap girişi de gerekmez)</li>
+    </ul></td>
+    <td><ul>
+      <li>Evden uzaktayken kontrol</li>
+      <li>Zamanlı kurallar (sunucuda çalışır)</li>
+      <li>Gece huzur hatırlatması</li>
+      <li>Telefona alarm bildirimi (Android)</li>
+      <li>Aile ve misafir daveti, ev devri</li>
+      <li>Servis PIN'i</li>
+    </ul></td>
+  </tr>
+</table>
+<p>Ev ağınızda internet yoksa telefonunuz aynı ev ağındayken panoyu <b>Yerel Ağ Modu</b> ile yine kontrol edebilirsiniz (Bölüm 13).</p>
+
+<h3>1.4 Bulut Modu ve Yerel Ağ Modu</h3>
+<p>Uygulama iki kipte çalışır. <b>Bulut Modu</b> her yerden kontrol sağlar ve internet gerektirir. <b>Yerel Ağ Modu</b>'nda telefonunuz,
+aynı ev ağındaki panoya doğrudan bağlanır. İnternet kesilip gelse de uygulama kipi kendiliğinden değiştirmez; kipi siz değiştirirsiniz.
+Telefonda bu seçenek üst çubuğun sağındaki üç nokta (⋮, <q>Diğer işlemler</q>) menüsündedir; geniş ekranlı tablette üst çubukta simge olarak
+durur. Seçeneğin adı <q>Bulut Modu (yerel moda geç)</q> ya da <q>Yerel Ağ Modu (buluta geç)</q>dir.</p>
+
+<h3>1.5 Pano yazılımı</h3>
+<p>Panonun yazılımı internetten kendiliğinden güncellenmez; güncellemeyi yetkili servis yerinde yapar.</p>
+
+<div class="box warn"><b>Elektrik güvenliği:</b> panonun çıkış bağlantılarında şebeke elektriği (230 V) bulunur. Panonun kapağını açmayın,
+kablolara dokunmayın. Bağlantı, değişiklik ve onarımları yetkili servise ya da yetkili bir elektrikçiye yaptırın; kablo bağlantısı
+yapılmadan önce ana sigorta kapatılmalıdır.</div>
+
+<!-- ================================================================== 2 -->
+<h2 id="s2">2. Uygulama ve hesabınız</h2>
+<h3>2.1 Uygulamayı bulma</h3>
+<p>Uygulama telefonunuzda Android'de <b>ev_otomasyon</b>, iPhone'da <b>Ev Otomasyon</b> adıyla görünür. Uygulamayı nereden
+yükleyeceğinizi bilmiyorsanız satıcınıza ya da Güde Teknoloji destek hattına sorun (Bölüm 19).</p>
+
+<h3>2.2 Hesap açma</h3>
+<ol>
+  <li>Giriş ekranında <q>Hesabınız yok mu?</q> yazısının yanındaki <q class="b">Kayıt Olun</q> bağlantısına dokunun. <q>Kayıt Ol</q> sayfası açılır (<q>Yeni Hesap Oluşturun</q>).</li>
+  <li><q>Ad Soyad</q>, <q>E-Posta Adresi</q>, <q>Şifre</q> ve <q>Şifre Tekrar</q> alanlarını doldurun. <q>Telefon</q> alanı isteğe bağlıdır (örnek: <var>0555 123 45 67</var>).</li>
+  <li><q>Kullanıcı Sözleşmesi'ni okudum ve kabul ediyorum.</q> kutusunu işaretleyin. Metni okumak için bu cümledeki <q>Kullanıcı Sözleşmesi</q>
+  yazısına dokunun. Kutu işaretlenmeden kayıt yapılamaz (Bölüm 18).</li>
+  <li><q class="b">Kayıt Ol ve Giriş Yap</q>a dokunun. Hesabınız hemen açılır ve oturumunuz başlar.</li>
+</ol>
+<div class="box"><b>Şifre kuralları:</b> en az 10 karakter olmalı, en çok yaklaşık 72 karakter olabilir ve yalnız boşluktan oluşmamalıdır. Şifreniz yazdığınız gibi kaydedilir:
+baştaki ya da sondaki boşluk da şifrenin parçasıdır.</div>
+
+<h3>2.3 Giriş yapma</h3>
+<p>Giriş ekranında <q>E-Posta Adresi</q> ve <q>Şifre</q> alanlarını doldurup <q class="b">Giriş Yap</q>a dokunun. Giriş e-posta adresiyle
+yapılır; bu alan telefon numarası kabul etmez. <q>VEYA</q> ayracının altında başka yollar da vardır:</p>
+<ul>
+  <li><q class="b">Google ile Devam Et</q>: Google hesabınızla giriş. Bu yol kullanılamıyorsa uygulama bir uyarı gösterir (örneğin
+  <q>Google ile giriş şu anda kullanılamıyor.</q>); o zaman e-posta ve şifrenizle girin.</li>
+  <li><q class="b">Apple ile Giriş Yap</q>: yalnız iPhone gibi Apple cihazlarında görünür.</li>
+  <li><q class="b">Telefon Numarası ile Şifresiz Giriş (SMS)</q>: bu düğme yalnız SMS ile giriş hizmeti açıksa görünür. <q>Şifresiz SMS Girişi</q>
+  penceresinde <q>Telefon Numarası</q> yazıp <q class="b">Kod Gönder</q>e dokunun, SMS ile gelen <q>Doğrulama Kodu</q>nu yazıp
+  <q class="b">Giriş Yap</q>a dokunun. Kod 5 dakika geçerlidir; kimseyle paylaşmayın. Numaranız kayıtlı değilse e-postası olmayan yeni bir hesap
+  açılır; böyle bir hesaba şifre sıfırlama kodu gönderilemez.</li>
+  <li><q class="b">E-postadaki Bağlantım Var</q>: size e-postayla gelen bir bağlantıyı kullanmak içindir (Bölüm 3).</li>
+</ul>
+<p><q>Servis ve kurulum</q> başlığı altındaki <q>Yetkili Servis Girişi (PIN)</q> servis içindir. <q>Pano Wi-Fi Kurulumu (İnternet Gerekmez)</q>
+giriş yapmadan da kullanılabilir (Bölüm 4.3). <q>Yerel Ağ Modu (ESP32 Doğrudan Erişim)</q> da giriş yapmadan açılır; ancak bu yolda panoyu
+kontrol etmek için cihaz anahtarı gerekir ve anahtar etikette yazmaz (Bölüm 13). En alttaki <q>Kullanıcı Sözleşmesi</q> ve <q>Gizlilik ve KVKK</q>
+bağlantıları yasal metinleri giriş yapmadan açar (Bölüm 18).</p>
+
+<h3>2.4 Şifrenizi unuttuysanız</h3>
+<ol>
+  <li>Giriş ekranında <q class="b">Şifremi Unuttum</q>a dokunun.</li>
+  <li><q>Şifre Yenileme</q> penceresinde <q>E-posta veya Telefon</q> alanına hesabınızın e-posta adresini (ya da kayıtlı telefon numaranızı) yazıp <q class="b">Kod Gönder</q>e dokunun.</li>
+  <li>Kod her durumda hesabınızın e-posta adresine gelir (SMS gönderilmez) ve 15 dakika geçerlidir. E-postanın konusu <q>AHBU Akıllı Ev - Şifre sıfırlama kodu</q>dur.</li>
+  <li><q>6 Haneli Kurtarma Kodu</q>, <q>Yeni Şifre</q> ve <q>Yeni Şifre Tekrar</q> alanlarını doldurup <q class="b">Şifreyi Yenile</q>ye dokunun.</li>
+  <li><q>Şifreniz yenilendi ve oturumunuz açıldı.</q> yazar. Diğer telefonlardaki oturumlarınız kapanır.</li>
+</ol>
+<p>Yeni kod için <q class="b">Kodu Tekrar Gönder</q>: en erken 60 saniye sonra, saatte en çok 5 kez. Kod 5 kez yanlış girilirse uygulama
+yaklaşık 1 saat beklemenizi ister ve kalan süreyi gösterir; süre dolunca yeni kod isteyin.</p>
+
+<h3>2.5 Parmak izi ya da Face ID ile açma</h3>
+<p>İlk girişten sonra telefonunuz destekliyorsa telefonunuza göre <q><var>Parmak İzi</var> Kullanılsın mı?</q> ya da <q><var>Face ID</var> Kullanılsın mı?</q>
+penceresi açılır: <q class="b">Evet, Etkinleştir</q> ya da <q class="b">Daha Sonra</q>. Açarsanız uygulama her açılışta ve 30 saniye ya da daha uzun
+süre arka planda kaldıktan sonra kilitlenir ve telefonunuz parmak izinizi ya da yüzünüzü ister. Doğrulama olmazsa
+<q class="b"><var>Parmak İzi</var> ile Aç</q> ile yeniden deneyin. Kilit ekranındaki
+<q class="b">Şifre ile Giriş Yap</q> onayınızdan sonra oturumu kapatır; ardından e-posta ve şifrenizle girersiniz. Bu özelliği
+<q>Cihaz &amp; Sistem Ayarları</q> → <q>Güvenlik</q> bölümündeki <q><var>Parmak İzi</var> ile Giriş</q> anahtarıyla açıp kapatırsınız; bu da doğrulama ister.</p>
+
+<h3>2.6 Oturum ve hatalı şifre kilidi</h3>
+<ul>
+  <li>Uygulamayı 30 gün boyunca hiç kullanmazsanız oturumunuz sona erer: <q>Oturumunuz sona erdi. Lütfen tekrar giriş yapın.</q></li>
+  <li>15 dakika içinde aynı hesaba aynı ağdan 10 kez (ya da hesaba toplam 50 kez) yanlış şifre girilirse giriş bir süre kilitlenir; düğmede
+  <q>Tekrar dene (<var>4:59</var>)</q> gibi bir geri sayım görünür.</li>
+  <li>Hesabınızı bir yönetici size şifre vererek açtıysa ilk girişte <q>Şifrenizi Değiştirin</q> ekranı çıkar: <q>Geçici Şifre</q> alanına size
+  verilen şifreyi, ardından yeni şifrenizi yazın.</li>
+</ul>
+
+<!-- ================================================================== 3 -->
+<h2 id="s3">3. Eviniz servis kurulumuyla geldiyse</h2>
+<p>Panonuzu yetkili servis kurduysa, servis sorumlusu kurulum sırasında panoyu sizin e-posta adresinize bağlar. Bu sırada iki e-posta alabilirsiniz:</p>
+<table>
+  <thead><tr><th style="width:30%">E-postanın konusu</th><th style="width:30%">Ne zaman gelir?</th><th>Ne yapmalısınız?</th></tr></thead>
+  <tr><td><q>AHBU Akıllı Ev - Pano kurulum onay kodu</q></td><td>Servis panoyu hesabınıza bağlarken. İçinde 6 haneli bir kod vardır; 15 dakika geçerlidir.</td>
+  <td>Kodu yalnız kurulumu yapan yetkili servis sorumlusuna söyleyin. E-postada da <q>Bu kodu yalnızca kurulumu yapan yetkili servis sorumlusuna iletiniz.</q> yazar.</td></tr>
+  <tr><td><q>AHBU Akıllı Ev - Hesabınızı etkinleştirin</q></td><td>Bu e-posta adresiyle açılmış bir hesabınız yoksa servis sizin için hesap açar. 72 saat geçerlidir.</td>
+  <td>Aşağıdaki adımlarla şifrenizi belirleyin.</td></tr>
+</table>
+<p>Kurulum onay kodu her zaman e-postayla gelir. Bu yüzden servise kullandığınız bir e-posta adresini verin.</p>
+
+<h3>3.1 Hesabınızı etkinleştirme (şifre belirleme)</h3>
+<ol>
+  <li><q>Hesabınızı etkinleştirin</q> e-postasındaki <q>Hesabımı etkinleştir</q> bağlantısını kopyalayın.</li>
+  <li>Uygulamanın giriş ekranında <q class="b">E-postadaki Bağlantım Var</q>a dokunun. <q>E-postadaki Bağlantı</q> penceresine bağlantıyı yapıştırıp <q class="b">Devam</q>a dokunun.</li>
+  <li><q>Yeni Şifre Belirle</q> ekranında <q>Yeni Şifre</q> ve <q>Yeni Şifre Tekrar</q> alanlarını doldurup <q class="b">Şifreyi Yenile</q>ye
+  dokunun. Hesabınız etkinleşir ve oturumunuz açılır.</li>
+</ol>
+<p>Bağlantıyı kullanamazsanız ya da süresi geçtiyse giriş ekranındaki <q class="b">Şifremi Unuttum</q> ile e-postanıza yeni bir kod isteyin
+(Bölüm 2.4); yeni kod gelince önceki e-postadaki kod geçersiz olur. Şifre belirlemeden giriş yapmaya çalışırsanız uygulama sizi yönlendirir:
+<q>Hesabınızı servis açtıysa ve hiç şifre belirlemediyseniz e-postadaki etkinleştirme bağlantısını kullanın ya da Şifremi unuttum ile şifre belirleyin.</q>
+Yanındaki <q class="b">Şifremi Unuttum ile Şifre Belirle</q> düğmesi aynı işi yapar.</p>
+<div class="box warn"><b>Daha önce uygulamadan kendiniz hesap açtıysanız:</b> e-posta adresiniz henüz doğrulanmamışsa (örneğin şifre sıfırlama kodunu ya da
+bağlantısını hiç kullanmadıysanız) servis panoyu bu hesaba bağladığında güvenlik için eski şifreniz geçersiz olur ve açık oturumlarınız kapanır.
+Size gelen <q>Hesabınızı etkinleştirin</q> e-postasıyla yeni şifrenizi belirleyin.</div>
+
+<h3>3.2 Kurulumdan sonra</h3>
+<ul>
+  <li><b>Evinizin adı:</b> daireniz bir siteye aitse eviniz uygulamada <var>Site adı Blok-No</var> biçiminde bir adla görünür (örneğin <var>Güneş Sitesi A-12</var>).</li>
+  <li><b>Servis personelinin erişimi:</b> kurulumu yapan servis personelinin evinize 72 saatlik süreli erişimi olur. Bu kişiyi
+  <q>Aile &amp; Misafir Yönetimi</q> sayfasında <q>SERVİS PERSONELİ</q> olarak görürsünüz; isterseniz <q class="b">Yetkiyi İptal Et</q> ile erişimini hemen kaldırabilirsiniz.</li>
+  <li><b>Teslim:</b> teknisyen kurulumu size gösterir. Android telefon kullanıyorsanız uygulama kapalıyken de alarm bildirimi almak için
+  <q>Arka planda alarm bildirimi</q>ni açın (Bölüm 9). iPhone'da uygulama kapalıyken alarm bildirimi gelmez; evde bir siren bulunması önerilir.</li>
+</ul>
+
+<!-- ================================================================== 4 -->
+<h2 id="s4">4. Panoyu kendiniz kuruyorsanız</h2>
+<p>Panoyu satın alıp kendiniz kuruyorsanız iki iş yaparsınız: panoyu uygulamada hesabınıza <b>eşlersiniz</b> ve panoyu ev <b>Wi-Fi</b>'nize bağlarsınız.
+Pano modeme kabloyla (Ethernet) bağlıysa Wi-Fi adımı gerekmez. Panonun montajını ve kablolamasını yetkili bir elektrikçiye yaptırın (Bölüm 1.5'teki uyarı).</p>
+
+<h3>4.1 Pano etiketi</h3>
+<p>Panonun üzerinde 100×50 mm boyutunda bir etiket bulunur. Etikette iki karekod ve kurulum bilgileri vardır:</p>
+<table class="keep">
+  <thead><tr><th style="width:40%">Etiketteki bilgi</th><th>Ne işe yarar?</th></tr></thead>
+  <tr><td><q>1) Daireye bağla (uygulama)</q> karekodu</td><td>Panoyu hesabınıza eşlemek için. Altında <q>Karekodu uygulamayla okutun</q> yazar.</td></tr>
+  <tr><td><q>2) Kurulum Wi-Fi'sine bağlan (telefon kamerası)</q> karekodu</td><td>Telefonunuzu panonun kurulum ağına bağlamak için. Altında <q>Telefon kamerasıyla okutun, ağa bağlanın</q> yazar.</td></tr>
+  <tr><td><q>CİHAZ SERİ NO (UID)</q></td><td>Panonun kimliği (örnek: <var>AHBU-S3-1A2B3C</var>).</td></tr>
+  <tr><td><q>KURULUM PIN</q></td><td>6 haneli kurulum PIN'i (etikette 3+3 hane olarak yazılır).</td></tr>
+  <tr><td><q>KURULUM Wi-Fi AĞI</q></td><td>Panonun kendi kurulum ağının adı (<var>AHBU-XXXXXX</var>).</td></tr>
+  <tr><td><q>AĞ PAROLASI (AP)</q></td><td>Kurulum ağının parolası.</td></tr>
+  <tr><td><q>MAC ADRESİ</q></td><td>Panonun donanım adresi.</td></tr>
+</table>
+<div class="box bad"><b>Etiket gizlidir.</b> Etikette <q>GİZLİ: Bu etiket yalnızca cihaz üzerinde/elde saklanır; fotoğrafı paylaşılmaz (kurulum parolası ve PIN içerir).</q>
+yazar. Etiketi ele geçiren biri panonuzu sahiplenmeye çalışabilir.</div>
+
+<h3>4.2 Panoyu hesabınıza eşleme</h3>
+<ol>
+  <li>Uygulamada hesap açın ya da giriş yapın (Bölüm 2).</li>
+  <li>Henüz bir eviniz yoksa <q>Hoş Geldiniz, <var>Ayşe</var>!</q> ekranında <q>Henüz kayıtlı bir daireniz yok</q> yazar; <q class="b">Karekod Tara (Katıl / Cihaz Eşle)</q>ye
+  dokunun. Panosu olmayan bir evin sahibiyseniz <q>Evinize Hoş Geldiniz!</q> kartındaki <q class="b">Karekod ile Cihaz Eşle</q>yi kullanın.</li>
+  <li><q>Karekod Tara</q> ekranında etiketteki <b>1. karekodu</b> çerçeveye hizalayın (<q>Pano kapağındaki karekodu çerçeveye hizalayın</q>).
+  Kamera çalışmıyorsa <q class="b">Kameram Çalışmıyor / Kodu Elle Gir</q>e dokunun; kamera izni istenirse verin (telefonun ayarlarında uygulamanın
+  adı Android'de <b>ev_otomasyon</b>'dur).</li>
+  <li><q>Cihaz Eşleştirme</q> penceresinde <q>Cihaz UID / Seri No</q> ve <q>Kurulum PIN Kodu (6 Hane)</q> alanlarını etiketle karşılaştırın ya da etiketten yazın.
+  <q>Ev / Daire Adı</q> alanında hazır <q>Evim</q> yazar; isterseniz değiştirin.</li>
+  <li><q class="b">Eşle &amp; Sahiplen</q>e dokunun. Ekranın altında <q>Cihaz başarıyla evinize eşleştirildi.</q> iletisi ve yanında kısa süre
+  <q class="b">Wi-Fi Kurulumu</q> kısayolu görünür. Bu kısayolla (ya da 4.3'teki diğer yollarla) panoyu ev ağınıza bağlayın.</li>
+</ol>
+<p>Karekodu okutmadan eşlemek için evi olmayan kullanıcı <q class="b">Cihaz Kodunu Elle Gir</q>i, panosu olmayan evin sahibi
+<q class="b">Kodu Elle Gir (Manuel Eşleme)</q>yi kullanır.</p>
+<ul>
+  <li><b>Yanlış PIN:</b> <q>Geçersiz kurulum PIN kodu. Kalan deneme hakkı: <var>4</var></q> yazar. 5. yanlışta pano 15 dakika kilitlenir:
+  <q>Çok fazla hatalı PIN denemesi yapıldı; bu cihaz geçici olarak kilitlendi. <var>15 dakika</var> sonra tekrar deneyin.</q> Kilit art arda ikinci kez
+  oluşursa: <q>Başka bir hesaptan hatalı denemeler olabilir; etiket sizdeyse satıcınıza/yetkili servise başvurun.</q></li>
+  <li><b>Pano başka bir eve bağlıysa:</b> <q>Bu cihaz zaten bir daireye bağlı veya işlem çakıştı. Cihaz önceki sahibine aitse devir kodu alın ya da servisle iletişime geçin.</q></li>
+  <li><b>Pano ilk hazırlığını görmemişse</b> uygulama bunu bildirir; böyle bir pano bu haliyle kullanılamaz. Satıcınıza ya da yetkili servise başvurun.</li>
+  <li><b>Hangi eve bağlanır?</b> Pano, sahibi olduğunuz ve panosu olmayan evinize bağlanır; böyle bir eviniz yoksa yeni bir ev açılır. Bu yüzden
+  eşlediğiniz ikinci bir pano ayrı bir ev olarak görünür. Başka bir evde aile üyesi ya da misafir olmanız kendi panonuzu eşlemenize engel değildir.</li>
+</ul>
+
+<h3>4.3 Panoyu ev Wi-Fi'nize bağlama</h3>
+<p>Sihirbazı açmanın yolları: eşlemeden sonraki <q class="b">Wi-Fi Kurulumu</q> kısayolu; evi olmayan kullanıcıda <q class="b">Pano Wi-Fi Kurulumu</q>;
+giriş yapmadan, giriş ekranındaki <q class="b">Pano Wi-Fi Kurulumu (İnternet Gerekmez)</q>; ayarlarda <q>Wi-Fi Şifre Değişimi &amp; Kurtarma</q> →
+<q class="b">Kurtarma Modu Sihirbazını Aç</q>. Sihirbazın başlığı <q>Wi-Fi Kurulum &amp; Kurtarma Sihirbazı</q>dır:
+<q>Modem veya şifre değiştiğinde panoyu yeniden bağlayın. İnternet ve giriş gerekmez.</q></p>
+<ol>
+  <li><q>Adım 1: Telefonu panonun kurulum ağına bağlayın</q> — Telefonunuzun Wi-Fi ayarlarını açın ve etiketteki <q>KURULUM Wi-Fi AĞI</q>na bağlanın;
+  parola olarak <q>AĞ PAROLASI (AP)</q> değerini girin. Ya da etiketteki <b>2. karekodu</b> telefonunuzun kamerasıyla okutup ağa bağlanın. Telefon
+  <b>internet yok</b> uyarısı verirse bağlantıyı koruyun.</li>
+  <li><q>Adım 2: Panoyla bağlantıyı test edin</q> — <q class="b">Bağlantıyı Test Et</q>e dokunun.</li>
+  <li><q>Adım 3: Ev Wi-Fi bilgilerini girin</q> — <q class="b">Ağları Tara</q> ile ağınızı seçin, ya da modeminizin Wi-Fi karekodunu
+  <q class="b">Modem Wi-Fi Karekodu Tara (Kamera)</q> ile okutun, ya da <q>Wi-Fi Ağ Adı (SSID)</q> ve <q>Wi-Fi Şifresi</q> alanlarını elle doldurun
+  (şifresiz ağda şifre boş kalır).</li>
+  <li><q>Adım 4: Panoya yükleyin</q> — <q class="b">Yeni Wi-Fi Şifresini Panoya Yükle</q>ye dokunun. <q>Pano ev Wi-Fi ağına bağlandı!</q> yazınca
+  <q>Telefonunuzu ev Wi-Fi ağınıza (veya mobil veriye) geri alın.</q></li>
+</ol>
+<div class="box warn">Pano yalnız <b>2,4 GHz</b> Wi-Fi ağlarına bağlanır; Wi-Fi şifresi 8–63 karakter olmalıdır. Panonun kendi kurulum ağı (AHBU-…) ev ağı olarak seçilemez.</div>
+<p><b>Mobil veri:</b> Android'de <q>Mobil veri açık kalabilir; uygulama pano ağını otomatik kullanır. Bağlantı kurulamazsa mobil veriyi kapatıp yeniden deneyin.</q>
+iPhone'da gerekirse mobil veriyi geçici olarak kapatın.</p>
+<p>Eşleme ve Wi-Fi kurulumu bitip pano buluta bağlanınca cihazlarınız ana ekranda görünür. Uygulama <q>Bu pano yazılımı buluta kendiliğinden bağlanamaz; yetkili servisten güncelleme isteyin.</q>
+derse yetkili servisle görüşün.</p>
+
+<h3>4.4 Kurulum ağı görünmüyorsa</h3>
+<p>Uygulamanın açıklaması: <q>Kurulum ağı açılıştan sonra 10 dk açık kalır, sonra 15 dk kapanır; görünmüyorsa panonun elektriğini kapatıp açın. Pano kayıtlı bir ev ağını arıyorsa kurulum ağı yaklaşık 3 dk sonra açılır.</q>
+Telefonunuz kurulum ağına bağlıyken bu süre uzar (en çok 30 dakika). Pano ev ağına bağlanınca kurulum ağını kapatır.</p>
+
+<h3>4.5 Fabrika yerleşimi</h3>
+<p>Servis tarafından ayar (şablon) yazılmamış bir pano aşağıdaki yerleşimle gelir. Kablolamayı yapan elektrikçi bu tabloyu kullanabilir;
+yerleşim servis kurulumunda değiştirilebilir. Panjurların çalışma süresi başlangıçta 20 saniyedir (ev sahibi değiştirebilir, Bölüm 14.4).</p>
+<table class="keep">
+  <thead><tr><th style="width:8%">No</th><th style="width:38%">Çıkış (röle)</th><th>Giriş (duvar butonu)</th></tr></thead>
+  <tr><td>1</td><td>Salon panjuru – yukarı</td><td>Salon panjur butonu (tek buton: yukarı / dur / aşağı)</td></tr>
+  <tr><td>2</td><td>Salon panjuru – aşağı</td><td>Boşta</td></tr>
+  <tr><td>3</td><td>Oda panjuru – yukarı</td><td>Oda panjur butonu (tek buton)</td></tr>
+  <tr><td>4</td><td>Oda panjuru – aşağı</td><td>Boşta</td></tr>
+  <tr><td>5</td><td>Salon aydınlatma</td><td>Buton 5 → salon aydınlatma (her basışta aç/kapa)</td></tr>
+  <tr><td>6</td><td>Mutfak aydınlatma</td><td>Buton 6 → mutfak aydınlatma</td></tr>
+  <tr><td>7</td><td>Koridor aydınlatma</td><td>Buton 7 → koridor aydınlatma</td></tr>
+  <tr><td>8</td><td>Balkon aydınlatma</td><td>Buton 8 → balkon aydınlatma</td></tr>
+</table>
+<div class="box warn">Duvar girişlerine yalnız <b>yaylı</b> (bırakınca geri dönen) buton bağlanır; kalıcı (mandallı) anahtar desteklenmez (Bölüm 6).</div>
+
+<!-- ================================================================== 5 -->
+<h2 id="s5">5. Günlük kullanım</h2>
+<h3>5.1 Ana ekran</h3>
+<p>Bulut modunda ana ekran yukarıdan aşağıya şöyle sıralanır:</p>
+<ol>
+  <li>Bağlantı uyarısı ve güvenlik uyarıları (alarm kartları, Bölüm 7–8).</li>
+  <li>Ev kartı: <q>Açık lamba</q>, <q>Hareketli panjur</q> ve <q>Kontrol noktası</q> sayıları.</li>
+  <li>Durum şeridi (5.2).</li>
+  <li><q>Huzur Modu / Gece Kontrolü</q> bandı (evde açık lamba varsa, 5.7).</li>
+  <li><q>Hızlı Senaryolar</q> (5.6) ve oda seçimi (5.8).</li>
+  <li><q>Güvenlik ve Eylemciler</q> (vana, siren, fan, sensörler, alarm kipi), <q>Panjurlar</q>, <q>Aydınlatma &amp; Çıkışlar</q>.</li>
+</ol>
+<p>Yerel Ağ Modu'nda ayrıca <q>Duvar Butonları &amp; Girişler</q> bölümü görünür (Bölüm 6).</p>
+
+<h3>5.2 Durum şeridi</h3>
+<table class="keep">
+  <thead><tr><th style="width:40%">Ekranda yazan</th><th>Anlamı</th></tr></thead>
+  <tr><td><q><var>3</var> Işık Açık</q> / <q>Tüm Işıklar Kapalı</q></td><td>Açık lamba sayısı.</td></tr>
+  <tr><td><q><var>1</var> Panjur Hareketli</q> / <q>Panjurlar Sabit</q></td><td>Hareket eden panjur sayısı.</td></tr>
+  <tr><td><q>Çocuk Kilidi Aktif</q></td><td>Duvar butonları kilitli (Bölüm 10.1).</td></tr>
+  <tr><td><q>Sistem Hazır</q></td><td>Bağlantı tamam.</td></tr>
+  <tr><td><q>Bağlanıyor…</q></td><td>Uygulama bağlantı kuruyor.</td></tr>
+  <tr><td><q>Pano çevrimdışı</q></td><td>Pano buluta bağlı değil; gösterilen durum son bilinen durumdur.</td></tr>
+  <tr><td><q>Canlı izleme kesik</q></td><td>Anlık durum bilgisi gelmiyor; ekrandaki durum güncel olmayabilir.</td></tr>
+  <tr><td><q>Sunucuya ulaşılamıyor</q></td><td>Telefonunuz sunucuya ulaşamıyor; internet bağlantınızı kontrol edin.</td></tr>
+</table>
+
+<h3>5.3 Lamba ve priz</h3>
+<p>Lamba ve priz kartları <q>AÇIK</q> ya da <q>KAPALI</q> durumunu gösterir; kartın üzerine dokunarak açıp kapatırsınız. Komut panoya iletilirken
+<q>Uygulanıyor…</q>, pano çevrimdışıyken <q>Çevrimdışı • son bilinen</q> yazar. Darbe çıkışının kartında <q>Darbe çıkışı</q> yazar;
+<q class="b">Tetikle</q> çıkışı kısa süre çekip bırakır. Lamba, priz ve panjurları misafir dahil herkes kullanabilir.</p>
+
+<h3>5.4 Panjur</h3>
+<p>Panjur kartında <q class="b">Aç</q>, <q class="b">Durdur</q> ve <q class="b">Kapat</q> düğmeleri ile <q>Kapalı</q>dan <q>Açık</q>a giden bir
+kaydırıcı vardır. %0 tam kapalı, %100 tam açık demektir; kaydırıcıyla bir ara konum seçerseniz panjur oraya gider (<q>Hedef %<var>60</var></q>).
+Kartta <q>Durdu</q>, <q>Açılıyor…</q> ya da <q>Kapanıyor…</q> yazar.</p>
+<p>Panjurun konumu motorun çalışma süresinden hesaplanır. Tam açma ve tam kapamada panjur, sonuna oturması için kısa bir ek süre çalışır.
+Yön değiştirirken panjur kısa bir an (yaklaşık yarım saniye) bekler; bu normaldir.</p>
+
+<h3>5.5 Komut uygulanmazsa</h3>
+<p>Uygulama, verdiğiniz komutun panoda uygulandığını birkaç saniye içinde doğrular. Doğrulama gelmezse ekrandaki değer eski haline döner ve
+<q>Cihazdan onay alınamadı. İşlem geri alındı; durum yeniden kontrol ediliyor.</q> yazar. Diğer iletiler: <q>Sunucuya ulaşılamadı. İşlem geri alındı.</q>
+ve <q>Cihaza ulaşılamadı. İşlem geri alındı.</q> Pano çevrimdışıyken komut iletilmez: <q>Cihaz çevrimdışı. Komut iletilemedi.</q></p>
+
+<h3>5.6 Hızlı senaryolar <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<table class="keep">
+  <thead><tr><th style="width:24%">Senaryo</th><th style="width:30%">Ekrandaki açıklama</th><th>Not</th></tr></thead>
+  <tr><td><q class="b">Evden Çıkıyorum</q></td><td><q>Işıkları kapat, panjurları indir</q></td><td>Hırsız alarmı varsa sonunda <q>Alarmı dışarıda kip ile kurayım mı?</q>
+  diye sorar: <q class="b">Alarmı Kur</q> ya da <q class="b">Hayır</q>.</td></tr>
+  <tr><td><q class="b">Günaydın</q></td><td><q>Panjurları aç</q></td><td></td></tr>
+  <tr><td><q class="b">İyi Geceler</q></td><td><q>Işıkları söndür, panjurları kapat</q></td><td></td></tr>
+  <tr><td><q class="b">Tüm Lambalar</q></td><td><q>Hepsini söndür</q></td><td>Bulut modunda prizleri kapatmaz (5.7).</td></tr>
+  <tr><td><q class="b">Panjurları Durdur</q></td><td><q>Anlık acil durdurma</q></td><td>Hareket eden panjurları durdurur.</td></tr>
+</table>
+<p>Hızlı senaryolar misafirlere görünmez.</p>
+
+<h3>5.7 Açık kalan lambalar: Huzur Modu <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<p>Evde açık lamba olduğu sürece (yalnız gece değil) ana ekranda <q>Huzur Modu / Gece Kontrolü</q> bandı görünür ve kaç lambanın açık kaldığını
+yazar (<q><var>3</var> lamba açık kaldı.</q>). Banttaki <q class="b">Hepsini Kapat</q> yalnız lambaları kapatır, panjurlara dokunmaz. Bu bant
+misafirlere ve pano çevrimdışıyken görünmez.</p>
+<p>Bulut modunda <q>Tüm Lambalar</q> ve <q>Hepsini Kapat</q>, <q>Priz</q> olarak işaretlenmiş çıkışları kapatmaz; gece hatırlatması da prizleri lamba saymaz.</p>
+
+<h3>5.8 Odalar</h3>
+<p>Bulut modunda evinizde en az iki oda varsa cihaz listesinin üstünde oda seçimi görünür: <q>Tümü</q> ve oda adları. Odası belirtilmemiş
+cihazlar <q>Genel</q> altında toplanır.</p>
+
+<h3>5.9 Zamanlı kurallar <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<ol>
+  <li>Üst çubuktaki <q>Cihaz Ayarları</q> simgesiyle <q>Cihaz &amp; Sistem Ayarları</q>nı açın; <q>Otomasyon</q> bölümündeki
+  <q>Zamanlı Otomasyon Kuralları</q> kartından <q>Zamanlı Kurallar</q> sayfasına geçin.</li>
+  <li><q class="b">Yeni Kural Ekle</q>ye (hiç kural yoksa <q class="b">İlk Kuralı Ekle</q>) dokunun.</li>
+  <li><q>Kanal</q> (hangi çıkış), <q>Eylem</q> (<q>Aç</q> ya da <q>Kapat</q>; darbe çıkışında <q>Tetikle</q>), <q>Saat</q>, <q>Günler</q> ve isterseniz
+  <q>Etiket (opsiyonel)</q> alanlarını doldurun.</li>
+  <li><q class="b">Ekle</q>ye dokunun (düzenlerken <q class="b">Güncelle</q>). Başka bir kuralla çakışma varsa uyarı çıkar; yine de kaydetmek için
+  <q class="b">Yine de Kaydet</q>.</li>
+</ol>
+<p>Kuralları değiştirmek ya da silmek için kuralın yanındaki üç nokta (⋮) menüsünden <q class="b">Düzenle</q> ya da <q class="b">Sil</q>i
+seçin; bir kuralı silmeden durdurmak için yanındaki anahtarı kapatın. Kurallar sunucuda çalışır;
+internet ve Bulut Modu gerekir. Yerel modda <q>Zamanlı kurallar sunucuda çalışır. Kuralları yönetmek için bulut moduna geçin.</q> yazar.
+Saatler evin saat dilimine göredir. Bir evde en çok 50 kural olabilir. Kuralı kuran kişinin evdeki erişimi biterse (örneğin evden çıkarılırsa)
+o kural çalışmaz; kuralı düzenleyip kaydederseniz sizin adınıza yeniden çalışır. Misafir kural yönetemez.</p>
+
+<h3>5.10 Gece huzur hatırlatması <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<p>Her ev için <q>Gece Huzur Bildirimi</q> başlangıçta açıktır ve saati 23:30'dur. <q>Cihaz &amp; Sistem Ayarları</q> → <q>Otomasyon</q> →
+<q>Gece Huzur Bildirimi</q> kartındaki anahtarla hatırlatmayı açıp kapatırsınız. Saati değiştirmek için kartın <q>Bildirim saati</q> satırındaki
+saate (örneğin <var>23:30</var>) dokunup yeni saati seçin (Bulut Modu). Belirlenen saatte açık
+kalan lamba ya da panjur varsa, uygulamayı açtığınızda <q>Gece hatırlatması</q> bandı çıkar: <q class="b">Hepsini kapat</q> açık lambaları kapatır ve
+açık panjurları indirir; <q class="b">Gizle</q> bandı kapatır.</p>
+<div class="box warn">Gece hatırlatması telefonunuza bildirim olarak gelmez; yalnız uygulamayı açtığınızda görünür.</div>
+
+<!-- ================================================================== 6 -->
+<h2 id="s6">6. Duvar butonları</h2>
+<p>Duvar butonları doğrudan panoya bağlıdır; internet ya da telefon gerekmez. Butonların davranışı kurulumda seçilen göreve göre değişir:</p>
+<table class="keep">
+  <thead><tr><th style="width:30%">Buton</th><th>Ne yapar?</th></tr></thead>
+  <tr><td>Lamba butonu (aç/kapa)</td><td>Her basışta lambayı açar ya da kapatır.</td></tr>
+  <tr><td>Basılı tutma butonu</td><td>Bağlı çıkış yalnız butona basılı tuttuğunuz sürece açık kalır.</td></tr>
+  <tr><td>Tek butonlu panjur</td><td>Panjur hareket ediyorsa basınca durur. Duruyorsa: tam açıksa aşağı iner, tam kapalıysa yukarı çıkar, aradaysa son gittiği yönün tersine gider.</td></tr>
+  <tr><td>Panjur yukarı / aşağı butonu</td><td>Panjuru o yöne götürür; panjur hareket ederken basarsanız durur.</td></tr>
+</table>
+<ul>
+  <li>Elektrik geldiğinde basılı kalmış bir buton bir işlem başlatmaz.</li>
+  <li><b>Çocuk kilidi</b> devredeyken butonlar yeni işlem başlatmaz; yalnız hareket eden bir panjur durdurulabilir. Engellenen basışta pano kısa bir
+  bip sesi verir (Bölüm 10.1).</li>
+  <li>Yerel Ağ Modu'nda <q>Duvar Butonları &amp; Girişler</q> (<q>Kuru kontak</q>) bölümünde girişler <q>Giriş <var>1</var></q> adıyla <q>Aktif</q> ya da
+  <q>Pasif</q> görünür. Kilitliyken <q>Kilitli: duvar anahtarları devre dışı. Uygulamadan kontrol edebilirsiniz.</q> yazar.</li>
+  <li>Hangi butonun hangi lambayı ya da panjuru yöneteceğini uygulamadan değiştiremezsiniz; bunu yetkili servis kurulum sihirbazında yapar.
+  Ev sahibi bunun için servise geçici PIN verebilir (Bölüm 12).</li>
+</ul>
+<div class="box warn"><b>Yalnız yaylı buton:</b> duvar girişlerine yalnız yaylı (bırakınca geri dönen) buton bağlanır. Kalıcı (mandallı) anahtar
+desteklenmez: anahtarın yalnız bir yöne çevrilmesi basış sayılır; lamba iki çevirişte bir değişir ve anahtarın konumu lambanın durumunu göstermez.
+Anahtar değiştirirken elektrikçinize bunu söyleyin.</div>
+
+<!-- ================================================================== 7 -->
+<h2 id="s7">7. Su, gaz ve duman alarmları</h2>
+<div class="box warn"><b>Önemli:</b> AHBU belgelendirilmiş bir yangın, gaz ya da hırsız alarm sistemi değildir ve bir alarm izleme merkezine
+bağlı değildir; alarm olduğunda sizin yerinize kimseye haber vermez. Binanızın ya da mevzuatın gerektirdiği dedektörleri ve alarm sistemlerini
+ayrıca bulundurun. Acil durumda 112'yi arayın. Ayrıntılar Kullanıcı Sözleşmesi'ndeki güvenlik uyarılarındadır (Bölüm 18).</div>
+<h3>7.1 Alarm olunca ne olur?</h3>
+<p>Su, gaz ya da duman sensörü tehlike algılayıp pano bunu doğrulayınca ilgili bölge alarma geçer:</p>
+<ul>
+  <li>Sensörün türüne uyan vanalar kapanır (su baskınında su vanası, gaz kaçağında gaz vanası). Duman alarmı vana kapatmaz.</li>
+  <li>Sirenler çalar, panonun zili öter.</li>
+  <li>Gaz alarmında kurulumda patlamaya dayanıklı (ex-proof) olarak tanımlanmış havalandırma fanı çalıştırılır; diğer fanlar alarm sürerken
+  açılamaz. Duman alarmında fanlar durur.</li>
+</ul>
+<p>Bunların hepsi panoda olur; internet gerekmez.</p>
+
+<h3>7.2 Alarm kartı</h3>
+<p>Alarm sürerken ana ekranın üstünde bir alarm kartı çıkar. Başlıkta alarmın türü ve sensörün adı yazar: <q>Su baskını: <var>Banyo</var></q> gibi.
+Diğer türler <q>Gaz kaçağı</q> ve <q>Duman algılandı</q>dır. Kartın durum etiketi <q>ALARM</q>, <q>SUSTURULDU</q> ya da <q>VANA ARIZASI</q> olur.</p>
+
+<h3>7.3 Alarmı susturma ve onaylama <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<ol>
+  <li>Sensör hâlâ tehlike algılarken (örneğin su sensörü ıslakken) kartta <q class="b">Sesi Sustur</q> düğmesi bulunur. Onay penceresi:
+  <q>Alarm susturulsun mu?</q> — <q>Siren ve pano zili susar. Vana kapalı kalır; sensör kuruyunca alarmı ayrıca onaylamanız gerekir.</q></li>
+  <li>Sensör normale dönünce düğme <q class="b">Alarmı Onayla</q> olur. Onay penceresi (<q>Alarm onaylansın mı?</q>):
+  <q>Onaylayınca alarm kalkar. Vana güvenlik için KAPALI kalır; suyu ayrıca açmanız gerekir.</q></li>
+  <li>Onaydan sonra sensör kesintisiz 10 saniye normal kalınca alarm kalkar (bu süreyi servis değiştirebilir).</li>
+  <li>Vana kapalı kalır. Sızıntıyı giderdikten sonra su vanasını açın (7.6).</li>
+</ol>
+<p>Sensör yanıt vermiyorsa alarm kalkmaz; kartta <q>Sensör yanıt vermiyor; alarm kalkamaz</q> yazar. Misafirler alarm kartındaki
+<q>Sesi Sustur</q> ve <q>Alarmı Onayla</q> düğmelerini görmez; kartta <q>Alarmı ev sahibi ya da ev üyeleri onaylayabilir.</q> yazar.
+Çalışan bir sireni ise misafir dahil herkes <q>Güvenlik ve Eylemciler</q> bölümündeki siren kartının anahtarıyla kapatabilir. Bu yalnız
+sireni o alarm için susturur; pano zili ve alarm sürer.</p>
+
+<h3>7.4 Gaz ve duman: ne yapmalı?</h3>
+<div class="box bad">
+  <p><b>Gaz kaçağı</b> (uygulamadaki yönerge): <q>Ortamı havalandırın. Elektrik anahtarlarına ve prizlere dokunmayın, ateş yakmayın. Kokuyu hâlâ alıyorsanız evden çıkın ve 187'yi arayın.</q></p>
+  <p><b>Duman</b> (uygulamadaki yönerge): <q>Evde biri varsa hemen dışarı çıkın ve 112'yi arayın. Pano su vanasını kapatmaz; havalandırma fanları durduruldu.</q></p>
+</div>
+
+<h3>7.5 Vana arızası</h3>
+<p>Kapandığını bildiren (geri bildirimli) bir vana süresi içinde kapanmazsa vana arızası oluşur; siren susturulmuş olsa bile yeniden çalar.</p>
+<div class="box bad">
+  <p><b>Su vanası:</b> <q>Vana kapanmadı! Ana vanayı elle kapatın.</q></p>
+  <p><b>Gaz vanası:</b> <q>Gaz vanası kapanmadı! Sayaçtaki ana gaz vanasını elle kapatın, ortamı havalandırın ve 187'yi arayın.</q></p>
+</div>
+
+<h3>7.6 Vanalar</h3>
+<p>Vana kartında <q class="b">Kapat</q> ve su vanasında <q class="b">Aç</q> düğmeleri bulunur. Konum yazıları: <q>Kapalı (doğrulandı)</q>,
+<q>Kapatıldı (geri bildirim yok)</q>, <q>Kapanıyor…</q>, <q>Açık (doğrulandı)</q>, <q>Açıldı (geri bildirim yok)</q>, <q>Açılıyor…</q>,
+<q>Konum bilinmiyor</q>.</p>
+<table class="keep">
+  <thead><tr><th style="width:24%">İşlem</th><th style="width:26%">Kim yapabilir?</th><th>Nasıl?</th></tr></thead>
+  <tr><td>Vanayı kapatma</td><td>Misafir dahil herkes, her zaman.</td><td><q>Vana kapatılsın mı?</q> — <q><var>Su vanası</var> kapatılacak; akış kesilir. Kapatmak her zaman güvenlidir.</q> → <q class="b">Vanayı Kapat</q>.</td></tr>
+  <tr><td>Su vanasını açma</td><td>Ev sahibi ve aile üyesi. Alarm sürmemeli, ilgili sensörler kuru olmalı.</td><td><q>Vana açılsın mı?</q> — <q><var>Su vanası</var> açılacak ve su akışı yeniden başlayacak. Sızıntının giderildiğinden emin olun.</q> → <q class="b">Vanayı Aç</q>.</td></tr>
+  <tr><td>Gaz vanasını açma</td><td>Uygulamadan hiç kimse.</td><td>Güvenlik gereği yalnız yerinde açılır. Evinizde nasıl açılacağını kurulumu yapan yetkili servise sorun.</td></tr>
+</table>
+<p>Alarm yokken bir su vanası kapalıysa (örneğin alarm kalktıktan sonra) ana ekranın üstünde <q>Su kesik</q> kartı çıkar; ev sahibi ve aile
+üyesi için <q class="b">Vanayı Aç</q> düğmesini taşır. Açma engelliyse nedeni yazar, örneğin <q>Sensör hâlâ ıslak; vana açılamaz.</q> Misafir
+bu düğmeyi görmez; vana kartında <q>Vanayı ev sahibi ya da ev üyeleri açabilir.</q> yazar.</p>
+
+<h3>7.7 Gaz alarmı sürerken</h3>
+<ul>
+  <li>Bir lamba, priz, panjur ya da hızlı senaryo komutu verirseniz önce onay istenir: <q>Gaz alarmı sürüyor.</q> — <q>Elektrik anahtarlamak kıvılcım oluşturabilir. Yine de uygulansın mı?</q>
+  Komutu yine de göndermek için <q class="b">Yine de Uygula</q>. Gaz kokusu varsa vazgeçin.</li>
+  <li>Çalışan havalandırma fanını durdurmak da onay ister: <q>Gaz alarmı sürüyor; havalandırma durdurulsun mu?</q> — <q>Fan, gaz birikmesini önlemek için çalışıyor. Ortam havalandırılmadıysa durdurmayın.</q>
+  (<q class="b">Fanı Durdur</q>). Bu düğme yalnız ev sahibi ve aile üyesine açıktır.</li>
+</ul>
+
+<h3>7.8 Siren ve sensör durumları</h3>
+<p>Siren her alarmda en çok 180 saniye (3 dakika) çalar; servis bu süreyi 10 saniye ile 30 dakika arasında ayarlayabilir. <q>Güvenlik ve Eylemciler</q>
+bölümündeki sensör durumları: su sensöründe <q>Islak</q> / <q>Kuru</q>, diğerlerinde <q>Algılandı</q> / <q>Normal</q>; ulaşılamayan sensörde
+<q>Bağlantı yok</q>. Adı verilmemiş sensörler <q>Giriş <var>3</var></q> ya da <q>Kablosuz sensör <var>1</var></q> gibi görünür.</p>
+
+<h3>7.9 Yerel kumandalar (kuruluma bağlı)</h3>
+<p>Servis, kurulumda panoya şu yerel kumandaları bağlayabilir: alarm onay butonu, vana kapatma butonu, gaz vanasını yerinde açma (gaz sıfırlama)
+girişi ve anahtarlı alarm kontağı (anahtar bir yöne çevrilince hırsız alarmı <q>Dışarıda</q> kipinde kurulur, geri çevrilince çözülür).
+Evinizde hangilerinin bulunduğunu kurulumu yapan servise sorun.</p>
+
+<!-- ================================================================== 8 -->
+<h2 id="s8">8. Hırsız alarmı <span class="tag">Ev sahibi · Aile üyesi</span></h2>
+<p>Hırsız alarmı <q>Güvenlik ve Eylemciler</q> bölümündeki alarm kipi kartından yönetilir. Kip seçenekleri <q>Kapalı</q>, <q>Evde</q> ve <q>Dışarıda</q>dır;
+kartın başlığı <q>Alarm kapalı</q>, <q>Alarm: Evde kurulu</q> ya da <q>Alarm: Dışarıda kurulu</q> olur.</p>
+<h3>8.1 Kurma</h3>
+<ol>
+  <li>Kip olarak <q class="b">Evde</q> ya da <q class="b">Dışarıda</q>yı seçin.</li>
+  <li><q>Alarm <q>Dışarıda</q> kipinde kurulsun mu?</q> sorusunda <q class="b">Alarmı Kur</q>a dokunun.</li>
+  <li>Kurunca (iki kipte de) çıkış gecikmesi başlar; kartta <q>Çıkış için <var>45</var> sn</q> gibi bir geri sayım görünür. <q>Dışarıda</q>
+  kipinde bu sürede evden çıkın.</li>
+</ol>
+<p><q>Evde</q> kipinin onay penceresinde <q>Evde kipinde yalnız çevre (kapı ve pencere) izlenir; hareket sensörleri sayılmaz.</q> yazar (servis
+kurulumda bunu sensör bazında değiştirebilir). Açık bir kapı ya da pencere varken alarm kurulmaz: <q>Kurulamaz: <var>Salon penceresi</var> açık.</q>
+Yanıt vermeyen bir sensör de kurmayı engeller: <q>Kurulamaz: <var>Mutfak kapısı</var> yanıt vermiyor.</q> Pano kurmayı reddederse <q>Alarm kurulamadı: açık kapı ya da pencere var.</q> yazar. Servisin
+<b>giriş yolu</b> olarak tanımladığı kapı (evden çıkıp girdiğiniz kapı) bunun dışındadır: çıkmak için açık olabilir. Çıkış süresi dolduğunda bu kapı
+hâlâ açıksa giriş gecikmesi başlar; kapıyı kapatıp alarmı çözün ve yeniden kurun.</p>
+<h3>8.2 Çözme, giriş gecikmesi ve tetiklenme</h3>
+<ul>
+  <li>Çözmek için: <q>Alarm çözülsün mü?</q> → <q class="b">Alarmı Çöz</q>.</li>
+  <li>Alarm kuruluyken giriş yolundaki kapıyı açtığınızda giriş gecikmesi başlar: <q>Giriş gecikmesi: <var>30</var> sn içinde alarmı çözün.</q>
+  Süre dolmadan çözün; süre dolarsa alarm çalar. Giriş yolunda olmayan sensörler alarmı hemen başlatır.</li>
+  <li>Alarm tetiklenince <q>Hırsız alarmı</q> kartı çıkar; <q>Tetikleyen:</q> satırı alarmı başlatan sensörü gösterir. Alarmı <q class="b">Alarmı Çöz</q> ile çözersiniz.</li>
+  <li>Başlangıç süreleri: çıkış gecikmesi 45 saniye, giriş gecikmesi 30 saniye (servis değiştirebilir).</li>
+</ul>
+<div class="box">Hırsız alarmını yalnız ev sahibi ve aile üyeleri kurup çözebilir. Misafirler ve servis personeli uygulamadan kuramaz ve çözemez;
+kartta <q>Alarmı ev sahibi ya da ev üyeleri çözebilir.</q> yazar. Hızlı senaryolardaki <q>Evden Çıkıyorum</q> da sonunda alarmı kurmayı önerir (Bölüm 5.6).</div>
+
+<!-- ================================================================== 9 -->
+<h2 id="s9">9. Telefona alarm bildirimi ve Alarm Geçmişi</h2>
+<h3>9.1 Arka planda alarm bildirimi (yalnız Android) <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<ol>
+  <li><q>Cihaz &amp; Sistem Ayarları</q> → <q>Güvenlik</q> → <q>Arka planda alarm bildirimi</q> anahtarını açın (Bulut Modu). Bu ayar başlangıçta kapalıdır.</li>
+  <li>Telefon bildirim izni sorarsa izin verin. İzin vermezseniz özellik açılmaz: <q>Bildirim izni verilmedi. Telefon ayarlarından bu uygulamanın bildirimlerini açın.</q></li>
+  <li>Kartta <q>Pil kısıtlaması açık: telefon servisi kapatabilir.</q> uyarısı görünürse <q class="b">Pil kısıtlamasını kaldır</q>a dokunun.
+  İzin sonradan kapatıldıysa <q>Bildirim izni kapalı: alarm telefonda görünmez.</q> uyarısı ve <q class="b">Bildirim izni ver</q> düğmesi çıkar.</li>
+</ol>
+<p>Açıkken su baskını, gaz, duman, hırsız alarmı ve vana arızası uygulama kapalıyken de telefonunuza bildirilir. Durum çubuğunda kalıcı
+<q>Arka planda alarm takibi</q> bildirimi durur (<q>Alarm takibi açık • <var>1</var> ev</q>) ve telefon biraz daha fazla pil kullanır. Bazı telefon
+markaları (Xiaomi, Huawei, Oppo vb.) arka plandaki uygulamaları kapatabilir; bunun için pil kısıtlamasını kaldırın. Kartın durum yazısı
+<q>Açık</q>, <q>Açık • bildirim izni kapalı</q>, <q>Durdu - yeniden başlatılıyor</q> ya da <q>Kapalı</q> olur.</p>
+<ul>
+  <li>Alarm bildirimleri <q>Güvenlik alarmları</q> kanalından yüksek öncelikle, sesli ve titreşimli gelir. Başlık örnekleri:
+  <q>Su baskını: <var>Banyo</var> — <var>Evim</var></q>, <q>Vana kapanmadı (arıza) — <var>Evim</var></q>, <q>Pano güvenli kipe girdi — <var>Evim</var></q>.</li>
+  <li>Alarm kalkınca bildirim silinir; aynı alarm ikinci kez bildirilmez.</li>
+  <li>Bildirime dokununca uygulama o evde açılır ve alarm kartını gösterir; alarm kapandıysa Alarm Geçmişi açılır (<q>Bu alarm kapanmış.</q>).</li>
+  <li>Oturumunuz kapanırsa takip durur ve <q>Alarm takibi durdu</q> bildirimi gelir: <q>Oturumunuz kapandı; arka plan alarm bildirimi durdu. Uygulamaya yeniden giriş yapın.</q></li>
+</ul>
+<p><b>iPhone:</b> bu kart <q>Bu özellik yalnız Android'de. Alarm, uygulamayı açtığınızda uygulama içinde görünür.</q> der.</p>
+<div class="box warn"><b>Telefon bildirimine tek başına güvenmeyin.</b> iPhone'da uygulama kapalıyken alarm bildirimi gelmez; Android'de de telefonun pil
+ayarları uygulamayı durdurabilir. Evde bir siren bulunması önerilir.</div>
+
+<h3>9.2 Alarm Geçmişi <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<p><q>Güvenlik ve Eylemciler</q> bölümündeki <q class="b">Alarm Geçmişi</q> düğmesi geçmiş alarmları listeler. Kayıt yoksa <q>Kayıtlı alarm yok</q> —
+<q>Güvenlik sensörlerinden gelen alarmlar burada listelenir.</q> yazar. Bulut Modu'nda her alarmın durumu <q>Sürüyor</q>, <q>Susturuldu</q>,
+<q>Kapandı</q>, <q>Vana arızası</q> ya da <q>Doğrulanamadı</q> olarak görünür. Yerel Ağ Modu'nda ise panonun son olayları listelenir:
+<q>Yerel bağlantı: panonun son olayları gösteriliyor (internet gerekmez).</q> Bu olaylar arasında <q>Alarm susturuldu</q>, <q>Alarm kalktı</q>,
+<q>Vana kapanmadı (arıza)</q>, <q>Vana arızası düzeldi</q>, <q>Sensör yanıt vermiyor</q>, <q>Pano güvenli kipe girdi</q>, <q>Hırsız alarmı</q>,
+<q>Hırsız alarmı çözüldü</q> ve <q>Alarm kipi değişti</q> bulunur.</p>
+
+<!-- ================================================================== 10 -->
+<h2 id="s10">10. Çocuk kilidi, elektrik kesintisi ve güvenli kip</h2>
+<h3>10.1 Çocuk kilidi</h3>
+<table class="keep">
+  <thead><tr><th style="width:26%">Konu</th><th>Açıklama</th></tr></thead>
+  <tr><td>Neyi kilitler?</td><td>Duvardaki anahtar ve butonlarla yeni bir işlem başlatılmasını engeller. Kilitliyken yalnız hareket eden bir panjur
+  duvardan durdurulabilir; engellenen basışta pano kısa bir bip sesi verir.</td></tr>
+  <tr><td>Neyi kilitlemez?</td><td>Uygulama, zamanlı kurallar ve diğer telefonlar çalışmaya devam eder.</td></tr>
+  <tr><td>Kapsamı</td><td>Evdeki tüm panoları kapsar ve panonun hafızasında kalır.</td></tr>
+  <tr><td>Elektrik kesintisinde</td><td>Elektrik kesilip gelince lambalar kapalı başlar ve kilit kaldırılana kadar duvardan açılamaz.</td></tr>
+  <tr><td>Kim değiştirebilir?</td><td>Ev sahibi, aile üyeleri ve yetkili servis. Misafir yalnız durumunu görür.</td></tr>
+</table>
+<p><b>Kilitleme:</b> <q>Cihaz &amp; Sistem Ayarları</q> → <q>Güvenlik</q> → <q>Çocuk Kilidi</q> kartındaki anahtarı açın (tek dokunuş).
+Kartta <q>Kilitli: duvar anahtarları devre dışı</q>, ana ekranın durum şeridinde <q>Çocuk Kilidi Aktif</q> yazar.</p>
+<p><b>Kaldırma:</b> aynı anahtarı kapatın. Açılan <q>Çocuk kilidi kaldırılsın mı?</q> penceresinde <q class="b"><var>Parmak İzi</var> ile doğrula</q>ya dokunun. Telefonunuzda
+parmak izi ya da yüz tanıma yoksa <q class="b">Kilidi kaldırmak için basılı tutun</q> düğmesine yaklaşık 1,2 saniye basılı tutun. Vazgeçmek için
+<q class="b">Vazgeç (kilitli kalsın)</q>.</p>
+
+<h3>10.2 Elektrik kesilip gelince</h3>
+<ul>
+  <li>Lambalar kapalı başlar; panjurlar hareket etmez ve konumları hafızadan okunur.</li>
+  <li>Çocuk kilidi devredeyse devam eder.</li>
+  <li>Alarm durumu ve kapalı vana bilgisi panoda saklanır; elektrik gelince korunur.</li>
+  <li>Hırsız alarmının kipi de saklanır; elektrik gelince çıkış gecikmesi yeniden başlamaz. Önceki alarm kaydı geri gelir ama siren yeniden çalmaz.</li>
+</ul>
+<p>Ayarlardaki <q>Donanım &amp; Motor Koruması</q> kartı da bunu anlatır: <q>Elektrik kesintisi dönüşünde lambalar kapalı kalır, panjurlar hareket etmez. Panjurlar tam açma/kapamada mekanik limite oturması için kısa bir ek süre çalışır. Çocuk kilidi açıksa elektrik gelince de sürer.</q></p>
+
+<h3>10.3 Güvenli kip</h3>
+<p>Panonun ayarları bozulursa ya da pano sürekli yeniden başlarsa pano <b>güvenli kipe</b> girer. Bu kipte vanalar açılamaz ve hırsız alarmı
+kurulamaz (çözülebilir). Sürekli yeniden başlama nedeniyle girdiyse pano 30 dakika kesintisiz çalışınca güvenli kipten kendiliğinden çıkar; diğer
+durumlarda çıkış uygulamadan yapılamaz, yalnız panonun yanında yapılabilir. Ekranda <q>Pano güvenli kipte; vanalar açılamaz. Kurulumcunuza başvurun.</q> yazar;
+Android'de <q>Pano güvenli kipe girdi — <var>Evim</var></q> bildirimi gelir. Bu durumda yetkili servisi arayın.</p>
+
+<!-- ================================================================== 11 -->
+<h2 id="s11">11. Aile ve misafirler</h2>
+<h3>11.1 Roller ve yetkiler</h3>
+<table class="roles">
+  <thead><tr><th>İşlem</th><th>Ev sahibi</th><th>Aile üyesi</th><th>Misafir</th></tr></thead>
+  <tr><td>Lamba, priz ve panjur kullanma</td><td class="y">Evet</td><td class="y">Evet</td><td class="y">Evet</td></tr>
+  <tr><td>Vanayı kapatma</td><td class="y">Evet</td><td class="y">Evet</td><td class="y">Evet</td></tr>
+  <tr><td>Hızlı senaryolar, <q>Hepsini Kapat</q></td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Su vanasını açma</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Gaz vanasını uygulamadan açma</td><td class="n">Hayır</td><td class="n">Hayır</td><td class="n">Hayır</td></tr>
+  <tr><td>Alarm kartından susturma ve onaylama</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Çalışan sireni siren kartından kapatma</td><td class="y">Evet</td><td class="y">Evet</td><td class="y">Evet</td></tr>
+  <tr><td>Hırsız alarmını kurma ve çözme</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Gaz alarmında fanı durdurma</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Alarm Geçmişi, arka planda alarm bildirimi</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Çocuk kilidini değiştirme</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır (görür)</td></tr>
+  <tr><td>Zamanlı kurallar, gece hatırlatma saati</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Sistem Doktoru, Wi-Fi kurtarma (ayarlardan)</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Bulut / yerel kip değiştirme</td><td class="y">Evet</td><td class="y">Evet</td><td class="n">Hayır</td></tr>
+  <tr><td>Kanal adı, oda, lamba/priz tipi, panjur süresi</td><td class="y">Evet</td><td class="n">Hayır</td><td class="n">Hayır</td></tr>
+  <tr><td>Aile ve misafir davet etme, kişi çıkarma</td><td class="y">Evet</td><td class="n">Hayır</td><td class="n">Hayır</td></tr>
+  <tr><td>Servis PIN'i, pano değişimi, evi devretme</td><td class="y">Evet</td><td class="n">Hayır</td><td class="n">Hayır</td></tr>
+</table>
+<p>Misafir için ayarlar salt okunurdur: <q>Misafir erişimi: ayarlar salt-okunurdur. Cihaz ayarlarını yalnızca ev sahibi ve aile üyeleri değiştirebilir.</q>
+Aile üyesi ayarlarda şunu görür: <q>Aile üyesi hesabı: panjur kalibrasyonu, davet ve servis PIN'i gibi bazı ayarları yalnızca ev sahibi değiştirebilir.</q></p>
+<p><b>Rol adları ekrandan ekrana değişir:</b> profil penceresinde <q>Ev Sahibi</q> / <q>Aile Bireyi</q> / <q>Süreli Misafir</q>; ayarlardaki
+<q>Bu dairedeki rolünüz</q> satırında <q>Ev Sahibi</q> / <q>Aile Üyesi</q> / <q>Misafir</q>; üye listesinde <q>EV SAHİBİ</q> / <q>AİLE ÜYESİ</q> /
+<q>SÜRELİ MİSAFİR</q> / <q>MİSAFİR (SÜRESİ DOLDU)</q> / <q>SERVİS PERSONELİ</q>.</p>
+
+<h3>11.2 Aile bireyi davet etme <span class="tag">Ev sahibi</span></h3>
+<ol>
+  <li>Üst çubuktaki <q>Aile &amp; Misafir Yönetimi</q>ne dokunun (dar ekranlı telefonda üç nokta (⋮) <q>Diğer işlemler</q> menüsündedir) ve <q class="b">Yeni Birey / Misafir Davet Et (QR Üret)</q>i
+  seçin. Profil penceresindeki <q class="b">Hızlı Davet Kodu / QR Üret</q> da aynı pencereyi açar.</li>
+  <li><q>Erişim Paylaş &amp; Davet Et</q> penceresinde <q>Aile Bireyi</q> sekmesini seçin.</li>
+  <li><q class="b">Aile Katılım Kodu Üret</q>e dokunun. <q>AİLE KATILIM KODU</q> ve karekodu çıkar. Kod <code>AHBU-</code> ile başlar, 24 saat geçerlidir ve bir kez kullanılır.</li>
+  <li><q class="b">Kodu Kopyala &amp; Paylaş</q> ile kodu aile bireyinize gönderin ya da karekodu onun telefonuna okutun. Vazgeçerseniz <q class="b">Bu daveti iptal et</q>.</li>
+</ol>
+
+<h3>11.3 Süreli misafir davet etme <span class="tag">Ev sahibi</span></h3>
+<ol>
+  <li>Aynı pencerede <q>Süreli Misafir</q> sekmesini seçin.</li>
+  <li><q>Erişim Süresi Seçin:</q> <q>2 Saat</q>, <q>4 Saat</q>, <q>8 Saat (Mesai)</q> (hazır seçili), <q>24 Saat (1 Gün)</q>, <q>48 Saat (2 Gün)</q> ya da <q>72 Saat (3 Gün)</q>.</li>
+  <li>İsterseniz <q>Misafir / Görevli Adı</q> yazın.</li>
+  <li><q class="b">Geçici Misafir QR'ı Üret</q>e dokunun; <q>GEÇİCİ MİSAFİR KODU</q> çıkar. Kodu misafirinize iletin.</li>
+</ol>
+<div class="box">Misafirin süresi kodun üretildiği anda başlar (misafirin katıldığı anda değil) ve bitince yetkisi kendiliğinden kapanır; en uzun süre
+72 saattir. Kod bir kez kullanılır. Bir evde aynı anda en çok 20 kullanılmamış davet olabilir.</div>
+
+<h3>11.4 Bir eve katılma <span class="tag">Aile üyesi · Misafir</span></h3>
+<ol>
+  <li>Uygulamada hesap açın ya da giriş yapın.</li>
+  <li>Eviniz yoksa <q class="b">Kod ile Bir Eve Katıl</q>a, başka bir eviniz varsa profil penceresindeki <q class="b">Başka Bir Eve Katıl (Kod İle)</q>ye
+  dokunun. Karekodu okutmak için üst çubuktaki karekod simgesini (<q>Karekod Tara (Cihaz / Eve Katıl)</q>) de kullanabilirsiniz.</li>
+  <li><q>Bir Eve Katıl</q> penceresinde <q>Davet / Devir Kodu</q> alanına kodu yazıp <q class="b">Devam</q>a dokunun.</li>
+  <li><q>Katılımı Onayla</q> ekranında <q>İşlem</q>, <q>Rolünüz</q> ve <q>Kod geçerliliği</q> satırlarını kontrol edip <q class="b">Eve Katıl</q>a dokunun.
+  <q>Eve başarıyla katıldınız!</q> yazar.</li>
+</ol>
+<p>Kodun süresi dolmuş ya da kod kullanılmışsa <q>Bu kodun süresi dolmuş veya daha önce kullanılmış. Yeni bir kod isteyin.</q> yazar.</p>
+
+<h3>11.5 Kişileri yönetme ve evden çıkarma <span class="tag">Ev sahibi</span></h3>
+<p><q>Aile &amp; Misafir Yönetimi</q> sayfasında <q>Kayıtlı Kişiler &amp; Yetkiler</q> listesi bulunur. Misafirlerin kartında kalan süre
+(<q><var>5 saat</var> kaldı</q>) ve <q>Erişim bitişi: <var>…</var></q> görünür. <q>Bekleyen davetler</q> bölümündeki her daveti
+<q class="b">İptal Et</q> ile iptal edebilirsiniz (<q>Davet iptal edilsin mi?</q>).</p>
+<p><b>Evden çıkarma:</b> kişinin kartındaki çöp kutusu simgesine (<q>Yetkiyi İptal Et</q>) dokunun. Onay penceresinin başlığı aile üyesinde <q>Üyeyi Evden Çıkar</q>,
+misafirde <q>Misafir Yetkisini İptal Et</q>tir; <q class="b">Yetkiyi İptal Et</q> ile onaylayın. Çıkarılan kişinin açık bağlantıları kesilir. Ev sahibi
+kendini ya da başka bir ev sahibini çıkaramaz. Bir evden ayrılmak isteyen aile üyesi ya da misafir, ev sahibinden yetkisini iptal etmesini ister.</p>
+
+<h3>11.6 Misafirin süresi dolunca <span class="tag">Misafir</span></h3>
+<p>Misafirin ekranında <q>Erişim süreniz doldu</q> sayfası çıkar: <q><var>Evim</var> için misafir erişiminiz (<var>…</var>) sona erdi. Cihazları göremez ve kontrol edemezsiniz. Yeniden erişim için ev sahibinden yeni bir davet isteyin.</q>
+Sayfada <q class="b">Daire listesini yenile</q> ve (başka bir eviniz varsa) <q class="b">Başka daireye geç</q> düğmeleri bulunur; üst çubukta
+<q>Erişim süresi doldu</q> yazar.</p>
+
+<h3>11.7 Evi devretme (satış, taşınma) <span class="tag">Ev sahibi</span></h3>
+<ol>
+  <li><q>Aile &amp; Misafir Yönetimi</q> → <q class="b">Daireyi Devret (Mülkiyet Transferi)</q>.</li>
+  <li><q>Yeni Sahip</q> alanına evi devralacak kişinin hesabındaki e-posta adresini ya da telefon numarasını yazın (zorunlu).</li>
+  <li><q class="b">48 Saatlik Devir Kodu &amp; QR Üret</q>e dokunun. <q>Daire Devri Onayı</q> penceresinde <q>DEVRET</q> yazıp <q class="b">Devri Başlat</q>a dokunun.</li>
+  <li><q>DEVİR KODU (48 saat geçerli)</q> yalnız bir kez gösterilir. <q>Hesap sahibine kodu güvenli bir kanaldan iletin.</q> Kodu yalnız yazdığınız hesap
+  kabul edebilir. Vazgeçerseniz <q class="b">Devir İşlemini İptal Et</q>.</li>
+</ol>
+<p><b>Devralan kişi:</b> <q>Bir Eve Katıl</q> penceresine (11.4) kodu yazar ya da karekodu okutur → <q>Daire Devrini Onayla</q> ekranında uyarıyı okur,
+<q>DEVRAL</q> yazar ve <q class="b">Daireyi Devral</q>a dokunur.</p>
+<div class="box bad"><q>DİKKAT: Onaylarsanız bu dairenin TEK SAHİBİ siz olursunuz. Mevcut ev sahibi dahil tüm sakinlerin ve misafirlerin bu evdeki erişimi kalıcı olarak kaldırılır; servis erişimleri ve davetler iptal edilir. Bu işlem geri alınamaz.</q></div>
+
+<!-- ================================================================== 12 -->
+<h2 id="s12">12. Servise geçici erişim (Servis PIN'i) <span class="tag">Ev sahibi</span></h2>
+<p>Kurulum ya da arıza için gelen yetkili servisin panonuza erişmesi için tek kullanımlık bir PIN üretirsiniz.</p>
+<ol>
+  <li><q>Cihaz &amp; Sistem Ayarları</q> → <q>Güvenlik</q> → <q>Yetkili Servis İçin Geçici PIN</q> (Bulut Modu). Kartın açıklaması:
+  <q>Kurulum veya arıza için gelen yetkili servisin panoya erişebilmesi için 2 saat süreli tek kullanımlık bir PIN üretin.</q></li>
+  <li><q class="b">6 Haneli Servis PIN'i Üret</q>e dokunun.</li>
+  <li>PIN yalnız bir kez gösterilir: <q>Bu PIN yalnızca şimdi gösterilir. Gizlerseniz ya da bu ekrandan çıkarsanız tekrar görüntüleyemezsiniz; gerekirse yeni PIN üretin.</q>
+  Yanında <q>Kalan süre</q> ve <q class="b">PIN'i gizle</q> bulunur.</li>
+  <li>PIN'i yalnız evinize gelen yetkili servise söyleyin. Teknisyen PIN'i giriş ekranındaki <q>Yetkili Servis Girişi (PIN)</q> ile kullanır.</li>
+</ol>
+<ul>
+  <li>PIN 2 saat geçerlidir, bir kez kullanılır ve yalnız bu ev içindir. Servis oturumu da 2 saat sürer.</li>
+  <li><q class="b">Yeni PIN Üret</q> (<q>Yeni PIN üretilsin mi?</q>) kullanılmamış eski PIN'i iptal eder.</li>
+  <li><q>Açık servis oturumları</q> listesinden servisin bağlı olup olmadığını görürsünüz. <q class="b">Servis erişimini kapat</q> → <q>Servis erişimi kapatılsın mı?</q>
+  → <q class="b">Erişimi Kapat</q> tüm kullanılmamış PIN'leri ve açık servis oturumlarını kapatır.</li>
+  <li>Profil penceresindeki <q>Tüm Cihazlardan Çıkış Yap</q> da ürettiğiniz servis PIN'lerini ve açık servis oturumlarını kapatır.</li>
+</ul>
+
+<!-- ================================================================== 13 -->
+<h2 id="s13">13. İnternet yokken: Yerel Ağ Modu <span class="tag">Ev sahibi · Aile üyesi</span></h2>
+<p><b>Ne zaman?</b> Ev ya da pano internete çıkamıyorsa ve telefonunuz panoyla aynı ev ağındaysa.</p>
+<h3>13.1 Geçiş</h3>
+<p>Yerel Ağ Modu'na şu yollardan biriyle geçersiniz:</p>
+<ul>
+  <li>Ana ekranın üst çubuğundaki <q>Bulut Modu (yerel moda geç)</q> seçeneği (telefonda üç nokta (⋮) <q>Diğer işlemler</q> menüsünde; Bölüm 1.4).</li>
+  <li>İnternet yokken çıkan uyarıdaki <q class="b">Yerel moda geç</q>.</li>
+  <li>Giriş ekranındaki <q class="b">Yerel Ağ Modu (ESP32 Doğrudan Erişim)</q>. Bu yolda oturum açık olmadığı için cihaz anahtarını elle
+  girmeniz gerekir; bu yüzden ilk iki yolu, yani hesabınızla oturum açıkken geçişi kullanın.</li>
+</ul>
+<p>Geçince <q>Yerel ağ moduna geçildi</q>, geri dönünce <q>Bulut moduna geçildi</q> yazar. İnternet gelince üst çubuktaki
+<q>Yerel Ağ Modu (buluta geç)</q> seçeneğiyle (telefonda üç nokta (⋮) menüsünde) Bulut Modu'na dönün; uygulama kendiliğinden dönmez.
+Misafir kip değiştiremez.</p>
+<h3>13.2 Panonun adresi ve cihaz anahtarı</h3>
+<ul>
+  <li><b>Adres:</b> yerel modda panonun ev ağındaki adresini (IP adresi, örneğin <var>192.168.1.20</var>) bir kez girmeniz gerekir: <q>Cihaz Yerel Adresi (IP)</q>
+  kartında <q>Cihaz adresi</q> alanına yazıp <q class="b">Kaydet ve Bağlan</q>a dokunun. Adres her ev için saklanır. Adresi öğrenmek için internet varken
+  <q>Sistem Doktoru</q>nu çalıştırın; adres <q>2. Ev modemi ve internet</q> satırında görünür.</li>
+  <li><b>Cihaz anahtarı:</b> ev sahibi ve aile üyesi için anahtar internet varken kendiliğinden alınır ve telefonda güvenli biçimde saklanır.
+  Bu yüzden internet varken en az bir kez yerel moda geçin; sonra internet olmadan da çalışır. Oturumu kapatırsanız anahtar telefondan silinir.
+  <q>Cihaz anahtarı etikette yazmaz; hesabınızla giriş yaparsanız (ev sahibi/üye) anahtar otomatik alınır.</q></li>
+</ul>
+<h3>13.3 Yerel modda olmayanlar</h3>
+<p>Zamanlı kurallar, davet, servis PIN'i ve kanal düzenleme Bulut Modu ister. Yerel modda ayrıca <q>Cihaz Telemetrisi</q> ve
+<q>Duvar Butonları &amp; Girişler</q> görünür.</p>
+<h3>13.4 Yerel mod hataları</h3>
+<table>
+  <thead><tr><th style="width:34%">Ekranda yazan</th><th>Ne yapmalı?</th></tr></thead>
+  <tr><td><q>Cihaza ulaşılamıyor</q> — <q>Cihaza bağlanılamıyor (<var>192.168.1.20</var>). Yerel Wi-Fi ağına bağlı olduğunuzdan emin olun.</q></td>
+  <td>Telefonunuzun ev Wi-Fi'sine bağlı olduğunu kontrol edin. Adres yanlışsa <q class="b">Adresi düzenle</q>. Pano ev ağında değilse
+  <q class="b">Wi-Fi Kurtarma Modu</q>; internet varsa <q class="b">Bulut moduna geç</q>.</td></tr>
+  <tr><td><q>Cihaz kontrol edilemiyor</q> — <q>Cihaz anahtarı gerekli. Ayarlardan cihaz anahtarını girin.</q></td>
+  <td>İnternet varken hesabınızla giriş yapıp bir kez yerel moda geçin (anahtar kendiliğinden alınır) ya da <q class="b">Ayarları aç</q>.</td></tr>
+  <tr><td><q>Çok fazla hatalı deneme yapıldı. Cihaz kısa süre sonra yeniden denenecek.</q></td>
+  <td>Pano, aynı telefondan 5 yanlış anahtar denemesinde 60 saniye bekletir. Bekleyin.</td></tr>
+</table>
+
+<!-- ================================================================== 14 -->
+<h2 id="s14">14. Ayarlar ve hesap işlemleri</h2>
+<h3>14.1 Ayarlar sayfası</h3>
+<p>Üst çubuktaki <q>Cihaz Ayarları</q> simgesi <q>Cihaz &amp; Sistem Ayarları</q> sayfasını açar. Üstte <q>Donanım &amp; Motor Koruması</q> kartı ve rolünüze göre bir bilgi kartı bulunur.</p>
+<table class="keep">
+  <thead><tr><th style="width:18%">Bölüm</th><th>Kartlar</th></tr></thead>
+  <tr><td><q>Güvenlik</q></td><td><q>Çocuk Kilidi</q> · <q><var>Parmak İzi</var> ile Giriş</q> · <q>Yetkili Servis İçin Geçici PIN</q> (ev sahibi) ·
+  <q>Arka planda alarm bildirimi</q> (ev sahibi, aile üyesi)</td></tr>
+  <tr><td><q>Görünüm</q></td><td><q>Görünüm &amp; Tema Modu</q></td></tr>
+  <tr><td><q>Cihaz</q></td><td><q>Sistem Doktoru (Teşhis &amp; Analiz)</q> · <q>Wi-Fi Şifre Değişimi &amp; Kurtarma</q> · <q>Felaket Kurtarma &amp; Pano Değişimi</q> (ev sahibi) ·
+  <q>Kanallar ve Panjurlar</q> (ev sahibi, Bulut Modu) · <q>Cihaz Yerel Adresi (IP)</q> · <q>Cihaz Telemetrisi</q> (Yerel Ağ Modu)</td></tr>
+  <tr><td><q>Otomasyon</q></td><td><q>Gece Huzur Bildirimi</q> · <q>Zamanlı Otomasyon Kuralları</q></td></tr>
+  <tr><td><q>Aile</q></td><td><q>Kullanıcı Hesabı</q> (<q class="b">Profili Yönet</q>, <q class="b">Oturumu Kapat</q>). Aile ve misafir yönetimi üst çubuktan açılır (Bölüm 11).</td></tr>
+  <tr><td><q>Hakkında</q></td><td><q>Yasal Metinler</q> (Bölüm 18)</td></tr>
+</table>
+
+<h3>14.2 Sistem Doktoru <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<p>Bir sorun olduğunda önce Sistem Doktoru'nu çalıştırın: ayarlardaki kartta <q class="b">Sistem Doktorunu Çalıştır</q> ya da üst çubukta
+<q>Sistem Doktoru (Teşhis)</q> (telefonda üç nokta (⋮) <q>Diğer işlemler</q> menüsünde).
+Üç katman denetlenir: <q>1. Bulut sunucu ve güvenli bağlantı</q>, <q>2. Ev modemi ve internet</q>, <q>3. Pano gücü ve donanım</q>. Her biri
+<q>Sağlıklı</q>, <q>Uyarı</q>, <q>Sorun var</q>, <q>Veri yok</q> ya da <q>Pano yok</q> olarak işaretlenir. Sonuçtaki <q>Ne yapmalıyım?</q> bölümünü
+okuyun; düzelttikten sonra <q class="b">Testi Yeniden Çalıştır</q>.</p>
+
+<h3>14.3 Modem ya da Wi-Fi şifresi değişince <span class="tag">Ev sahibi · Aile üyesi</span></h3>
+<p><q>Wi-Fi Şifre Değişimi &amp; Kurtarma</q> kartı: <q>Evinizdeki modem veya Wi-Fi şifresi değiştiyse panoya yeni bilgileri aktarmak için kurtarma sihirbazını başlatın.</q>
+<q class="b">Kurtarma Modu Sihirbazını Aç</q>a dokunup Bölüm 4.3'teki adımları izleyin. Sihirbaz giriş yapmadan da açılır: giriş ekranındaki
+<q>Pano Wi-Fi Kurulumu (İnternet Gerekmez)</q>.</p>
+
+<h3>14.4 Kanallar ve Panjurlar <span class="tag">Ev sahibi</span></h3>
+<p><q>Kanal adlarını ve odalarını, lamba / priz tipini ve panjur sürelerini düzenleyin.</q> → <q class="b">Kanalları Düzenle</q>. Listede
+değiştirmek istediğiniz çıkışın kalem simgesine (<q>Düzenle</q>) dokunun. Pencerede <q>Ad</q> (1–100 karakter), <q>Oda</q> (1–50 karakter), <q>Lamba</q> / <q>Priz</q> tipi ve panjurlarda <q>Panjur süresi (sn, 1-300)</q> alanları vardır;
+ardından <q class="b">Kaydet</q>. Panjur süresi, panjurun bir uçtan öbür uca gitme süresidir; konum bu süreden hesaplanır. Panjur süresi panjur
+hareket ederken ya da pano çevrimdışıyken değiştirilemez. Not: <q>Panonun bildirdiği ad değişirse yerleşim eşitlemesi adınızı güncelleyebilir.</q></p>
+
+<h3>14.5 Pano değişimi <span class="tag">Ev sahibi</span></h3>
+<p><q>Felaket Kurtarma &amp; Pano Değişimi</q>: <q>Arızalanan veya yıldırım düşen panoyu yenisiyle değiştirdiğinizde oda isimleri ve ayarlarınız yeni panoya aktarılır.</q>
+<q class="b">Pano Değişimi Sihirbazını Aç</q> → eski panoyu seçin, yeni panonun kimliğini (UID) ve 6 haneli kurulum PIN'ini girin →
+<q class="b">Eski Panonun Ayarlarını Yeni Panoya Aktar</q>. Onay penceresindeki <q class="b">Panoyu Değiştir</q> geri alınamaz. Sonuç belirsiz kalırsa işlemi körlemesine yinelemeyin; önce <q class="b">Durumu Kontrol Et</q>. Yeni pano modeme kabloyla bağlı değilse
+Wi-Fi'ye bağlayın (Bölüm 4.3).</p>
+
+<h3>14.6 Tema</h3>
+<p><q>Görünüm &amp; Tema Modu</q> kartında <q>Koyu</q>, <q>Açık</q> ya da <q>Sistem</q> seçilir (başlangıçta koyu). Aynı seçim profil penceresinde
+<q>Tema</q> altında <q>Sistem</q>, <q>Aydınlık</q> ve <q>Karanlık</q> adlarıyla da yapılabilir.</p>
+
+<h3>14.7 Profil, şifre ve çıkış</h3>
+<p>Üst çubuğun en sağındaki, adınızın baş harfini gösteren profil simgesi profil penceresini açar. Pencerede rolünüz ve <q>Tema</q> seçimi
+bulunur. <q>Hesap ve güvenlik</q> altında <q class="b">Şifreyi Değiştir</q>, <q class="b">Tüm Cihazlardan Çıkış Yap</q> ve <q class="b">Hesabımı Sil</q>,
+<q>Hakkında</q> altında <q class="b">Yasal Metinler</q> bulunur; en altta <q class="b">Oturumu Kapat</q> düğmesi vardır.</p>
+<ul>
+  <li><b>Şifre değiştirme:</b> <q>Şifre Değiştir</q> ekranında <q>Mevcut Şifre</q>, <q>Yeni Şifre</q> ve <q>Yeni Şifre Tekrar</q> → <q class="b">Şifreyi Değiştir</q>.
+  Yeni şifre eskisiyle aynı olamaz. <q>Şifreniz değiştirildi. Diğer cihazlardaki oturumlar kapatıldı.</q></li>
+  <li><b>Çıkış:</b> <q>Çıkış Yapılsın mı?</q> → <q class="b">Evet, Çıkış Yap</q>. Bu telefondaki güvenli veriler (yerel mod anahtarı dahil) temizlenir.</li>
+  <li><b>Tüm cihazlardan çıkış:</b> <q>Bu hesabın tüm cihazlardaki oturumları kapatılacak ve bu cihazdan da çıkış yapılacak. Ürettiğiniz servis PIN'leri ve açık servis oturumları da kapatılır. Devam edilsin mi?</q>
+  → <q class="b">Tümünden Çık</q>.</li>
+</ul>
+
+<h3>14.8 Hesabı silme</h3>
+<ol>
+  <li>Profil penceresinde <q class="b">Hesabımı Sil</q> → <q>Hesabı Sil</q>: <q>Hesabınız, kişisel verileriniz ve bu hesaba bağlı tüm oturumlarınız kalıcı olarak silinir. Bu işlem geri alınamaz.</q></li>
+  <li><q>Şifreniz</q> alanına şifrenizi yazın (Google, Apple ya da SMS ile açılmış hesapta boş bırakın) ve onay için <q>SİL</q> yazın.</li>
+  <li><q class="b">Hesabı Kalıcı Olarak Sil</q>e dokunun.</li>
+</ol>
+<p>Başka üyesi ya da panosu olan bir evin tek sahibiyseniz önce evi devretmeniz istenir (<q class="b">Devret</q>); bu durumda hiçbir şey silinmez.
+Silmede hesabınız anonimleştirilir; üyelikleriniz, davetleriniz, servis PIN'leriniz ve kurduğunuz zamanlı kurallar iptal edilir ve e-posta adresiniz
+yeniden kullanılabilir hale gelir.</p>
+
+<!-- ================================================================== 15 -->
+<h2 id="s15">15. Sorun giderme</h2>
+<p>Bir sorun olduğunda önce <b>Sistem Doktoru</b>'nu çalıştırın (Bölüm 14.2). Aşağıdaki tablolar sık karşılaşılan durumları konulara göre özetler.</p>
+<h3>15.1 Bağlantı</h3>
+<table>
+  <thead><tr><th style="width:44%">Belirti ya da ekranda yazan</th><th>Ne yapmalı?</th></tr></thead>
+  <tr><td><q>Pano çevrimdışı</q> — <q>Pano şu an buluta bağlı görünmüyor. Gösterilen durum son bilinen durumdur; pano elektrik ve internet bağlantısını kontrol edin.</q></td>
+  <td>Panonun elektriğini ve evin internetini kontrol edin, <q class="b">Yeniden dene</q>. Modem ya da Wi-Fi şifresi değiştiyse <q class="b">Wi-Fi Kurtarma Modu</q> (Bölüm 14.3).</td></tr>
+  <tr><td><q>Pano henüz bağlanmadı</q></td><td>Panonun elektriği açık ve ev ağına (Ethernet ya da Wi-Fi) bağlı olmalı. Wi-Fi kurulmadıysa <q class="b">Pano Wi-Fi Kurulumu</q> (Bölüm 4.3).</td></tr>
+  <tr><td><q>Çevrimdışısınız. Kayıtlı daireler gösteriliyor; durum güncel olmayabilir.</q> ya da <q>Cihazlar güncellenemedi. Son bilinen durum gösteriliyor.</q></td>
+  <td>Telefonunuzun internetini (Wi-Fi ya da mobil veri) kontrol edin, <q class="b">Yeniden dene</q>. Evdeyseniz <q class="b">Yerel moda geç</q> (Bölüm 13).</td></tr>
+  <tr><td><q>Cihazdan onay alınamadı. İşlem geri alındı; durum yeniden kontrol ediliyor.</q> ya da <q>Sunucu cihaza şu an ulaşamıyor. Lütfen tekrar deneyin.</q></td>
+  <td>Biraz bekleyip yeniden deneyin. Sürerse Sistem Doktoru'nu çalıştırın.</td></tr>
+  <tr><td><q>Pano şu anda meşgul. Biraz bekleyip tekrar deneyin.</q></td><td>Birkaç saniye bekleyip yeniden deneyin.</td></tr>
+</table>
+<h3>15.2 Kurulum ve Wi-Fi</h3>
+<table>
+  <thead><tr><th style="width:44%">Belirti ya da ekranda yazan</th><th>Ne yapmalı?</th></tr></thead>
+  <tr><td><q>Pano bulunamadı. Telefonunuzun Wi-Fi ayarlarından panonun kurulum ağına bağlı olduğunuzdan emin olup tekrar deneyin.</q></td>
+  <td>Telefonun panonun kurulum ağına (AHBU-…) bağlı olduğunu kontrol edin. Kurulum ağı görünmüyorsa Bölüm 4.4.</td></tr>
+  <tr><td><q>Pano bu isteği kabul etmedi. <var>…</var></q></td><td>Telefonu kurulum ağına etiketteki <q>AĞ PAROLASI (AP)</q> ile bağlayın ve yeniden deneyin.</td></tr>
+  <tr><td><q>Çok fazla hatalı deneme nedeniyle pano geçici olarak kilitlendi<var>…</var></q></td><td>Bir süre bekleyip yeniden deneyin.</td></tr>
+  <tr><td>Wi-Fi yüklenirken bağlantı koptu</td><td><q>Bu bir hata olmayabilir: pano bağlandığında kurulum ağını kapatır. Telefonunuzu ev Wi-Fi ağınıza alın; pano uygulamada çevrimiçi görünüyorsa kurulum tamamdır.</q></td></tr>
+  <tr><td><q>Geçersiz kurulum PIN kodu. Kalan deneme hakkı: <var>4</var></q> ya da PIN kilidi</td><td>PIN'i etiketten dikkatle okuyun. Kilitlendiyse 15 dakika bekleyin; kilit tekrarlarsa satıcınıza ya da yetkili servise başvurun.</td></tr>
+  <tr><td><q>Bu cihaz zaten bir daireye bağlı veya işlem çakıştı. <var>…</var></q></td><td>Pano önceki sahibine aitse ondan devir kodu isteyin ya da servisle görüşün.</td></tr>
+  <tr><td><q>Bu pano yazılımı buluta kendiliğinden bağlanamaz; yetkili servisten güncelleme isteyin.</q></td><td>Yetkili servisle görüşün.</td></tr>
+  <tr><td><q>Pano henüz hazırlanmamış (ilk kurulum yapılmamış). Wi-Fi bilgileri bu ekrandan gönderilemez; servis kurulum sihirbazını kullanın.</q></td><td>Satıcınıza ya da yetkili servise başvurun.</td></tr>
+</table>
+<h3>15.3 Giriş ve hesap</h3>
+<table>
+  <thead><tr><th style="width:44%">Belirti ya da ekranda yazan</th><th>Ne yapmalı?</th></tr></thead>
+  <tr><td>Girişte <q>Tekrar dene (<var>4:59</var>)</q></td><td>Çok sayıda yanlış şifre girildi. Süre dolunca yeniden deneyin; şifrenizi hatırlamıyorsanız <q class="b">Şifremi Unuttum</q>.</td></tr>
+  <tr><td>Şifre sıfırlama kodu gelmedi; ya da <q>Şifre sıfırlama e-postası şu anda gönderilemiyor. Lütfen daha sonra tekrar deneyin.</q></td>
+  <td>E-postanızın istenmeyen (spam) klasörüne de bakın; 60 saniye sonra <q class="b">Kodu Tekrar Gönder</q>. Sürerse daha sonra yeniden deneyin.</td></tr>
+  <tr><td><q>Telefonla açılmış (e-postasız) hesaplara kod gönderilemez; diğer hesaplarda kod kayıtlı e-postaya gider.</q></td><td>SMS ile açılan hesabın şifresi yoktur; girişte <q class="b">Telefon Numarası ile Şifresiz Giriş (SMS)</q>yi kullanın (Bölüm 2.3). Sorun sürerse destek hattına başvurun.</td></tr>
+  <tr><td><q>Oturumunuz sona erdi. Lütfen tekrar giriş yapın.</q></td><td>E-posta ve şifrenizle yeniden giriş yapın.</td></tr>
+  <tr><td>Parmak izi ya da Face ID kilidi açılmıyor; ya da <q>Başlatma beklenenden uzun sürüyor. Bekleyebilir ya da şifre ile giriş yapabilirsiniz.</q></td>
+  <td><q class="b">Şifre ile Giriş Yap</q>: onaydan sonra oturum kapanır; e-posta ve şifrenizle yeniden girin.</td></tr>
+  <tr><td><q>Bu kodun süresi dolmuş veya daha önce kullanılmış. Yeni bir kod isteyin.</q></td><td>Ev sahibinden yeni bir davet kodu isteyin.</td></tr>
+  <tr><td><q>Erişim süreniz doldu</q></td><td>Misafir süreniz bitti; ev sahibinden yeni bir davet isteyin.</td></tr>
+</table>
+<h3>15.4 Alarm ve bildirim</h3>
+<table>
+  <thead><tr><th style="width:44%">Belirti ya da ekranda yazan</th><th>Ne yapmalı?</th></tr></thead>
+  <tr><td>Android'de alarm bildirimi gelmiyor</td><td><q>Arka planda alarm bildirimi</q> kartındaki durumu okuyun: <q class="b">Bildirim izni ver</q>, <q class="b">Pil kısıtlamasını kaldır</q>;
+  <q>Durdu - yeniden başlatılıyor</q> yazıyorsa bekleyin. Oturumunuz açık olmalı (Bölüm 9.1).</td></tr>
+  <tr><td>iPhone'da alarm bildirimi gelmiyor; gece hatırlatması hiçbir telefonda bildirim olarak gelmiyor</td><td>Bu beklenen davranıştır: bu uyarılar uygulamayı açtığınızda görünür.</td></tr>
+  <tr><td><q>Sensör yanıt vermiyor; alarm kalkamaz</q></td><td>Alarm, sensör yeniden yanıt verene kadar kalkmaz. Yetkili servisi arayın.</td></tr>
+  <tr><td><q>Pano güvenli kipte; vanalar açılamaz. Kurulumcunuza başvurun.</q></td><td>Yetkili servisi arayın (Bölüm 10.3).</td></tr>
+  <tr><td><q>Kurulamaz: <var>Salon penceresi</var> açık.</q></td><td>Belirtilen kapı ya da pencereyi kapatıp alarmı yeniden kurun.</td></tr>
+</table>
+<h3>15.5 Duvar butonları</h3>
+<table>
+  <thead><tr><th style="width:44%">Belirti ya da ekranda yazan</th><th>Ne yapmalı?</th></tr></thead>
+  <tr><td>Buton çalışmıyor, pano bip sesi veriyor</td><td>Çocuk kilidi devrede (<q>Çocuk Kilidi Aktif</q>). Kilidi uygulamadan kaldırın (Bölüm 10.1).</td></tr>
+  <tr><td>Lamba ters çalışıyor ya da iki basışta bir değişiyor</td><td>Duvarda kalıcı (mandallı) anahtar olabilir; yaylı buton taktırın (Bölüm 6).</td></tr>
+</table>
+
+<!-- ================================================================== 16 -->
+<h2 id="s16">16. Güvenli kullanım: yapmamanız gerekenler</h2>
+<ul>
+  <li><b>Etiketin fotoğrafını paylaşmayın.</b> Etiket kurulum PIN'ini ve kurulum ağı parolasını içerir.</li>
+  <li><b>Kodları yalnız yerine verin.</b> Pano kurulum onay kodunu yalnız kurulumu yapan servis sorumlusuna; servis PIN'ini yalnız evinize gelen yetkili
+  servise söyleyin. SMS kodunu kimseyle paylaşmayın. Devir kodunu yalnız yeni sahibe, güvenli bir yoldan iletin.</li>
+  <li><b>Duvara kalıcı (mandallı) anahtar taktırmayın;</b> yalnız yaylı buton kullanın.</li>
+  <li><b>Gaz alarmında</b> elektrik anahtarına ve prize dokunmayın, ateş yakmayın; ortam havalandırılmadan gaz fanını durdurmayın.</li>
+  <li><b>Sızıntı giderilmeden</b> su vanasını açmayın.</li>
+  <li>Panonun kurulum ağını (AHBU-…) ev Wi-Fi'si olarak seçmeyin; yalnız 5 GHz yayın yapan bir ağ seçmeyin (pano yalnız 2,4 GHz'e bağlanır).</li>
+  <li>Sonucu belirsiz kalan bir pano değişimini körlemesine yinelemeyin; önce <q class="b">Durumu Kontrol Et</q>.</li>
+  <li>Panonun kapağını açmayın, kablolarına dokunmayın; bu işleri yetkili servise ya da yetkili elektrikçiye bırakın.</li>
+  <li>Alarmlar için yalnız telefon bildirimine güvenmeyin (Bölüm 9).</li>
+</ul>
+
+<!-- ================================================================== 17 -->
+<h2 id="s17">17. Kodlar ve geçerlilik süreleri</h2>
+<table>
+  <thead><tr><th style="width:24%">Kod</th><th style="width:26%">Nereden gelir?</th><th style="width:18%">Geçerlilik</th><th>Not</th></tr></thead>
+  <tr><td>Kurulum PIN'i</td><td>Pano etiketi</td><td>Etikette yazılı</td><td>5 yanlışta pano 15 dakika kilitlenir.</td></tr>
+  <tr><td>Pano kurulum onay kodu</td><td>E-posta (servis kurulumunda)</td><td>15 dakika</td><td>Yalnız kurulumu yapan servis sorumlusuna söylenir.</td></tr>
+  <tr><td>Hesap etkinleştirme</td><td>E-posta (<q>Hesabınızı etkinleştirin</q>)</td><td>72 saat</td><td>Bağlantıyla şifre belirlenir (Bölüm 3.1).</td></tr>
+  <tr><td>Şifre sıfırlama kodu</td><td>E-posta</td><td>15 dakika</td><td>5 yanlış denemeden sonra yaklaşık 1 saat beklenir; yeniden gönderme 60 saniye arayla, saatte en çok 5.</td></tr>
+  <tr><td>SMS giriş kodu</td><td>SMS</td><td>5 dakika</td><td>Kimseyle paylaşmayın. 5 yanlış denemeden sonra yaklaşık 1 saat beklenir.</td></tr>
+  <tr><td>Aile katılım kodu</td><td>Ev sahibi üretir</td><td>24 saat</td><td>Bir kez kullanılır.</td></tr>
+  <tr><td>Misafir kodu</td><td>Ev sahibi üretir</td><td>Seçilen süre (en çok 72 saat)</td><td>Süre kodun üretildiği anda başlar; bir kez kullanılır.</td></tr>
+  <tr><td>Devir kodu</td><td>Ev sahibi üretir</td><td>48 saat</td><td>Bir kez gösterilir; yalnız yazılan hesap kabul eder.</td></tr>
+  <tr><td>Servis PIN'i</td><td>Ev sahibi üretir</td><td>2 saat</td><td>Bir kez gösterilir, bir kez kullanılır; servis oturumu 2 saat sürer.</td></tr>
+  <tr><td>Kurulumu yapan servisin erişimi</td><td>Servis kurulumunda kendiliğinden</td><td>72 saat</td><td><q class="b">Yetkiyi İptal Et</q> ile erken kaldırılabilir.</td></tr>
+</table>
+
+<!-- ================================================================== 18 -->
+<h2 id="s18">18. Yasal metinler</h2>
+<p>Hizmeti kullanırken iki metin geçerlidir:</p>
+<ul>
+  <li><b>Kullanıcı Sözleşmesi</b> (tam adı: Kullanıcı Sözleşmesi ve Son Kullanıcı Lisans Koşulları): hizmetin kullanım koşulları ve güvenlik
+  uyarıları. Hesap açarken onay kutusunu işaretlemeniz istenir (Bölüm 2.2). Sözleşmeyi henüz onaylamadıysanız (örneğin hesabınız Google,
+  Apple ya da SMS ile ya da servis tarafından açıldıysa) ya da sözleşme güncellenirse, uygulama devam etmeden önce metni gösterir:
+  <q class="b">Kabul Ediyorum</q> ile devam edersiniz; kabul etmezseniz <q class="b">Çıkış Yap</q> ile çıkabilirsiniz.</li>
+  <li><b>Gizlilik Politikası ve KVKK Aydınlatma Metni:</b> kişisel verilerinizin nasıl işlendiği ve haklarınız. Bu metin bilgilendirme içindir;
+  sizden onay istenmez.</li>
+</ul>
+<p>Uygulamada bu metinlere şuralardan ulaşırsınız; metnin başında sürümü ve yürürlük tarihi yazar:</p>
+<ul>
+  <li><q>Cihaz &amp; Sistem Ayarları</q> sayfasının en altındaki <q>Hakkında</q> bölümünde <q>Yasal Metinler</q> kartı: <q>Kullanıcı Sözleşmesi</q>,
+  <q>Gizlilik Politikası ve KVKK Aydınlatma Metni</q> ve <q>Açık Kaynak Lisansları</q>.</li>
+  <li>Profil penceresinde <q>Hakkında</q> → <q class="b">Yasal Metinler</q> (Bölüm 14.7).</li>
+  <li>Giriş yapmadan: giriş ekranının en altındaki <q>Kullanıcı Sözleşmesi</q> ve <q>Gizlilik ve KVKK</q> bağlantıları.</li>
+</ul>
+<p>Web'de şu adreslerden ulaşabilirsiniz:</p>
+<ul>
+  <li><a href="https://evotomasyon.gudeteknoloji.com.tr/yasal/kullanici-sozlesmesi">https://evotomasyon.gudeteknoloji.com.tr/yasal/kullanici-sozlesmesi</a></li>
+  <li><a href="https://evotomasyon.gudeteknoloji.com.tr/yasal/gizlilik-politikasi">https://evotomasyon.gudeteknoloji.com.tr/yasal/gizlilik-politikasi</a></li>
+</ul>
+<p>Bu kitapçık kullanım bilgisi verir; hak ve yükümlülükleriniz için yukarıdaki metinler esas alınır. Kişisel verilerinizle ilgili başvuru yolları
+Gizlilik Politikası ve KVKK Aydınlatma Metni'nde yazılıdır; sorularınız için Güde Teknoloji'ye ulaşabilirsiniz (Bölüm 19).</p>
+
+<!-- ================================================================== 19 -->
+<h2 id="s19">19. Destek ve iletişim</h2>
+<table class="keep">
+  <tr><th style="width:22%">Firma</th><td>Güde Teknoloji (Zayıf Akım ve Teknoloji Sistemleri)</td></tr>
+  <tr><th>Adres</th><td>Yalı Mah. 6436 Sok. No:37/A Karşıyaka / İzmir</td></tr>
+  <tr><th>E-posta</th><td><a href="mailto:bilgi@gudeteknoloji.com">bilgi@gudeteknoloji.com</a></td></tr>
+  <tr><th>Telefon</th><td><a href="tel:+905437956044">+90 543 795 60 44</a></td></tr>
+  <tr><th>Web</th><td><a href="https://gudeteknoloji.com">gudeteknoloji.com</a></td></tr>
+</table>
+<p><b>Destek isterken hazır bulundurun:</b> evinizin uygulamadaki adı, panonun seri numarası (etiketteki <q>CİHAZ SERİ NO (UID)</q>), ekranda gördüğünüz
+ileti ve Sistem Doktoru sonucu. Etiketin fotoğrafını, şifrenizi ve kodlarınızı paylaşmayın; servis PIN'ini yalnız evinize gelen yetkili servise söyleyin.</p>
+
+<h3>19.1 Kurulum bilgileriniz</h3>
+<p>Kurulumdan sonra doldurun ve kitapçığı kolay bulacağınız bir yerde saklayın. Bu tabloya şifre, PIN ya da kod yazmayın.</p>
+<table class="keep form">
+  <tr><th style="width:44%">Evin uygulamadaki adı</th><td></td></tr>
+  <tr><th>Pano seri numarası (<q>CİHAZ SERİ NO (UID)</q>)</th><td></td></tr>
+  <tr><th>Kurulum tarihi</th><td></td></tr>
+  <tr><th>Kurulumu yapan servis ve telefonu</th><td></td></tr>
+  <tr><th>Gaz vanası yerinde nasıl açılır? (Bölüm 7.6)</th><td></td></tr>
+  <tr><th>Evdeki yerel kumandalar (Bölüm 7.9)</th><td></td></tr>
+  <tr><th>Hırsız alarmında giriş yolu kapısı (Bölüm 8.1)</th><td></td></tr>
+  <tr><th>Sirenin yeri (varsa)</th><td></td></tr>
+</table>
+
+<footer>AHBU Ev Otomasyonu · Cihaz Kullanım Kitapçığı · Güde Teknoloji · Güncelleme: 9 Ekim 2026 (uygulamanın bu tarihteki ekranlarına göre hazırlanmıştır)</footer>
+</main>
+</body>
+</html>
