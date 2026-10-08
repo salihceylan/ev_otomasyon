@@ -101,6 +101,13 @@ listedeki kodları üretir, firmware ek olarak kendi kodlarını (`CfgErr` metin
 `label` isteğe bağlı, 0..31 bayt; `device_name` olarak yazılır (boşsa `meta.name`'in ilk 31 baytı).
 
 Yanıt (200): `{"ok":true,"template_id":"…","version":4,"rev":<yeni güvenlik rev>}`.
+Pano yazmayı bekleme süresinde bitiremezse **202** `{"pending":true}`: istemci `GET /api/template`'i (≈1 sn arayla,
+≈20 sn) yoklar; id+sürüm eşleşirse başarı sayar. Ağ hatası/zaman aşımında da aynı geri okuma yapılır (yazım kaydı
+yanlışlıkla "hata" olmasın).
+Yeni (provizyonsuz) kart: `POST /api/factory/init` yalnız kurulum AP'sinden kabul edilir; Ethernet/STA'dan
+403 `factory_ap_only` (atölye zinciri: USB flash → USB `FACTORYINIT` → şablon USB ya da Ethernet).
+Yarım kalmış uygulama (elektrik kesintisi): kart güvenli kipe girer; yalnız seri `TPL` ile yeniden uygulanarak düzelir
+(LAN reddeder).
 Hata (400): `{"error":"<kod>","path":"relays[3].runtime_s"}` — `path` isteğe bağlı ama sunucu/araç her zaman doldurur.
 LAN gevşetme yasağı: 403 `local_loosen_forbidden`; kilitli bölge 409 `zone_latched`; kurulu alarm 409 `armed`;
 panjur hareket halinde 409 `busy`; NVS yetersiz 507 `storage`.

@@ -73,9 +73,10 @@ export DATABASE_URL=...   # ev otomasyonu DB'si; kapı sistemi DB'si DEĞİL
 MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js --status         # önce durumu gör
 MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js --baseline 17    # eski run_*.js ile kurulmuş şemayı 001–017 olarak işaretle (beklenen tablolar yoksa reddeder)
 MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js --dry-run        # uygulanacakları gör
-MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js                  # 018,019 (A) → 020,021 (B) → 022–026 (C) → 027–029 (B2) → 030 (H) → 031 (L: yerleşim eşitleme) → 032 (akış denetimi: yerel anahtar bekletme)
+MIGRATE_CONFIRM=<db_adı> node scripts/migrate.js                  # 018,019 (A) → 020,021 (B) → 022–026 (C) → 027–029 (B2) → 030 (H) → 031 (L: yerleşim eşitleme) → 032 (akış denetimi: yerel anahtar bekletme) → 033 → 034 (güvenlik) → 035 (site/şablon)
 node scripts/check_schema_contract.js --live                       # (DATABASE_URL ile) "Şema sözleşmesi TEMİZ" olmalı
 ```
+Sıra: **önce migration, sonra sunucu yeniden başlatma.** 035'siz veritabanında yeni kod claim'i ve çevrimiçi durumu bozmaz (daire bağı ve `tpl` yazımı atlanır).
 Boş bir veritabanında `--baseline` kullanılmaz; doğrudan `node scripts/migrate.js` 001→sonuncu uygular.
 
 **032 (yerel anahtar bekletme, akış denetimi 2026-10-04):** `devices.local_key_pending_enc` (TEXT) + `local_key_pending_at` (TIMESTAMPTZ), ikisi de NULL ve varsayılansız, COMMENT'li; `CREATE OR REPLACE FUNCTION` + `DROP/CREATE TRIGGER trg_devices_pending_key_superseded` (sahipsiz kayıtta bekleyene dokunmadan `local_key_enc` değişirse bekleyeni temizler: etiket yeniden üretimi). Tablo yeniden yazılmaz (kısa ACCESS EXCLUSIVE kilidi), idempotenttir (iki kez yeniden uygulandı, hata yok), içinde BEGIN/COMMIT yoktur (çalıştırıcı tek transaction açar).

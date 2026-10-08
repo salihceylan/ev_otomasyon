@@ -104,39 +104,39 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
   seri `TPL *`, durum/state `tpl`, `eth_*` alanları.
 
 ### Faz 1 — Sunucu (`server/`, migration 035)
-- [ ] **İP-1.1** Migration `035_sites_templates.sql`:
+- [x] **İP-1.1** Migration `035_sites_templates.sql`:
   - `sites` (ad, adres, il/ilçe, sorumlu adı, sorumlu telefonu, e-posta, blok sayısı, daire sayısı, not, oluşturan, zaman damgaları, `deleted_at`)
   - `site_flats` (site, blok, daire no, daire tipi, atanan şablon, bağlı kart `device_uuid` boş olabilir, durum: planlandı/yazıldı/kuruldu/teslim)
   - `install_templates` (site — boşsa "genel/standart" şablon —, ad, daire tipi, güncel sürüm, `deleted_at`)
   - `install_template_versions` (şablon, sürüm no, gövde JSONB, gövde SHA-256, oluşturan, zaman; **güncelleme/silme yok**)
   - `template_writes` (kart, şablon, sürüm, daire, yol usb/eth, yazan, zaman, sonuç, hata kodu)
   - İdempotent, `NOT VALID`+`VALIDATE` deseni; statik test + gerçek PG testi (55432).
-- [ ] **İP-1.2** `utils/template_schema.js`: K-Ş2 doğrulayıcısı (saf fonksiyon) — Faz 0 örnekleriyle test.
-- [ ] **İP-1.3** Rotalar (`createRouter(deps)` deseni, `requireServiceManager`):
+- [x] **İP-1.2** `utils/template_schema.js`: K-Ş2 doğrulayıcısı (saf fonksiyon) — Faz 0 örnekleriyle test.
+- [x] **İP-1.3** Rotalar (`createRouter(deps)` deseni, `requireServiceManager`):
   - `/api/v1/sites` CRUD + `/sites/:id/flats` (toplu daire üretimi: "A blok 1-24")
   - `/api/v1/templates` CRUD (site filtresi, "genel" şablonlar)
   - `/templates/:id/versions` (liste) + `/templates/:id/versions/:v` (gövde)
   - `POST /api/v1/template-writes` (yazım kaydı)
   - `PUT /sites/:id/flats/:flatId/device` (kartı daireye bağla; envanter durumu kontrolü)
-- [ ] **İP-1.4** Ethernet yazımı için yerel anahtar: envanter kartı için yetkili okuma ucu (super + service_user,
+- [x] **İP-1.4** Ethernet yazımı için yerel anahtar: envanter kartı için yetkili okuma ucu (super + service_user,
   denetim kaydı, oran sınırı). Mevcut bir uç varsa o kullanılır.
-- [ ] **İP-1.5** Claim entegrasyonu (K-Ş8): kart bir daireye bağlıysa ev adı daireden, uç nokta tohumu karta yazılmış
+- [x] **İP-1.5** Claim entegrasyonu (K-Ş8): kart bir daireye bağlıysa ev adı daireden, uç nokta tohumu karta yazılmış
   şablon sürümünden; değilse bugünkü davranış. State `tpl` alanı `devices` tablosunda saklanır.
-- [ ] **İP-1.6** Testler (`node:test`): yetki matrisi (owner/guest/servis PIN → 403), sürüm değişmezliği, yumuşak silme,
+- [x] **İP-1.6** Testler (`node:test`): yetki matrisi (owner/guest/servis PIN → 403), sürüm değişmezliği, yumuşak silme,
   doğrulama, claim tohumu; `check_schema_contract` yeşil.
 
 ### Faz 2 — Firmware v1.3.0
-- [ ] **İP-2.1** `NetLink` katmanı: Wi-Fi + Ethernet birleşik bağlantı durumu; MQTT kapısı, SNTP tetiği, kurtarma AP
+- [x] **İP-2.1** `NetLink` katmanı: Wi-Fi + Ethernet birleşik bağlantı durumu; MQTT kapısı, SNTP tetiği, kurtarma AP
   politikası, durum `ip` alanları buna geçer. Wi-Fi-only davranış birim testlerle sabitlenir (yerel `pio test` / saf mantık testi).
-- [ ] **İP-2.2** W5500 sürücüsü (IDF 4.4 `esp_eth` + `esp_netif`, pinler `WS_ETH.h`'tekiler: CS16 IRQ12 RST39 SCK15
+- [x] **İP-2.2** W5500 sürücüsü (IDF 4.4 `esp_eth` + `esp_netif`, pinler `WS_ETH.h`'tekiler: CS16 IRQ12 RST39 SCK15
   MISO14 MOSI13). Demo NTP/RTC kodu **geri gelmez**. Kablo yokken açılış süresi ve bellek ölçülür.
-- [ ] **İP-2.3** Şablon ayrıştırma + doğrulama (`TemplateApply`): ana yapılandırma + güvenlik birlikte; saf mantık
+- [x] **İP-2.3** Şablon ayrıştırma + doğrulama (`TemplateApply`): ana yapılandırma + güvenlik birlikte; saf mantık
   Faz 0 örnekleriyle test edilir.
-- [ ] **İP-2.4** Atomik uygulama: güvenlik için toplu değiştir (`SafetyManager` yeni yolu; LATCHED/ARMED iken red),
+- [x] **İP-2.4** Atomik uygulama: güvenlik için toplu değiştir (`SafetyManager` yeni yolu; LATCHED/ARMED iken red),
   ana yapılandırma kaydı, `ahbu_tpl` (id, sürüm, daire etiketi). Panjur hareket halindeyse `409 busy`. NVS bütçesi ölçülür.
-- [ ] **İP-2.5** `POST /api/template/apply` (KEYED, K-Ş4 LAN kuralı) + `GET /api/template`; durum ve MQTT state'e `tpl`.
-- [ ] **İP-2.6** Seri `TPL BEGIN/DATA/COMMIT/ABORT/STATUS` (K-Ş5), zaman aşımı, CRC; gövde günlüğe yazılmaz.
-- [ ] **İP-2.7** `pio run` yeşil; sürüm notu "DONANIMDA DENENMEDİ" bandıyla; birleşik imaj + SHA256.
+- [x] **İP-2.5** `POST /api/template/apply` (KEYED, K-Ş4 LAN kuralı) + `GET /api/template`; durum ve MQTT state'e `tpl`.
+- [x] **İP-2.6** Seri `TPL BEGIN/DATA/COMMIT/ABORT/STATUS` (K-Ş5), zaman aşımı, CRC; gövde günlüğe yazılmaz.
+- [x] **İP-2.7** `pio run` yeşil; sürüm notu "DONANIMDA DENENMEDİ" bandıyla; birleşik imaj + SHA256.
 
 ### Faz 3 — Servis yazılımı (`ev_otomasyon_servis_yazilimi/`)
 - [x] **İP-3.1** Giriş: `service_user` da girebilsin (bugün yalnız `super_user`). Envanter kaydı/durum/silme yetkileri
@@ -156,11 +156,11 @@ yalnız test kalır. Şablon seçmeyen servis sorumlusu bugünkü akışı aynen
   PDF üretimi (sayfa boyutu, metin varlığı); yetki (service_user girişi); kullanım rehberi + `test_guide_consistency` güncellemesi.
 
 ### Faz 4 — Uygulama (Flutter)
-- [ ] **İP-4.1** Bulut API: şablon listesi/sürümü, yazım kaydı (servis rolleri).
-- [ ] **İP-4.2** Yerel API: `applyTemplate`, `fetchTemplate`; durum modelinde `tpl`, `eth_*`.
-- [ ] **İP-4.3** Sihirbaz: bağlantıdan sonra "Şablon uygula (isteğe bağlı)" kartı (K-Ş10); uygulanırsa 7-9. adımlar
+- [x] **İP-4.1** Bulut API: şablon listesi/sürümü, yazım kaydı (servis rolleri).
+- [x] **İP-4.2** Yerel API: `applyTemplate`, `fetchTemplate`; durum modelinde `tpl`, `eth_*`.
+- [x] **İP-4.3** Sihirbaz: bağlantıdan sonra "Şablon uygula (isteğe bağlı)" kartı (K-Ş10); uygulanırsa 7-9. adımlar
   şablon değerleriyle gelir, yalnız test kalır; panonun yüklü şablonu cihaz bilgisinde görünür.
-- [ ] **İP-4.4** Testler: sihirbaz akışı (şablonlu/şablonsuz), LAN `local_loosen_forbidden` → kullanıcıya açıklama,
+- [x] **İP-4.4** Testler: sihirbaz akışı (şablonlu/şablonsuz), LAN `local_loosen_forbidden` → kullanıcıya açıklama,
   360x640 / 2.0x yazı düzen testi.
 
 ### Faz 5 — Dağıtım ve belgeler
