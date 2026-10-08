@@ -2686,6 +2686,11 @@ def base64_decoded_length(chunk: str) -> bytes:
     return binascii.a2b_base64(chunk.encode("ascii"))
 
 
+# Kullanıcı kararı (2026-10-08): kablolu Ethernet'ten gelen istek kartta anahtarsız yetkilidir; X-Device-Key başlığı yalnız
+# biçim gereği bu sabitle gönderilir (gizli değil; kart Ethernet yolunda doğrulamaz).
+ETH_NO_KEY = "ethernet-no-key"
+
+
 class TemplateLanWriter:
     """Ethernet/LAN üzerinden şablon yazımı (yerel anahtarla; yalnız özel/yerel IP)."""
 

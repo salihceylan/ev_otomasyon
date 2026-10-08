@@ -83,6 +83,11 @@ inline void ethApply(EthState& s, EthEvent ev, uint32_t ip = 0, uint32_t mask = 
 
 inline bool ethUp(const EthState& s) { return s.started && s.link && s.hasIp && s.ip != 0; }
 
+// İstek kablolu Ethernet'ten mi geldi? (bağlantının panodaki yerel ucu Ethernet IP'si). Kullanıcı kararı 2026-10-08:
+// Ethernet'ten gelen yerel API istekleri anahtarsız ve provizyonsuz yetkilidir, güvenlik yapılandırması gevşetmesi de
+// serbesttir (seri CLI ile eşit). Wi-Fi STA ve SoftAP'ten gelenler etkilenmez (anahtarlı kalır).
+inline bool requestViaEth(const EthState& s, uint32_t localIp) { return localIp != 0 && ethUp(s) && localIp == s.ip; }
+
 // Etkin arayüz (Wi-Fi öncelikli; IDF varsayılan rotasıyla aynı).
 inline NetIf activeIf(bool wifiUp, bool ethIsUp) {
   if (wifiUp) return NetIf::WIFI;

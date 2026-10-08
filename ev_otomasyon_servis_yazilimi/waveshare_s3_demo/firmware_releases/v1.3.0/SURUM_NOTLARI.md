@@ -15,16 +15,16 @@ Plan: `docs/superpowers/plans/2026-10-08-site-sablon-kurulum.md` Faz 2 (İP-2.1.
 | Dosya | Boyut (bayt) | Amaç |
 | --- | --- | --- |
 | `firmware_combined_0x0.bin` | 1382368 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
-| `app_0x10000_v1.3.0.bin` | 1316832 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
+| `app_0x10000_v1.3.0.bin` | 1317168 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
 | `SHA256SUMS.txt` | - | `sha256sum -c SHA256SUMS.txt` ile doğrulayın. |
 
-SHA-256 (ana imaj): `c15095c5931fd3c969be115c5a066d8151419adee986ac13400f568f029a4cea`
-SHA-256 (yalnız uygulama): `676abcaeccf03ccce6a18c7b1b79778672b5c95e042621d7eda643da2cf4c3b5`
-ELF SHA-256: `5b84b4f439d14211ed30a60cd23487c81d935270e12469ce56da0ff2563589a9`
+SHA-256 (ana imaj): `b0a13c989560d1fec8bed5f96cb8ccea6927362141ac04805b31314583a50f72`
+SHA-256 (yalnız uygulama): `1a2a4df9937b5d8266fe5b4118e3d2bdd5d43d737f62c65959d3a8feb7754e64`
+ELF SHA-256: `232f151d1c53fdfc1d2cf042c57a7134952cedb0388a0c5a9b330b297caaea15`
 
 Derleme: PlatformIO espressif32@7.1.3 (Arduino-ESP32 2.0.17 / IDF 4.4, çekirdek DEĞİŞMEDİ), esptool 4.11.0 `merge_bin`
 (`--flash_mode dio --flash_freq 80m --flash_size 16MB`, 0x0 bootloader / 0x8000 bölüm tablosu / 0xe000 boot_app0 / 0x10000 uygulama).
-Boyut: Flash 1256049 -> 1316473 bayt (+60424, %41,8 / 3 MB), statik RAM 68624 -> 69256 bayt (+632).
+Boyut: Flash 1256049 -> 1316805 bayt (+60756, %41,9 / 3 MB), statik RAM 68624 -> 69256 bayt (+632).
 
 ## Kullanıcı kararı: Ethernet kısıtlamaları kaldırıldı (2026-10-08; paket yeniden üretildi, önceki 1.3.0 özetleri `97c21d15…` / `c1a42e2d…`
 ## ve `3ce05170…` / `9b62c948…` GEÇERSİZ)
@@ -137,3 +137,16 @@ Yetmezse hiçbir şey yazılmaz (`507 storage` / `ERR storage`). Dolu bir kartta
 7. Fabrika sıfırlaması (`/api/system/reset`) sonrası `tpl` yok.
 8. Uygulama sırasında güç kesme (NVS yazımı ortası): açılışta güvenli kip + `tpl_incomplete`; seri TPL ya da LAN ile yeniden yazınca normal.
 9. Ethernet <-> Wi-Fi geçişinde MQTT yeniden bağlanıyor, DNS etkin arayüzünkine dönüyor (`[AG] Etkin arayuz ... DNS ...`).
+
+
+## Kullanıcı kararı 2: kablolu Ethernet'ten gelen istekler anahtarsız (2026-10-08; paket yeniden üretildi, önceki özet çiftleri
+## `c15095c5…` / `676abcae…` dahil hepsi GEÇERSİZ)
+
+Kullanıcı, riskler anlatıldıktan sonra açıkça seçti ("Yalnız Ethernet'te kilitsiz"):
+- Bağlantının panodaki yerel ucu **Ethernet IP'si** ise (`netlink::requestViaEth`) tüm yerel API uçları **anahtarsız ve provizyonsuz**
+  yetkilidir (KEYED ve AP_OR_KEYED); `GET /api/status` anahtar başlığı varsa doğrulamadan tam durum verir.
+- Ethernet'ten gelen `POST /api/safety/config` seri CLI ile eşittir (`VIA_CLI`): güvenlik yapılandırması gevşetmesi serbest.
+- Wi-Fi STA ve SoftAP'ten gelen istekler DEĞİŞMEDİ (anahtarlı, kilit/sayaç, LAN gevşetme yasağı).
+- **Bilinen sonuç:** pano modeme kabloyla bağlıysa, modem üzerinden gelen her istek (Wi-Fi'deki telefonlar dahil) Ethernet'ten gelmiş
+  sayılır; ev ağındaki herkes anahtarsız tam yetkilidir. Kullanıcı bunu kabul etti.
+- Test: `test_net_link` +1 (`requestViaEth`); 23 grup / 396 test, 0 hata. 0x0-0xFFFF bölgesi v1.2.1 ile aynı.

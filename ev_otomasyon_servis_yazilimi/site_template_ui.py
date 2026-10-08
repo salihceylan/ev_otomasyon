@@ -30,6 +30,7 @@ from factory_client import (
     ApiError,
     ProvisionError,
     SerialUnavailableError,
+    ETH_NO_KEY,
     TemplateLanWriter,
     TemplateSerialWriter,
     TemplateWriteError,
@@ -1383,9 +1384,9 @@ class SiteTemplateTabsMixin:
                     request.port, envelope, template_id=template_id, version=version, label=request.label,
                     expected_uid=expected_uid, progress=say, cancel=cancel)
             writer = TemplateLanWriter(request.host, transport=self._device_transport)
-            say("Kartın yerel anahtarı sunucudan alınıyor (denetim kaydı tutulur; anahtar gösterilmez)...")
-            key = self.client.fetch_local_key(request.device_uid)
-            return writer.write(key, envelope, template_id=template_id, version=version, label=request.label,
+            # Kullanıcı kararı (2026-10-08): kart kablolu Ethernet'ten gelen isteği anahtarsız ve provizyonsuz kabul eder
+            # (firmware v1.3.0, netlink::requestViaEth) -> sunucudan anahtar ALINMAZ; başlık yalnız biçim gereği gönderilir.
+            return writer.write(ETH_NO_KEY, envelope, template_id=template_id, version=version, label=request.label,
                                 device_uid=request.device_uid, progress=say)
 
         self.run_background(work, lambda outcome, err: self._on_template_written(body, request, site, flat, outcome, err))

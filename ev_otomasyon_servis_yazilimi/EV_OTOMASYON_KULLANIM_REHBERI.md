@@ -253,9 +253,10 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
 2. Pencerede yol seçin:
    - **USB (seri) — önerilen:** USB portunu seçin. Kart fiziksel olarak bağlı olduğu için güvenlik ayarlarını tamamen yazabilir.
      Daireye bağlı kart varsa araç bağlı kartın o kart olduğunu denetler; değilse hiçbir şey yazmaz.
-   - **Ethernet (LAN):** kartın IP adresi (yalnız yerel ağ) ve UID'si. Kartın yerel anahtarı sunucudan alınır (denetim kaydı tutulur)
-     ve **ekranda gösterilmez**; araç anahtarı doğrudan girilen IP'ye gönderir (IP ile UID ayrıca karşılaştırılmaz): **IP adresinin
-     doğru karta ait olduğundan emin olun.** Kart "**Önce provizyon yapın**" derse kart henüz provizyonsuzdur (sıra: flash → provizyon → şablon).
+   - **Ethernet (LAN):** kartın IP adresi (yalnız yerel ağ) ve UID'si. Kart (firmware v1.3.0) **kablolu Ethernet'ten gelen isteği
+     anahtarsız ve provizyonsuz kabul eder**: sunucudan anahtar alınmaz, kart envantere kaydedilmemiş ya da provizyonsuz olsa da yazılır.
+     IP ile UID ayrıca karşılaştırılmaz: **IP adresinin doğru karta ait olduğundan emin olun.** IP kartın Wi-Fi adresiyse kart
+     anahtar ister ve yazım reddedilir; kartın Ethernet IP'sini girin.
 3. Araç şablonu gönderir, kart **atomik** uygular (geçersizse hiçbir şey değişmez), ardından karttan **geri okur**. Sonuç
    "Karta Yazım Sonucu" alanında görünür ve sunucuya yazım kaydı işlenir (daire **Yazıldı** olur).
 4. Firmware yükleme + USB provizyon bittikten sonra **3. sekmede** **Şablon Yaz (aynı USB portu)** düğmesi aynı porttan şablon

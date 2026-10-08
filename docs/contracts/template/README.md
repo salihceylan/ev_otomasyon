@@ -112,6 +112,8 @@ uygulanarak düzelir. Bildirim: tam durumda `"tpl_incomplete":true`, `GET /api/t
 `STATUS` `Sablon:` satırında `YARIM (...)` eki. `ahbu_tpl` ayrıca `txn` (u8) tutar. Bir uygulama sürerken ikinci LAN
 isteği `503 busy`, ikinci seri `COMMIT` `ERR busy` alır.
 Hata (400): `{"error":"<kod>","path":"relays[3].runtime_s"}` — `path` isteğe bağlı ama sunucu/araç her zaman doldurur.
+**Kablolu Ethernet'ten gelen istek** (bağlantının yerel ucu panonun Ethernet IP'si) tüm yerel API'de
+**anahtarsız ve provizyonsuz** yetkilidir; `/api/safety/config` gevşetmesi de serbesttir (kullanıcı kararı 2026-10-08, ikinci).
 LAN gevşetme kuralı **kaldırıldı** (kullanıcı kararı 2026-10-08): LAN'dan her geçerli şablon uygulanır; eski
 sürümler 403 `local_loosen_forbidden` dönebilir. Kilitli bölge 409 `zone_latched`; kurulu alarm 409 `armed`;
 panjur hareket halinde 409 `busy`; NVS yetersiz 507 `storage`.

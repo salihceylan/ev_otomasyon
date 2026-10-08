@@ -897,7 +897,30 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         record = [c for c in self.api.calls if c.path == "/api/v1/template-writes"][-1]
         self.assertEqual((record.body["result"], record.body["error_code"]), ("error", "zone_latched"))
 
-    def test_ethernet_write_uses_server_local_key_without_showing_it(self):
+    def test_ethernet_write_needs_no_local_key_or_provisioning(self):
+        # Kullanıcı kararı (2026-10-08, ikinci): kablolu Ethernet'ten gelen istek kartta anahtarsız yetkilidir -> araç sunucudan
+        # anahtar İSTEMEZ (envantere kaydedilmemiş/provizyonsuz kartta da yazılabilir).
+        self.login_as("service_user")
+        self.api.routes.pop(f"GET /api/v1/admin/inventory/{base.UID}/local-key", None)
+        calls = []
+
+        def device(method, url, headers, body, timeout):
+            calls.append((method, url, dict(headers)))
+            if url.endswith("/api/template/apply"):
+                meta = json.loads(body.decode("utf-8"))["template"]["meta"]
+                return fc.TransportResponse(200, {}, json.dumps({"ok": True, "template_id": meta["template_id"],
+                                                                 "version": meta["version"], "rev": 1}).encode())
+            return fc.TransportResponse(200, {}, json.dumps({"template_id": TID, "version": 4, "label": "A-12"}).encode())
+
+        self.app._device_transport = device
+        self.dialogs.confirm = False
+        self.app.start_template_write(ok_template(), self._eth_request())
+        self.assertNotIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
+        self.assertEqual([c[1] for c in calls], ["http://192.168.1.60/api/template/apply", "http://192.168.1.60/api/template"])
+        record = [c for c in self.api.calls if c.path == "/api/v1/template-writes"][-1]
+        self.assertEqual((record.body["via"], record.body["result"]), ("eth", "ok"))
+
+    def test_ethernet_write_error_is_recorded_without_server_key(self):
         self.login_as("service_user")
         device_calls = []
 
@@ -913,10 +936,10 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         ui = __import__("site_template_ui")
         request = ui.TemplateWriteRequest("eth", label="A-12", host="192.168.1.60", device_uid=base.UID)
         self.app.start_template_write(ok_template(), request)
-        self.assertIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
-        # Kullanıcı kararı: IP<->UID ön denetimi YOK; anahtar alınır ve doğrudan yazılır.
+        self.assertNotIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
+        # Kullanıcı kararları: IP<->UID ön denetimi YOK; Ethernet'te kart anahtar istemez -> sabit biçim başlığı gider.
         self.assertNotIn("http://192.168.1.60/api/status", [c[1] for c in device_calls])
-        self.assertEqual(device_calls[0][2]["X-Device-Key"], base.FAKE_LOCAL_KEY)
+        self.assertEqual(device_calls[0][2]["X-Device-Key"], fc.ETH_NO_KEY)
         self.assertEqual(device_calls[0][1], "http://192.168.1.60/api/template/apply")
         shown = self.dialogs.all_text() + self.app.tpl_log.get("1.0", "end")
         self.assertNotIn(base.FAKE_LOCAL_KEY, shown)

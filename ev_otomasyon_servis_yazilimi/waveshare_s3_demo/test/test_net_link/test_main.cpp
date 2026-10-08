@@ -45,6 +45,24 @@ void test_without_ethernet_every_decision_equals_wifi_only_behavior() {
   }
 }
 
+// Kullanıcı kararı (2026-10-08): kablolu Ethernet'ten gelen istek anahtarsız ve provizyonsuz yetkilidir. Ölçüt: bağlantının
+// panodaki yerel ucu Ethernet IP'si mi (Wi-Fi STA / SoftAP'ten gelenler etkilenmez).
+void test_request_arrived_via_ethernet_only_when_local_ip_is_the_eth_ip() {
+  const EthState none;
+  TEST_ASSERT_FALSE(requestViaEth(none, ip(192, 168, 1, 57)));
+  TEST_ASSERT_FALSE(requestViaEth(none, 0));
+  EthState s;
+  ethApply(s, EthEvent::START);
+  ethApply(s, EthEvent::LINK_UP);
+  s.hasIp = true; s.ip = ip(192, 168, 10, 57); s.mask = ip(255, 255, 255, 0);
+  TEST_ASSERT_TRUE(requestViaEth(s, ip(192, 168, 10, 57)));    // istek Ethernet arayüzüne geldi
+  TEST_ASSERT_FALSE(requestViaEth(s, ip(192, 168, 1, 20)));    // Wi-Fi STA IP'sine geldi
+  TEST_ASSERT_FALSE(requestViaEth(s, ip(192, 168, 4, 1)));     // SoftAP'e geldi
+  TEST_ASSERT_FALSE(requestViaEth(s, 0));
+  ethApply(s, EthEvent::LINK_DOWN);                              // kablo çekildi: artık Ethernet yolu yok
+  TEST_ASSERT_FALSE(requestViaEth(s, ip(192, 168, 10, 57)));
+}
+
 void test_cable_not_plugged_driver_started_is_not_up() {
   EthState s;
   ethApply(s, EthEvent::START);
@@ -165,6 +183,7 @@ void test_dns_applied_on_switch_or_new_lease_only_when_known() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_without_ethernet_every_decision_equals_wifi_only_behavior);
+  RUN_TEST(test_request_arrived_via_ethernet_only_when_local_ip_is_the_eth_ip);
   RUN_TEST(test_cable_not_plugged_driver_started_is_not_up);
   RUN_TEST(test_link_then_dhcp_brings_ethernet_up_and_cable_pull_takes_it_down);
   RUN_TEST(test_out_of_order_ip_before_link_and_zero_ip);

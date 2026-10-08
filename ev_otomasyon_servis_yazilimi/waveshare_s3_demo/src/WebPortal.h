@@ -62,6 +62,11 @@ private:
   // -> POST /api/wifi/connect icin global hiz siniri (dakikada 6) yalniz bu durumda uygulanir.
   bool _viaApOrigin;
 
+  // Bu istek kablolu Ethernet'ten mi geldi? (dispatch her istekte kurar). Kullanıcı kararı 2026-10-08: Ethernet'ten gelen
+  // istek anahtarsız ve provizyonsuz yetkilidir; güvenlik yapılandırması gevşetmesi de serbesttir (seri CLI ile eşit).
+  bool _viaEthernet;
+  bool requestViaEthernet();
+
   void route(const char* uri, HTTPMethod method, Handler handler, Access access);
   void dispatch(Handler handler, Access access);
   void setupRoutes();

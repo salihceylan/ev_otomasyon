@@ -382,7 +382,7 @@ WebPortal& WebPortal::instance() {
   return inst;
 }
 
-WebPortal::WebPortal() : _server(80), _taskHandle(nullptr), _scan(), _viaApOrigin(false) {}
+WebPortal::WebPortal() : _server(80), _taskHandle(nullptr), _scan(), _viaApOrigin(false), _viaEthernet(false) {}
 
 void WebPortal::begin() {
   if (_taskHandle != nullptr) return;
@@ -594,9 +594,17 @@ void WebPortal::route(const char* uri, HTTPMethod method, Handler handler, Acces
 void WebPortal::dispatch(Handler handler, Access access) {
   if (!guardRequest()) return;
   _viaApOrigin = false;   // her istekte sifirlanir; yalniz authorizeApOrKeyed() anahtarsiz AP yolunda kurar
-  if (access == Access::KEYED && !authorize()) return;
-  if (access == Access::AP_OR_KEYED && !authorizeApOrKeyed()) return;
+  _viaEthernet = requestViaEthernet();
+  // Kullanici karari (2026-10-08): kablolu Ethernet'ten gelen istek anahtarsiz ve provizyonsuz yetkilidir.
+  if (!_viaEthernet) {
+    if (access == Access::KEYED && !authorize()) return;
+    if (access == Access::AP_OR_KEYED && !authorizeApOrKeyed()) return;
+  }
   (this->*handler)();
+}
+
+bool WebPortal::requestViaEthernet() {
+  return netlink::requestViaEth(NetLink::eth(), (uint32_t)_server.client().localIP());
 }
 
 void WebPortal::setupRoutes() {
@@ -894,7 +902,12 @@ void WebPortal::handleNotFound() {
 void WebPortal::handleApiStatus() {
   ConfigManager& cm = ConfigManager::instance();
   const bool provisioned = cm.hasLocalKey();
-  // Anahtar basligi gonderilmediyse KISITLI ozet; gonderildiyse dogrulanip tam durum
+  // Anahtar basligi gonderilmediyse KISITLI ozet; gonderildiyse dogrulanip tam durum. Kablolu Ethernet'ten gelen istekte
+  // baslik (degeri ne olursa olsun) tam durumu ister; anahtar dogrulanmaz (kullanici karari 2026-10-08).
+  if (_viaEthernet && _server.hasHeader("X-Device-Key")) {
+    sendFullStatus();
+    return;
+  }
   if (provisioned && _server.hasHeader("X-Device-Key")) {
     if (!authorize()) return;
     sendFullStatus();
@@ -2135,7 +2148,9 @@ void WebPortal::handleApiSafetyConfigPost() {
     sendJson(400, String("{\"error\":\"cfg_invalid\",\"detail\":\"") + why + "\"}");
     return;
   }
-  const safety::CfgOutcome o = safety::SafetyManager::instance().submitEdit(*e, hasBase, baseRev, safety::VIA_LAN);
+  // Kablolu Ethernet'ten gelen istek seri CLI ile esit sayilir (gevsetme serbest; kullanici karari 2026-10-08).
+  const safety::CfgOutcome o =
+      safety::SafetyManager::instance().submitEdit(*e, hasBase, baseRev, _viaEthernet ? safety::VIA_CLI : safety::VIA_LAN);
   free(e);
   char crc[9];
   snprintf(crc, sizeof(crc), "%08lx", (unsigned long)o.crc);

@@ -798,6 +798,8 @@ sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas al�
   `"eth_ip"`, `"net_if":"wifi"|"eth"|"none"`. Mevcut alanlar değişmez; `ip` etkin arayüzün IP'sidir.
 - Seri: `TPL BEGIN|DATA|COMMIT|ABORT|STATUS`; `STATUS` çıktısına yeni satırlar `Ethernet: <bagli|yok> <ip>` ve
   `Sablon: <id|-> v<ver>` eklenir, eski satırlar aynen kalır (fabrika aracı ayrıştırması).
+- **Kablolu Ethernet'ten gelen yerel API isteği anahtarsız ve provizyonsuz yetkilidir** (KEYED + AP_OR_KEYED; `safety/config`
+  gevşetmesi serbest, seri CLI ile eşit). Wi-Fi STA / SoftAP'ten gelenler anahtarlı kalır. Kullanıcı kararı 2026-10-08.
 - Ethernet bağlıyken kurtarma AP'si kendiliğinden açılmaz; MQTT ve SNTP Wi-Fi ya da Ethernet'ten çalışır; UID Wi-Fi MAC'ten.
 
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)

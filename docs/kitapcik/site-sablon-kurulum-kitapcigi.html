@@ -46,7 +46,7 @@
   <p><b>Kimler için:</b> servis sorumlusu ve süper kullanıcı (ofis), atölye personeli (kart hazırlama), saha ekibi (montaj ve kablolama).</p>
   <div class="flow">
     <div><b>1 · Ofis</b>Site açılır, daireler üretilir, daire tipi şablonları hazırlanır.</div>
-    <div><b>2 · Atölye</b>Firmware + provizyon (USB) → şablon (USB ya da Ethernet) → etiket + kablolama şeması (PDF).</div>
+    <div><b>2 · Atölye</b>Firmware (USB) → şablon (USB ya da Ethernet; Ethernet'te provizyon gerekmez) → etiket + kablolama şeması (PDF).</div>
     <div><b>3 · Saha</b>Pano takılır, şemaya göre kablolanır, duvar butonlarıyla denenir. İnternet gerekmez.</div>
     <div><b>4 · Teslim</b>Servis sorumlusu panoyu eve bağlar; ayarlar panodan gelir, yalnız kontrol kalır.</div>
   </div>
@@ -110,12 +110,12 @@
 <p>Her kart için aynı sıra izlenir. Firmware USB'den yüklenir; provizyon ve şablon USB'den ya da Ethernet'ten yapılabilir.</p>
 <ol>
   <li><b>Kartı kaydet ve etiket al</b> (yalnız süper kullanıcı): <span class="btn">2. Karekod Üret &amp; Etiket Bas</span> sekmesinde karttan MAC'i okuyun, <span class="btn">SUNUCU ENVANTERİNE KAYDET &amp; KAREKOD ÜRET</span>.</li>
-  <li><b>Firmware yükle ve provizyon:</b> <span class="btn">1. Firmware Yükleyici</span> sekmesinde USB portunu seçip v1.3.0'ı yükleyin; yükleme bitince araç aynı porttan provizyonu (FACTORYINIT) kendisi yapar. Kart Ethernet'e bağlıysa provizyonu <span class="btn">3. sekme</span> → <span class="btn">🌐 Ethernet ile Provizyonla</span> ile de yapabilirsiniz (kartın IP'sini girin). <b>Dikkat:</b> provizyonsuz kartı aynı ağdaki başka bir bilgisayar da sahiplenebilir; Ethernet'e bağladıktan sonra provizyonu hemen yapın, mümkünse ayrı bir atölye ağı kullanın.</li>
+  <li><b>Firmware yükle ve provizyon:</b> <span class="btn">1. Firmware Yükleyici</span> sekmesinde USB portunu seçip v1.3.0'ı yükleyin; yükleme bitince araç aynı porttan provizyonu (FACTORYINIT) kendisi yapar. Kart Ethernet'e bağlı olacaksa provizyon <b>gerekmez</b>: kart kablodan gelen isteği anahtarsız kabul eder ve şablon doğrudan Ethernet'ten yazılır.</li>
   <li><b>Kartı daireye bağla:</b> <span class="btn">🏢 4. Siteler</span> → daireyi seçin → <span class="btn">Kart Bağla</span> → kartın UID'si (<code>AHBU-S3-XXXXXX</code>, etikette yazar). Yalnız stoktaki kartlar bağlanabilir.</li>
   <li><b>Şablonu yaz:</b> daireyi seçip <span class="btn">Karta Yaz</span> (ya da provizyon sekmesindeki <span class="btn">📐 Şablon Yaz (aynı USB portu)</span>). Yol seçin:
     <ul>
       <li><b>USB (önerilen):</b> port seçilir. Araç önce takılı kartın o daireye bağlı kart olduğunu denetler; değilse hiçbir şey yazmaz.</li>
-      <li><b>Ethernet:</b> kart atölye ağına kabloyla bağlanır; kartın IP adresi ve UID'si girilir. Araç kartın anahtarını sunucudan alır (ekranda gösterilmez, kayıt tutulur) ve şablonu o IP'ye gönderir. <b>IP'nin doğru karta ait olduğundan emin olun</b>; araç bunu ayrıca denetlemez.</li>
+      <li><b>Ethernet:</b> kart atölye ağına kabloyla bağlanır; kartın IP adresi ve UID'si girilir. Anahtar ya da provizyon gerekmez; araç şablonu doğrudan o IP'ye gönderir. <b>Kartın Ethernet IP'sini girin ve doğru karta ait olduğundan emin olun</b>; araç bunu ayrıca denetlemez.</li>
     </ul>
     Kart şablonu tek parça uygular: geçersizse hiçbir şey değişmez. Sonra araç karttan geri okur ve sonucu sunucuya işler; daire <b>Yazıldı</b> olur.</li>
   <li><b>Etiket:</b> şablon bu oturumda kaydedilen karta yazıldıysa etikete daire satırı eklenir (ör. <code>A Blok / Daire 12 · 3+1 · Şablon v4</code>). Etiketi yeniden kaydedip yazdırın, kartın üstüne yapıştırın.</li>
