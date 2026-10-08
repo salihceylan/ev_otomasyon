@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../../common/confirm_dialogs.dart' show showSimpleConfirm;
 import '../../../theme/tokens.dart';
 import '../../../widgets/settings/accent_button.dart';
 import '../device_connection_panel.dart';
@@ -47,6 +50,7 @@ class Step6Cloud extends StatelessWidget {
             // "Panoya Bağlan" burada İKİNCİL (çerçeveli): adım pano bağlantısını kendisi kurar ("Buluta Bağla ve Bekle"); elle
             // adres/anahtar yolu yardımcıdır. Eskiden iki gradyan birincil yan yana duruyordu ve hangisinin basılacağı belli değildi.
             DeviceConnectionPanel(controller: c, primaryConnect: false),
+            if (cloud.keyMismatch) _keyMismatchCard(context, cloud),
             SetupCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -55,6 +59,14 @@ class Step6Cloud extends StatelessWidget {
                     icon: Icons.cloud_upload_rounded,
                     text: 'Pano bulut sunucusuna bağlanınca sunucuda "çevrimiçi" görünür. Bu adım bunu doğrular.',
                   ),
+                  // Elle girilen anahtar sunucu kaydıyla doğrulanamadı (servis_kurulum-5).
+                  if (c.ctx.manualKeyUnverified)
+                    const SetupInfoRow(
+                      key: Key('cloud_manual_key_unverified'),
+                      icon: Icons.warning_amber_rounded,
+                      color: SetupColors.warn,
+                      text: 'Elle girilen cihaz anahtarı sunucudaki kayıtla doğrulanamadı; yanlışsa pano buluta bağlanamaz.',
+                    ),
                   const SizedBox(height: 10),
                   SetupPrimaryButton(
                     key: const Key('btn_cloud_connect'),
@@ -82,6 +94,48 @@ class Step6Cloud extends StatelessWidget {
             if (showDiag) _diagCard(context, cloud),
           ] else
             _onlineCard(context, cloud),
+        ],
+      ),
+    );
+  }
+
+  /// Panodaki anahtar izi sunucudakinden farklı (servis_kurulum-1): onaylı eşitleme, sonra bulut adımı sürer.
+  Widget _keyMismatchCard(BuildContext context, CloudLogic cloud) {
+    return SetupCard(
+      key: const Key('cloud_key_mismatch_card'),
+      accent: SetupColors.warn,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SetupInfoRow(
+            icon: Icons.key_rounded,
+            color: SetupColors.warn,
+            bold: true,
+            text: 'Panodaki cihaz anahtarı sunucudaki kayıttan farklı. Eşitlenirse panonun anahtarı sunucudakiyle '
+                'değiştirilir.',
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            key: const Key('btn_sync_board_key'),
+            onPressed: cloud.busy
+                ? null
+                : () async {
+                    final ok = await showSimpleConfirm(
+                      context,
+                      title: 'Panonun anahtarı eşitlensin mi?',
+                      message: 'Panonun yerel anahtarı sunucudaki anahtarla değiştirilecek. Panoyu eski anahtarla yerel '
+                          'ağdan kullanan cihazlar anahtarı sunucudan yeniden alır.',
+                      confirmLabel: 'Eşitle',
+                      icon: Icons.key_rounded,
+                      confirmKey: const Key('btn_sync_key_confirm'),
+                    );
+                    if (!ok) return;
+                    if (await cloud.syncBoardKey()) unawaited(cloud.connectAndWait());
+                  },
+            icon: Icon(Icons.sync_lock_rounded, size: accentIconSize(context, base: 18)),
+            label: const Text('Panonun Anahtarını Eşitle'),
+            style: accentOutlinedButtonStyle(context, AppFamilies.amber),
+          ),
         ],
       ),
     );

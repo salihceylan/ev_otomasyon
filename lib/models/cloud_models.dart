@@ -517,7 +517,11 @@ class InvitationModel {
     this.guestName,
     this.guestValidFrom,
     this.guestValidUntil,
+    this.id,
   });
+
+  /// Davetin sunucu kimliği (oluşturma yanıtındaki `id`; iptal için; ev_uyelik-6). Eski sunucuda `null`.
+  final String? id;
 
   final String code;
 
@@ -552,10 +556,12 @@ class InvitationModel {
       guestName: asNonEmptyString(json['guest_name'] ?? json['guestName']),
       guestValidFrom: asDate(json['guest_valid_from'] ?? json['guestValidFrom']),
       guestValidUntil: asDate(json['guest_valid_until'] ?? json['guestValidUntil']),
+      id: asNonEmptyString(json['id'] ?? json['invitation_id']),
     );
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': ?id,
         'code': code,
         'role': role,
         'expires_at': expiresAt.toUtc().toIso8601String(),
@@ -565,6 +571,46 @@ class InvitationModel {
         if (guestValidFrom != null) 'guest_valid_from': guestValidFrom!.toUtc().toIso8601String(),
         if (guestValidUntil != null) 'guest_valid_until': guestValidUntil!.toUtc().toIso8601String(),
       };
+}
+
+/// Bekleyen (kullanılmamış, süresi dolmamış) davet: `GET /homes/:homeId/invitations` öğesi (ev_uyelik-6; sunucu sözleşme 12).
+/// Kod sunucudan DÖNMEZ (yalnız oluşturanın ekranında gösterilir); iptal kimlikle yapılır.
+class PendingInvitation {
+  const PendingInvitation({
+    required this.id,
+    required this.role,
+    this.expiresAt,
+    this.guestValidFrom,
+    this.guestValidUntil,
+    this.guestName,
+    this.createdAt,
+  });
+
+  final String id;
+
+  /// `resident` | `guest`.
+  final String role;
+  final DateTime? expiresAt;
+  final DateTime? guestValidFrom;
+  final DateTime? guestValidUntil;
+  final String? guestName;
+  final DateTime? createdAt;
+
+  bool get isGuest => role == 'guest';
+
+  factory PendingInvitation.fromJson(Map<String, dynamic> json) {
+    final id = asNonEmptyString(json['id']);
+    if (id == null) throw const FormatException('Davet kimliği yok');
+    return PendingInvitation(
+      id: id,
+      role: (asNonEmptyString(json['role']) ?? 'resident').toLowerCase(),
+      expiresAt: asDate(json['expires_at']),
+      guestValidFrom: asDate(json['guest_valid_from']),
+      guestValidUntil: asDate(json['guest_valid_until']),
+      guestName: asNonEmptyString(json['guest_name']),
+      createdAt: asDate(json['created_at']),
+    );
+  }
 }
 
 /// Evdeki bir üye / misafir (`GET /homes/:homeId/members`).
@@ -637,6 +683,7 @@ class InventoryDeviceModel {
     this.claimedHomeName,
     this.claimedUserEmail,
     required this.qrClaimUrl,
+    this.claimedHomeId,
   });
 
   final String id;
@@ -656,6 +703,15 @@ class InventoryDeviceModel {
   final String? claimedHomeName;
   final String? claimedUserEmail;
   final String qrClaimUrl;
+
+  /// Sahiplenildiği evin kimliği (`claimed_home_id`; yalnız süper yönetici yanıtında; servis_kurulum-9).
+  final String? claimedHomeId;
+
+  /// Kurulum PIN'i hatalı denemeler yüzünden şu an kilitli mi (`locked_until` gelecekte; bireysel-7).
+  bool isPinLocked(DateTime now) {
+    final until = lockedUntil;
+    return until != null && until.isAfter(now);
+  }
 
   String get formattedSerial =>
       serialNo != null ? '#${serialNo.toString().padLeft(4, '0')}' : '#----';
@@ -702,6 +758,7 @@ class InventoryDeviceModel {
       claimedUserEmail: asNonEmptyString(json['claimed_user_email']),
       qrClaimUrl: asNonEmptyString(json['qr_claim_url']) ??
           '${AppConfig.productionClaimUrl}?uid=${Uri.encodeQueryComponent(uuid)}',
+      claimedHomeId: asNonEmptyString(json['claimed_home_id']),
     );
   }
 
@@ -721,5 +778,6 @@ class InventoryDeviceModel {
         claimedHomeName: claimedHomeName,
         claimedUserEmail: claimedUserEmail,
         qrClaimUrl: qrClaimUrl,
+        claimedHomeId: claimedHomeId,
       );
 }

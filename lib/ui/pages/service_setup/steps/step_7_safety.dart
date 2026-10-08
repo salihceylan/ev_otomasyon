@@ -731,9 +731,54 @@ class SafetySaveCard extends StatelessWidget {
               padding: const EdgeInsets.only(top: 8),
               child: SetupInfoRow(
                 key: Key('safety_test_result_${r.zone}'),
-                icon: r.failed ? Icons.error_rounded : (r.fbMs != null ? Icons.verified_rounded : Icons.visibility_outlined),
-                color: r.failed ? SetupColors.error : (r.fbMs != null ? SetupColors.ok : SetupColors.info),
+                icon: r.unconfirmed
+                    ? Icons.help_outline_rounded
+                    : (r.failed ? Icons.error_rounded : (r.fbMs != null ? Icons.verified_rounded : Icons.visibility_outlined)),
+                color: r.unconfirmed
+                    ? SetupColors.warn
+                    : (r.failed ? SetupColors.error : (r.fbMs != null ? SetupColors.ok : SetupColors.info)),
                 text: r.message,
+              ),
+            ),
+          // Geçmeyen bölge testi (başarısız ya da geri bildirim sonucu alınamadı; kayıttan geri yüklenen dahil;
+          // servis_kurulum-2): adım tamamlanmaz, yalnız o bölgeler yeniden test edilebilir.
+          if (logic.testResults.any((t) => t.failed))
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SetupInfoRow(
+                    key: Key('safety_failed_note'),
+                    icon: Icons.warning_amber_rounded,
+                    color: SetupColors.error,
+                    text: 'Son bölge testi geçmedi (vana kapanmadı ya da geri bildirim sonucu alınamadı); adım tamamlanmaz. '
+                        'Kablolamayı ve pano bağlantısını kontrol edip testi yeniden çalıştırın.',
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const Key('btn_retest_failed_zones'),
+                      onPressed: logic.busy ? null : () => logic.retestFailedZones(),
+                      icon: const Icon(Icons.replay_rounded, size: 18),
+                      label: const Text('Bölge Testini Yeniden Çalıştır'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          // Çevrimdışı kuyrukta zincir geçersiz çıktı, kısmi kuyruk geri alındı (guvenlik-4).
+          if (logic.resendOffer)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const Key('btn_safety_resend'),
+                  onPressed: logic.busy ? null : () => unawaited(_save(context)),
+                  icon: const Icon(Icons.send_rounded, size: 18),
+                  label: const Text('Planı Yeniden Gönder'),
+                ),
               ),
             ),
         ],
@@ -746,6 +791,27 @@ class SafetySaveCard extends StatelessWidget {
     final gas = logic.assignments.values.any((a) => a.isGasValve);
     if (!await confirmGasValveTest(context, hasGasValve: gas)) return;
     await logic.saveSafety();
+    final pending = logic.queueReplaceOffer;
+    if (pending != null && context.mounted) {
+      // Bulutta bekleyen değişiklik varken plan kuyruğa eklenmez (guvenlik-4): kullanıcı onaylarsa kuyruk silinip plan baştan
+      // sıraya alınır.
+      final replace = await showSimpleConfirm(
+        context,
+        title: 'Bekleyen değişiklikler var',
+        message: 'Bekleyen $pending değişiklik iptal edilip plan baştan sıraya alınsın mı?',
+        confirmLabel: 'İptal Et ve Yeniden Sırala',
+        icon: Icons.playlist_remove_rounded,
+        family: AppFamilies.amber,
+        cancelKey: const Key('btn_queue_replace_cancel'),
+        confirmKey: const Key('btn_queue_replace_confirm'),
+      );
+      if (replace) {
+        await logic.replaceQueuedSafety();
+      } else {
+        logic.dismissQueueReplaceOffer();
+      }
+      return;
+    }
     if (!logic.cloudOffer || !context.mounted) return;
     // LAN gevşetme reddi: yetkili hesapla bulut önerisi (F2.D.5).
     final ok = await showSimpleConfirm(

@@ -181,7 +181,9 @@ void main() {
       'isGuest',
       ...homeBase,
       'canCloseActuators', // vanayı kapatabilir; onay/açma/test ✖ (7.2b karar 4)
-      // toplu ✖, çocuk kilidi ✖, kalibrasyon ✖, kural ✖, davet ✖, claim ✖, Wi-Fi/IP ✖
+      // bireysel-2: sahiplenme ev kapsamlı değildir (küresel user kendi panosunu eşler)
+      'canClaimDevice',
+      // toplu ✖, çocuk kilidi ✖, kalibrasyon ✖, kural ✖, davet ✖, Wi-Fi/IP ✖
     });
   });
 
@@ -202,7 +204,8 @@ void main() {
       expect(caps.canViewState, isFalse);
       expect(caps.canControlDevices, isFalse);
       expect(caps.canUseGroupCommands, isFalse);
-      expect(granted(caps), equals(<String>{'isAuthenticated', 'isGuestExpired'}));
+      // bireysel-2: ev yetkisi yok; küresel sahiplenme hakkı kalır.
+      expect(granted(caps), equals(<String>{'isAuthenticated', 'isGuestExpired', 'canClaimDevice'}));
     }
   });
 
@@ -210,13 +213,13 @@ void main() {
     expectExactly('bilinmeyen küresel rol', Capabilities(globalRole: 'hacker', homeRole: 'owner', now: now), <String>{});
     expectExactly('oturum yok', Capabilities(globalRole: null, homeRole: 'owner', now: now), <String>{});
     expectExactly('boş küresel rol', Capabilities(globalRole: '  ', now: now), <String>{});
-    // Tanınmayan EV rolü: ev yetkisi yok; yalnızca küresel hak (claim: ev rolü bilinmediği için ✖).
+    // Tanınmayan EV rolü: ev yetkisi yok; yalnızca küresel hak (bireysel-2: claim ev kapsamlı değil ✔).
     final unknownHome = Capabilities(globalRole: 'user', homeRole: 'admin', now: now);
     expect(unknownHome.hasHomeAccess, isFalse);
     expect(unknownHome.canControlDevices, isFalse);
     expect(unknownHome.canCalibrate, isFalse);
     expect(unknownHome.canInvite, isFalse);
-    expect(unknownHome.canClaimDevice, isFalse);
+    expect(unknownHome.canClaimDevice, isTrue);
   });
 
   test('evsiz sade kullanıcı: yalnızca cihaz sahiplenebilir', () {
@@ -275,6 +278,56 @@ void main() {
     // Süresi dolmuş misafir ve ev bağlamı olmayan kullanıcı: hiçbiri.
     expect(caps('user', 'guest', until: inPast).canFetchLocalKey, isFalse);
     expect(Capabilities(globalRole: 'user', now: now).canFetchLocalKey, isFalse);
+  });
+
+  group('2026-10-08 mantık düzeltmeleri', () {
+    test('uyelik-13: küresel rolü düşürülen (user) hesabın ev rolü service_user ise servis yetkisi yok', () {
+      final caps = Capabilities(globalRole: 'user', homeRole: 'service_user', now: now);
+      expect(caps.isStaff, isFalse);
+      expect(caps.hasHomeAccess, isFalse, reason: 'sunucu: service_user üyeliği yalnız personel için geçerli');
+      expect(caps.canCommission, isFalse);
+      expect(caps.canCalibrate, isFalse);
+      expect(caps.canFetchLocalKey, isFalse);
+      expect(caps.canReissueDeviceCredential, isFalse);
+      expect(caps.canTestSafety, isFalse);
+      // Küresel user: sahiplenme hakkı kalır (bireysel-2).
+      expect(caps.canClaimDevice, isTrue);
+      // Süper kullanıcının evdeki service_user üyeliği geçerlidir.
+      final superStaff = Capabilities(globalRole: 'super_user', homeRole: 'service_user', now: now);
+      expect(superStaff.isStaff, isTrue);
+      expect(superStaff.canCommission, isTrue);
+    });
+
+    test('bireysel-2: aktif evi misafir olan küresel user panosunu sahiplenebilir; servis oturumu sahiplenemez', () {
+      final guest = Capabilities(
+        globalRole: 'user',
+        homeRole: 'guest',
+        guestValidFrom: inPast,
+        guestValidUntil: inFuture,
+        now: now,
+      );
+      expect(guest.canClaimDevice, isTrue);
+      final expiredGuest = Capabilities(globalRole: 'user', homeRole: 'guest', guestValidUntil: inPast, now: now);
+      expect(expiredGuest.canClaimDevice, isTrue);
+      final session = Capabilities(globalRole: 'service_session', homeRole: 'service_session', now: now);
+      expect(session.canClaimDevice, isFalse);
+      final sessionRoleOnly = Capabilities(globalRole: 'user', homeRole: 'service_session', now: now);
+      expect(sessionRoleOnly.canClaimDevice, isFalse);
+    });
+
+    test('guvenlik-12: alarm kurma ev rolüne bağlı (owner/resident); servis oturumu ✖', () {
+      expect(Capabilities(globalRole: 'super_user', homeRole: 'owner', now: now).canArm, isTrue);
+      expect(Capabilities(globalRole: 'service_user', homeRole: 'owner', now: now).canArm, isTrue);
+      expect(Capabilities(globalRole: 'service_user', homeRole: 'resident', now: now).canArm, isTrue);
+      expect(Capabilities(globalRole: 'service_user', homeRole: 'service_user', now: now).canArm, isFalse);
+      expect(Capabilities(globalRole: 'super_user', homeRole: null, hasActiveHome: true, now: now).canArm, isFalse);
+      expect(Capabilities(globalRole: 'service_session', homeRole: 'service_session', now: now).canArm, isFalse);
+      expect(
+        Capabilities(globalRole: 'user', homeRole: 'guest', guestValidUntil: inFuture, now: now).canArm,
+        isFalse,
+      );
+      expect(Capabilities(globalRole: 'user', homeRole: 'owner', now: now).canArm, isTrue);
+    });
   });
 
   test('eşitlik ve toString', () {

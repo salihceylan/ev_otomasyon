@@ -24,6 +24,7 @@ void main() {
     List<int> days = const <int>[0, 1, 2, 3, 4, 5, 6],
     bool enabled = true,
     String? label,
+    bool creatorActive = true,
   }) =>
       ScheduledRule(
         id: id,
@@ -36,6 +37,7 @@ void main() {
         daysOfWeek: days,
         enabled: enabled,
         label: label,
+        creatorActive: creatorActive,
       );
 
   Future<void> flush(WidgetTester tester) async {
@@ -208,6 +210,45 @@ void main() {
       );
       await flush(tester);
       expect(find.textContaining('Europe/Berlin'), findsOneWidget);
+    });
+
+    test('kullanim-5: creator_active ayrıştırılır (alan yoksa true)', () {
+      Map<String, dynamic> json({Object? creatorActive}) => <String, dynamic>{
+            'id': 'r1',
+            'home_id': kHomeA,
+            'channel': 1,
+            'channel_type': 'relay',
+            'action': 'on',
+            'hour': 7,
+            'minute': 0,
+            'days_of_week': <int>[1],
+            'creator_active': ?creatorActive,
+          };
+      expect(ScheduledRule.fromJson(json()).creatorActive, isTrue, reason: 'eski sunucu');
+      expect(ScheduledRule.fromJson(json(creatorActive: false)).creatorActive, isFalse);
+      expect(ScheduledRule.fromJson(json(creatorActive: false)).copyWith(enabled: false).creatorActive, isFalse);
+    });
+
+    testWidgets('kullanim-5: kuranın erişimi bitmiş kuralda amber not; kapalı kurallar için ipucu', (tester) async {
+      await pumpReady(
+        tester,
+        const ScheduledRulesPage(),
+        configure: (h) => h.e1.rules = <ScheduledRule>[
+          rule('r1', creatorActive: false),
+          rule('r2', channel: 2, enabled: false),
+        ],
+      );
+      await flush(tester);
+      expect(find.byKey(const Key('note_rule_creator_r1')), findsOneWidget);
+      expect(
+        find.text('Çalışmıyor: kuralı kuranın erişimi bitti. Düzenleyip kaydederek kuralı üstlenin.'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('note_rule_creator_r2')), findsNothing);
+      expect(
+        find.text('Kuralı oluşturan kişinin erişimi sona erdiyse kural çalışmaz; kaydederseniz sizin adınıza çalışır.'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('kural kartı kanalı uç nokta adıyla gösterir (etiket yoksa)', (tester) async {

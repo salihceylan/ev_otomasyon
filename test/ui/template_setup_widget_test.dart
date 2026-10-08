@@ -141,7 +141,7 @@ void main() {
       env.device.templateRejectOnce = (403, 'local_loosen_forbidden', null);
       await tapKey(tester, 'btn_template_apply');
       await pumpUntil(tester, env, () => _offstagePresent('template_problem'));
-      expect(find.textContaining('atölyede USB ile yazın', skipOffstage: false), findsWidgets);
+      expect(find.textContaining('Pano şablonu kabul etmedi (eski firmware olabilir).', skipOffstage: false), findsWidgets);
       expect(tester.takeException(), isNull, reason: 'gevşetme yasağı açıklaması');
 
       await tapKey(tester, 'btn_template_apply');

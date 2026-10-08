@@ -197,10 +197,48 @@ class SafetyNoticeController extends ChangeNotifier {
         // Yenileme yetişmedi: eldeki durumla karar verilir.
       }
       if (!_current(generation) || state.activeHome?.id != home.id) return;
-      _target = _resolve(notice);
+      // Doğrudan (LAN) kipte adresteki pano bildirimin evine (ve panosuna) ait değilse kart da geçmiş de doğru değildir:
+      // yalnız pano (kullanim-3).
+      if (state.mode == AppMode.direct &&
+          !state.lanBoardBelongsTo(home.id, deviceUid: notice.isAlarm ? notice.deviceUuid : null)) {
+        _target = SafetyNoticeTarget(kind: SafetyNoticeTargetKind.dashboard, notice: notice);
+        _notify();
+        return;
+      }
+      // Canlı durum (MQTT) tazelenmeden "Bu alarm kapanmış" denmez (kullanim-2): arka plandan dönüşte / başka eve
+      // geçişte güvenlik haritası bayat ya da boş olabilir.
+      final fresh = await state.awaitFreshSafety(homeId: home.id, timeout: refreshTimeout);
+      if (!_current(generation) || state.activeHome?.id != home.id) return;
+      var target = _resolve(notice);
+      if (target.kind == SafetyNoticeTargetKind.history && !fresh) {
+        final open = await _alarmStillOpen(notice);
+        if (!_current(generation) || state.activeHome?.id != home.id) return;
+        // Hâlâ açık ya da denetlenemedi: pano (kart canlı durum gelince görünür). Kapandığı doğrulandıysa geçmiş.
+        if (open != false) target = SafetyNoticeTarget(kind: SafetyNoticeTargetKind.dashboard, notice: notice);
+      }
+      _target = target;
       _notify();
     } catch (_) {
       // Yönlendirme en iyi çabadır; hata arayüzü bozmaz.
+    }
+  }
+
+  /// Bildirimin alarmı sunucuda hâlâ açık mı (aynı pano / bölge / tür): `true`/`false`; denetlenemediyse `null`.
+  Future<bool?> _alarmStillOpen(SafetyPushNotice notice) async {
+    try {
+      final records = await state.fetchOpenAlarms().timeout(refreshTimeout);
+      final uid = notice.deviceUuid?.toUpperCase();
+      for (final r in records) {
+        if (!r.isOpen) continue;
+        if (notice.isIntrusion ? r.kind != 'intrusion' : r.kind == 'intrusion') continue;
+        if (!notice.isIntrusion && notice.zone != null && r.zone != notice.zone) continue;
+        if (uid != null && r.deviceUuid != null && r.deviceUuid != uid) continue;
+        if (!notice.isIntrusion && notice.kind != 'generic' && r.kind != 'unknown' && r.kind != notice.kind) continue;
+        return true;
+      }
+      return false;
+    } catch (_) {
+      return null;
     }
   }
 

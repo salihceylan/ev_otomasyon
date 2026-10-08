@@ -66,6 +66,12 @@ class AlarmWatchEngine {
   String? _userId;
   DateTime? _nextHomesFetch;
 
+  /// Ev listesinin son BAŞARIYLA alındığı an (uyelik-5).
+  DateTime? _lastHomesOk;
+
+  /// Bütün evler MQTT'ye bağlıyken ev listesi bu aralıkla tazelenir (ortak NAT arkasında istek sayısı düşer; uyelik-5).
+  static const Duration _connectedHomesEvery = Duration(minutes: 60);
+
   bool get isRunning => _running && !_stopped;
 
   /// İzlenen ev kimlikleri (testler / durum metni).
@@ -106,6 +112,12 @@ class AlarmWatchEngine {
     }
     final next = _nextHomesFetch;
     if (next != null && _clock.now().isBefore(next)) {
+      await _updateStatus();
+      return;
+    }
+    final lastOk = _lastHomesOk;
+    final allConnected = _watches.isNotEmpty && _watches.values.every((w) => w.mqtt.isConnected);
+    if (lastOk != null && allConnected && _clock.now().difference(lastOk) < _connectedHomesEvery) {
       await _updateStatus();
       return;
     }
@@ -155,6 +167,7 @@ class AlarmWatchEngine {
       final eligible = eligibleWatchHomes(globalRole: user.role, homes: homes);
       _backoff.reset();
       _nextHomesFetch = null;
+      _lastHomesOk = _clock.now();
       if (!_stopped && eligible != config.homes) {
         try {
           await settings.save(config.copyWith(homes: eligible));
@@ -210,6 +223,10 @@ class AlarmWatchEngine {
     if (!next.supported) return;
     final uid = next.deviceUid ?? message.status.uid ?? '-';
     final previous = watch.last[uid];
+    // Sürmekte olan alarmların kaydı tazelenir (guvenlik-9): aylarca süren kilit, servis yeniden başlayınca yeni sayılmaz.
+    final active = activeAlarmDedupeKeys(homeId: watch.home.id, state: next);
+    if (active.isNotEmpty) await dedupe.touch(active);
+    if (_stopped) return;
     if (previous == next) return;
     watch.last[uid] = next;
     final needsNames = next.hasActiveAlarm || next.intrusionAlarmActive;

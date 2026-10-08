@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../models/automation_models.dart';
 import '../../services/automation_api_service.dart';
 import '../../services/clock.dart';
+import '../../utils/version_compare.dart';
 import '../../utils/wifi_qr_parser.dart';
 import '../motion/motion_scope.dart';
 import '../motion/skeleton.dart';
@@ -55,6 +56,8 @@ class WifiProvisionPanel extends StatefulWidget {
     this.onDeviceChecked,
     this.numberedSteps = false,
     this.clock = const SystemClock(),
+    this.serviceMode = true,
+    this.boardSeenOnline,
   });
 
   final AutomationApiService api;
@@ -89,6 +92,15 @@ class WifiProvisionPanel extends StatefulWidget {
 
   /// 429 bekleme sayacı için zaman kaynağı (testlerde sahte saat).
   final Clock clock;
+
+  /// Kullanıcı servis rolünde mi (`ServiceSetupAccess.fromState != null`; servis sihirbazı varsayılanı). `false` iken
+  /// hazırlanmamış panoda açamayacağı servis sihirbazı yerine satıcı / servis yönlendirmesi gösterilir (bireysel-13) ve
+  /// eski yazılımlı panoda bulut uyarısı verilir (bireysel-1).
+  final bool serviceMode;
+
+  /// Bu pano daha önce buluta bağlandı mı (ör. evin cihaz listesinde görülmüş): öyleyse bulut kimliği panoda vardır ve
+  /// eski yazılım uyarısı gösterilmez (yalnız Wi-Fi değişikliği yeterli).
+  final bool Function(String uid)? boardSeenOnline;
 
   @override
   State<WifiProvisionPanel> createState() => WifiProvisionPanelState();
@@ -202,12 +214,19 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
         _mismatch = _mismatchMessage(status);
         if (status.provisioned == false) {
           _phase = _Phase.idle;
-          _checkError = 'Pano henüz kurulmamış görünüyor (ilk hazırlık yapılmamış). Wi-Fi bilgileri bu aşamada '
-              'gönderilemez: servis girişinden "Yeni Kurulum Başlat" sihirbazını açın; cihazı tanıtıp daireye bağladıktan '
-              'sonra 5. adımda (Wi-Fi Kurulumu) "Panoyu Hazırla" ile ilk hazırlığı yapın ve ev Wi-Fi bilgisini oradan gönderin.';
+          _checkError = widget.serviceMode
+              ? 'Pano henüz kurulmamış görünüyor (ilk hazırlık yapılmamış). Wi-Fi bilgileri bu aşamada '
+                  'gönderilemez: servis girişinden "Yeni Kurulum Başlat" sihirbazını açın; cihazı tanıtıp daireye bağladıktan '
+                  'sonra 5. adımda (Wi-Fi Kurulumu) "Panoyu Hazırla" ile ilk hazırlığı yapın ve ev Wi-Fi bilgisini oradan gönderin.'
+              // Servis rolü olmayan kullanıcı sihirbazı açamaz (bireysel-13).
+              : kUnprovisionedBoardUserMessage;
         }
       });
-      if (status.provisioned == false) return;
+      if (status.provisioned == false) {
+        // Çağıran panonun hazırlık durumunu da öğrenir (bireysel-13: sahiplenme diyaloğu eşlemeden önce uyarır).
+        await _notifyDeviceChecked(status);
+        return;
+      }
       await _notifyDeviceChecked(status); // örn. kimliği doğrulanmış panonun önbellek anahtarı
       if (!_alive(run)) return;
       setState(() => _phase = _Phase.idle);
@@ -419,12 +438,14 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
     if (error is LocalApiException) {
       if (error.isNetwork || error.code == 'not_configured') {
         final base = whileChecking
-            ? 'Pano bulunamadı. Telefonunuzun Wi-Fi ayarlarından panonun kurulum ağına bağlı olduğunuzdan emin olup tekrar deneyin.'
+            ? 'Pano bulunamadı. Telefonunuzun Wi-Fi ayarlarından panonun kurulum ağına bağlı olduğunuzdan emin olup tekrar deneyin. '
+                '$apWindowHint'
             : 'Panoyla bağlantı kurulamadı. Telefonun hâlâ panonun ağına bağlı olduğundan emin olun.';
         final hint = error.hint; // Android: pano ağına yönlenme kurulamadıysa nedeni (BoardNetworkBinding)
         return hint == null ? base : '$base $hint';
       }
       if (error.isUnprovisioned) {
+        if (!widget.serviceMode) return kUnprovisionedBoardUserMessage; // açamayacağı sihirbaz önerilmez (bireysel-13)
         return 'Pano henüz hazırlanmamış (ilk kurulum yapılmamış). Wi-Fi bilgileri bu ekrandan gönderilemez; '
             'servis kurulum sihirbazını kullanın.';
       }
@@ -448,6 +469,26 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
       return error.message;
     }
     return 'İşlem tamamlanamadı. Pano bağlantısını kontrol edip tekrar deneyin.';
+  }
+
+  /// Kurulum ağı (AP) penceresi (firmware ApPolicy): açılışta 10 dk açık, kesinti sürerse 15 dk sonra yeniden (bireysel-11).
+  /// Kayıtlı ev ağı varken pano önce onu arar: pencere açılıştan yaklaşık 3 dk sonra açılır.
+  static const String apWindowHint =
+      'Kurulum ağı açılıştan sonra 10 dk açık kalır, sonra 15 dk kapanır; görünmüyorsa panonun elektriğini kapatıp açın. '
+      'Pano kayıtlı bir ev ağını arıyorsa kurulum ağı yaklaşık 3 dk sonra açılır.';
+
+  /// Eski yazılımlı (v1.3.0 öncesi) pano bulut kimliğini kendisi alamaz (bireysel-1): yalnız servis rolü olmayan kullanıcıya
+  /// ve pano daha önce buluta bağlanmamışsa gösterilir. Sürüm okunamazsa uyarı yok.
+  static const String oldFirmwareWarning =
+      'Bu pano yazılımı buluta kendiliğinden bağlanamaz; yetkili servisten güncelleme isteyin. Pano daha önce buluta '
+      'bağlandıysa Wi-Fi değişikliğinden sonra yeniden bağlanır.';
+
+  bool _showOldFirmwareWarning(DeviceStatus? status) {
+    if (widget.serviceMode || status == null || status.provisioned == false) return false;
+    if (versionAtLeast(status.firmware, kCloudBootstrapMinFirmware) != false) return false;
+    final uid = status.uid?.trim().toUpperCase();
+    if (uid != null && uid.isNotEmpty && (widget.boardSeenOnline?.call(uid) ?? false)) return false;
+    return true;
   }
 
   String _hostLabel() {
@@ -580,6 +621,10 @@ class WifiProvisionPanelState extends State<WifiProvisionPanel> {
           if (_mismatch != null) ...[
             const SizedBox(height: 10),
             InlineMessage.warning(_mismatch!, key: const Key('wifi_target_mismatch')),
+          ],
+          if (connected && _showOldFirmwareWarning(status)) ...[
+            const SizedBox(height: 10),
+            const InlineMessage.warning(oldFirmwareWarning, key: Key('wifi_fw_old_warning')),
           ],
           if (_checkError != null) ...[
             const SizedBox(height: 10),

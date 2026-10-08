@@ -905,7 +905,14 @@ DimmerGuide dimmerGuideFor({
 /// Bölge testi sonucu (`test_result {ok, fb_ms}`; §4.4 madde 3).
 @immutable
 class SafetyTestResult {
-  const SafetyTestResult({required this.zone, this.ok, this.fbMs, this.hasValve = true, this.cloud = false});
+  const SafetyTestResult({
+    required this.zone,
+    this.ok,
+    this.fbMs,
+    this.hasValve = true,
+    this.cloud = false,
+    this.hasFeedback = false,
+  });
 
   /// Test bulut üzerinden gönderildi: sonuç yalnız yerel bağlantıda okunur (karar F2-10).
   final bool cloud;
@@ -914,6 +921,10 @@ class SafetyTestResult {
 
   /// Bölgede vana var mı (yoksa test yalnız siren/fan/cihaz içindir; kapanma süresi sorulmaz).
   final bool hasValve;
+
+  /// Bölgede geri bildirim girişli (`fb_di`) vana var: pano sonucu kesin bildirir (kapandı / `fb_timeout_s` içinde
+  /// kapanmadı); gözle doğrulama sonucun yerini tutmaz.
+  final bool hasFeedback;
 
   /// Pano sonucu: `true` kapandı, `false` zaman aşımı, `null` sonuç okunamadı.
   final bool? ok;
@@ -925,6 +936,10 @@ class SafetyTestResult {
     if (cloud) {
       return 'Bölge $zone: test gönderildi. Geri bildirim sonucu yalnız yerel bağlantıda görünür; '
           '${hasValve ? 'vananın kapandığını' : 'sirenin / cihazın çalıştığını'} gözle doğrulayın.';
+    }
+    if (unconfirmed) {
+      return 'Bölge $zone: vananın geri bildirim sonucu süre içinde alınamadı; kapandığı doğrulanmadı. '
+          'Bölge testini yeniden çalıştırın.';
     }
     if (!hasValve) {
       return ok == false
@@ -942,5 +957,11 @@ class SafetyTestResult {
     return 'Bölge $zone: Geri bildirim yok: vananın kapandığını gözle doğrulayın.';
   }
 
-  bool get failed => ok == false;
+  /// Geri bildirimli vananın sonucu alınamadı (servis_kurulum-2): test GEÇMİŞ sayılmaz (pano kapanmayan vanayı ancak
+  /// `fb_timeout_s` dolunca bildirir; sonuç gelmediyse vana hâlâ takılı olabilir).
+  bool get unconfirmed => !cloud && hasFeedback && ok == null;
+
+  /// Test geçmedi: vana süre içinde kapanmadı (`ok == false`) ya da geri bildirimli vananın sonucu alınamadı
+  /// ([unconfirmed]). Adımı tamamlatmaz; "Bölge Testini Yeniden Çalıştır" bu bölgeleri dener.
+  bool get failed => ok == false || unconfirmed;
 }

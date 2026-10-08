@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/services/push/peace_notice.dart';
 import 'package:ev_otomasyon/services/push/safety_notice.dart';
 import 'package:ev_otomasyon/services/safety_notice_controller.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/safety_fixtures.dart';
@@ -106,13 +108,93 @@ void main() {
     expect(target, isNull);
   });
 
-  test('etkin ev farklı -> o eve geçilir, sonra hedef çözülür', () async {
+  test('etkin ev farklı -> o eve geçilir, sonra hedef çözülür (canlı durum gelmedi, alarm sunucuda açık: pano)', () async {
     await setUpRig(homes: <HomeModel>[testHome(), testHome(id: kHomeB, name: 'Yazlık', topic: 'h_b')]);
     h.cloud.endpoints[kHomeB] = safetyUiEndpoints();
+    h.cloud.alarmRecords = const <AlarmRecord>[
+      AlarmRecord(id: '41', zone: 1, aid: '9f3a11c0-3', kind: 'water', deviceUuid: kSafetyUid),
+    ];
     expect(h.state.activeHome?.id, kHomeA);
-    final target = await deliver(notice(home: kHomeB));
+    notices.add(notice(home: kHomeB));
+    await pumpEventQueue(times: 40);
+    await h.clock.elapse(const Duration(seconds: 6)); // canlı durum beklenir (en çok refreshTimeout)
+    await pumpEventQueue(times: 40);
+    final target = c.takeTarget();
     expect(h.state.activeHome?.id, kHomeB);
     expect(target, isNotNull);
+    expect(target!.kind, SafetyNoticeTargetKind.dashboard, reason: 'kart MQTT gelince görünür; "kapanmış" denmez');
+  });
+
+  group('kullanim-2: canlı durum beklenmeden "Bu alarm kapanmış" denmez', () {
+    test('MQTT state\'i olmayan başka eve geçiş: REST denetimi başarısız -> pano (geçmiş DEĞİL)', () async {
+      await setUpRig(homes: <HomeModel>[testHome(), testHome(id: kHomeB, name: 'Yazlık', topic: 'h_b')]);
+      h.cloud.endpoints[kHomeB] = safetyUiEndpoints();
+      h.cloud.alarmsError = ApiException.network();
+      notices.add(notice(home: kHomeB));
+      await pumpEventQueue(times: 40);
+      await h.clock.elapse(const Duration(seconds: 6));
+      await pumpEventQueue(times: 40);
+      final target = c.takeTarget();
+      expect(target?.kind, SafetyNoticeTargetKind.dashboard);
+      expect(target?.kind, isNot(SafetyNoticeTargetKind.history));
+    });
+
+    test('canlı durum yok ama REST kontrolü alarmın kapandığını gösteriyor -> geçmiş + not', () async {
+      await setUpRig(homes: <HomeModel>[testHome(), testHome(id: kHomeB, name: 'Yazlık', topic: 'h_b')]);
+      h.cloud.endpoints[kHomeB] = safetyUiEndpoints();
+      h.cloud.alarmRecords = const <AlarmRecord>[];
+      notices.add(notice(home: kHomeB));
+      await pumpEventQueue(times: 40);
+      await h.clock.elapse(const Duration(seconds: 6));
+      await pumpEventQueue(times: 40);
+      final target = c.takeTarget();
+      expect(target?.kind, SafetyNoticeTargetKind.history);
+      expect(target?.note, 'Bu alarm kapanmış.');
+    });
+
+    test('aynı ev: arka plandan dönüşte bayat harita; ~200 ms sonra alarmı taşıyan canlı state -> kart', () async {
+      await setUpRig();
+      h.mqtt.emitStateJson(safetyStateJson()); // alarm yok: arka plandan sonra bayat kalacak
+      await pumpEventQueue();
+      h.state.handleLifecycleState(AppLifecycleState.paused);
+      await h.clock.elapse(const Duration(minutes: 5));
+      h.state.handleLifecycleState(AppLifecycleState.resumed);
+      await pumpEventQueue(times: 40);
+
+      notices.add(notice());
+      await pumpEventQueue(times: 40);
+      expect(c.takeTarget(), isNull, reason: 'taze canlı durum bekleniyor');
+
+      await h.clock.elapse(const Duration(milliseconds: 200));
+      h.mqtt.emitStateJson(safetyStateJson(zoneSt: 'latched', sensorActive: true));
+      await pumpEventQueue(times: 40);
+      final target = c.takeTarget();
+      expect(target?.kind, SafetyNoticeTargetKind.card);
+      expect(target?.cardKey, 'card_critical_alarm_${kSafetyUid}_1');
+    });
+
+    test('awaitFreshSafety: canlı kanal başladıktan sonra state geldiyse hemen true; doğrudan kipte true', () async {
+      await setUpRig();
+      h.mqtt.emitStateJson(safetyStateJson());
+      await pumpEventQueue();
+      expect(await h.state.awaitFreshSafety(homeId: kHomeA, timeout: const Duration(seconds: 1)), isTrue);
+      final other = h.state.awaitFreshSafety(homeId: kHomeB, timeout: const Duration(seconds: 1));
+      expect(await other, isFalse, reason: 'başka ev');
+    });
+  });
+
+  test('kullanim-3: doğrudan kipte LAN panosu bildirimin evine ait değilse yalnız pano', () async {
+    await setUpRig();
+    h.directMock.on('GET', '/api/status', (r) => jsonResponse(<String, dynamic>{
+          ...safetyStateJson(),
+          'uid': 'AHBU-S3-OTHER1',
+          'device': 'AHBU-S3-OTHER1',
+        }));
+    await h.state.setMode(AppMode.direct);
+    await h.state.setHost('192.168.1.30');
+    await pumpEventQueue(times: 40);
+    final target = await deliver(notice());
+    expect(target?.kind, SafetyNoticeTargetKind.dashboard);
   });
 
   test('oturum yokken bekletilir, oturum açılınca bir kez işlenir', () async {

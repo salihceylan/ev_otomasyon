@@ -119,9 +119,14 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
         });
         return;
       }
+      var message = friendlyError(e, fallback: 'Hesap silinemedi. Lütfen tekrar deneyin.');
+      if (e is ApiException && e.isReauthRequired) {
+        // Parolası olmayan (sosyal / SMS) ya da parolasını bilmeyen kullanıcıya yol (uyelik-8).
+        message = '$message Şifreniz yoksa ya da bilmiyorsanız çıkış yapıp Şifremi unuttum ile şifre belirleyin.';
+      }
       setState(() {
         _busy = false;
-        _error = friendlyError(e, fallback: 'Hesap silinemedi. Lütfen tekrar deneyin.');
+        _error = message;
       });
     }
   }
@@ -256,6 +261,13 @@ class _DeleteAccountDialogState extends State<DeleteAccountDialog> {
         'Hesabınızı silmeden önce aşağıdaki dairelerin sahipliğini devretmelisiniz; aksi halde bu dairelerin '
         'kontrolü kimsede kalmaz. Hiçbir şey silinmedi.',
         key: Key('sole_owner_notice'),
+      ),
+      const SizedBox(height: 8),
+      // Devredecek kimsesi olmayan tek sahibin yolu (uyelik-9; sunucu kuralı değişmez).
+      const InlineMessage.info(
+        'Devredecek kimse yoksa yetkili servise başvurun; servis panoyu sıfırlayıp daireyi boşaltabilir, ardından '
+        'hesabınızı silebilirsiniz.',
+        key: Key('sole_owner_no_heir'),
       ),
       const SizedBox(height: 12),
       if (homes.isEmpty)

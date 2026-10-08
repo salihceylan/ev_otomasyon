@@ -47,6 +47,18 @@ class _Budget {
       );
 }
 
+/// Tek yenileme denemesinin sonucu (iç kullanım).
+enum _RefreshOutcome {
+  /// Yenilendi.
+  ok,
+
+  /// Sunucu refresh token'ı kalıcı reddetti (4xx).
+  rejected,
+
+  /// Token yok ya da istek sürerken oturum değişti (sonuç eski oturuma aitti).
+  stale,
+}
+
 /// Bulut REST istemcisi (CONTRACTS §1).
 ///
 /// * Singleton **değildir**; kurucudan `baseUrl` / `http.Client` / `Clock` alır (test için örneklenebilir).
@@ -110,10 +122,26 @@ class EvCloudApiService {
   /// Güvenli depodaki güncel refresh token (yalnız [refreshGate] ile kullanılır).
   Future<String?> Function()? readStoredRefreshToken;
 
-  /// Depoda olduğunu en son BİLDİĞİMİZ refresh token (depodan geri yükleme, giriş ve BAŞARILI kalıcı yazımda güncellenir).
-  /// Depo yalnız bundan FARKLIYSA (başka isolate döndürmüş) benimsenir: kendi kalıcı yazımımız başarısız olduysa depoda
-  /// eski (kullanılmış) token kalır ve onu geri almak sunucuda bütün oturum ailesini iptal ettirirdi.
+  /// Depoda olduğunu en son BİLDİĞİMİZ refresh token (depodan geri yükleme, DOĞRULANMIŞ kalıcı yazım). Depo yalnız
+  /// bundan FARKLIYSA (başka isolate döndürmüş) benimsenir: kendi kalıcı yazımımız başarısız olduysa depoda eski
+  /// (kullanılmış) token kalır ve onu geri almak sunucuda bütün oturum ailesini iptal ettirirdi.
   String? _storedRefreshSeen;
+
+  /// [_storedRefreshSeen] gerçekten biliniyor mu (uyelik-3). Girişte ([beginSession]) depo yazımı henüz doğrulanmadığı
+  /// için `false`'tur: bu sırada depodan benimseme YAPILMAZ (yazım başarısız olduysa depoda önceki oturumun token'ı
+  /// kalmış olabilir). Yazım bitince çağıran [markRefreshPersisted] ile bildirir.
+  bool _storedRefreshKnown = false;
+
+  /// Depodaki refresh token'ın değeri biliniyor mu (tanı / test; uyelik-3).
+  bool get storedRefreshKnown => _storedRefreshKnown;
+
+  /// [token]'ın güvenli depoya yazımı TAMAMLANDI (giriş, parola değişimi / sıfırlama; uyelik-3). Bellekteki token değilse
+  /// (bu arada döndü) yok sayılır.
+  void markRefreshPersisted(String? token) {
+    if (token == null || token.isEmpty || token != _refreshToken) return;
+    _storedRefreshSeen = token;
+    _storedRefreshKnown = true;
+  }
 
   /// `true` (arka plan izleyicisi): depoda token yoksa kullanıcı çıkış yapmıştır; yenileme YAPILMAZ ve oturum biter
   /// (silinmiş oturumun belirteçleri yeniden üretilip depoya yazılmasın). Ön plan uygulamasında `false`.
@@ -154,6 +182,7 @@ class EvCloudApiService {
   void setRefreshToken(String? token) {
     _refreshToken = (token == null || token.isEmpty) ? null : token;
     _storedRefreshSeen = _refreshToken; // depodan geri yüklenen değer
+    _storedRefreshKnown = _refreshToken != null;
   }
 
   /// Yeni bir oturum başlatır (giriş sonrası). Önceki oturumdan kalan işlemler geçersiz olur.
@@ -162,7 +191,9 @@ class EvCloudApiService {
     _serviceSession = null;
     _authToken = accessToken;
     _refreshToken = (refreshToken == null || refreshToken.isEmpty) ? null : refreshToken;
-    _storedRefreshSeen = _refreshToken; // giriş belirteçleri hemen depoya yazılır
+    // Giriş belirteçlerinin depoya yazıldığı HENÜZ bilinmiyor (uyelik-3): yazım bitince [markRefreshPersisted].
+    _storedRefreshSeen = null;
+    _storedRefreshKnown = false;
   }
 
   /// Kayıtlı servis PIN oturumunu geri yükler (uygulama yeniden açıldığında).
@@ -179,6 +210,7 @@ class EvCloudApiService {
     _authToken = null;
     _refreshToken = null;
     _storedRefreshSeen = null;
+    _storedRefreshKnown = false;
     _serviceSession = null;
   }
 
@@ -452,10 +484,39 @@ class EvCloudApiService {
     return future;
   }
 
-  Future<bool> _doRefresh(SessionEndReason rejectionReason) {
+  Future<bool> _doRefresh(SessionEndReason rejectionReason) async {
     final gate = refreshGate;
-    if (gate == null) return _doRefreshNow(rejectionReason);
-    return gate.run(() async {
+    Future<bool> attempt() => gate == null ? _doRefreshNow(rejectionReason) : _doRefreshGated(gate, rejectionReason);
+    try {
+      return await attempt();
+    } on ApiException catch (first) {
+      if (first.statusCode != 429) rethrow;
+      // Hız sınırı (uyelik-5; ortak NAT arkasında çok kullanıcı). Sunucu sınırlayıcısı sabit pencerelidir: Retry-After
+      // [_refreshRateLimitMaxWait]'ten uzunsa beklemek yalnız çağıranı geciktirir (sonuç yine 429); hemen anlaşılır mesaj.
+      final wait = first.retryAfter ?? _refreshRateLimitDefaultWait;
+      if (wait > _refreshRateLimitMaxWait) throw _refreshBusy(first);
+      // Bekleme yenileme kapısı DIŞINDA yapılır: kapı uzun tutulursa diğer isolate kilidi devralıp (maxWait) aynı token'la
+      // yenileyebilir ve sunucu bütün oturum ailesini iptal eder. Yeniden denemede kapı yeniden alınır ve depodaki EN SON
+      // token benimsenir (bu arada diğer isolate döndürmüş olabilir). Yine 429 ise oturum korunur, anlaşılır mesaj verilir.
+      final generation = _generation;
+      await _sleep(wait);
+      if (_disposed || generation != _generation) return false;
+      try {
+        return await attempt();
+      } on ApiException catch (second) {
+        if (second.statusCode == 429) throw _refreshBusy(second);
+        rethrow;
+      }
+    }
+  }
+
+  /// Yenileme denemesi yenileme kapısı tutularak (en çok bir istek + kalıcı yazım süresi; 429 beklemesi kapı DIŞINDA,
+  /// [_doRefresh]).
+  Future<bool> _doRefreshGated(RefreshGate gate, SessionEndReason rejectionReason) async {
+    // Arka plan (depo yetkili) izleyicide ret hemen oturumu bitirmez (uyelik-4): ön plan parolayı değiştirmiş / yeniden
+    // giriş yapmış olabilir; depoda yeni token belirmesi kısa süre beklenir (kapı DIŞINDA).
+    final deferRejection = storedSessionIsAuthoritative && readStoredRefreshToken != null;
+    final outcome = await gate.run(() async {
       final reader = readStoredRefreshToken;
       if (reader != null && _refreshToken != null) {
         String? stored;
@@ -468,35 +529,121 @@ class EvCloudApiService {
         }
         if (readOk && (stored == null || stored.isEmpty) && storedSessionIsAuthoritative) {
           _expire(rejectionReason); // çıkış yapılmış: yenilenmez
-          return false;
+          return _RefreshOutcome.stale;
         }
-        // Diğer isolate token'ı döndürdüyse (depo son bildiğimizden FARKLI) yenisi benimsenir; depo boşsa (çıkış) ya da
-        // depoda hâlâ son bildiğimiz değer varsa (kendi kalıcı yazımımız başarısız olmuş olabilir) bellekteki sürer.
-        if (stored != null && stored.isNotEmpty && _refreshToken != null && stored != _storedRefreshSeen) {
+        // Diğer isolate token'ı döndürdüyse (depo son bildiğimizden FARKLI) yenisi benimsenir; depo boşsa (çıkış),
+        // depoda hâlâ son bildiğimiz değer varsa (kendi kalıcı yazımımız başarısız olmuş olabilir) ya da depo durumu
+        // BİLİNMİYORSA (giriş yazımı doğrulanmadı; uyelik-3) bellekteki sürer.
+        if (_storedRefreshKnown &&
+            stored != null &&
+            stored.isNotEmpty &&
+            _refreshToken != null &&
+            stored != _storedRefreshSeen) {
           _refreshToken = stored;
           _storedRefreshSeen = stored;
         }
       }
-      final ok = await _doRefreshNow(rejectionReason, waitPersist: true);
-      return ok;
+      return _refreshAttempt(rejectionReason, waitPersist: true, expireOnReject: !deferRejection);
     });
+    if (outcome != _RefreshOutcome.rejected || !deferRejection) return outcome == _RefreshOutcome.ok;
+
+    final generation = _generation;
+    final sent = _lastAttemptToken;
+    final fresh = sent == null ? null : await _awaitStoredRefreshChange(sent, generation);
+    if (generation != _generation) return false;
+    if (fresh == null) {
+      _expire(rejectionReason);
+      return false;
+    }
+    final again = await gate.run(() async {
+      if (generation != _generation) return _RefreshOutcome.stale;
+      _refreshToken = fresh;
+      _storedRefreshSeen = fresh;
+      _storedRefreshKnown = true;
+      return _refreshAttempt(rejectionReason, waitPersist: true);
+    });
+    return again == _RefreshOutcome.ok;
   }
 
-  Future<bool> _doRefreshNow(SessionEndReason rejectionReason, {bool waitPersist = false}) async {
+  /// Arka planda reddedilen yenilemeden sonra depodaki refresh token'ın yoklanma aralığı ve süresi (uyelik-4).
+  static const Duration _storedTokenPollEvery = Duration(milliseconds: 500);
+  static const Duration _storedTokenPollFor = Duration(seconds: 10);
+
+  /// Depodaki refresh token [sent]'ten FARKLI (boş olmayan) bir değere dönerse onu döndürür; [_storedTokenPollFor]
+  /// içinde dönmezse, depo boşalırsa (çıkış) ya da oturum değişirse `null`.
+  Future<String?> _awaitStoredRefreshChange(String sent, int generation) async {
+    final reader = readStoredRefreshToken;
+    if (reader == null) return null;
+    final deadline = _clock.now().add(_storedTokenPollFor);
+    while (true) {
+      String? stored;
+      var readOk = false;
+      try {
+        stored = await reader();
+        readOk = true;
+      } catch (_) {}
+      if (_disposed || generation != _generation) return null;
+      if (readOk && (stored == null || stored.isEmpty)) return null; // çıkış yapılmış
+      if (stored != null && stored.isNotEmpty && stored != sent) return stored;
+      if (!_clock.now().isBefore(deadline)) return null;
+      await _sleep(_storedTokenPollEvery);
+    }
+  }
+
+  Future<void> _sleep(Duration duration) {
+    final done = Completer<void>();
+    _clock.timer(duration, done.complete);
+    return done.future;
+  }
+
+  /// En son gönderilen (denenen) refresh token (uyelik-4: ret sonrası depo yoklaması bununla karşılaştırır).
+  String? _lastAttemptToken;
+
+  /// 429'da tek yeniden denemeden önceki en uzun bekleme (uyelik-5). `Retry-After` bundan uzunsa yeniden denenmez.
+  static const Duration _refreshRateLimitMaxWait = Duration(seconds: 30);
+
+  /// 429 yanıtında `Retry-After` yoksa yeniden denemeden önceki bekleme.
+  static const Duration _refreshRateLimitDefaultWait = Duration(seconds: 1);
+
+  /// Yenileme hız sınırında (429) kullanıcıya gösterilen metin (uyelik-5): oturum korunur.
+  static const String refreshBusyMessage = 'Sunucu geçici olarak yoğun; biraz sonra yeniden deneyin.';
+
+  static ApiException _refreshBusy(ApiException cause) => ApiException(
+        statusCode: 429,
+        code: 'RATE_LIMITED',
+        message: refreshBusyMessage,
+        retryAfter: cause.retryAfter,
+      );
+
+  /// Kapısız yenileme denemesi (ön plan, arka plan izleyicisi yokken).
+  Future<bool> _doRefreshNow(SessionEndReason rejectionReason) async =>
+      (await _refreshAttempt(rejectionReason)) == _RefreshOutcome.ok;
+
+  Future<http.Response> _sendRefresh(String token) => _sendRaw(
+        'POST',
+        _uri('/v1/auth/refresh'),
+        body: <String, dynamic>{'refresh_token': token},
+        auth: false,
+        timeout: const Duration(seconds: 10),
+      );
+
+  /// Tek yenileme denemesi (tek istek; bekleme YOK: 429 [_doRefresh]'te kapı dışında ele alınır). [expireOnReject]
+  /// `false` ise kalıcı ret oturumu BİTİRMEZ; [_RefreshOutcome.rejected] döner (arka plan izleyici depoyu yoklar;
+  /// uyelik-4).
+  Future<_RefreshOutcome> _refreshAttempt(
+    SessionEndReason rejectionReason, {
+    bool waitPersist = false,
+    bool expireOnReject = true,
+  }) async {
     final generation = _generation;
     final token = _refreshToken;
-    if (token == null) return false;
+    if (token == null) return _RefreshOutcome.stale;
+    _lastAttemptToken = token;
 
-    final res = await _sendRaw(
-      'POST',
-      _uri('/v1/auth/refresh'),
-      body: <String, dynamic>{'refresh_token': token},
-      auth: false,
-      timeout: const Duration(seconds: 10),
-    );
+    final res = await _sendRefresh(token);
 
     // Çıkış / yeni giriş oldu: bu yanıt eski oturuma aittir, yazılmaz.
-    if (generation != _generation) return false;
+    if (generation != _generation) return _RefreshOutcome.stale;
 
     final status = res.statusCode;
     if (status >= 200 && status < 300) {
@@ -523,18 +670,27 @@ class EvCloudApiService {
         var persisted = false;
         await _clock.bound<void>(
           Future<void>.sync(() async {
-            await callback(access, newRefresh);
-            persisted = true;
+            try {
+              await callback(access, newRefresh);
+              persisted = true;
+            } catch (_) {
+              // Kalıcı yazım başarısız (uyelik-3): yenileme yine BAŞARILIDIR (belirteçler bellekte). Depoda eski token
+              // kalmış olabileceğinden "son görülen" güncellenmez: sonraki yenileme depodaki eskiyi benimsemez.
+            }
           }),
           waitPersist ? _gatedPersistLimit : _tokenPersistLimit,
           () {},
         );
-        if (generation != _generation) return false; // depolama beklenirken çıkış yapıldı
-        if (persisted) _storedRefreshSeen = newRefresh; // depoda artık bu var
+        if (generation != _generation) return _RefreshOutcome.stale; // depolama beklenirken çıkış yapıldı
+        if (persisted) {
+          _storedRefreshSeen = newRefresh; // depoda artık bu var
+          _storedRefreshKnown = true;
+        }
       } else {
         _storedRefreshSeen = newRefresh; // kalıcı yazım yok (test/yalın istemci): bellek = kaynak
+        _storedRefreshKnown = true;
       }
-      return true;
+      return _RefreshOutcome.ok;
     }
 
     // Geçici hata: oturum KORUNUR.
@@ -543,8 +699,8 @@ class EvCloudApiService {
     }
 
     // 400/401/403/404 ...: refresh token kalıcı olarak reddedildi.
-    _expire(rejectionReason);
-    return false;
+    if (expireOnReject) _expire(rejectionReason);
+    return _RefreshOutcome.rejected;
   }
 
   // ---------------------------------------------------------------------------
@@ -798,13 +954,45 @@ class EvCloudApiService {
     if (generation == _generation) clearSession();
   }
 
-  /// Çıkış: **önce yerel oturum silinir**, sonra (en iyi çaba) sunucuda refresh token iptal edilir.
+  /// Çıkış: **önce yerel oturum silinir**, sonra (en iyi çaba) sunucuda refresh token iptal edilir. Servis (PIN)
+  /// oturumunda refresh token yoktur: oturum, JWT'siyle sunucuda kapatılır ([revokeServiceSession]; uyelik-12).
   Future<void> logout() async {
     final refresh = _refreshToken;
     final access = _authToken;
+    final serviceSession = _serviceSession != null;
     clearSession();
+    if (serviceSession) {
+      if (access != null) await revokeServiceSession(access);
+      return;
+    }
     if (refresh != null) {
       await revokeRefreshToken(refresh, accessToken: access);
+    }
+  }
+
+  /// Servis oturumu çıkış isteğinin üst süresi (uyelik-12).
+  static const Duration _serviceLogoutLimit = Duration(seconds: 3);
+
+  /// Servis (PIN) oturumunu sunucuda kapatır (uyelik-12): gövdede `refresh_token` YOK, `Authorization: Bearer <servis
+  /// JWT>`. Sunucu oturumu iptal eder (`self_logout`) ve evin servis oturumu MQTT kimliklerini silip atar. En çok 3 sn;
+  /// asla fırlatmaz (çıkışı engellemez). Belirteç loglanmaz.
+  Future<bool> revokeServiceSession(String accessToken) async {
+    if (_disposed || accessToken.isEmpty) return false;
+    try {
+      final res = await _client
+          .post(
+            _uri('/v1/auth/logout'),
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'Authorization': 'Bearer $accessToken',
+            },
+            body: '{}',
+          )
+          .timeout(_serviceLogoutLimit);
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1155,6 +1343,27 @@ class EvCloudApiService {
       );
     }
     return key;
+  }
+
+  /// Yerel anahtar ve sunucunun hesapladığı parmak izi (`local_key_fp`; eski sunucuda `null`; CONTRACTS sözleşme 1). Servis
+  /// sihirbazı panonun `lk_fp`'siyle karşılaştırır (servis_kurulum-1). Anahtar loglanmaz.
+  Future<({String key, String? fp})> localKeyInfo(String homeId, String deviceUuid) async {
+    final body = await _call(
+      'GET',
+      '/v1/homes/${_seg(homeId)}/devices/${_seg(deviceUuid)}/local-key',
+      homeId: homeId,
+    );
+    final data = _data(body);
+    final key = asNonEmptyString(data['local_key']);
+    if (key == null || key.length < 8 || key.length > 32) {
+      throw const ApiException(
+        statusCode: 502,
+        code: 'BAD_RESPONSE',
+        message: 'Sunucu geçersiz bir cihaz anahtarı verdi.',
+      );
+    }
+    final fp = asNonEmptyString(data['local_key_fp']);
+    return (key: key, fp: fp != null && RegExp(r'^[0-9a-f]{8}$').hasMatch(fp) ? fp : null);
   }
 
   /// Uç nokta günceller: ad, oda, (isteğe bağlı tip) ve panjur motor süresi (1..300 sn).
@@ -1512,6 +1721,17 @@ class EvCloudApiService {
   Future<List<HomeMember>> getHomeMembers(String homeId) async {
     final body = await _call('GET', '/v1/homes/${_seg(homeId)}/members', homeId: homeId);
     return parseList(_list(body, 'members'), HomeMember.fromJson, label: 'HomeMember');
+  }
+
+  /// Bekleyen davetler (`GET /homes/:homeId/invitations`; ev sahibi / süper; kod dönmez; ev_uyelik-6).
+  Future<List<PendingInvitation>> listInvitations(String homeId) async {
+    final body = await _call('GET', '/v1/homes/${_seg(homeId)}/invitations', homeId: homeId);
+    return parseList(_list(body, 'invitations'), PendingInvitation.fromJson, label: 'PendingInvitation');
+  }
+
+  /// Daveti iptal eder (`DELETE /homes/:homeId/invitations/:id`). Kullanılmış / süresi dolmuş davette `404 NOT_FOUND`.
+  Future<void> revokeInvitation(String homeId, String invitationId) async {
+    await _call('DELETE', '/v1/homes/${_seg(homeId)}/invitations/${_seg(invitationId)}', homeId: homeId);
   }
 
   /// Ev sahibi: üyeyi / misafiri evden çıkarır. [targetUserId] UUID **String**.
@@ -1901,8 +2121,8 @@ class EvCloudApiService {
     );
   }
 
-  /// Etiket yeniden üretimi (yalnızca süper kullanıcı; `POST /admin/inventory/:uid/reissue-label`):
-  /// yeni kurulum PIN'i + yerel anahtar **yalnızca bu yanıtta** gelir.
+  /// Etiket yeniden üretimi (`POST /admin/inventory/:uid/reissue-label`): yeni kurulum PIN'i (+ karekod bağlantısı)
+  /// **yalnızca bu yanıtta** gelir; yerel anahtar DEĞİŞMEZ ve yanıtta yoktur (atolye-2).
   Future<Map<String, dynamic>> reissueInventoryLabel(String uuid) async {
     final body = await _call(
       'POST',
@@ -1910,6 +2130,16 @@ class EvCloudApiService {
       timeout: const Duration(seconds: 15),
     );
     return _data(body);
+  }
+
+  /// Kurulum PIN kilidini kaldırır (`POST /admin/inventory/:uuid/clear-pin-lock`; yalnız süper yönetici; anahtar/PIN
+  /// değişmez; sunucu sözleşme 13; bireysel-7).
+  Future<void> clearInventoryPinLock(String uuid) async {
+    await _call(
+      'POST',
+      '/v1/admin/inventory/${_seg(uuid.trim().toUpperCase())}/clear-pin-lock',
+      timeout: const Duration(seconds: 15),
+    );
   }
 
   // --- Hesap silme (E2) ---------------------------------------------------------------------

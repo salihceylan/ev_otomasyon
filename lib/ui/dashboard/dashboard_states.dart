@@ -8,6 +8,8 @@ import '../../models/capabilities.dart';
 import '../../models/cloud_models.dart';
 import '../../services/automation_state.dart';
 import '../common/app_dialogs.dart';
+import '../common/qr_flow.dart';
+import '../pages/claim/claim_manual_dialog.dart';
 import '../pages/system_doctor_dialog.dart';
 import '../pages/wifi_recovery_dialog.dart';
 import '../motion/motion.dart';
@@ -478,16 +480,19 @@ class DeviceOfflineNotice extends StatelessWidget {
     final vm = context
         .select<
           AutomationState,
-          ({bool direct, String host, Capabilities caps})
+          ({bool direct, String host, Capabilities caps, String? neverSeenUid})
         >(
           (s) => (
             direct: s.mode == AppMode.direct,
             host: s.host,
             caps: s.capabilities,
+            neverSeenUid: _neverSeenUid(s),
           ),
         );
     final state = context.read<AutomationState>();
     final warn = AppTheme.warningText(context);
+    // Panoların hiçbiri buluta hiç bağlanmadı (bireysel-12): "çevrimdışı / son bilinen durum" değil, kurulum eksik.
+    final neverSeen = !vm.direct && vm.neverSeenUid != null;
 
     return Container(
       key: const Key('notice_device_offline'),
@@ -505,7 +510,7 @@ class DeviceOfflineNotice extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  vm.direct ? 'Cihaza ulaşılamıyor' : 'Pano çevrimdışı',
+                  vm.direct ? 'Cihaza ulaşılamıyor' : (neverSeen ? 'Pano henüz bağlanmadı' : 'Pano çevrimdışı'),
                   style: TextStyle(fontWeight: FontWeight.bold, color: warn),
                 ),
               ),
@@ -515,8 +520,12 @@ class DeviceOfflineNotice extends StatelessWidget {
           Text(
             vm.direct
                 ? 'Cihaza bağlanılamıyor${vm.host.isEmpty ? '' : ' (${vm.host})'}. Yerel Wi-Fi ağına bağlı olduğunuzdan emin olun.'
-                : 'Pano şu an buluta bağlı görünmüyor. Gösterilen durum son bilinen durumdur; '
-                      'pano elektrik ve internet bağlantısını kontrol edin.',
+                : (neverSeen
+                      ? 'Pano buluta henüz hiç bağlanmadı. Panonun elektriği açık ve ev ağına (Ethernet ya da Wi-Fi) bağlı '
+                            'olmalı; Wi-Fi ile bağlanacaksa ev ağını "Pano Wi-Fi Kurulumu" ile yükleyin. Pano internete '
+                            'çıktıktan sonra bağlantı birkaç dakika sürebilir.'
+                      : 'Pano şu an buluta bağlı görünmüyor. Gösterilen durum son bilinen durumdur; '
+                            'pano elektrik ve internet bağlantısını kontrol edin.'),
             style: TextStyle(
               fontSize: 13,
               color: AppTheme.getTextMuted(context),
@@ -553,15 +562,26 @@ class DeviceOfflineNotice extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     minimumSize: const Size(48, 48),
                   ),
-                  onPressed: () => WifiRecoveryDialog.show(context),
+                  onPressed: () => WifiRecoveryDialog.show(context, deviceUuid: neverSeen ? vm.neverSeenUid : null),
                   icon: const Icon(Icons.wifi_find, size: 18),
-                  label: const Text('Wi-Fi Kurtarma Modu'),
+                  label: Text(neverSeen ? 'Pano Wi-Fi Kurulumu' : 'Wi-Fi Kurtarma Modu'),
                 ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  /// Evin pano listesi boş değilse ve hiçbiri buluta hiç bağlanmadıysa (son görülme yok, çevrimiçi değil) ilk panonun
+  /// kimliği; aksi halde `null`.
+  static String? _neverSeenUid(AutomationState s) {
+    final devices = s.devices;
+    if (devices.isEmpty) return null;
+    for (final d in devices) {
+      if (d.lastSeenAt != null || d.online) return null;
+    }
+    return devices.first.deviceUuid;
   }
 }
 
@@ -734,8 +754,9 @@ Future<void> showHomeSwitcherSheet(BuildContext context) {
 }
 
 /// Misafir erişimi sona ermiş ekranı: kapsamlı bir "Erişim süreniz doldu" açıklaması, ev listesini
-/// yenileme ve (varsa) başka daireye geçiş. Anahtarlar: `Key('view_guest_expired')`,
-/// `Key('btn_refresh_homes')`.
+/// yenileme, (varsa) başka daireye geçiş ve (bireysel-2) kendi panosunu eşleme: sahiplenme ev kapsamlı değildir,
+/// süresi dolan misafir de kendi panosunu karekodla / elle eşleyebilir. Anahtarlar: `Key('view_guest_expired')`,
+/// `Key('btn_refresh_homes')`, `Key('btn_guest_scan_qr')`, `Key('btn_guest_claim_manual')`.
 class GuestExpiredView extends StatelessWidget {
   const GuestExpiredView({super.key});
 
@@ -745,7 +766,7 @@ class GuestExpiredView extends StatelessWidget {
     final vm = context
         .select<
           AutomationState,
-          ({String name, DateTime? until, bool hasOther})
+          ({String name, DateTime? until, bool hasOther, bool canClaim})
         >((s) {
           final now = s.clock.now();
           return (
@@ -754,6 +775,7 @@ class GuestExpiredView extends StatelessWidget {
             hasOther: s.homes.any(
               (h) => h.id != s.activeHome?.id && !h.isGuestExpiredAt(now),
             ),
+            canClaim: s.capabilities.canClaimDevice,
           );
         });
 
@@ -793,6 +815,26 @@ class GuestExpiredView extends StatelessWidget {
             icon: const Icon(Icons.swap_horiz, size: 18),
             label: const Text('Başka daireye geç'),
           ),
+        if (vm.canClaim) ...[
+          OutlinedButton.icon(
+            key: const Key('btn_guest_scan_qr'),
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size(48, 48),
+            ),
+            onPressed: () => scanAndRouteQr(context),
+            icon: const Icon(Icons.qr_code_scanner, size: 18),
+            label: const Text('Karekod ile Cihaz Eşle'),
+          ),
+          TextButton.icon(
+            key: const Key('btn_guest_claim_manual'),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(48, 48),
+            ),
+            onPressed: () => ClaimManualDialog.show(context),
+            icon: const Icon(Icons.keyboard_alt_outlined, size: 18),
+            label: const Text('Cihaz Kodunu Elle Gir'),
+          ),
+        ],
       ],
     );
   }

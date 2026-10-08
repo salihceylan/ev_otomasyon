@@ -37,6 +37,8 @@ class _ActuatorView {
     required this.openBlock,
     required this.canClose,
     required this.canControl,
+    this.gasVentilation = false,
+    this.canAck = false,
   });
 
   final ActuatorItem? item;
@@ -45,6 +47,10 @@ class _ActuatorView {
   final bool canClose;
   final bool canControl;
 
+  /// Çalışan fan + bölgesinde etkin gaz alarmı (guvenlik-7).
+  final bool gasVentilation;
+  final bool canAck;
+
   @override
   bool operator ==(Object other) =>
       other is _ActuatorView &&
@@ -52,10 +58,12 @@ class _ActuatorView {
       other.pending == pending &&
       other.openBlock == openBlock &&
       other.canClose == canClose &&
-      other.canControl == canControl;
+      other.canControl == canControl &&
+      other.gasVentilation == gasVentilation &&
+      other.canAck == canAck;
 
   @override
-  int get hashCode => Object.hash(item, pending, openBlock, canClose, canControl);
+  int get hashCode => Object.hash(item, pending, openBlock, canClose, canControl, gasVentilation, canAck);
 }
 
 /// Tek eylemcinin kartı; canlı değerini kendisi seçer (bölüm yalnız kart kümesi değişince yeniden kurulur).
@@ -78,6 +86,8 @@ class ActuatorCard extends StatelessWidget {
         openBlock: item != null && item.isValve ? s.valveOpenBlockReason(item) : null,
         canClose: s.capabilities.canCloseActuators,
         canControl: s.capabilities.canControlActuators,
+        gasVentilation: item != null && s.isGasVentilationRunning(item),
+        canAck: s.capabilities.canAckAlarm,
       );
     });
     final item = view.item;
@@ -179,7 +189,8 @@ class ActuatorCard extends StatelessWidget {
 
   Widget _switchBody(BuildContext context, ActuatorItem item, _ActuatorView view) {
     final on = item.on ?? false;
-    final allowed = on ? view.canClose : view.canControl;
+    // Gaz alarmı sürerken çalışan havalandırma fanı: anahtar yalnız alarm onay yetkisi olana (guvenlik-7).
+    final allowed = view.gasVentilation ? view.canAck : (on ? view.canClose : view.canControl);
     return Row(
       children: [
         Expanded(
@@ -206,8 +217,19 @@ class ActuatorCard extends StatelessWidget {
               value: on,
               onChanged: view.pending
                   ? null
-                  : (value) {
+                  : (value) async {
                       final state = context.read<AutomationState>();
+                      if (!value && view.gasVentilation) {
+                        final ok = await confirmSafetyAction(
+                          context,
+                          title: 'Gaz alarmı sürüyor; havalandırma durdurulsun mu?',
+                          message: 'Fan, gaz birikmesini önlemek için çalışıyor. Ortam havalandırılmadıysa durdurmayın.',
+                          confirmLabel: 'Fanı Durdur',
+                          icon: Icons.mode_fan_off_outlined,
+                          family: AppFamilies.amber,
+                        );
+                        if (!ok || !context.mounted) return;
+                      }
                       unawaited(runCommand(context, actuatorCommandKey(item), () => state.setActuatorOn(item, value)));
                     },
             ),

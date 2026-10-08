@@ -425,6 +425,8 @@ class _SafetySection extends StatelessWidget {
   final List<SensorItem> sensors;
   final bool showHistory;
 
+  bool get _multiBoard => sensors.map((s) => s.deviceUid).toSet().length > 1;
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -465,7 +467,15 @@ class _SafetySection extends StatelessWidget {
           Wrap(
             spacing: 12,
             runSpacing: 8,
-            children: [for (final x in sensors) SensorStatusPill(key: ValueKey('pill_sensor_${x.id}'), sensor: x)],
+            children: [
+              // Çok panolu evde aynı sensör kimliği (d3) iki panoda da olabilir: anahtar panoyla ayrılır (yinelenen anahtar
+              // bölümü çökertirdi); tek panolu evde anahtar değişmez.
+              for (final x in sensors)
+                SensorStatusPill(
+                  key: ValueKey(_multiBoard ? 'pill_sensor_${x.deviceUid}_${x.id}' : 'pill_sensor_${x.id}'),
+                  sensor: x,
+                ),
+            ],
           ),
         ],
       ],

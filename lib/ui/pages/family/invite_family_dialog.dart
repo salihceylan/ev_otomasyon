@@ -9,6 +9,7 @@ import '../../../models/cloud_models.dart';
 import '../../../services/automation_state.dart';
 import '../../../utils/friendly_error.dart';
 import '../../common/app_dialogs.dart';
+import '../../common/confirm_dialogs.dart' show showSimpleConfirm;
 import '../../common/date_format.dart';
 import '../../common/inline_message.dart';
 import '../../motion/motion_scope.dart';
@@ -61,10 +62,13 @@ class InviteFamilyDialog extends StatefulWidget {
 
 /// Ekranda gösterilen üretilmiş davet.
 class _InviteView {
-  const _InviteView({required this.code, required this.qrContent, this.expiresAt, this.accessUntil});
+  const _InviteView({required this.code, required this.qrContent, this.expiresAt, this.accessUntil, this.id});
 
   final String code;
   final String qrContent;
+
+  /// Sunucu kimliği (iptal için; ev_uyelik-6). Eski sunucuda / dışarıdan verilen kodda `null`.
+  final String? id;
 
   /// Kodun son kullanım zamanı (bilinmiyorsa `null`).
   final DateTime? expiresAt;
@@ -120,7 +124,59 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> {
         qrContent: inv.qrContent,
         expiresAt: inv.expiresAt,
         accessUntil: inv.guestValidUntil,
+        id: inv.id,
       );
+
+  bool _revoking = false;
+
+  /// Bu pencerede üretilen daveti iptal eder (ev_uyelik-6): kod ekrandan kalkar.
+  Future<void> _revoke({required bool guest}) async {
+    final view = guest ? _guest : _member;
+    final id = view?.id;
+    if (id == null || _revoking) return;
+    final ok = await showSimpleConfirm(
+      context,
+      title: 'Davet iptal edilsin mi?',
+      message: 'Bu davet kodu artık kullanılamaz.',
+      confirmLabel: 'İptal Et',
+      cancelLabel: 'Vazgeç',
+      destructive: true,
+      icon: Icons.cancel_schedule_send_rounded,
+    );
+    if (!ok || !mounted) return;
+    final state = context.read<AutomationState>();
+    setState(() => _revoking = true);
+    String message;
+    try {
+      await state.revokeInvitation(id);
+      message = 'Davet iptal edildi.';
+    } catch (e) {
+      message = e is ApiException && e.statusCode == 404
+          ? 'Davet zaten kullanılmış ya da süresi dolmuş.'
+          : friendlyError(e, fallback: 'Davet iptal edilemedi. Lütfen tekrar deneyin.');
+      if (!(e is ApiException && e.statusCode == 404)) {
+        if (mounted) setState(() => _revoking = false);
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+          );
+        }
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _revoking = false;
+      if (guest) {
+        _guest = null;
+      } else {
+        _member = null;
+      }
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
 
   Future<void> _generate({required bool guest}) async {
     final state = context.read<AutomationState>();
@@ -539,6 +595,15 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> {
               style: TextStyle(color: muted, fontSize: 12, height: 1.3),
               textAlign: TextAlign.center,
             ),
+            if (member.id != null)
+              Center(
+                child: TextButton.icon(
+                  key: const Key('btn_revoke_member_invite'),
+                  onPressed: _revoking ? null : () => _revoke(guest: false),
+                  icon: const Icon(Icons.cancel_outlined, size: 18),
+                  label: const Text('Bu daveti iptal et'),
+                ),
+              ),
           ],
         ],
       ),
@@ -665,6 +730,15 @@ class _InviteFamilyDialogState extends State<InviteFamilyDialog> {
               style: TextStyle(color: muted, fontSize: 12, height: 1.3),
               textAlign: TextAlign.center,
             ),
+            if (guest.id != null)
+              Center(
+                child: TextButton.icon(
+                  key: const Key('btn_revoke_guest_invite'),
+                  onPressed: _revoking ? null : () => _revoke(guest: true),
+                  icon: const Icon(Icons.cancel_outlined, size: 18),
+                  label: const Text('Bu daveti iptal et'),
+                ),
+              ),
           ],
         ],
       ),

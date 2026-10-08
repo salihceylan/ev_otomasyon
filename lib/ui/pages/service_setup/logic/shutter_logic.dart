@@ -172,8 +172,13 @@ class ShutterLogic extends SetupLogic {
   Map<int, String> _endpointIds = const <int, String>{};
   Map<int, Map<String, dynamic>> _saved = const <int, Map<String, dynamic>>{};
 
+  /// Teknisyen "Bu dairede motorlu panjur yok" beyanı (servis_kurulum-3): tüm çiftler "kullanılmıyor" iken adım dürüstçe
+  /// tamamlanır; teslim raporuna beyan olarak yazılır. Herhangi bir çift geri alınınca / şablon uygulanınca düşer.
+  bool _noMotorizedDeclared = false;
+
   List<ShutterCheck> get shutters => _shutters;
   bool get loaded => _loaded;
+  bool get noMotorizedDeclared => _noMotorizedDeclared;
 
   /// Şablon panoya uygulandı (İP-4.3): panjur listesi ve kayıttaki yön/süre ilerlemesi bırakılır (süreler şablondan
   /// gelir); adıma girilince panodan yeniden okunur.
@@ -181,13 +186,31 @@ class ShutterLogic extends SetupLogic {
     _shutters = const <ShutterCheck>[];
     _loaded = false;
     _saved = const <int, Map<String, dynamic>>{};
+    _noMotorizedDeclared = false;
     clearProblem();
   }
   bool get hasNoShutters => _loaded && _shutters.isEmpty;
 
   @override
   bool get isComplete =>
-      _loaded && _shutters.every((s) => s.isReady) && (_shutters.isEmpty || _shutters.any((s) => s.isVerified));
+      _loaded &&
+      _shutters.every((s) => s.isReady) &&
+      (_shutters.isEmpty ||
+          _shutters.any((s) => s.isVerified) ||
+          (_noMotorizedDeclared && _shutters.every((s) => s.unused)));
+
+  /// "Bu dairede motorlu panjur yok" (servis_kurulum-3): tüm çiftler "kullanılmıyor" işaretlenir (ölçüm için yazılmış
+  /// geçici süre geri yüklenir) ve beyan kaydedilir.
+  Future<bool> declareNoMotorizedShutters() async {
+    for (final s in List<ShutterCheck>.of(_shutters)) {
+      if (s.unused) continue;
+      if (!await setUnused(s.pair, true)) return false;
+    }
+    _noMotorizedDeclared = true;
+    ctx.notify();
+    ctx.persist();
+    return true;
+  }
 
   ShutterCheck? byPair(int pair) {
     for (final s in _shutters) {
@@ -389,6 +412,8 @@ class ShutterLogic extends SetupLogic {
         _put(_require(pair).copyWith(unused: true));
       });
     }
+    // Bir çift yeniden kullanımda: "motorlu panjur yok" beyanı geçersiz (servis_kurulum-3).
+    if (!unused) _noMotorizedDeclared = false;
     _put(s.copyWith(unused: unused));
     ctx.notify();
     ctx.persist();
@@ -748,11 +773,12 @@ class ShutterLogic extends SetupLogic {
         }
       }
     }
-    return <String, dynamic>{'shutters': out};
+    return <String, dynamic>{'shutters': out, if (_noMotorizedDeclared) 'no_shutters': true};
   }
 
   @override
   void restore(Map<String, dynamic> json) {
+    _noMotorizedDeclared = json['no_shutters'] == true;
     final raw = asMap(json['shutters']);
     if (raw == null) return;
     _saved = <int, Map<String, dynamic>>{

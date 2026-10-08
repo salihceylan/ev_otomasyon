@@ -612,11 +612,20 @@ class EvMqttService {
 
   void _scheduleRenewal(MqttCredentials credentials, Completer<void> ended, void Function() onDue) {
     _cancelRenewTimer();
-    final remaining = credentials.expiresAt.difference(_clock.now());
-    // Süre dolmadan en geç 5 dk önce (kalan sürenin yarısından fazla değil) yenile.
-    final lead = remaining.inSeconds > 600 ? const Duration(minutes: 5) : remaining ~/ 2;
-    var delay = remaining - lead;
-    if (delay < const Duration(seconds: 15)) delay = const Duration(seconds: 15);
+    // Sunucunun hesapladığı kalan süre (`expires_in`) esastır (kullanim-10): telefon saati ileri/geri ise
+    // `expiresAt - yerel saat` yanıltır (ör. 13 sa ileri saatte 15 sn'de bir yeni kimlik istenirdi).
+    final remaining = credentials.expiresIn ?? credentials.expiresAt.difference(_clock.now());
+    Duration delay;
+    if (remaining <= Duration.zero) {
+      // Eski sunucu + yanlış telefon saati: süre "dolmuş" görünür. Kimlik büyük olasılıkla hâlâ geçerlidir; döngüye
+      // girmemek için en az 5 dk beklenir (gerçekten dolduysa broker bağlantıyı keser ve taze kimlik istenir).
+      delay = const Duration(minutes: 5);
+    } else {
+      // Süre dolmadan en geç 5 dk önce (kalan sürenin yarısından fazla değil) yenile.
+      final lead = remaining.inSeconds > 600 ? const Duration(minutes: 5) : remaining ~/ 2;
+      delay = remaining - lead;
+      if (delay < const Duration(seconds: 15)) delay = const Duration(seconds: 15);
+    }
     _renewTimer = _clock.timer(delay, () {
       onDue();
       if (!ended.isCompleted) ended.complete();

@@ -45,7 +45,7 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
   /// Telefon kimliği ipucu (UYELIK-08): telefon-OTP hesabının parolası yoktur, e-postası sunucunun teknik yer
   /// tutucusudur; sunucu genel "gönderildi" yanıtı verse de kod hiçbir kanala ulaşmaz.
   static const String _phoneOnlyHint =
-      'Yalnızca telefonla açılmış hesapların şifresi ve e-postası yoktur; bu hesaplara sıfırlama kodu gönderilemez.';
+      'Telefonla açılmış (e-postasız) hesaplara kod gönderilemez; diğer hesaplarda kod kayıtlı e-postaya gider.';
 
   final _identifierController = TextEditingController();
   final _codeController = TextEditingController();
@@ -331,8 +331,13 @@ class _ForgotPasswordDialogState extends State<ForgotPasswordDialog> {
         style: TextStyle(fontSize: 13, color: muted, height: 1.4),
       ),
       const SizedBox(height: 4),
+      // Kod her zaman hesabın e-postasına gider; telefonla istendiğinde SMS gönderilmez (uyelik-16).
       Text(
-        '$_identifier adresine/numarasına gönderilen 6 haneli kodu girin.',
+        sentToPhone
+            ? 'Kod, bu numaraya bağlı hesabın e-posta adresine gönderildi (hesap varsa). E-postanızı kontrol edin; SMS '
+                'gönderilmez.'
+            : '$_identifier adresine gönderilen 6 haneli kodu girin.',
+        key: const Key('forgot_sent_to'),
         style: TextStyle(fontSize: 12, color: muted, height: 1.4),
       ),
       if (sentToPhone) ...[

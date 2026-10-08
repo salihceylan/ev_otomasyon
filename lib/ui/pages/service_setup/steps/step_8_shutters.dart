@@ -31,8 +31,9 @@ class Step8Shutters extends StatelessWidget {
       context,
       c,
       8,
-      continueHint: s.loaded && !s.hasNoShutters && s.shutters.every((x) => x.unused)
-          ? 'En az bir panjuru gerçekten test edin (yön + süre): hepsi "Kullanılmıyor" işaretlenerek geçilemez.'
+      continueHint: s.loaded && !s.hasNoShutters && s.shutters.every((x) => x.unused) && !s.noMotorizedDeclared
+          ? 'En az bir panjuru gerçekten test edin (yön + süre) ya da dairede motorlu panjur yoksa "Bu dairede motorlu '
+              'panjur yok" ile beyan edin.'
           : 'Devam etmek için her panjurun yönünü onaylayın ve süresini kaydedin (veya "Kullanılmıyor" işaretleyin).',
       statusText: s.loaded ? (s.hasNoShutters ? 'Panjur yok' : '$ready/${s.shutters.length} hazır') : null,
       // Ekranda zaten gradyan birincil var ("Panoya Bağlan" / "Panjurları Listele"): hata kutusundaki "Tekrar dene" çerçeveli.
@@ -49,9 +50,29 @@ class Step8Shutters extends StatelessWidget {
                 text: 'Bu panoda panjur çıkışı yok. Bu adım tamamlanmış sayılır; "Devam"a basabilirsiniz.',
               ),
             )
-          else if (s.loaded)
+          else if (s.loaded) ...[
             for (final shutter in s.shutters)
-              _ShutterCard(key: Key('card_shutter_${shutter.pair}'), controller: c, pair: shutter.pair)
+              _ShutterCard(key: Key('card_shutter_${shutter.pair}'), controller: c, pair: shutter.pair),
+            // Tüm çiftler "kullanılmıyor": dairede motorlu panjur yoksa teknisyen beyanıyla adım tamamlanır (servis_kurulum-3).
+            if (s.shutters.every((x) => x.unused) && !s.noMotorizedDeclared)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: OutlinedButton.icon(
+                  key: const Key('btn_no_motorized_shutters'),
+                  onPressed: s.busy ? null : () => _declareNoMotorized(context, s),
+                  icon: const Icon(Icons.block_rounded, size: 18),
+                  label: const Text('Bu dairede motorlu panjur yok'),
+                ),
+              ),
+            if (s.noMotorizedDeclared)
+              const SetupCard(
+                key: Key('shutter_no_motor_note'),
+                child: SetupInfoRow(
+                  icon: Icons.info_outline_rounded,
+                  text: 'Dairede motorlu panjur yok (teknisyen beyanı): teslim raporuna beyan olarak yazılır.',
+                ),
+              ),
+          ]
           else if (!s.busy && c.conn.ready)
             Padding(
               padding: const EdgeInsets.only(top: 12),
@@ -66,6 +87,35 @@ class Step8Shutters extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "Bu dairede motorlu panjur yok" beyanı onayla kaydedilir (servis_kurulum-3).
+Future<void> _declareNoMotorized(BuildContext context, ShutterLogic s) async {
+  final ok = await showAppDialog<bool>(
+    context,
+    builder: (ctx) => AlertDialog(
+      scrollable: true,
+      title: const Text('Dairede motorlu panjur yok mu?'),
+      content: const Text(
+        'Panoda panjur çiftleri tanımlı ama dairede motorlu panjur yoksa onaylayın. Panjur testi yapılmaz; teslim raporuna '
+        '"dairede motorlu panjur yok (teknisyen beyanı)" yazılır.',
+      ),
+      actions: [
+        TextButton(
+          key: const Key('btn_no_motor_cancel'),
+          style: AppTheme.quietTextButtonStyle(ctx),
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Vazgeç'),
+        ),
+        ElevatedButton(
+          key: const Key('btn_no_motor_confirm'),
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Onaylıyorum'),
+        ),
+      ],
+    ),
+  );
+  if (ok == true) await s.declareNoMotorizedShutters();
 }
 
 class _ShutterCard extends StatefulWidget {
@@ -192,8 +242,8 @@ class _ShutterCardState extends State<_ShutterCard> {
         title: const Text('Bu panjur kullanılmıyor mu?'),
         content: const Text(
           'Panoda bu panjur için röle çıkışları tanımlı ama motor bağlı değilse işaretleyin. Bu panjur test edilmez; '
-          'teslim raporuna "kullanılmıyor (teknisyen beyanı)" yazılır. Panoda hiç test edilen panjur kalmazsa adım '
-          'geçilemez: en az bir panjuru gerçekten test etmelisiniz.',
+          'teslim raporuna "kullanılmıyor (teknisyen beyanı)" yazılır. Hiçbir panjur test edilmeyecekse adım yalnız '
+          '"Bu dairede motorlu panjur yok" beyanıyla geçilir.',
         ),
         actions: [
           TextButton(

@@ -202,6 +202,19 @@ class AutomationState extends ChangeNotifier {
   static const _prefsActiveHome = 'saved_active_home_id';
   static const _prefsLegacyToken = 'saved_auth_token';
 
+  /// Ev başına hatırlanan LAN panosu (kullanim-1): `lan_device_<evKimliği>` -> pano uid'i (gizli değil). İnternet yokken
+  /// (cihaz listesi alınamaz) yerel anahtar bu kimlikle güvenli depodan bulunur.
+  static const _prefsLanDevicePrefix = 'lan_device_';
+
+  /// Ev başına doğrudan kip adresi (kullanim-3): `saved_esp_host_<evKimliği>`.
+  static const _prefsHostPrefix = 'saved_esp_host_';
+
+  /// Yerel anahtarın sunucudan son önden tazelendiği an (pano-6): `local_key_prefetch_<uid>` -> epoch ms.
+  static const _prefsKeyPrefetchPrefix = 'local_key_prefetch_';
+
+  /// Girişsiz yerel kipte anahtarı girilen panonun kimliği (bireysel-5).
+  static const _prefsAnonLanDevice = 'saved_lan_device_uuid';
+
   // ---------------------------------------------------------------------------
   // Durum alanları
   // ---------------------------------------------------------------------------
@@ -235,6 +248,15 @@ class AutomationState extends ChangeNotifier {
   // Uçuştaki LAN isteğinin hedefi (PF-32): adres/anahtar değişirse eski uçuş devralınmaz, sonucu atılır.
   String? _pollFlightBase;
   String? _pollFlightKey;
+
+  /// Ev kimliği -> hatırlanan LAN panosu uid'i (kullanim-1; `lan_device_<ev>` tercihlerinin bellek kopyası).
+  final Map<String, String> _lanDeviceByHome = <String, String>{};
+
+  /// Girişsiz yerel kipte anahtarı girilen panonun uid'i (bireysel-5; `saved_lan_device_uuid`).
+  String? _anonLanDevice;
+
+  /// Son LAN yanıtının pano kimliği (tam durumda `uid`, kısıtlı özette `device`) (bireysel-5).
+  String? _lastLanUid;
 
   // Telemetri bildirim eşiği (PF-33): `uptime`/RSSI için SON BİLDİRİLEN değerler.
   int _telemetryUptimeSec = 0;
@@ -290,6 +312,13 @@ class AutomationState extends ChangeNotifier {
   String? _lastDeviceIp;
   int _realtimeEpoch = -1;
   Timer? _reconcileTimer;
+
+  /// Canlı kanalın (MQTT) bu ev için en son başlatıldığı an (kullanim-2): bu andan SONRA uygulanan ilk `state`, güvenlik
+  /// görünümünün (alarm kartları) taze olduğunu kanıtlar. Arka plandan dönüşte eski harita bayat kalabilir.
+  DateTime? _realtimeStartedAt;
+
+  /// [awaitFreshSafety] bekleyicileri: [_applyCloudSnapshot] her uygulamada tamamlar.
+  final List<Completer<void>> _snapshotWaiters = <Completer<void>>[];
 
   String? _servicePin;
   DateTime? _servicePinExpiry;
@@ -747,6 +776,7 @@ class AutomationState extends ChangeNotifier {
 
     _host = prefs.getString(_prefsHost) ?? '';
     directApi.updateHost(_host);
+    _loadLanDevicePrefs(prefs);
 
     final savedTheme = prefs.getString(_prefsTheme);
     _themeMode = savedTheme == 'light'
@@ -963,8 +993,9 @@ class AutomationState extends ChangeNotifier {
 
   /// Depolama işlemlerini sıraya alır. [epoch] verilirse ve bu arada oturum değiştiyse işlem
   /// **çalıştırılmaz** (çıkıştan sonra gecikmeli token yazımı olmaz). Hatalar yutulmaz:
-  /// [storageError] olarak yüzeye çıkar.
-  Future<void> _enqueueStorage(Future<void> Function() operation, {int? epoch}) {
+  /// [storageError] olarak yüzeye çıkar. [rethrowErrors] `true` ise hata ayrıca çağırana iletilir (uyelik-3: API
+  /// istemcisi yazımın başarısız olduğunu bilmelidir); kuyruk bundan etkilenmez (sonraki işlemler sürer).
+  Future<void> _enqueueStorage(Future<void> Function() operation, {int? epoch, bool rethrowErrors = false}) {
     final run = _storageQueue.then((_) async {
       if (epoch != null && epoch != _sessionEpoch) return;
       try {
@@ -972,12 +1003,14 @@ class AutomationState extends ChangeNotifier {
       } on SecureStorageException catch (e) {
         _storageError = e.message;
         notifyListeners();
+        if (rethrowErrors) rethrow;
       } catch (_) {
         _storageError = 'Güvenli depolama kullanılamıyor.';
         notifyListeners();
+        if (rethrowErrors) rethrow;
       }
     });
-    _storageQueue = run;
+    _storageQueue = run.catchError((Object _) {}); // kuyruk kopmasın
     return run;
   }
 
@@ -998,12 +1031,15 @@ class AutomationState extends ChangeNotifier {
         await secureStorage.saveRefreshToken(refreshToken);
       }
       await secureStorage.saveAuthToken(accessToken);
-    }, epoch: epoch);
+    }, epoch: epoch, rethrowErrors: true); // yazım hatası istemciye bildirilir (uyelik-3)
   }
 
   Future<void> _wipeStorageQuietly() => _enqueueStorage(() => secureStorage.clearAll());
 
   Future<void> _clearUserPrefs() async {
+    // Ev başına LAN panosu / adres ve girişsiz pano kimliği önceki kullanıcıya aittir (kullanim-1/3, bireysel-5).
+    _lanDeviceByHome.clear();
+    _anonLanDevice = null;
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_prefsLegacyToken);
@@ -1013,7 +1049,55 @@ class AutomationState extends ChangeNotifier {
       await prefs.remove(_prefsSvcIp);
       await prefs.remove(_prefsSvcName);
       await prefs.remove(_prefsActiveHome);
+      await prefs.remove(_prefsAnonLanDevice);
+      for (final key in prefs.getKeys().toList()) {
+        if (key.startsWith(_prefsLanDevicePrefix) ||
+            key.startsWith(_prefsHostPrefix) ||
+            key.startsWith(_prefsKeyPrefetchPrefix)) {
+          await prefs.remove(key);
+        }
+      }
     } catch (_) {}
+  }
+
+  /// `lan_device_<ev>` ve `saved_lan_device_uuid` tercihlerini belleğe alır (açılışta).
+  void _loadLanDevicePrefs(SharedPreferences prefs) {
+    _lanDeviceByHome.clear();
+    try {
+      for (final key in prefs.getKeys()) {
+        if (!key.startsWith(_prefsLanDevicePrefix)) continue;
+        final uid = QrClaimParser.normalizeUid(prefs.getString(key));
+        if (uid != null) _lanDeviceByHome[key.substring(_prefsLanDevicePrefix.length)] = uid;
+      }
+      _anonLanDevice = QrClaimParser.normalizeUid(prefs.getString(_prefsAnonLanDevice));
+    } catch (_) {}
+  }
+
+  Future<void> _savePref(String key, String value) async {
+    try {
+      await (await SharedPreferences.getInstance()).setString(key, value);
+    } catch (_) {}
+  }
+
+  /// Aktif ev için LAN panosunu hatırlar (kullanim-1). Servis personelinin elle seçtiği cihaz ([selectDevice]) eve
+  /// yazılmaz: o seçim aktif evden bağımsızdır.
+  void _rememberLanDevice(String uuid) {
+    final home = _activeHome;
+    if (home == null || _selectedDeviceUuid.isNotEmpty) return;
+    if (_lanDeviceByHome[home.id] == uuid) return;
+    _lanDeviceByHome[home.id] = uuid;
+    unawaited(_savePref('$_prefsLanDevicePrefix${home.id}', uuid));
+  }
+
+  /// Aktif evin doğrudan kip adresi (kullanim-3): `saved_esp_host_<ev>`, yoksa genel `saved_esp_host`.
+  Future<void> _loadHomeHost(String homeId) async {
+    String? host;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      host = prefs.getString('$_prefsHostPrefix$homeId') ?? prefs.getString(_prefsHost);
+    } catch (_) {}
+    _host = host ?? '';
+    directApi.updateHost(_host);
   }
 
   // ---------------------------------------------------------------------------
@@ -1182,8 +1266,9 @@ class AutomationState extends ChangeNotifier {
       _presence = DevicePresence.offline;
       notifyListeners();
     }
-    // İletildi ama cihaz doğrulamadı: komut uygulanmış olabilir; gerçek durumu hemen yeniden oku.
-    if (failure.reason == CommandFailureReason.timeout &&
+    // İletildi ama cihaz doğrulamadı ya da yanıt alınamadı (ağ / zaman aşımı; kullanim-9): komut uygulanmış olabilir;
+    // gerçek durumu hemen yeniden oku (bulutta tek anlık görüntü, doğrudan kipte LAN yoklaması).
+    if ((failure.reason == CommandFailureReason.timeout || failure.reason == CommandFailureReason.network) &&
         !_inBackground &&
         (isAuthenticated || _mode == AppMode.direct)) {
       unawaited(refresh(silent: true));
@@ -1279,11 +1364,9 @@ class AutomationState extends ChangeNotifier {
       await refresh(silent: true);
       return;
     }
-    if (!isAuthenticated || isServiceSession) {
-      if (isServiceSession) await refresh(silent: true);
-      return;
-    }
-    // Ev listesi (roller) + tek snapshot + canlı kanal EŞZAMANLI (PF-03): ardışık beklemek 3 tur x 10 sn olabilir.
+    if (!isAuthenticated) return;
+    // Ev listesi (roller) + tek snapshot + canlı kanal EŞZAMANLI (PF-03): ardışık beklemek 3 tur x 10 sn olabilir. Servis
+    // PIN oturumu da kapsanır (kullanim-6): ev listesi orada erken döner, canlı kanal (MQTT) yeniden kurulur.
     await Future.wait<void>(<Future<void>>[
       fetchHomes(autoSelect: false),
       refresh(silent: true),
@@ -1593,6 +1676,7 @@ class AutomationState extends ChangeNotifier {
       if (access != null) await secureStorage.saveAuthToken(access);
       if (refresh != null) await secureStorage.saveRefreshToken(refresh);
       await secureStorage.saveUser(updated);
+      cloudApi.markRefreshPersisted(refresh); // uyelik-3: yazım doğrulandı
     }, epoch: epoch);
   }
 
@@ -1743,6 +1827,8 @@ class AutomationState extends ChangeNotifier {
       await secureStorage.saveAuthToken(access);
       if (refresh != null) await secureStorage.saveRefreshToken(refresh);
       await secureStorage.saveUser(user!);
+      // Yazım gerçekten bitti (uyelik-3): istemci depodaki token'ı artık bilir (başka isolate döndürürse benimser).
+      cloudApi.markRefreshPersisted(refresh);
     }, epoch: epoch));
     unawaited(_clearUserPrefs());
     if (previousRefreshToken != null && previousRefreshToken != refresh) {
@@ -1779,6 +1865,10 @@ class AutomationState extends ChangeNotifier {
   Future<void> logout() async {
     if (_beforeLogoutHooks.isNotEmpty) await _awaitLogoutHooksBriefly(_startBeforeLogoutHooks());
     final refresh = cloudApi.currentRefreshToken;
+    // Servis (PIN) oturumu sunucuda da kapatılır (uyelik-12): istek yerel temizlikten ÖNCE oturumun JWT'siyle başlatılır;
+    // beklenmez (en çok 3 sn; hata çıkışı engellemez). Aksi halde PIN oturumu 2 saat boyunca sunucuda açık kalırdı.
+    final serviceToken = isServiceSession ? cloudApi.authToken : null;
+    if (serviceToken != null) unawaited(cloudApi.revokeServiceSession(serviceToken));
     _resetSessionState();
     _authStatus = AuthStatus.unauthenticated;
     _sessionNotice = null;
@@ -1854,9 +1944,7 @@ class AutomationState extends ChangeNotifier {
       notifyListeners();
       unawaited(fetchHomes(autoSelect: false)); // rol / üyelik değişimini uzlaştırır (_reconcileHomes)
       if (_mode == AppMode.direct) {
-        await _prepareDirect();
-        _startPolling();
-        await refresh();
+        await _startDirectSession(epoch);
       } else {
         unawaited(_selectInitialHome());
       }
@@ -1870,12 +1958,23 @@ class AutomationState extends ChangeNotifier {
     notifyListeners();
 
     if (_mode == AppMode.direct) {
-      await _prepareDirect();
-      _startPolling();
-      await refresh();
+      await _startDirectSession(epoch);
     } else {
       unawaited(_selectInitialHome());
     }
+  }
+
+  /// Doğrudan (LAN) kipte oturum açılışı (kullanim-1): önce aktif ev seçilir (komut/yetki kapıları ev rolüne bakar;
+  /// `selectHome`'un doğrudan dalı adres + anahtarı hazırlayıp durumu okur), sonra yoklama başlar. Ev yoksa (dairesiz
+  /// hesap) eldeki adres/anahtarla sürer.
+  Future<void> _startDirectSession(int epoch) async {
+    await _selectInitialHome();
+    if (_isStaleSession(epoch)) return;
+    if (_activeHome == null) {
+      await _prepareDirect();
+      await refresh();
+    }
+    _startPolling();
   }
 
   /// Saklı ev listesi (yalnız bu kullanıcı için). Okuma hatası [storageError]'a yazılır ve boş liste döner
@@ -1924,6 +2023,7 @@ class AutomationState extends ChangeNotifier {
       _homesFromCache = false;
       _persistHomesCache(list);
       await _reconcileHomes(autoSelect: autoSelect, epoch: epoch);
+      if (epoch == _sessionEpoch) _maybePrefetchLocalKey();
     } on ApiException catch (e) {
       if (epoch != _sessionEpoch) return;
       if (e.isUnauthorized) return; // oturum kapatma olayı zaten işlendi
@@ -1987,6 +2087,9 @@ class AutomationState extends ChangeNotifier {
         _mqttLink = MqttLinkState.disconnected;
         _resetHomeScopedState();
         _activeHome = null;
+        // Doğrudan kipte kalınırsa ev seçimi ve komut kapıları çıkmaza girer (kullanim-1/bireysel-5): buluta dönülür.
+        // Beklenmez: bulut kipine geçiş ev listesini yeniler ve o yenileme şu an uçuştaki bu yenilemedir.
+        if (_mode == AppMode.direct) unawaited(setMode(AppMode.cloud));
       } else if (match.role != active.role ||
           match.guestValidUntil != active.guestValidUntil ||
           match.serverMarkedExpired != active.serverMarkedExpired) {
@@ -2059,8 +2162,18 @@ class AutomationState extends ChangeNotifier {
       // REST yenilemesi ve canlı kanal EŞZAMANLI (PF-03): MQTT REST yığınının (3 ardışık tur olabilir) arkasında
       // beklemez; REST yanıtı beklenirken gelen daha yeni canlı `state` REST'in üzerine uygulanır (_loadEndpoints).
       await Future.wait<void>(<Future<void>>[refresh(), _startRealtime()]);
+      _maybePrefetchLocalKey();
     } else {
+      // Ev değişti (kullanim-3): önceki evin panosu (anahtar + adres + uçuştaki yoklama) yeni eve taşınmaz.
+      final epoch = _homeEpoch;
+      directApi.localKey = null;
+      _localKeyRefreshTried = false;
+      _pollInFlight = null;
+      _lastLanUid = null;
+      await _loadHomeHost(home.id);
+      if (_isDisposed || epoch != _homeEpoch) return;
       await _prepareDirect();
+      if (epoch != _homeEpoch) return;
       await refresh();
     }
   }
@@ -2095,6 +2208,27 @@ class AutomationState extends ChangeNotifier {
   // Mod, adres, cihaz seçimi
   // ---------------------------------------------------------------------------
 
+  /// Wi-Fi sihirbazında anahtarsız durumda görülen panoların hazırlık bilgisi (bireysel-13; yalnız bellekte): pano kimliği
+  /// -> `provisioned`. Sahiplenme diyaloğu hazırlanmamış panoda eşlemeden önce uyarır.
+  final Map<String, bool> _boardProvisioned = <String, bool>{};
+
+  /// Wi-Fi sihirbazı bir panonun hazırlık durumunu gördü (`null` = bilinmiyor; kayıt silinir).
+  void noteBoardProvisioned(String uid, bool? provisioned) {
+    final id = QrClaimParser.normalizeUid(uid);
+    if (id == null) return;
+    if (provisioned == null) {
+      _boardProvisioned.remove(id);
+    } else {
+      _boardProvisioned[id] = provisioned;
+    }
+  }
+
+  /// Pano bu oturumda Wi-Fi sihirbazında hazırlanmamış (`provisioned:false`) görüldü.
+  bool isKnownUnprovisioned(String uid) {
+    final id = QrClaimParser.normalizeUid(uid);
+    return id != null && _boardProvisioned[id] == false;
+  }
+
   /// Bulut / doğrudan mod. Doğrudan moda yalnızca yetkili kullanıcılar (veya oturumsuz yerel mod)
   /// geçebilir; reddedilirse `false` döner.
   Future<bool> setMode(AppMode newMode) async {
@@ -2115,6 +2249,8 @@ class AutomationState extends ChangeNotifier {
       _invalidateViews();
       _directFailures = 0;
       _connState = ConnectionStateEnum.connecting;
+      final home = _activeHome;
+      if (home != null) await _loadHomeHost(home.id); // ev başına adres (kullanim-3)
       await _prepareDirect();
       _startPolling();
       await refresh();
@@ -2159,8 +2295,12 @@ class AutomationState extends ChangeNotifier {
       throw ApiException.validation('Geçersiz cihaz adresi.');
     }
     _host = trimmed;
+    _lastLanUid = null;
     try {
-      await (await SharedPreferences.getInstance()).setString(_prefsHost, _host);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefsHost, _host);
+      final home = _activeHome;
+      if (home != null) await prefs.setString('$_prefsHostPrefix${home.id}', _host); // kullanim-3
     } catch (_) {}
     _connState = ConnectionStateEnum.connecting;
     _directFailures = 0;
@@ -2251,9 +2391,23 @@ class AutomationState extends ChangeNotifier {
     directApi.localKey = clean;
     _resumeDirectPolling(); // yeni anahtar: durdurulmuş yoklama sürer ve HEMEN denenir (depo yazımı beklenmez)
     if (_mode == AppMode.direct) unawaited(refresh(silent: true));
-    final uuid = _localKeyDeviceUuid();
-    if (uuid != null) {
-      await _enqueueStorage(() => secureStorage.saveLocalKey(uuid, clean));
+    // Anahtarın ait olduğu pano (bireysel-5): girişsiz kullanıcıda adresteki pano esastır; girişlide aktif evin panosu.
+    final anonymous = _currentUser == null;
+    var uuid = anonymous ? (_lastLanUid ?? _localKeyDeviceUuid()) : (_localKeyDeviceUuid() ?? _lastLanUid);
+    if (uuid == null && directApi.isConfigured) {
+      try {
+        uuid = (await directApi.fetchStatus()).uid; // en iyi çaba: kısıtlı özet de `device` taşır
+      } catch (_) {}
+    }
+    final id = QrClaimParser.normalizeUid(uuid);
+    if (id != null) {
+      await _enqueueStorage(() => secureStorage.saveLocalKey(id, clean));
+      if (anonymous) {
+        _anonLanDevice = id;
+        await _savePref(_prefsAnonLanDevice, id); // girişsiz açılışta anahtar bu kimlikle geri yüklenir
+      } else {
+        _rememberLanDevice(id);
+      }
     }
     notifyListeners();
   }
@@ -2306,7 +2460,11 @@ class AutomationState extends ChangeNotifier {
   String? _localKeyDeviceUuid() {
     if (_selectedDeviceUuid.isNotEmpty) return _selectedDeviceUuid;
     final ref = _primaryDeviceRef();
-    return ref == null ? null : QrClaimParser.normalizeUid(ref);
+    final fromCloud = ref == null ? null : QrClaimParser.normalizeUid(ref);
+    if (fromCloud != null) return fromCloud;
+    final home = _activeHome;
+    if (home != null) return _lanDeviceByHome[home.id]; // kullanim-1: internetsiz açılışta hatırlanan pano
+    return _currentUser == null ? _anonLanDevice : null; // bireysel-5: girişsiz yerel kip
   }
 
   /// Anahtarı çözer (depo, yoksa/`forceRefresh` ise sunucu) ve `directApi.localKey`'e yazar. Dönen değer:
@@ -2314,11 +2472,56 @@ class AutomationState extends ChangeNotifier {
   Future<bool> _resolveLocalKey({bool forceRefresh = false}) async {
     final uuid = _localKeyDeviceUuid();
     if (uuid == null) return false;
+    final epoch = _homeEpoch;
     final result = await _lookupLocalKey(uuid, forceRefresh: forceRefresh);
+    if (epoch != _homeEpoch) return false; // ev değişti (kullanim-3): eski evin anahtarı yeni eve yazılmaz
     final key = result.key;
-    if (key != null) directApi.localKey = key;
+    if (key != null) {
+      directApi.localKey = key;
+      _rememberLanDevice(uuid); // kullanim-1: internetsiz açılışta da bu pano bulunsun
+    }
     notifyListeners();
     return result.serverAnswered;
+  }
+
+  /// Önden tazeleme aralığı (pano-6; cihaz başına).
+  static const Duration _localKeyPrefetchEvery = Duration(hours: 12);
+
+  /// Önden tazelemesi uçuşta olan panolar.
+  final Set<String> _localKeyPrefetchFlight = <String>{};
+
+  /// Bulut kipinde aktif evin birincil panosunun yerel anahtarını, güvenli depoda zaten varsa (yerel kip kullanılmış),
+  /// cihaz başına en çok 12 saatte bir sunucudan tazeler (pano-6): sunucu anahtarı döndürdükten sonra internet kesilirse
+  /// yerel kip güncel anahtarla çalışır. En iyi çaba: beklenmez, hatalar yutulur (depodaki anahtar korunur); anahtar
+  /// yetkisi olmayan rolde (misafir, süper) yapılmaz. Mevcut 401 -> tek tazeleme davranışı aynen sürer.
+  void _maybePrefetchLocalKey() {
+    if (_isDisposed || _mode != AppMode.cloud || !isAuthenticated || _inBackground) return;
+    final home = _activeHome;
+    // Servis PIN oturumunda yapılmaz: teknisyen telefonunda müşteri anahtarı tutulmaz (sihirbaz anahtarı yalnız bellekte).
+    if (home == null || !capabilities.canFetchLocalKey || capabilities.isServiceSession) return;
+    final ref = _primaryDeviceRef();
+    final uuid = ref == null ? null : QrClaimParser.normalizeUid(ref);
+    if (uuid == null || !_localKeyPrefetchFlight.add(uuid)) return;
+    final epoch = _sessionEpoch;
+    unawaited(() async {
+      try {
+        final stored = await secureStorage.getLocalKey(uuid);
+        if (stored == null || _isStaleSession(epoch)) return;
+        final prefs = await SharedPreferences.getInstance();
+        final stampKey = '$_prefsKeyPrefetchPrefix$uuid';
+        final last = prefs.getInt(stampKey);
+        final now = clock.now().millisecondsSinceEpoch;
+        if (last != null && now >= last && now - last < _localKeyPrefetchEvery.inMilliseconds) return;
+        final fresh = await cloudApi.localKey(home.id, uuid);
+        if (_isStaleSession(epoch)) return;
+        if (fresh != stored) await _enqueueStorage(() => secureStorage.saveLocalKey(uuid, fresh), epoch: epoch);
+        await prefs.setInt(stampKey, now);
+      } catch (_) {
+        // En iyi çaba: ağ / yetki hatası yerel kipteki mevcut anahtarı etkilemez.
+      } finally {
+        _localKeyPrefetchFlight.remove(uuid);
+      }
+    }());
   }
 
   /// Anahtarı sunucudan BİR kez yeniler (401 / anahtarsız özet). Yenileme hakkı yalnız sunucudan YANIT alınan
@@ -2330,10 +2533,41 @@ class AutomationState extends ChangeNotifier {
     if (!answered) _localKeyRefreshTried = false;
   }
 
+  /// [_prepareDirect]'in en iyi çaba cihaz listesi isteğinin üst süresi (internet yokken LAN açılışı bekletilmez).
+  static const Duration _directDevicesLimit = Duration(seconds: 4);
+
   Future<void> _prepareDirect() async {
     directApi.updateHost(_host);
+    // Aktif evin pano kimliği bilinmiyorsa (doğrudan kipte açılış; kullanim-1) bulut cihaz listesi en iyi çabayla alınır:
+    // anahtar o kimlikle depodan / sunucudan bulunur. Hata yutulur (internet yok: hatırlanan LAN panosu kullanılır).
+    final home = _activeHome;
+    if (isAuthenticated && home != null && _devices.isEmpty && capabilities.canViewState) {
+      final epoch = _homeEpoch;
+      try {
+        final list = await clock.bound<List<DeviceInfo>?>(cloudApi.devices(home.id), _directDevicesLimit, () => null);
+        if (list != null && epoch == _homeEpoch) _devices = list;
+      } catch (_) {}
+    }
     if (directApi.localKey == null) await _resolveLocalKey();
   }
+
+  /// Aktif evin beklenen pano kimlikleri (kullanim-3): bulut cihaz listesi, hatırlanan LAN panosu ve personelin elle
+  /// seçtiği cihaz. Boş küme = bilinmiyor (denetim yapılmaz).
+  Set<String> _expectedLanUids() {
+    final home = _activeHome;
+    if (home == null) return const <String>{};
+    final out = <String>{};
+    for (final d in _devices) {
+      final uid = QrClaimParser.normalizeUid(d.deviceUuid);
+      if (uid != null) out.add(uid);
+    }
+    final remembered = _lanDeviceByHome[home.id];
+    if (remembered != null) out.add(remembered);
+    if (_selectedDeviceUuid.isNotEmpty) out.add(_selectedDeviceUuid.toUpperCase());
+    return out;
+  }
+
+  static const String _lanBoardMismatch = 'Bu adresteki pano seçili daireye ait değil. Adresi kontrol edin.';
 
   // ---------------------------------------------------------------------------
   // Yenileme (snapshot)
@@ -2499,6 +2733,10 @@ class AutomationState extends ChangeNotifier {
       if (epoch != _homeEpoch) return;
       _devices = list;
       _devicesFailed = false;
+      if (_pruneSafetyForDevices(list)) {
+        _invalidateViews();
+        if (notify) notifyListeners();
+      }
       // Canlı `status` kanalı yokken (veya henüz bilinmiyorsa) REST bilgisi kullanılır.
       if (list.isNotEmpty && (_presence == DevicePresence.unknown || !brokerConnected)) {
         _presence = list.any((d) => d.online) ? DevicePresence.online : DevicePresence.offline;
@@ -2510,6 +2748,20 @@ class AutomationState extends ChangeNotifier {
     } catch (_) {
       if (epoch == _homeEpoch) _devicesFailed = true;
     }
+  }
+
+  /// Bulut cihaz listesi yenilenince evde artık olmayan panoların güvenlik durumu, alarm saati ve ad kopyası düşer
+  /// (guvenlik-1): değiştirilen / çıkarılan panonun son (ya da retained) `state`'i oturum boyunca alarm kartı
+  /// göstermez. Pano kimliği bilinmeyen (`''`) kayıt korunur. Bir şey silindiyse `true` (çağıran bildirir).
+  bool _pruneSafetyForDevices(List<DeviceInfo> devices) {
+    final known = <String>{for (final d in devices) d.deviceUuid.toUpperCase()};
+    bool stale(String key) => key.isNotEmpty && !known.contains(key.toUpperCase());
+    final before = _safetyByUid.length;
+    _safetyByUid.removeWhere((key, _) => stale(key));
+    _armClock.removeWhere((key, _) => stale(key));
+    _safetyNames.removeWhere((key, _) => stale(key));
+    _safetyNamesRetryAt.removeWhere((key, _) => stale(key));
+    return _safetyByUid.length != before;
   }
 
   /// REST çocuk kilidi anlık görüntüsü. **Cihaz bildirimi esastır**: canlı kanal bağlıyken cihazdan
@@ -2594,6 +2846,7 @@ class AutomationState extends ChangeNotifier {
     final home = _activeHome!;
     final epoch = _homeEpoch;
     _realtimeEpoch = epoch;
+    _realtimeStartedAt = clock.now();
     Future<MqttCredentials> fetchCredentials() {
       if (epoch != _homeEpoch) {
         throw const ApiException(statusCode: 404, code: 'STALE', message: 'Ev değişti.');
@@ -2702,6 +2955,60 @@ class AutomationState extends ChangeNotifier {
       notifyListeners();
     }
     if (!retained) _watchEndpointLayout(snapshot); // bayat (retained) ileti yerleşim kararına esas olmaz
+    if (_snapshotWaiters.isNotEmpty) {
+      final waiters = List<Completer<void>>.of(_snapshotWaiters);
+      _snapshotWaiters.clear();
+      for (final w in waiters) {
+        if (!w.isCompleted) w.complete();
+      }
+    }
+  }
+
+  /// Bildirim yönlendirmesi için (kullanim-2): [homeId] evinin güvenlik görünümü, canlı kanal (yeniden) başladıktan
+  /// SONRA gelen bir `state` ile tazelendi mi? Tazelenmediyse ilk anlık görüntü en çok [timeout] beklenir; zaman
+  /// aşımında ya da ev değişince `false` (çağıran "alarm kapanmış" diye karar VERMEMELİDİR). Doğrudan (LAN) kipte durum
+  /// yoklamayla okunduğundan `true`.
+  Future<bool> awaitFreshSafety({required String homeId, required Duration timeout}) async {
+    if (_mode == AppMode.direct) return true;
+    bool fresh() {
+      final started = _realtimeStartedAt;
+      final at = _lastLiveSnapshotAt;
+      return !_isDisposed &&
+          _mode == AppMode.cloud &&
+          _activeHome?.id == homeId &&
+          _realtimeEpoch == _homeEpoch &&
+          started != null &&
+          at != null &&
+          !at.isBefore(started);
+    }
+
+    if (fresh()) return true;
+    // Ev farklı ya da durum görme yetkisi yok (süresi dolmuş misafir): canlı kanal hiç kurulmaz, beklemek boşunadır.
+    if (_isDisposed || _activeHome?.id != homeId || !capabilities.canViewState) return false;
+    final epoch = _homeEpoch;
+    final waiter = Completer<void>();
+    _snapshotWaiters.add(waiter);
+    final arrived = await clock.bound<bool>(waiter.future.then((_) => true), timeout, () => false);
+    _snapshotWaiters.remove(waiter);
+    if (!arrived || epoch != _homeEpoch) return false;
+    return fresh();
+  }
+
+  /// Aktif evin sunucudaki AÇIK alarm kayıtları (kullanim-2: canlı durum gelmediyse alarmın kapandığını doğrulamak için).
+  Future<List<AlarmRecord>> fetchOpenAlarms() async {
+    final home = _activeHome;
+    if (home == null) return const <AlarmRecord>[];
+    return cloudApi.alarms(home.id, openOnly: true);
+  }
+
+  /// Doğrudan (LAN) kipte adresteki panonun [homeId] evine ait olduğu doğrulandı mı (kullanim-3): durum alınmış ve pano
+  /// kimliği evin beklenen panolarından biri ([deviceUid] verilirse o pano). Kimlik/küme bilinmiyorsa `false`.
+  bool lanBoardBelongsTo(String homeId, {String? deviceUid}) {
+    if (_mode != AppMode.direct || _activeHome?.id != homeId) return false;
+    final uid = _status?.uid?.toUpperCase();
+    if (uid == null) return false;
+    if (deviceUid != null && deviceUid.toUpperCase() != uid) return false;
+    return _expectedLanUids().contains(uid);
   }
 
   // ---------------------------------------------------------------------------
@@ -2920,15 +3227,30 @@ class AutomationState extends ChangeNotifier {
       final st = await directApi.fetchStatus();
       if (epoch != _homeEpoch || _mode != AppMode.direct || stale()) return;
       final previous = _status;
-      if (st.restricted) {
+      final lanUid = st.uid?.toUpperCase();
+      if (lanUid != null) _lastLanUid = lanUid;
+      final expected = _expectedLanUids();
+      if (lanUid != null && expected.isNotEmpty && !expected.contains(lanUid)) {
+        // Adresteki pano seçili daireye ait değil (kullanim-3): başka evin panosu gösterilmez/kontrol edilmez. Durum yok:
+        // komutlar reddedilir; komut hattı bu panonun durumunu gözlemez. Kullanıcı adresi düzeltene dek yoklama durur.
+        changed = previous != null;
+        _directFailures = 0;
+        _status = null;
+        _invalidateViews();
+        _connState = ConnectionStateEnum.connected;
+        _directError = _lanBoardMismatch;
+        _pollHalted = true;
+      } else if (st.restricted) {
         // Anahtarsız kısıtlı özet: cihaza ulaşıldı ama kontrol edilemez ("boş cihaz" sanılmaz).
         changed = previous != null;
         _directFailures = 0;
         _status = null;
         _invalidateViews();
         _connState = ConnectionStateEnum.connected;
+        // Hazırlanmamış pano: servis rolü olmayan kullanıcı sihirbazı açamaz; satıcı / servis yönlendirmesi (bireysel-13).
+        final serviceRole = isAuthenticated && (isServiceSession || isServiceUser || isSuperUser);
         final message = st.provisioned == false
-            ? 'Cihaz henüz kurulmamış. Servis kurulumunu tamamlayın.'
+            ? (serviceRole ? 'Cihaz henüz kurulmamış. Servis kurulumunu tamamlayın.' : kUnprovisionedBoardUserMessage)
             : 'Cihaz anahtarı gerekli. Anahtarı girin veya hesabınızla giriş yapın.';
         _directError = message;
         if (st.provisioned != false && !_localKeyRefreshTried && isAuthenticated) {
@@ -3629,11 +3951,31 @@ class AutomationState extends ChangeNotifier {
     );
   }
 
-  /// Siren / fan / genel eylemci. Kapatma (güvenli yön) misafir dahil serbest ve iyimser; açma iyimser değil.
+  /// Gaz alarmı sürerken havalandırmayı durdurma reddinin metni (sunucu 403 FORBIDDEN ile aynı; guvenlik-7).
+  static const String gasFanStopForbidden = 'Gaz alarmı sürerken havalandırmayı yalnız ev sahibi/üyeleri durdurabilir.';
+
+  /// [actuator] çalışan bir fan ve bölgesinde (aynı pano) etkin gaz alarmı (latched/fault) sürüyor (guvenlik-7): fanı
+  /// durdurmak yalnız alarm onay yetkisi olanlara açıktır ve arayüz onay ister (havalandırma gaz birikimini önler).
+  bool isGasVentilationRunning(ActuatorItem actuator) {
+    if (actuator.kind != ActuatorKind.fan || actuator.on != true) return false;
+    final safety = _rawSafetyFor(actuator.deviceUid);
+    for (final alarm in safety.alarms) {
+      if (!alarm.isActive || !actuator.zones.contains(alarm.zone)) continue;
+      if (alarmHazardKinds(alarm, safety.sensors).contains('gas')) return true;
+    }
+    return false;
+  }
+
+  /// Siren / fan / genel eylemci. Kapatma (güvenli yön) misafir dahil serbest ve iyimser; açma iyimser değil. Gaz alarmı
+  /// sürerken çalışan fanı yalnız alarm onay yetkisi olan durdurur (guvenlik-7).
   Future<bool> setActuatorOn(ActuatorItem actuator, bool on) async {
     final key = _actuatorKey(actuator);
     if (actuator.isValve) {
       _reject(key, 'Vana için Vanayı Aç / Vanayı Kapat kullanılır.', reason: CommandFailureReason.validation);
+      return false;
+    }
+    if (!on && !capabilities.canAckAlarm && isGasVentilationRunning(actuator)) {
+      _reject(key, gasFanStopForbidden, reason: CommandFailureReason.forbidden);
       return false;
     }
     if (!_safetyAllowed(key, on ? capabilities.canControlActuators : capabilities.canCloseActuators)) return false;
@@ -4431,6 +4773,18 @@ class AutomationState extends ChangeNotifier {
     return cloudApi.getHomeMembers(_homeIdOrActive(homeId));
   }
 
+  /// Aktif evin bekleyen davetleri (ev_uyelik-6). Yalnız üye yönetebilen rol (ev sahibi / süper).
+  Future<List<PendingInvitation>> fetchPendingInvitations([String? homeId]) async {
+    if (!capabilities.canManageMembers) throw ApiException.forbidden();
+    return cloudApi.listInvitations(_homeIdOrActive(homeId));
+  }
+
+  /// Bekleyen daveti iptal eder (ev_uyelik-6). Kullanılmış / süresi dolmuş davette sunucu `404` döner.
+  Future<void> revokeInvitation(String invitationId, [String? homeId]) async {
+    if (!capabilities.canManageMembers) throw ApiException.forbidden();
+    await cloudApi.revokeInvitation(_homeIdOrActive(homeId), invitationId);
+  }
+
   /// Üyeyi/misafiri evden çıkarır ([targetUserId] UUID String). Yalnızca ev sahibi.
   Future<bool> removeHomeMember(String targetUserId, [String? homeId]) async {
     if (!capabilities.canManageMembers) throw ApiException.forbidden();
@@ -4618,6 +4972,12 @@ class AutomationState extends ChangeNotifier {
     ];
     notifyListeners();
     return true;
+  }
+
+  /// Kurulum PIN kilidini kaldırır (yalnız süper yönetici; bireysel-7). Anahtar ve PIN değişmez.
+  Future<void> clearInventoryPinLock(String uuid) async {
+    if (!capabilities.canManageInventory) throw ApiException.forbidden();
+    await cloudApi.clearInventoryPinLock(uuid);
   }
 
   /// Envanterden siler. Sahiplenilmiş cihaz silinemez.

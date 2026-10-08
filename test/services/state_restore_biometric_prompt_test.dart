@@ -159,7 +159,10 @@ void main() {
       await settle();
       expect(h.state.authStatus, AuthStatus.authenticated);
       expect(h.state.shouldPromptBiometrics, isFalse, reason: 'biyometrik zaten etkin: istem gerekmez');
-      expect(storage.memory.startedReads, 6, reason: 'yalnız +1 ev listesi önbelleği (oturum başlatma); istem kaydı okunmaz');
+      // +1 ev listesi önbelleği (oturum başlatma) ve +1 birincil panonun yerel anahtar kaydı (pano-6: anahtar depoda varsa
+      // önden tazelenir); istem kaydı okunmaz.
+      expect(storage.memory.startedReads, 7);
+      expect(storage.memory.readCountFor('ahbu_biometric_prompt_shown'), 0, reason: 'istem kaydı okunmaz');
     });
 
     test('(c2) biyometrik tercihi OKUNAMADI (fail-closed kilit): kilitli başlar, istem yok', () async {

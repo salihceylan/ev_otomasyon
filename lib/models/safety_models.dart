@@ -309,6 +309,29 @@ bool isSafetyRejectCode(String? code) => code != null && _rejectMessages.contain
 String safetyRejectMessage(String? code) =>
     _rejectMessages[code?.toLowerCase()] ?? 'Pano komutu reddetti${code == null ? '' : ' ($code)'}.';
 
+/// Su / gaz / duman: alarmın tehlike türleri (guvenlik-11); kapı/pencere/hareket ve yerel kumanda rolleri dışarıda.
+const Set<String> kHazardKinds = <String>{'water', 'gas', 'smoke'};
+
+/// Alarmın tehlike türü kümesi (guvenlik-11): alarmın kendi türü + alarmı tetikleyen / sonradan katılan kaynak sensörlerin
+/// (AYNI pano) türleri; yalnız su, gaz, duman. Aynı bölgede birden çok tehlike tek türe indirgenmez (ör. duman + su).
+/// Sıra: alarmın türü önce, sonra su, gaz, duman.
+List<String> alarmHazardKinds(AlarmItem alarm, Iterable<SensorItem> sensors) {
+  final found = <String>{if (kHazardKinds.contains(alarm.kind)) alarm.kind};
+  for (final id in alarm.sources) {
+    for (final s in sensors) {
+      if (s.id != id || !kHazardKinds.contains(s.kind)) continue;
+      final uid = alarm.deviceUid?.toUpperCase();
+      if (uid != null && s.deviceUid != null && s.deviceUid!.toUpperCase() != uid) continue;
+      found.add(s.kind);
+    }
+  }
+  return <String>[
+    if (found.contains(alarm.kind)) alarm.kind,
+    for (final k in const <String>['water', 'gas', 'smoke'])
+      if (k != alarm.kind && found.contains(k)) k,
+  ];
+}
+
 /// Güvenlik sensörü (`state.sensors[]`).
 @immutable
 class SensorItem {
@@ -321,6 +344,7 @@ class SensorItem {
     this.ok = false,
     String? name,
     this.flags,
+    this.deviceUid,
   }) : name = name ?? id;
 
   /// `d<1..40>` (DI) ya da `b<1..16>` (köprü yuvası).
@@ -346,6 +370,9 @@ class SensorItem {
   /// Yapılandırma bayrakları (`flags`; state'te yoktur, kopyadan gelir). Bilinmiyorsa `null` ([defaultSensorFlags]).
   final int? flags;
 
+  /// Sensörün ait olduğu pano (`state.uid`; guvenlik-2): çok panolu evde aynı bölge numarası farklı panolarda ayrıdır.
+  final String? deviceUid;
+
   /// Okunur ad: yapılandırma adı; yoksa kimlikten ("d3" -> "Giriş 3", "b1" -> "Kablosuz sensör 1").
   String get displayName {
     if (name != id) return name;
@@ -366,7 +393,7 @@ class SensorItem {
   /// Yerel kumanda rolü (alarm onay / vana kapat / gaz vanası açma düğmesi); tehlike sensörü değildir.
   bool get isControl => kSafetyControlKinds.contains(kind);
 
-  static SensorItem? fromJson(Map<String, dynamic> json) {
+  static SensorItem? fromJson(Map<String, dynamic> json, {String? deviceUid}) {
     final id = asNonEmptyString(json['id']);
     if (id == null || id.length > 8) return null;
     final kind = asNonEmptyString(json['kind'])?.toLowerCase();
@@ -377,6 +404,7 @@ class SensorItem {
       zone: asInt(json['zone']) ?? 0,
       active: asBool(json['active']) ?? false,
       ok: asBool(json['ok']) ?? false,
+      deviceUid: deviceUid,
     );
   }
 
@@ -389,10 +417,20 @@ class SensorItem {
         ok: ok,
         name: (value == null || value.trim().isEmpty) ? id : value.trim(),
         flags: flags,
+        deviceUid: deviceUid,
       );
 
-  SensorItem withFlags(int? value) =>
-      SensorItem(id: id, src: src, kind: kind, zone: zone, active: active, ok: ok, name: name, flags: value);
+  SensorItem withFlags(int? value) => SensorItem(
+        id: id,
+        src: src,
+        kind: kind,
+        zone: zone,
+        active: active,
+        ok: ok,
+        name: name,
+        flags: value,
+        deviceUid: deviceUid,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -404,10 +442,11 @@ class SensorItem {
       other.active == active &&
       other.ok == ok &&
       other.name == name &&
-      other.flags == flags;
+      other.flags == flags &&
+      other.deviceUid == deviceUid;
 
   @override
-  int get hashCode => Object.hash(id, src, kind, zone, active, ok, name, flags);
+  int get hashCode => Object.hash(id, src, kind, zone, active, ok, name, flags, deviceUid);
 }
 
 /// Normal olmayan bir bölge (`state.safety.zones[]`): kilitli alarm, vana arızası ya da test.
@@ -734,7 +773,7 @@ class SafetyState {
     for (final raw in asList(state['sensors']) ?? const <dynamic>[]) {
       if (sensors.length >= _maxSensors) break;
       final map = asMap(raw);
-      final item = map == null ? null : SensorItem.fromJson(map);
+      final item = map == null ? null : SensorItem.fromJson(map, deviceUid: uid);
       if (item != null) sensors.add(item);
     }
     final actuators = <ActuatorItem>[];
@@ -957,9 +996,13 @@ class SafetyEvent {
     if (after.safeMode && !(prev?.safeMode ?? false)) out.add(ev(SafetyEventType.safeModeEntered));
     if (!after.safeMode && (prev?.safeMode ?? false)) out.add(ev(SafetyEventType.safeModeExited));
 
-    for (final entry in after.zones.entries) {
-      final zone = entry.key;
-      final now = entry.value;
+    // Firmware `safety.zones[]`'a YALNIZ normal olmayan bölgeleri yazar (CONTRACTS §2.6): kalkan alarmın bölgesi listeden
+    // ÇIKAR. Bölge kümesi önceki ve sonraki görüntünün birleşimidir; eksik bölge yapılandırılmış panoda `normal`dır
+    // (guvenlik-10). Yapılandırılmamış panoda (durum bilinmiyor) "kalktı" UYDURULMAZ.
+    final zoneIds = <int>{...after.zones.keys, ...?prev?.zones.keys}.toList()..sort();
+    for (final zone in zoneIds) {
+      final now = after.zoneStatus(zone);
+      if (now == ZoneStatus.unknown) continue;
       final was = prev?.zones[zone] ?? ZoneStatus.normal;
       final alarm = after.alarmForZone(zone);
       final oldAlarm = prev?.alarmForZone(zone);
@@ -981,6 +1024,9 @@ class SafetyEvent {
         continue;
       }
       if (now == ZoneStatus.normal && was.isAlarm) {
+        if (was == ZoneStatus.fault) {
+          out.add(ev(SafetyEventType.valveFaultCleared, zone: zone, aid: oldAlarm?.aid, kind: oldAlarm?.kind));
+        }
         out.add(ev(SafetyEventType.alarmCleared, zone: zone, aid: oldAlarm?.aid, kind: oldAlarm?.kind));
       }
     }

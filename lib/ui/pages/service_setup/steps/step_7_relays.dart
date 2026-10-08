@@ -34,6 +34,8 @@ class Step7Relays extends StatelessWidget {
       7,
       continueHint: r.problemCount > 0
           ? 'Sorunlu röle var: düzeltip yeniden test edin ya da "Kullanılmıyor" işaretleyin.'
+          : r.testResults.any((t) => t.failed)
+          ? 'Bölge testi geçmedi: kablolamayı / pano bağlantısını kontrol edip "Bölge Testini Yeniden Çalıştır"a basın.'
           : (r.needsSafetySave
               ? 'Güvenlik cihazı atamalarını "Güvenlik Ayarlarını Panoya Yaz" ile kaydedin.'
               : 'Devam etmek için her röleyi test edin (pano cevabı + "yük çalıştı mı?") veya "Kullanılmıyor" işaretleyin.'),
@@ -100,6 +102,17 @@ class Step7Relays extends StatelessWidget {
                 ],
               ),
             ),
+            // Yalnız panjur röleli pano (servis_kurulum-6): hata değil, bilgi.
+            if (r.relays.isEmpty && r.shutterRelays.isNotEmpty)
+              const SetupCard(
+                key: Key('relay_only_shutters_note'),
+                accent: SetupColors.info,
+                child: SetupInfoRow(
+                  icon: Icons.info_outline_rounded,
+                  color: SetupColors.info,
+                  text: 'Bu panoda lamba / darbe rölesi yok: tüm röleler panjur. Panjurlar 8. adımda test edilir.',
+                ),
+              ),
             // Röle numarası sırasıyla: panjur röleleri (bilgi kartı) ve test edilecek röleler karışık sırada olabilir.
             for (final entry in <(int, Widget)>[
               for (final s in r.shutterRelays) (s.id, _ShutterRelayCard(relay: s)),

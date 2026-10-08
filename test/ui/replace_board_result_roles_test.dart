@@ -1,0 +1,91 @@
+import 'package:ev_otomasyon/models/api_models.dart';
+import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/ui/pages/claim/claim_manual_dialog.dart';
+import 'package:ev_otomasyon/ui/pages/replace_board_dialog.dart';
+import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_wizard_page.dart';
+import 'package:ev_otomasyon/ui/pages/wifi_recovery_dialog.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import '../support/support.dart' show kHomeA;
+import 'f_support.dart';
+import 'f_widget_support.dart';
+
+/// bireysel-4 (servis_kurulum-4 birleşik): pano değişimi sonucunda "Yeni Panoyu Şimdi Bağla" yalnız sihirbazı açabilen
+/// role (personel / servis PIN oturumu) gösterilir; süper yöneticiye anahtar yolu notu, ev sahibine Wi-Fi yolu.
+void main() {
+  const oldUid = 'AHBU-S3-OLD001';
+  const newUid = 'AHBU-S3-NEW001';
+  const newLabel = 'https://evotomasyon.gudeteknoloji.com.tr/claim?uid=$newUid&pin=246810';
+
+  Future<ServiceHarness> env(WidgetTester tester, {required String harnessRole, String? userRole, required String homeRole}) async {
+    final e = await serviceHarness(role: harnessRole, flush: () async {});
+    if (userRole != null) {
+      e.state.setCurrentUserForTesting(UserModel(id: 'u-1', email: 'ayse@ornek.test', fullName: 'Ayşe', role: userRole));
+    }
+    e.cloud.devicesByHome[kHomeA] = <DeviceInfo>[
+      const DeviceInfo(deviceUuid: oldUid, name: 'Salon Panosu', online: false, firmware: '1.3.0'),
+    ];
+    e.cloud.replaceBoardToReturn = const ReplaceBoardResult(
+      newDeviceUuid: newUid,
+      oldDeviceUuid: oldUid,
+      homeId: kHomeA,
+      migratedEndpointsCount: 6,
+    );
+    await activateHome(tester, e, HomeModel(id: kHomeA, name: 'Daire 5', role: homeRole));
+    return e;
+  }
+
+  Future<void> replaceToResult(WidgetTester tester, ServiceHarness e) async {
+    await pumpLauncher(tester, e, (ctx) => ReplaceBoardDialog.show(ctx, scanner: fakeScanner(newLabel)));
+    await tester.tap(find.byKey(const Key('launcher')));
+    await settle(tester);
+    await tapKey(tester, 'btn_scan_new_board');
+    await settle(tester);
+    await tapKey(tester, 'btn_replace_submit');
+    await settle(tester);
+    await tapKey(tester, 'btn_replace_confirm');
+    await settle(tester);
+    expect(find.byKey(const Key('replace_result_title')), findsOneWidget);
+  }
+
+  bool exists(String key) => find.byKey(Key(key)).evaluate().isNotEmpty;
+
+  testWidgets('ev sahibi: sihirbaz düğmesi yok; Wi-Fi yolu ve bulut notu var; düğme Wi-Fi sihirbazını yeni panoyla açar', (tester) async {
+    final e = await env(tester, harnessRole: 'staff', userRole: 'user', homeRole: 'owner');
+    addTearDown(e.dispose);
+    await replaceToResult(tester, e);
+
+    expect(exists('btn_replace_open_wizard'), isFalse);
+    expect(find.textContaining('Kurulum sihirbazı bu adımları sizin için yürütür'), findsNothing);
+    expect(find.textContaining('Yeni pano Ethernet ile bağlıysa bir şey yapmanız gerekmez.'), findsOneWidget);
+    expect(find.textContaining(claimCloudBootstrapNote), findsOneWidget);
+
+    await tapKey(tester, 'btn_replace_open_wifi');
+    await settle(tester);
+    expect(find.byType(ReplaceBoardDialog), findsNothing);
+    expect(tester.widget<WifiRecoveryDialog>(find.byType(WifiRecoveryDialog)).deviceUuid, newUid);
+  });
+
+  testWidgets('süper yönetici: sihirbaz düğmesi yok, anahtar yolu notu var', (tester) async {
+    final e = await env(tester, harnessRole: 'super', homeRole: 'service_user');
+    addTearDown(e.dispose);
+    await replaceToResult(tester, e);
+
+    expect(exists('btn_replace_open_wizard'), isFalse);
+    expect(exists('replace_super_note'), isTrue);
+    expect(exists('btn_replace_open_wifi'), isFalse);
+  });
+
+  testWidgets('servis personeli: sihirbaz düğmesi var ve sihirbazı açar', (tester) async {
+    final e = await env(tester, harnessRole: 'staff', homeRole: 'service_user');
+    addTearDown(e.dispose);
+    await replaceToResult(tester, e);
+
+    expect(exists('replace_super_note'), isFalse);
+    expect(exists('btn_replace_open_wifi'), isFalse);
+    await tapKey(tester, 'btn_replace_open_wizard');
+    await settle(tester);
+    expect(find.byType(ServiceSetupWizardPage), findsOneWidget);
+  });
+}

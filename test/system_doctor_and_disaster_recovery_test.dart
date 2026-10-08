@@ -241,6 +241,30 @@ void main() {
       expect(exists('btn_doctor_recovery'), isFalse);
     });
 
+    testWidgets('bireysel-12: hiç bağlanmamış pano (NEVER_SEEN) arıza değil uyarı; Wi-Fi kurulumu önerilir', (tester) async {
+      final env = await doctorEnv(tester);
+      addTearDown(env.dispose);
+      env.cloud.diagnostic = <String, dynamic>{
+        ...healthyReport(),
+        'home_network': <String, dynamic>{'status': 'NEVER_SEEN', 'seconds_since_last_seen': null},
+        'hardware_power': <String, dynamic>{'status': 'UNKNOWN'},
+        'devices': <Map<String, dynamic>>[
+          <String, dynamic>{'device_uuid': kOldUid, 'online': false, 'network_status': 'NEVER_SEEN'},
+          <String, dynamic>{'device_uuid': kOldUid2, 'online': false, 'network_status': 'YENI_DURUM'},
+        ],
+        'diagnosis_title': 'Pano Henüz Buluta Hiç Bağlanmadı',
+        'diagnosis_level': 'warning',
+      };
+      await openDoctor(tester, env);
+
+      expect(badgeOf(tester, 'doctor_tier_network'), 'Uyarı');
+      expect(find.text('Pano henüz buluta hiç bağlanmadı'), findsOneWidget);
+      expect(find.textContaining('İnternet / modem bağlantısı yok'), findsNothing);
+      expect(find.text('$kOldUid: henüz buluta hiç bağlanmadı'), findsOneWidget);
+      expect(find.textContaining('$kOldUid2: çevrimdışı'), findsOneWidget, reason: 'tanınmayan durum çökmeden genel biçimde');
+      expect(find.text('Pano Wi-Fi Kurulumu'), findsOneWidget);
+    });
+
     testWidgets('çok panolu dairede tüm panolar son görülme bilgisiyle listelenir', (tester) async {
       final env = await doctorEnv(tester);
       addTearDown(env.dispose);

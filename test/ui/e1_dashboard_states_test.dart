@@ -142,7 +142,14 @@ void main() {
 
     for (final role in <String>['resident', 'service_user']) {
       testWidgets('$role için boş cihaz yanıtı cihaz eşleme önermez (yalnızca bilgi kartı)', (tester) async {
-        await pumpReady(tester, body(), role: role, endpoints: <EndpointModel>[]);
+        // uyelik-13: evdeki service_user üyeliği yalnız küresel personel hesabında geçerlidir.
+        await pumpReady(
+          tester,
+          body(),
+          role: role,
+          globalRole: role == 'service_user' ? 'service_user' : 'user',
+          endpoints: <EndpointModel>[],
+        );
         expect(find.text('Evinize Hoş Geldiniz!'), findsNothing);
         expect(byKeyName('btn_scan_qr'), findsNothing);
         expect(byKeyName('card_empty_home'), findsOneWidget);
@@ -390,6 +397,18 @@ void main() {
       expect(byKeyName('card_relay_1'), findsNothing);
       expect(byKeyName('card_scenario_leaving'), findsNothing);
       expect(byKeyName('btn_refresh_homes'), findsOneWidget);
+    });
+
+    testWidgets('bireysel-2: süresi dolan misafir kendi panosunu karekodla ya da elle eşleyebilir', (tester) async {
+      final h = await pumpReady(tester, body(), home: guestHome(hours: 1, name: 'Yazlık'));
+      h.clock.advance(const Duration(hours: 2));
+      await flush(tester);
+      expect(byKeyName('view_guest_expired'), findsOneWidget);
+      expect(h.state.capabilities.canClaimDevice, isTrue);
+      expect(byKeyName('btn_guest_scan_qr'), findsOneWidget);
+      expect(find.text('Karekod ile Cihaz Eşle'), findsOneWidget);
+      expect(byKeyName('btn_guest_claim_manual'), findsOneWidget);
+      expect(find.text('Cihaz Kodunu Elle Gir'), findsOneWidget);
     });
 
     testWidgets('başka (süresi dolmamış) dairesi varsa "Başka daireye geç" ile geçilebilir', (tester) async {

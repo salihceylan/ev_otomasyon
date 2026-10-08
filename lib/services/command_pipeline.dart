@@ -87,6 +87,16 @@ class CommandFailure {
         );
       }
       if (error.isNetwork) {
+        // Yanıt zaman aşımı (kullanim-9): istek sunucuya (ve panoya) gitmiş olabilir; "geri alındı" denmez, durum
+        // yeniden okunur. Gönderim öncesi bağlantı hatasında (IO / ClientException) komut gitmemiştir: geri alındı.
+        if (error.cause is TimeoutException) {
+          return CommandFailure(
+            key: key,
+            reason: CommandFailureReason.timeout,
+            message: kCommandNoResponseMessage,
+            error: error,
+          );
+        }
         return CommandFailure(
           key: key,
           reason: CommandFailureReason.network,
@@ -176,6 +186,9 @@ class CommandFailure {
     );
   }
 }
+
+/// Komutun yanıtı alınamadı (zaman aşımı; kullanim-9): komut uygulanmış olabilir, gerçek durum yeniden okunur.
+const String kCommandNoResponseMessage = 'Yanıt alınamadı; durum yeniden kontrol ediliyor.';
 
 /// Sunucunun güvenlik komutu ret kodları (tasarım §5.2.4) -> Türkçe metin (409).
 const Map<String, String> _serverSafetyMessages = <String, String>{
@@ -492,13 +505,14 @@ class CommandPipeline {
   void _onTimeout(_Entry entry) {
     if (!_isCurrent(entry)) return;
     if (!entry.command.delivered) {
-      // Gönderim yanıtı hiç gelmedi (yavaş/kopuk ağ): geri al.
+      // Gönderim yanıtı hiç gelmedi (yavaş/kopuk ağ): görünen değer geri alınır; istek gitmiş olabileceğinden mesaj
+      // nötrdür ve durum yeniden okunur (kullanim-9).
       _fail(
         entry,
         CommandFailure(
           key: entry.command.key,
           reason: CommandFailureReason.network,
-          message: 'Sunucudan yanıt alınamadı. İşlem geri alındı.',
+          message: kCommandNoResponseMessage,
         ),
       );
       return;

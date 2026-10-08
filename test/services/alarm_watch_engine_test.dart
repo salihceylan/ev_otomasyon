@@ -135,11 +135,21 @@ void main() {
     await e.stop();
   });
 
-  test('servis personeli hesabı: uygun ev yok -> durur', () async {
+  test('servis personeli hesabı: yalnız müşteri evleri (ev rolü service_user) -> uygun ev yok -> durur', () async {
     await enable();
     user = const UserModel(id: 'u1', email: 'e', fullName: 'Servis', role: 'service_user');
+    cloud.homes = <HomeModel>[guest, staff];
     expect(await engine().start(), isFalse);
     expect(stopReasons, <String>['no_homes']);
+  });
+
+  test('guvenlik-12: kendi evinin sahibi olan servis personeli kendi evini izler; müşteri evini izlemez', () async {
+    await enable();
+    user = const UserModel(id: 'u1', email: 'e', fullName: 'Servis', role: 'service_user');
+    final e = engine();
+    expect(await e.start(), isTrue);
+    expect(e.watchedHomeIds, <String>['h-owner', 'h-res']);
+    await e.stop();
   });
 
   test('alarm: sensör adıyla bir kez bildirilir; yeni alarm kimliği yeniden; kalkınca silinir', () async {
@@ -169,6 +179,46 @@ void main() {
     await pumpEventQueue();
     expect(notifier.shown, hasLength(2), reason: 'yeni alarm');
     await e.stop();
+  });
+
+  test('guvenlik-9: her state etkin alarmın kaydını tazeler; 7 günü aşan eski kilit yeniden başlangıçta yeni sayılmaz',
+      () async {
+    await enable();
+    cloud.homes = <HomeModel>[owner];
+    var now = DateTime(2026, 10, 9, 12);
+    final dedupe = AlarmDedupeStore(store, now: () => now);
+    AlarmWatchEngine make() => AlarmWatchEngine(
+          cloud: cloud,
+          settings: AlarmWatchSettingsRepository(store),
+          dedupe: dedupe,
+          notifier: notifier,
+          mqttFactory: () {
+            final m = FakeMqtt();
+            mqtts.add(m);
+            return m;
+          },
+          readUser: () async => user,
+          onStopRequested: stopReasons.add,
+          clock: FakeClock(),
+          backoff: AlarmBackoff(random: () => 0.5),
+        );
+    final first = make();
+    await first.start();
+    mqtts.last.emitStateJson(_stateJson(st: 'latched'));
+    await pumpEventQueue();
+    expect(notifier.shown, hasLength(1));
+    now = now.add(const Duration(days: 5)); // kilit sürüyor: özdeş kalp atışı kaydı tazeler
+    mqtts.last.emitStateJson(_stateJson(st: 'latched'));
+    await pumpEventQueue();
+    await first.stop();
+
+    now = now.add(const Duration(days: 4)); // ilk bildirimden 9 gün sonra servis yeniden başlar
+    final second = make();
+    await second.start();
+    mqtts.last.emitStateJson(_stateJson(st: 'latched'), retained: true);
+    await pumpEventQueue();
+    expect(notifier.shown, hasLength(1), reason: 'aynı (sürmekte olan) alarm ikinci kez çalmaz');
+    await second.stop();
   });
 
   test('servis yeniden başlayınca (retained ilk görüntü) aynı alarm ikinci kez çalmaz', () async {
@@ -218,6 +268,32 @@ void main() {
     clock.advance(const Duration(seconds: 6));
     await e.refresh();
     expect(e.watchedHomeIds, unorderedEquals(<String>['h-owner', 'h-res']));
+    await e.stop();
+  });
+
+  test('uyelik-5: tüm evler MQTT\'ye bağlıyken ev listesi 15 dk yerine 60 dk\'da bir tazelenir', () async {
+    final clock = FakeClock();
+    await enable();
+    final e = engine(clock: clock);
+    expect(await e.start(), isTrue);
+    await pumpEventQueue();
+    final fetches = cloud.count('fetchHomes');
+
+    clock.advance(const Duration(minutes: 15));
+    await e.refresh();
+    clock.advance(const Duration(minutes: 15));
+    await e.refresh();
+    expect(cloud.count('fetchHomes'), fetches, reason: 'bağlıyken 60 dk dolmadan istenmez');
+
+    clock.advance(const Duration(minutes: 31));
+    await e.refresh();
+    expect(cloud.count('fetchHomes'), fetches + 1);
+
+    // Bağlantı koptuysa (bir ev bağlı değil) 15 dk kuralı geçerli.
+    await mqtts.first.stop();
+    clock.advance(const Duration(minutes: 15));
+    await e.refresh();
+    expect(cloud.count('fetchHomes'), fetches + 2);
     await e.stop();
   });
 

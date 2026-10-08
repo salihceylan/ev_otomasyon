@@ -26,6 +26,7 @@ class FakeWifiDevice {
     this.apOnlyAuth = true,
     this.wifiStatusSupported = true,
     this.uid = kDeviceUid,
+    this.fw = '1.1.0',
   }) {
     api
       ..on('GET', '/api/status', (r) {
@@ -36,7 +37,7 @@ class FakeWifiDevice {
           return jsonResponse(<String, dynamic>{
             'device': uid,
             'name': 'Pano',
-            'fw': '1.1.0',
+            'fw': fw,
             'provisioned': provisioned,
             'wifi_connected': false,
           });
@@ -44,7 +45,7 @@ class FakeWifiDevice {
         return jsonResponse(<String, dynamic>{
           'device': uid,
           'name': 'Pano',
-          'fw': '1.1.0',
+          'fw': fw,
           'provisioned': provisioned,
           'wifi_connected': connectState == 'success',
           'wifi_sta_ip': connectState == 'success' ? '192.168.1.57' : '',
@@ -107,6 +108,9 @@ class FakeWifiDevice {
   final MockApi api = MockApi();
   final String uid;
   bool provisioned;
+
+  /// Panonun bildirdiği yazılım sürümü (`fw`).
+  String fw;
   final bool apOnlyAuth;
   final bool wifiStatusSupported;
   bool statusDown = false;

@@ -8,6 +8,7 @@ import '../common/qr_flow.dart';
 import '../motion/motion.dart';
 import '../pages/claim/claim_manual_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
+import '../pages/wifi_recovery_dialog.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_pill.dart';
@@ -103,9 +104,27 @@ class HomelessWelcome extends StatelessWidget {
                   label: const Text('Cihaz Kodunu Elle Gir'),
                   onPressed: () => ClaimManualDialog.show(context),
                 ),
+              // Kendi panosunu kuran kullanıcının ev ağına bağlama girişi (bireysel-11). Kapısızdır: pano yalnız kendi kurulum
+              // ağındaki telefona izin verir (WifiRecoveryDialog).
+              TextButton.icon(
+                key: const Key('btn_homeless_wifi'),
+                style: TextButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                icon: const Icon(Icons.wifi_rounded, size: 18),
+                label: const Text('Pano Wi-Fi Kurulumu'),
+                onPressed: () => WifiRecoveryDialog.show(context),
+              ),
             ],
           ),
         ),
+        if (vm.canClaim) ...[
+          const SizedBox(height: AppSpace.s8),
+          Text(
+            "Kendi panonuzu kuruyorsanız: 1) karekodla eşleyin 2) Wi-Fi'yi yükleyin",
+            key: const Key('homeless_self_setup_hint'),
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: AppText.caption, height: 1.4, color: AppTheme.getTextMuted(context)),
+          ),
+        ],
         const SizedBox(height: AppSpace.s24),
         StaggeredEntrance(
           index: 3,

@@ -365,7 +365,9 @@ class UserProfileDialog extends StatelessWidget {
     final ok = await showSimpleConfirm(
       context,
       title: 'Tüm Cihazlardan Çıkış',
-      message: 'Bu hesabın tüm cihazlardaki oturumları kapatılacak ve bu cihazdan da çıkış yapılacak. Devam edilsin mi?',
+      // Sunucu ürettiğiniz kullanılmamış servis PIN'lerini ve bunlarla açılmış oturumları da kapatır (uyelik-7).
+      message: 'Bu hesabın tüm cihazlardaki oturumları kapatılacak ve bu cihazdan da çıkış yapılacak. Ürettiğiniz '
+          "servis PIN'leri ve açık servis oturumları da kapatılır. Devam edilsin mi?",
       confirmLabel: 'Tümünden Çık',
       destructive: true,
       icon: Icons.devices_other_rounded,

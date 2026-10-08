@@ -240,8 +240,8 @@ void main() {
       expect(service.currentRefreshToken, 'r2');
     });
 
-    test('refresh 5xx / 429 ile düşerse oturum korunur', () async {
-      for (final status in <int>[500, 503, 429]) {
+    test('refresh 5xx ile düşerse oturum korunur (429: ev_cloud_api_refresh_rate_limit_test.dart, uyelik-5)', () async {
+      for (final status in <int>[500, 503]) {
         service
           ..setAuthToken('old-access')
           ..setRefreshToken('old-refresh');

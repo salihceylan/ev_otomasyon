@@ -13,21 +13,20 @@ import '../../../widgets/orb/orb_icon_badge.dart';
 import 'service_glass.dart';
 import '../setup_widgets.dart';
 
-/// `POST /admin/inventory/:uid/reissue-label` yanıtı: yeni kurulum PIN'i + yerel anahtar (+ PIN'li QR
-/// bağlantısı) **yalnızca bir kez** gelir. [toString] gizli alanları yazmaz.
+/// `POST /admin/inventory/:uid/reissue-label` yanıtı: yeni kurulum PIN'i (+ PIN'li QR bağlantısı) **yalnızca bir kez**
+/// gelir. Yerel anahtar DEĞİŞMEZ ve yanıtta yoktur (atolye-2; CONTRACTS sözleşme 13): eski sunucu gönderse bile okunmaz /
+/// gösterilmez. [toString] gizli alanları yazmaz.
 class LabelReissueResult {
-  const LabelReissueResult({this.pin, this.localKey, this.qrClaimUrl, this.apPass});
+  const LabelReissueResult({this.pin, this.qrClaimUrl, this.apPass});
 
   final String? pin;
-  final String? localKey;
   final String? qrClaimUrl;
   final String? apPass;
 
-  bool get isEmpty => pin == null && localKey == null && qrClaimUrl == null;
+  bool get isEmpty => pin == null && qrClaimUrl == null;
 
   factory LabelReissueResult.fromJson(Map<String, dynamic> json) => LabelReissueResult(
         pin: asNonEmptyString(json['pin'] ?? json['setup_pin']),
-        localKey: asNonEmptyString(json['local_key']),
         qrClaimUrl: asNonEmptyString(json['qr_claim_url'] ?? json['qr_url']),
         apPass: asNonEmptyString(json['ap_pass']),
       );
@@ -110,6 +109,17 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
                       'yapıştırın. Kopyaladığınız değer panodan 45 saniye sonra silinir.',
                 ),
               ),
+              const SizedBox(height: 8),
+              const ServiceCard(
+                key: Key('reissue_info'),
+                accent: SetupColors.info,
+                margin: EdgeInsets.zero,
+                child: SetupInfoRow(
+                  icon: Icons.info_outline_rounded,
+                  color: SetupColors.info,
+                  text: 'Yalnız PIN/karekod yenilendi; yerel anahtar değişmedi. Kurulum ağı (AP) parolası sunucuda saklanmaz: kayıp etiketteki AP parolası hâlâ geçerli. Yeni AP parolalı tam etiket için kartı servis yazılımındaki USB Etiketi Yeniden Bas akışından geçirin.',
+                ),
+              ),
               const SizedBox(height: 10),
               // Kimlik tek satır: tireden bölünüp iki satıra yayılmaz, sığmazsa küçülür.
               FittedBox(
@@ -129,14 +139,6 @@ class _LabelReissueDialogState extends State<LabelReissueDialog> {
                   copyKey: const Key('btn_copy_reissue_pin'),
                   showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
                   onCopy: () => _copy('Kurulum PIN', pin!),
-                ),
-              if (r.localKey != null)
-                SecretValueRow(
-                  label: 'Yerel anahtar',
-                  shown: r.localKey!,
-                  copyKey: const Key('btn_copy_reissue_key'),
-                  showWipeRing: false, // kartın kendi 45 sn halkası var (çift halka olmasın)
-                  onCopy: () => _copy('Yerel anahtar', r.localKey!),
                 ),
               if (r.apPass != null)
                 SecretValueRow(

@@ -47,7 +47,8 @@ void main() {
         ('owner', 'super_user', true),
       ]) {
         final h = await harness(role: role, globalRole: global);
-        expect(h.state.capabilities.canArm, global == 'super_user' ? isFalse : can, reason: '$role/$global');
+        // guvenlik-12: ev rolü belirleyicidir (kendi evinin sahibi olan süper kullanıcı kurabilir).
+        expect(h.state.capabilities.canArm, can, reason: '$role/$global');
         h.dispose();
       }
     });

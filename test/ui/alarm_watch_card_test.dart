@@ -134,6 +134,32 @@ void main() {
       expect((await AlarmWatchSettingsRepository(store).load()).enabled, isFalse);
     });
 
+    test('uyelik-4: ön plana dönüşte servis kendini durdurmuşsa (ör. şifre değişince oturumu bitti) yeniden başlatılır',
+        () async {
+      signIn();
+      final c = controller();
+      await c.init();
+      expect(await c.enable(), isTrue);
+      expect(platform.starts, 1);
+      expect(c.running, isTrue);
+
+      platform.running = false; // arka plan servisi oturum bitince kendini durdurdu
+      c.handleResume();
+      await pumpEventQueue();
+      expect(platform.starts, 2);
+      expect(c.running, isTrue);
+
+      // Durum değişimlerinde de (en çok 60 sn'de bir) denetlenir.
+      platform.running = false;
+      h.state.setThemeModeForTesting(ThemeMode.light); // dinleyicileri uyandırır
+      await pumpEventQueue();
+      expect(platform.starts, 2, reason: '60 sn dolmadan yeniden sorulmaz');
+      await h.clock.elapse(const Duration(seconds: 61));
+      h.state.setThemeModeForTesting(ThemeMode.dark);
+      await pumpEventQueue();
+      expect(platform.starts, 3);
+    });
+
     test('bildirim izni verilmezse açılmaz ve açıklama gösterilir', () async {
       signIn();
       platform.grantOnRequest = false;
@@ -152,9 +178,13 @@ void main() {
       expect(c.eligible, isFalse);
       expect(await c.enable(), isFalse);
 
-      signIn(user: const UserModel(id: 'u2', email: 's', fullName: 'Servis', role: 'service_user'));
+      // Müşteri evindeki servis üyeliği (ev rolü service_user) izlenmez.
+      signIn(role: 'service_user', user: const UserModel(id: 'u2', email: 's', fullName: 'Servis', role: 'service_user'));
       expect(c.eligible, isFalse);
       expect(platform.starts, 0);
+      // guvenlik-12: kendi evinin sahibi olan servis personeli açabilir.
+      signIn(user: const UserModel(id: 'u2', email: 's', fullName: 'Servis', role: 'service_user'));
+      expect(c.eligible, isTrue);
     });
 
     test('çıkış yapılınca kapanır ve servis durur; başka kullanıcı girince de', () async {
@@ -277,6 +307,19 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(c.enabled, isFalse);
+    });
+
+    testWidgets('uyelik-4: açık ama servis çalışmıyorsa "Durdu - yeniden başlatılıyor"', (tester) async {
+      signIn();
+      platform.allowed = true;
+      platform.startOk = false;
+      final c = await pumpCard(tester);
+      await tester.tap(find.byKey(const Key('switch_alarm_watch')));
+      await tester.pump();
+      await tester.pump();
+      expect(c.enabled, isTrue);
+      expect(c.running, isFalse);
+      expect(find.text('Durdu - yeniden başlatılıyor'), findsOneWidget);
     });
 
     testWidgets('iOS: "Bu özellik yalnız Android\'de", anahtar yok', (tester) async {

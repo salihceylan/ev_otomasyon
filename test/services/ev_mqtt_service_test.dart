@@ -320,6 +320,67 @@ void main() {
       expect(service.isConnected, isTrue);
     });
 
+    test('kullanim-10: telefon saati 13 sa ileri + expires_in 12 sa -> yenileme ~11 sa 55 dk sonra (15 sn döngüsü yok)',
+        () async {
+      await service.start(
+        credentialsProvider: providerOf((call) => MqttCredentials(
+              host: 'broker.test',
+              port: 8884,
+              username: 'a_h_abc_$call',
+              password: 'gecici-parola',
+              // Sunucu saatine göre 12 sa sonra biter; telefon 13 sa ileride olduğundan yerel saate göre GEÇMİŞTE.
+              expiresAt: clock.now().subtract(const Duration(hours: 1)),
+              expiresIn: const Duration(hours: 12),
+              topicId: 'h_abc',
+              clientId: 'cid-$call',
+            )),
+      );
+      await settle();
+      expect(providerCalls, 1);
+      await clock.elapse(const Duration(hours: 11, minutes: 50));
+      expect(providerCalls, 1, reason: 'sunucunun verdiği süre esas: erken yenileme döngüsü yok');
+      await clock.elapse(const Duration(minutes: 6));
+      expect(providerCalls, 2);
+    });
+
+    test('kullanim-10: expires_in yok (eski sunucu) ve yerel saate göre süresi geçmiş: en az 5 dk beklenir', () async {
+      await service.start(
+        credentialsProvider: providerOf((call) => creds(
+              now: clock.now(),
+              validFor: const Duration(hours: -1),
+              user: 'a_h_abc_$call',
+            )),
+      );
+      await settle();
+      expect(providerCalls, 1);
+      await clock.elapse(const Duration(minutes: 4));
+      expect(providerCalls, 1, reason: 'eskiden 15 sn\'de bir yeni kimlik istenirdi');
+      await clock.elapse(const Duration(minutes: 2));
+      expect(providerCalls, 2);
+    });
+
+    test('kullanim-10: MqttCredentials expires_in ayrıştırılır (tam sayı saniye)', () {
+      final c = MqttCredentials.fromJson(<String, dynamic>{
+        'host': 'broker.test',
+        'port': 8884,
+        'username': 'u',
+        'password': 'p',
+        'topic_id': 't',
+        'expires_at': '2026-10-08T12:00:00Z',
+        'expires_in': 43200,
+      });
+      expect(c.expiresIn, const Duration(hours: 12));
+      final old = MqttCredentials.fromJson(<String, dynamic>{
+        'host': 'broker.test',
+        'port': 8884,
+        'username': 'u',
+        'password': 'p',
+        'topic_id': 't',
+        'expires_at': '2026-10-08T12:00:00Z',
+      });
+      expect(old.expiresIn, isNull);
+    });
+
     test('beklenmeyen kopma -> kısa bekleme + TAZE kimlikle yeniden bağlanma', () async {
       await service.start(credentialsProvider: providerOf((call) => creds(now: clock.now(), user: 'u$call')));
       await settle();

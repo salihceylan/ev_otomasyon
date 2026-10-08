@@ -15,6 +15,7 @@ class MqttCredentials {
     required this.expiresAt,
     required this.topicId,
     this.clientId,
+    this.expiresIn,
   });
 
   final String host;
@@ -22,6 +23,10 @@ class MqttCredentials {
   final String username;
   final String password;
   final DateTime expiresAt;
+
+  /// Sunucuda hesaplanmış kalan süre (`expires_in`, tam sayı saniye; kullanim-10). Yenileme zamanlaması önce bunu kullanır
+  /// (telefon saati yanlışsa `expiresAt - yerel saat` yanıltır). Eski sunucuda `null`.
+  final Duration? expiresIn;
 
   /// `ev/{topicId}/state|status` konu kimliği.
   final String topicId;
@@ -47,6 +52,7 @@ class MqttCredentials {
         expires == null) {
       throw const FormatException('Geçersiz MQTT kimlik yanıtı');
     }
+    final expiresInSec = asInt(json['expires_in'] ?? json['expiresIn']);
     return MqttCredentials(
       host: host,
       port: port,
@@ -55,6 +61,7 @@ class MqttCredentials {
       expiresAt: expires,
       topicId: topic,
       clientId: asNonEmptyString(json['client_id'] ?? json['clientId']),
+      expiresIn: (expiresInSec != null && expiresInSec > 0) ? Duration(seconds: expiresInSec) : null,
     );
   }
 
@@ -349,18 +356,25 @@ class CustomerAccountInfo {
     this.created = false,
     this.status,
     this.inviteSent = false,
+    this.securityReset = false,
   });
 
+  /// Hesap bu claim'le YENİ açıldı. `false` ve [status] `pending_invite`: hesap zaten vardı ama henüz etkinleştirilmemiş
+  /// (davet yeniden gönderildi) ya da doğrulanmadığı için sıfırlandı (uyelik-1).
   final bool created;
 
   /// Ör. `pending_invite`.
   final String? status;
   final bool inviteSent;
 
+  /// Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı (`security_reset`; uyelik-1/11).
+  final bool securityReset;
+
   factory CustomerAccountInfo.fromJson(Map<String, dynamic> json) => CustomerAccountInfo(
         created: asBool(json['created']) ?? false,
         status: asNonEmptyString(json['status']),
         inviteSent: asBool(json['invite_sent'] ?? json['inviteSent']) ?? false,
+        securityReset: asBool(json['security_reset'] ?? json['securityReset']) ?? false,
       );
 }
 

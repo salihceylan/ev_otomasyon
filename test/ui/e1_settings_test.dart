@@ -2,6 +2,7 @@ import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/ui/pages/device_settings_page.dart';
+import 'package:ev_otomasyon/ui/widgets/settings/alarm_watch_card.dart';
 import 'package:ev_otomasyon/ui/widgets/settings/appearance_cards.dart';
 import 'package:ev_otomasyon/ui/widgets/settings/device_host_card.dart';
 import 'package:ev_otomasyon/ui/widgets/settings/info_cards.dart';
@@ -146,6 +147,16 @@ void main() {
         'card_host',
         'card_account',
       });
+    });
+
+    testWidgets('guvenlik-12: arka plan alarm kartı ev rolüne bağlı (kendi evinin sahibi personel görür)', (tester) async {
+      await pumpReady(tester, const DeviceSettingsPage(), role: 'owner', globalRole: 'service_user', size: tall);
+      expect(find.byType(AlarmWatchCard), findsOneWidget);
+    });
+
+    testWidgets('guvenlik-12: müşteri evindeki servis personeli arka plan alarm kartını görmez', (tester) async {
+      await pumpReady(tester, const DeviceSettingsPage(), role: 'service_user', globalRole: 'service_user', size: tall);
+      expect(find.byType(AlarmWatchCard), findsNothing);
     });
 
     testWidgets('süper kullanıcı (aktif ev yok): yalnızca uygulama ayarları (tema, biyometrik, hesap)', (tester) async {

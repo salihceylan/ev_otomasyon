@@ -12,6 +12,7 @@ import '../../../services/ev_cloud_api_service.dart';
 import 'device_link.dart';
 import 'service_target.dart';
 import 'setup_problem.dart';
+import 'setup_steps.dart';
 
 /// Sayfa kapanırken / denetleyici atılırken uçuştaki işlemlerin sessizce bırakılması.
 class SetupCancelled implements Exception {
@@ -159,6 +160,21 @@ class SetupContext {
   /// gönderilmez (5 hatalı denemede pano 60 sn kilitlenir). Elle yeni anahtar girilince sıfırlanır.
   String? _rejectedKey;
 
+  /// Bellekteki anahtar elle girildi (servis_kurulum-5): 6. adımda (internet var) sunucudaki anahtarla doğrulanır.
+  bool _keyIsManual = false;
+
+  /// Elle girilen anahtar sunucudaki kayıtla doğrulanamadı (sunucu anahtar vermedi / ulaşılamadı): 6. adımda uyarı.
+  bool manualKeyUnverified = false;
+
+  /// Hazırlanmamış (anahtarsız) pano: bulut ve teslim adımları yapılamaz (servis_kurulum-1).
+  static const SetupProblem unprovisionedProblem = SetupProblem(
+    kind: SetupProblemKind.deviceRejected,
+    title: 'Pano hazırlanmamış',
+    why: 'Panoda cihaz anahtarı yok; bulut kurulumu ve teslim yapılamaz.',
+    todo: '5. adımda Panoyu Hazırla ile ilk hazırlığı yapın.',
+    fixStep: SetupSteps.wifi,
+  );
+
   /// Sunucudan (yetkiliyse) cihaz yerel anahtarını alır; verilmezse `null`.
   ///
   /// **Hiçbir yere kaydedilmez**: `AutomationState.localKeyFor` gibi güvenli depoya yazmaz (teknisyenin
@@ -181,12 +197,50 @@ class SetupContext {
     }
   }
 
-  /// Anahtar elle girildi (8-32 görünür ASCII).
-  void useManualKey(String key) {
+  /// Anahtar elle girildi (8-32 görünür ASCII). [manual] `false`: anahtar sunucudan alındı (elle doğrulama gerekmez).
+  void useManualKey(String key, {bool manual = true}) {
     final t = requireTarget;
     _rejectedKey = null;
+    _keyIsManual = manual;
+    manualKeyUnverified = false;
     target = t.copyWith(localKey: key);
     link.useKey(key);
+  }
+
+  /// Elle girilen ve pano tarafından kabul edilen anahtar sunucudakiyle karşılaştırılır (servis_kurulum-5). Farklıysa
+  /// panonun anahtarı sunucudakine çevrilir (`rekey`): panonun kendi bulut kimliğini alması (bootstrap) ve ev sahibinin
+  /// yerel erişimi sunucu anahtarıyla çalışır. Sunucu anahtarı alınamazsa elle girilenle devam edilir ve uyarı gösterilir.
+  /// Süper yöneticiye sunucu anahtar vermediği için çağrılmaz. Dönüş: kullanılacak anahtar.
+  Future<String> _reconcileManualKey(String manual) async {
+    String? server;
+    try {
+      server = await fetchLocalKey();
+    } on ApiException catch (e) {
+      if (e.isServiceSessionExpired || e.isUnauthorized) rethrow;
+      server = null; // ağ / sunucu hatası: doğrulanamadı
+    }
+    ensureActive();
+    if (server == null || server.isEmpty) {
+      manualKeyUnverified = true;
+      return manual;
+    }
+    manualKeyUnverified = false;
+    if (server == manual) {
+      _keyIsManual = false;
+      return manual;
+    }
+    await link.verifiedApi.rekey(server);
+    ensureActive();
+    link.useKey(server);
+    final ok = await link.verifiedApi.checkKey();
+    ensureActive();
+    if (!ok) {
+      link.invalidate(dropKey: true);
+      target = requireTarget.copyWith(clearLocalKey: true);
+      throw const SetupProblemException(_keyRejected);
+    }
+    _keyIsManual = false;
+    return server;
   }
 
   static const SetupProblem _keyUnavailable = SetupProblem(
@@ -222,6 +276,7 @@ class SetupContext {
     if (key == null || key.isEmpty) {
       key = await fetchLocalKey();
       fromServer = true;
+      _keyIsManual = false;
       ensureActive();
     }
     if (key == null || key.isEmpty) throw const SetupProblemException(_keyUnavailable);
@@ -229,8 +284,10 @@ class SetupContext {
 
     // 1) Kimlik: anahtar gönderilmeden panonun beklenen cihaz olduğu doğrulanır.
     link.useKey(key);
-    await link.probe(t.ip, expectedUid: t.deviceUuid);
+    final identity = await link.probe(t.ip, expectedUid: t.deviceUuid);
     ensureActive();
+    // Hazırlanmamış pano (anahtarsız): bulut / teslim yapılamaz; kayıttan devamda da 6-9. adımlar kapanır (servis_kurulum-1).
+    if (identity.provisioned == false) throw const SetupProblemException(unprovisionedProblem);
     // 2) Anahtar pano tarafından kabul ediliyor mu?
     var accepted = await link.verifiedApi.checkKey();
     ensureActive();
@@ -252,6 +309,8 @@ class SetupContext {
       target = requireTarget.copyWith(clearLocalKey: true);
       throw const SetupProblemException(_keyRejected);
     }
+    // Elle girilen anahtar kabul edildi: sunucudakiyle eşitlenir (servis_kurulum-5; süper yöneticide sunucu anahtarı yok).
+    if (_keyIsManual && !access.isSuperUser) key = await _reconcileManualKey(key);
     _rejectedKey = null;
     link.markKeyChecked();
     target = requireTarget.copyWith(localKey: key);
@@ -358,6 +417,14 @@ abstract class SetupLogic {
     if (_problem == null && _retry == null) return;
     _problem = null;
     _retry = null;
+    ctx.notify();
+  }
+
+  /// Süren eylemin ilerleme metnini günceller (uzun beklemelerde ne beklendiği görünsün; eylem yoksa yok sayılır).
+  @protected
+  void updateBusyLabel(String label) {
+    if (!_busy || _busyLabel == label) return;
+    _busyLabel = label;
     ctx.notify();
   }
 

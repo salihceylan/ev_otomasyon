@@ -59,6 +59,10 @@ class _LoginPageState extends State<LoginPage> {
   bool _obscurePassword = true;
   bool _isLoading = false;
   String? _error;
+
+  /// Son giriş hatası şifresiz / davet bekleyen hesaba işaret edebilir (uyelik-10): etkinleştirme ipucu ve öne çıkan
+  /// "Şifremi Unuttum" gösterilir.
+  bool _activationHint = false;
   AutovalidateMode _autovalidate = AutovalidateMode.disabled;
 
   /// Sunucu telefonla (SMS kodu) girişi destekliyor mu (`GET /auth/capabilities` -> `sms_otp`; UYELIK-04). Yanıt
@@ -108,6 +112,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() {
       _isLoading = true;
       _error = null;
+      _activationHint = false;
     });
     try {
       final state = context.read<AutomationState>();
@@ -116,7 +121,10 @@ class _LoginPageState extends State<LoginPage> {
       // Başarıda AuthGate otomatik panele geçirir.
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = friendlyError(e, fallback: 'Giriş yapılamadı. Lütfen tekrar deneyin.'));
+      setState(() {
+        _error = friendlyError(e, fallback: 'Giriş yapılamadı. Lütfen tekrar deneyin.');
+        _activationHint = e is ApiException && (e.isInvalidCredentials || e.isAccountPending);
+      });
       _applyRateLimit(e);
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -354,6 +362,19 @@ class _LoginPageState extends State<LoginPage> {
                                   if (_error != null) ...[
                                     const SizedBox(height: 8),
                                     InlineMessage.error(_error!, key: const Key('login_error')),
+                                  ],
+                                  if (_error != null && _activationHint) ...[
+                                    const SizedBox(height: 8),
+                                    const InlineMessage.info(kAccountActivationHint, key: Key('login_activation_hint')),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: TextButton.icon(
+                                        key: const Key('btn_login_hint_forgot'),
+                                        onPressed: _isLoading ? null : () => ForgotPasswordDialog.show(context),
+                                        icon: const Icon(Icons.lock_reset_rounded, size: 18),
+                                        label: const Text('Şifremi Unuttum ile Şifre Belirle'),
+                                      ),
+                                    ),
                                   ],
                                   SizedBox(height: _error != null ? 16 : 4),
                                   // Birincil düğme: tür ElevatedButton KALIR; gradyan/şekil/gölge temadan gelir.

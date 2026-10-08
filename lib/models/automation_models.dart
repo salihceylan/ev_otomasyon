@@ -311,6 +311,7 @@ class DeviceStatus {
     this.ethConnected,
     this.ethIp = '',
     this.netIf,
+    this.lkFp,
   });
 
   final String deviceName;
@@ -396,6 +397,10 @@ class DeviceStatus {
 
   /// Etkin ağ arayüzü: `wifi` | `eth` | `none` (firmware v1.3.0+; eski panoda `null`).
   final String? netIf;
+
+  /// Yerel anahtar parmak izi (`lk_fp`; firmware 1.3.1, provizyonlu tam durumda; CONTRACTS sözleşme 1). Yalnız 8 küçük
+  /// hex ise okunur; uygulama HMAC hesaplamaz, sunucunun `local_key_fp`'siyle karşılaştırır (servis_kurulum-1).
+  final String? lkFp;
 
   /// Pano kablolu Ethernet ile ağa bağlı (firmware v1.3.0+; eski panoda her zaman `false`).
   bool get onEthernet => ethConnected == true || netIf == 'eth';
@@ -493,10 +498,17 @@ class DeviceStatus {
       ethConnected: asBool(json['eth_connected']),
       ethIp: asString(json['eth_ip']) ?? '',
       netIf: asNonEmptyString(json['net_if']),
+      lkFp: _parseLkFp(json['lk_fp']),
     );
   }
 
   static final RegExp _uidShape = RegExp(r'^AHBU-[A-Z0-9-]{3,32}$');
+  static final RegExp _lkFpShape = RegExp(r'^[0-9a-f]{8}$');
+
+  static String? _parseLkFp(Object? raw) {
+    final s = asNonEmptyString(raw);
+    return s != null && _lkFpShape.hasMatch(s) ? s : null;
+  }
 
   /// `shutters[]` -> gerçek panjurlar.
   ///
@@ -657,6 +669,7 @@ class DeviceStatus {
       stateVersion: stateVersion,
       safety: safety,
       lastRej: lastRej,
+      lkFp: lkFp,
       template: template,
       ethConnected: ethConnected,
       ethIp: ethIp,

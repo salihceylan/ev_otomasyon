@@ -6,6 +6,11 @@ import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/orb/orb.dart' show ProgressArc;
 
+/// Servisin açtığı (davet bekleyen) ya da hiç şifre belirlenmemiş hesapla girişte yönlendirme (uyelik-10): giriş
+/// `INVALID_CREDENTIALS`, telefon-OTP / sihirli bağlantı `ACCOUNT_PENDING` aldığında gösterilir.
+const String kAccountActivationHint = 'Hesabınızı servis açtıysa ve hiç şifre belirlemediyseniz e-postadaki etkinleştirme '
+    'bağlantısını kullanın ya da Şifremi unuttum ile şifre belirleyin.';
+
 /// Kimlik doğrulama formlarının alan çerçeve renkleri (WP-F4).
 ///
 /// Dinlenme halindeki çerçeve UI bileşeni kontrastını sağlar (şartname §5: >= 3:1). TEK KAYNAK: temanın alan çerçevesi

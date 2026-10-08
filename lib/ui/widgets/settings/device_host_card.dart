@@ -133,8 +133,13 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
 
   @override
   Widget build(BuildContext context) {
-    final vm = context.select<AutomationState, ({bool hasKey, String? lastIp, bool direct})>(
-      (s) => (hasKey: s.hasLocalKey, lastIp: s.lastKnownDeviceIp, direct: s.mode == AppMode.direct),
+    final vm = context.select<AutomationState, ({bool hasKey, String? lastIp, bool direct, bool hasUser})>(
+      (s) => (
+        hasKey: s.hasLocalKey,
+        lastIp: s.lastKnownDeviceIp,
+        direct: s.mode == AppMode.direct,
+        hasUser: s.currentUser != null,
+      ),
     );
     final apHost = AppConfig.current.deviceApHost;
     // Metin/simge yalnız okunur tonla (açık temada ham royal mavi/yeşil/amber ≈2–4.9:1 kalırdı).
@@ -269,6 +274,13 @@ class _DeviceHostCardState extends State<DeviceHostCard> {
               ),
             ],
           ),
+          if (!vm.hasUser) ...[
+            const SizedBox(height: 4),
+            const CardCaption(
+              'Cihaz anahtarı etikette yazmaz; hesabınızla giriş yaparsanız (ev sahibi/üye) anahtar otomatik alınır.',
+              key: Key('text_local_key_hint'),
+            ),
+          ],
           const SizedBox(height: 8),
           TextField(
             key: const Key('field_local_key'),

@@ -163,7 +163,10 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                                 )
                               else
                                 Text(
-                                  'Şifrenizi değiştirdiğinizde diğer tüm cihazlardaki oturumlarınız kapatılır.',
+                                  // Servis PIN'leri ve onlarla açılmış oturumlar da kapanır (uyelik-7).
+                                  'Şifrenizi değiştirdiğinizde diğer tüm cihazlardaki oturumlarınız kapatılır. '
+                                  "Ürettiğiniz servis PIN'leri ve açık servis oturumları da kapatılır.",
+                                  key: const Key('change_password_info'),
                                   style: TextStyle(color: muted, fontSize: 13, height: 1.4),
                                 ),
                               const SizedBox(height: 18),

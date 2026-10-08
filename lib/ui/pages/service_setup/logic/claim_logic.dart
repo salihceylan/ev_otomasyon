@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../../../../models/api_models.dart';
 import '../../../../models/capabilities.dart';
 import '../../../../models/cloud_models.dart';
+import '../../../../models/json_utils.dart';
 import '../../../../services/api_exception.dart';
 import '../../../../utils/qr_claim_parser.dart';
 import '../panel/uncertain_outcome_card.dart';
@@ -24,6 +25,8 @@ class ClaimSummary {
     required this.deviceUuid,
     this.warnings = const <String>[],
     this.customerAccountCreated = false,
+    this.customerAccountPending = false,
+    this.customerSecurityReset = false,
     this.inviteSent,
     this.technicianAccessExpiresAt,
     this.credentialReceived = false,
@@ -37,6 +40,12 @@ class ClaimSummary {
   /// Kısmi başarı uyarıları (ör. davet e-postası gönderilemedi): kullanıcıya MUTLAKA gösterilir.
   final List<String> warnings;
   final bool customerAccountCreated;
+
+  /// Müşteri hesabı zaten vardı ama henüz etkinleştirilmemiş (`created:false` + `pending_invite`; uyelik-1).
+  final bool customerAccountPending;
+
+  /// Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı (`security_reset`; uyelik-11).
+  final bool customerSecurityReset;
   final bool? inviteSent;
   final DateTime? technicianAccessExpiresAt;
 
@@ -55,6 +64,8 @@ class ClaimSummary {
         deviceUuid: deviceUuid,
         warnings: warnings,
         customerAccountCreated: customerAccountCreated,
+        customerAccountPending: customerAccountPending,
+        customerSecurityReset: customerSecurityReset,
         inviteSent: inviteSent,
         technicianAccessExpiresAt: technicianAccessExpiresAt,
         credentialReceived: credentialReceived,
@@ -174,6 +185,8 @@ class ClaimLogic extends SetupLogic {
         deviceUuid: deviceUuid,
         warnings: result.warnings,
         customerAccountCreated: account?.created ?? false,
+        customerAccountPending: account != null && !account.created && account.status == 'pending_invite',
+        customerSecurityReset: account?.securityReset ?? false,
         inviteSent: account?.inviteSent,
         technicianAccessExpiresAt: result.technicianAccessExpiresAt,
         credentialReceived: result.deviceCredential != null,
@@ -220,6 +233,30 @@ class ClaimLogic extends SetupLogic {
         if (devices.any((d) => d.deviceUuid.toUpperCase() == wanted)) return home;
       } on ApiException catch (e) {
         if (e.isForbidden || e.isNotFound) continue; // bu eve erişim yok: cihaz burada değil
+        rethrow;
+      }
+    }
+    // Süper yönetici claim ettiği evin üyesi olmaz (ev listesinde görmeyebilir): envanterdeki `claimed_home_id` ile
+    // bulunur ve cihazın o evde olduğu doğrulanır (servis_kurulum-9; sunucu sözleşme 13).
+    if (ctx.access.isSuperUser) return _findViaInventory(wanted);
+    return null;
+  }
+
+  Future<HomeModel?> _findViaInventory(String wanted) async {
+    ctx.ensureActive();
+    final data = await ctx.cloud.fetchDeviceInventory(search: wanted);
+    final items = parseList(asList(data['items']) ?? asList(data['devices']), InventoryDeviceModel.fromJson);
+    for (final d in items) {
+      if (d.deviceUuid.toUpperCase() != wanted) continue;
+      final homeId = d.claimedHomeId;
+      if (homeId == null) return null; // eski sunucu: ev kimliği verilmiyor
+      try {
+        final devices = await ctx.cloud.devices(homeId);
+        if (devices.any((x) => x.deviceUuid.toUpperCase() == wanted)) {
+          return HomeModel(id: homeId, name: d.claimedHomeName ?? '', role: 'super_user');
+        }
+      } on ApiException catch (e) {
+        if (e.isForbidden || e.isNotFound) return null;
         rethrow;
       }
     }
@@ -358,9 +395,22 @@ class ClaimLogic extends SetupLogic {
         retryAfter: e.retryAfter,
       ));
     }
+    if (e.statusCode == 409 && _uncertainFor != null && _uncertainFor == identify.uid && ctx.access.isSuperUser) {
+      // Süper yönetici dairenin üyesi değildir ve envanterden de doğrulanamadı (eski sunucu): yol "Aboneler > Kurulumu
+      // sürdür" ya da ev sahibinin servis PIN'i (servis_kurulum-9).
+      return const SetupProblemException(SetupProblem(
+        kind: SetupProblemKind.conflict,
+        title: 'Cihaz önceki denemede daireye bağlanmış olabilir',
+        why: 'Önceki isteğin yanıtı alınamamıştı ve sunucu şimdi cihazın zaten bir daireye bağlı olduğunu bildiriyor. '
+            'Önceki istek sunucuda tamamlanmış olabilir; ancak bu hesapla o daire doğrulanamadı.',
+        todo: "Sihirbazdan çıkıp servis panelinde Aboneler > Kurulumu sürdür ile devam edin ya da ev sahibinden servis "
+            "PIN'i alın.",
+        retryable: false,
+      ));
+    }
     if (e.statusCode == 409 && _uncertainFor != null && _uncertainFor == identify.uid) {
       // Önceki isteğin yanıtı alınamamıştı ve cihaz şimdi "zaten bağlı": önceki istek sunucuda tamamlanmış, ama bu
-      // hesap o daireyi doğrulayamadı (ör. süper yönetici: evin üyesi değil). Kör "başka daireye bağlı" demek yanıltır.
+      // hesap o daireyi doğrulayamadı. Kör "başka daireye bağlı" demek yanıltır.
       return const SetupProblemException(SetupProblem(
         kind: SetupProblemKind.conflict,
         title: 'Cihaz önceki denemede daireye bağlanmış olabilir',
@@ -370,6 +420,18 @@ class ClaimLogic extends SetupLogic {
             '"Bağlantıyı yeniden kur" ya da "Testleri yap" düğmesiyle kuruluma devam edin. Cihaz listede yoksa '
             'yöneticiye başvurun.',
         retryable: false,
+      ));
+    }
+    if (e.statusCode == 409 && ctx.access.isSuperUser) {
+      // Süper yönetici dairenin üyesi değildir: "Mevcut cihazlarım" yolu yoktur (servis_kurulum-9).
+      return SetupProblemException(SetupProblem(
+        kind: SetupProblemKind.conflict,
+        title: 'Cihaz eşlenemedi',
+        why: e.message,
+        todo: "Cihaz zaten bir daireye bağlıysa servis panelinde Aboneler > Kurulumu sürdür ile devam edin ya da ev "
+            "sahibinden servis PIN'i alın.",
+        retryable: false,
+        fixStep: SetupSteps.identify,
       ));
     }
     if (e.statusCode == 409 || e.isNotFound) {

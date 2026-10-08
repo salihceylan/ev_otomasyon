@@ -17,7 +17,10 @@ import '../widgets/settings/accent_button.dart';
 import 'service_setup/panel/assign_admin_dialog.dart';
 import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/subscriber_models.dart';
+import 'service_setup/service_setup_wizard_page.dart';
+import 'service_setup/service_target.dart';
 import 'service_setup/session_banner.dart';
+import 'service_setup/setup_steps.dart';
 import 'service_setup/setup_style.dart';
 
 /// Yetkili Servis Sorumlusu - Abonelerim & Cihaz Atama
@@ -568,9 +571,63 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
                   icon: Icon(Icons.person_add_alt_1_rounded, size: accentIconSize(context, base: 18)),
                   label: const Text('Home Admin Ata', textAlign: TextAlign.center),
                 ),
+              // Süper yönetici yarım kurulumu buradan sürdürür (servis_kurulum-9).
+              if (context.read<AutomationState>().isSuperUser && s.deviceUuids.isNotEmpty && !s.isCommissioned)
+                OutlinedButton.icon(
+                  key: Key('btn_resume_setup_${s.homeId}'),
+                  style: accentOutlinedButtonStyle(context, AppFamilies.emerald),
+                  onPressed: () => _resumeSetup(s),
+                  icon: Icon(Icons.play_circle_outline_rounded, size: accentIconSize(context, base: 18)),
+                  label: const Text('Kurulumu sürdür', textAlign: TextAlign.center),
+                ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  /// Süper yönetici (evin üyesi değildir; "Mevcut cihazlarım" yolu yoktur) yarım kalan kurulumu sürdürür (servis_kurulum-9):
+  /// evin panoları sunucudan alınır, sihirbaz mevcut cihaz kipinde 5. adımdan açılır.
+  Future<void> _resumeSetup(Subscriber s) async {
+    final state = context.read<AutomationState>();
+    final messenger = ScaffoldMessenger.of(context);
+    final List<String> uids;
+    try {
+      final devices = await state.cloudApi.devices(s.homeId).timeout(_requestTimeout);
+      uids = <String>[for (final d in devices) d.deviceUuid];
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, fallback: 'Dairenin panoları alınamadı.'))));
+      return;
+    }
+    if (!mounted) return;
+    if (uids.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('Bu dairede pano yok.')));
+      return;
+    }
+    final uid = uids.length == 1
+        ? uids.first
+        : await showDialog<String>(
+            context: context,
+            builder: (ctx) => SimpleDialog(
+              title: const Text('Hangi pano?'),
+              children: [
+                for (final u in uids)
+                  SimpleDialogOption(
+                    key: Key('opt_resume_$u'),
+                    onPressed: () => Navigator.of(ctx).pop(u),
+                    child: Text(u),
+                  ),
+              ],
+            ),
+          );
+    if (uid == null || !mounted) return;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ServiceSetupWizardPage(
+          existingTarget: ServiceTarget(homeId: s.homeId, deviceUuid: uid, homeName: s.homeName),
+          startStep: SetupSteps.wifi,
+        ),
       ),
     );
   }

@@ -131,7 +131,7 @@ class _NavItem {
 /// | `nav_qr` | oturum açmış, servis PIN oturumu değil (katıl / eşle) |
 /// | `nav_settings` | aktif eve erişim (misafir dahil, salt-okunur sayfa) |
 /// | `nav_family` | `canInvite` / `canManageMembers` (ev sahibi) |
-/// | `nav_mode` | `canSwitchMode` (misafir ✖) |
+/// | `nav_mode` | `canSwitchMode` (misafir ✖); doğrudan kipte giriş yapmış herkes (buluta dönüş) |
 /// | `nav_service` | servis PIN oturumu (`isServiceSession`) |
 /// | `nav_doctor` | `canChangeChildLock` (tanılama misafire kapalı) / konsollarda `canOpenServiceManagement` |
 /// | `nav_refresh`, `nav_profile`, `nav_login` | herkes / oturum açık / girişsiz yerel mod |
@@ -218,7 +218,8 @@ class DashboardAppBar extends StatelessWidget implements PreferredSizeWidget {
           ),
         );
       }
-      if (caps.canSwitchMode) {
+      // Doğrudan kipte giriş yapmış kullanıcı her zaman buluta dönebilir (kullanim-1; `setMode(cloud)` yetki kapısızdır).
+      if (caps.canSwitchMode || (caps.isAuthenticated && vm.mode == AppMode.direct)) {
         final cloud = vm.mode == AppMode.cloud;
         items.add(
           _NavItem(

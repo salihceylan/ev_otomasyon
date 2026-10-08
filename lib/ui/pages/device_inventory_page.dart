@@ -549,6 +549,8 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     final muted = AppTheme.getTextMuted(context);
     final home = device.claimedHomeName;
     final email = device.claimedUserEmail;
+    // Kurulum PIN'i hatalı denemelerle kilitli (bireysel-7): herkes görür, yalnız süper yönetici kaldırır.
+    final pinLocked = device.isPinLocked(context.read<AutomationState>().clock.now());
     // "Sahipli: Daire 5 (Sahipsiz)" çelişkisi: e-posta yoksa parantez hiç yazılmaz.
     final ownerText = 'Sahipli: ${home ?? 'Bilinmeyen Daire'}${email == null ? '' : ' ($email)'}';
 
@@ -630,6 +632,14 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
               ),
             ),
           ],
+          if (pinLocked) ...[
+            const SizedBox(height: 10),
+            Text(
+              "Kurulum PIN'i hatalı denemeler nedeniyle ${formatLocalDateTime(device.lockedUntil!)} saatine kadar kilitli.",
+              key: Key('note_pin_locked_${device.deviceUuid}'),
+              style: TextStyle(fontSize: AppText.caption, height: 1.3, color: AppTheme.warningText(context)),
+            ),
+          ],
           const SizedBox(height: 12),
           // Eylemler eşit genişlikte iki sütun; çerçeve + metin + simge AYNI aileden ve AA (ham amber/yeşil metin açık temada
           // ≈ 2:1'di). Yerel şekil/renk/yazı stili YOK: tema hapı, etiket tipografisi temadan (ailesiz textStyle yazı tipini
@@ -674,6 +684,14 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                   icon: Icon(Icons.print_rounded, size: accentIconSize(context, base: 18)),
                   label: const Text('Etiketi Yeniden Üret', textAlign: TextAlign.center),
                   style: accentOutlinedButtonStyle(context, AppFamilies.sky),
+                ),
+              if (manage && pinLocked)
+                OutlinedButton.icon(
+                  key: Key('btn_clear_pin_lock_${device.deviceUuid}'),
+                  onPressed: busy ? null : () => _clearPinLock(device),
+                  icon: Icon(Icons.lock_open_rounded, size: accentIconSize(context, base: 18)),
+                  label: const Text('PIN Kilidini Kaldır', textAlign: TextAlign.center),
+                  style: accentOutlinedButtonStyle(context, AppFamilies.amber),
                 ),
               if (manage && canDelete(device))
                 OutlinedButton.icon(
@@ -895,19 +913,45 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     }
   }
 
+  /// Kurulum PIN kilidini onayla kaldırır (bireysel-7): etiket sahibi başka hesabın hatalı denemeleri yüzünden
+  /// kilitlendiyse. Anahtar/PIN değişmez.
+  Future<void> _clearPinLock(InventoryDeviceModel device) async {
+    final ok = await showSimpleConfirm(
+      context,
+      title: 'PIN kilidi kaldırılsın mı?',
+      message: "${device.deviceUuid} kartının kurulum PIN'i kilidi kaldırılacak; hatalı deneme sayacı sıfırlanır. "
+          'Etiket ve PIN değişmez. Kilidin başka bir hesabın denemelerinden kaynaklanmadığından emin olun.',
+      confirmLabel: 'Kilidi Kaldır',
+      icon: Icons.lock_open_rounded,
+    );
+    if (!ok || !mounted) return;
+    final state = context.read<AutomationState>();
+    setState(() => _busyDevices.add(device.deviceUuid));
+    try {
+      await state.clearInventoryPinLock(device.deviceUuid);
+      if (!mounted) return;
+      _snack('${device.deviceUuid}: PIN kilidi kaldırıldı.');
+      unawaited(_load(reset: true));
+    } catch (e) {
+      _snack(friendlyError(e), color: AppTheme.filledAccent(AppTheme.accentRed));
+    } finally {
+      if (mounted) setState(() => _busyDevices.remove(device.deviceUuid));
+    }
+  }
+
   Future<void> _reissueLabel(InventoryDeviceModel device) async {
     final ok = await ConfirmDestructiveDialog.show(
       context,
       title: 'Etiket yeniden üretilsin mi?',
       message:
-          '${device.deviceUuid} için yeni kurulum PIN\'i ve yerel anahtar üretilecek. ESKİ ETİKET GEÇERSİZ olur; '
+          '${device.deviceUuid} için yeni kurulum PIN\'i üretilecek. ESKİ ETİKET GEÇERSİZ olur; '
           'yeni bilgiler yalnızca bir kez gösterilir.',
       confirmPhrase: device.deviceUuid,
       confirmLabel: 'Yeniden Üret',
     );
     if (!ok || !mounted || _reissuing) return;
     final state = context.read<AutomationState>();
-    // Yeni PIN ve anahtar yalnızca BU yanıtta gelir (eski etiket sunucuda zaten geçersiz): istek sürerken sayfadan
+    // Yeni PIN yalnızca BU yanıtta gelir (eski etiket sunucuda zaten geçersiz): istek sürerken sayfadan
     // çıkılırsa değerler hiç gösterilmeden kaybolurdu. Bu yüzden istek bitene kadar geri dönüş engellenir
     // ([PopScope]); yine de sayfa başka bir yolla kapanırsa (oturum bitişi ...) diyalog kök gezginde gösterilir.
     final rootContext = Navigator.of(context, rootNavigator: true).context;

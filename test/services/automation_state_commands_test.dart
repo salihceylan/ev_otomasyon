@@ -309,6 +309,36 @@ void main() {
       expect(h.state.childLock, isTrue);
     });
 
+    test('kullanim-9: yanıtı kaybolan bulut komutu nötr mesajla biter ve gerçek durum yeniden okunur', () async {
+      final h = await readyHarness();
+      addTearDown(h.dispose);
+      h.state.commandFailures.listen(failures.add);
+      h.cloud.sendCommandHandler = (homeId, deviceId, command) async {
+        await Future<void>.delayed(Duration.zero);
+        throw ApiException.network(
+          cause: TimeoutException('yanıt yok'),
+          message: 'Sunucu zamanında yanıt vermedi. Tekrar deneyin.',
+        );
+      };
+      final before = h.cloud.count('fetchEndpoints');
+      expect(await h.state.setRelay(1, true), isFalse);
+      await pumpEventQueue();
+      expect(failures.single.message, 'Yanıt alınamadı; durum yeniden kontrol ediliyor.');
+      expect(h.cloud.count('fetchEndpoints'), before + 1, reason: 'komut uygulanmış olabilir: durum yeniden okunur');
+    });
+
+    test('kullanim-9: ağ hatasında da (geri alınan komut) gerçek durum yeniden okunur', () async {
+      final h = await readyHarness();
+      addTearDown(h.dispose);
+      h.state.commandFailures.listen(failures.add);
+      h.cloud.sendCommandHandler = (homeId, deviceId, command) async => throw ApiException.network();
+      final before = h.cloud.count('fetchEndpoints');
+      expect(await h.state.setRelay(1, true), isFalse);
+      await pumpEventQueue();
+      expect(failures.single.reason, CommandFailureReason.network);
+      expect(h.cloud.count('fetchEndpoints'), before + 1);
+    });
+
     test('hata -> GERİ ALMA + sonuç denetimi (eskiden değer true kalıyordu)', () async {
       final h = await readyHarness();
       addTearDown(h.dispose);

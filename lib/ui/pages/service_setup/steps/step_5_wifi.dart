@@ -38,6 +38,9 @@ class _Step5WifiState extends State<Step5Wifi> {
   final TextEditingController _apPass = TextEditingController();
   final TextEditingController _lanIp = TextEditingController();
   final TextEditingController _key = TextEditingController();
+
+  /// Elle girilen anahtarın ikinci yazımı (servis_kurulum-5).
+  final TextEditingController _keyConfirm = TextEditingController();
   bool _showLan = false;
 
   /// Kurulum ağı adı panoya kopyalandı (düğme ✓ gösterir).
@@ -60,6 +63,7 @@ class _Step5WifiState extends State<Step5Wifi> {
     _apPass.dispose();
     _lanIp.dispose();
     _key.dispose();
+    _keyConfirm.dispose();
     super.dispose();
   }
 
@@ -136,6 +140,8 @@ class _Step5WifiState extends State<Step5Wifi> {
           else if (w.ethernetMode) ...[
             _ethernetChoice(context),
             _ethernetCard(context),
+            // Ethernet'le ev ağında ama hazırlanmamış pano: ilk hazırlık Ethernet adresinden (servis_kurulum-1).
+            if (w.needsProvision) _provisionCard(context, ethernet: true),
           ] else ...[
             _ethernetChoice(context),
             _connectCard(context, c),
@@ -320,9 +326,22 @@ class _Step5WifiState extends State<Step5Wifi> {
     );
   }
 
-  Widget _provisionCard(BuildContext context) {
+  /// İlk hazırlık kartı. [ethernet]: pano Ethernet'le ev ağında (telefon ev ağında, internet var): anahtar sunucudan
+  /// otomatik alınır (süper yöneticide elle girilir) ve hazırlık panonun Ethernet adresine yapılır (servis_kurulum-1).
+  Widget _provisionCard(BuildContext context, {bool ethernet = false}) {
     final w = _w;
     final hasKey = w.hasProvisionKey;
+    final isSuper = widget.controller.access.isSuperUser;
+    // Ethernet yolunda personel / servis oturumu anahtarı hazırlık sırasında sunucudan alır.
+    final keyFetchedOnTheFly = ethernet && !isSuper;
+    final canProvision = hasKey || keyFetchedOnTheFly;
+    Future<void> provision() async {
+      final ok = ethernet
+          ? await w.provisionViaEthernet(ip: w.ethProvisionIp ?? _lanIp.text, apPass: _apPass.text)
+          : await w.provision(apPass: _apPass.text);
+      if (ok && mounted) _apPass.clear();
+    }
+
     return SetupCard(
       key: const Key('wifi_provision_card'),
       accent: SetupColors.warn,
@@ -335,11 +354,29 @@ class _Step5WifiState extends State<Step5Wifi> {
           ),
           const SizedBox(height: 4),
           Text(
-            'Etiketteki "AĞ PAROLASI (AP)" değerini yazın. Pano kurulum ağını bu parolayla (WPA2) yeniden başlatır; '
-            'telefonunuz Wi-Fi\'dan düşer ve ağa bu parolayla yeniden bağlanmanız gerekir.',
+            ethernet
+                ? 'Etiketteki "AĞ PAROLASI (AP)" değerini yazın. İlk hazırlık panoya cihaz anahtarını ve kurulum ağı '
+                    'parolasını Ethernet adresinden yazar; kablolu bağlantı kesilmez.'
+                : 'Etiketteki "AĞ PAROLASI (AP)" değerini yazın. Pano kurulum ağını bu parolayla (WPA2) yeniden başlatır; '
+                    'telefonunuz Wi-Fi\'dan düşer ve ağa bu parolayla yeniden bağlanmanız gerekir.',
             style: TextStyle(fontSize: 13, height: 1.35, color: SetupColors.muted(context)),
           ),
-          if (!hasKey) ...[
+          if (!hasKey && keyFetchedOnTheFly)
+            const SetupInfoRow(
+              key: Key('wifi_provision_key_auto'),
+              icon: Icons.cloud_download_rounded,
+              color: SetupColors.info,
+              text: 'Cihaz anahtarı hazırlık sırasında sunucudan alınır (telefon ev ağında, internet gerekir).',
+            )
+          else if (!hasKey && ethernet) ...[
+            const SetupInfoRow(
+              key: Key('wifi_provision_nokey'),
+              icon: Icons.key_off_rounded,
+              color: SetupColors.error,
+              text: 'Süper yönetici hesabına cihaz anahtarı verilmez: fabrika/servis kaydındaki anahtarı elle girin.',
+            ),
+            _manualKeyFields(context),
+          ] else if (!hasKey) ...[
             SetupCard(
               key: const Key('wifi_provision_nokey'),
               accent: SetupColors.error,
@@ -368,7 +405,9 @@ class _Step5WifiState extends State<Step5Wifi> {
             label: 'Kurulum ağı parolası',
             prefixIcon: Icons.wifi_password_rounded,
             textInputAction: TextInputAction.done,
-            onSubmitted: (_) => w.provision(apPass: _apPass.text),
+            onSubmitted: (_) {
+              if (!w.busy && canProvision) provision();
+            },
           ),
           const SizedBox(height: 12),
           SetupPrimaryButton(
@@ -376,12 +415,7 @@ class _Step5WifiState extends State<Step5Wifi> {
             label: 'Panoyu Hazırla',
             icon: Icons.build_rounded,
             busy: w.busy && w.busyLabel == WifiLogic.provisionLabel,
-            onPressed: w.busy || !hasKey
-                ? null
-                : () async {
-                    final ok = await w.provision(apPass: _apPass.text);
-                    if (ok && mounted) _apPass.clear();
-                  },
+            onPressed: w.busy || !canProvision ? null : provision,
           ),
         ],
       ),
@@ -400,21 +434,55 @@ class _Step5WifiState extends State<Step5Wifi> {
           helperText: 'Fabrika/servis kaydındaki 8-32 karakterlik anahtar.',
           prefixIcon: Icons.key_rounded,
           monospace: true,
-          onSubmitted: (_) => w.useManualKey(_key.text.trim()),
+        ),
+        const SizedBox(height: 8),
+        // İkinci yazım (servis_kurulum-5): uyuşmazsa anahtar kullanılmaz, "Panoyu Hazırla" kapalı kalır.
+        SecretField(
+          key: const Key('field_local_key_confirm'),
+          controller: _keyConfirm,
+          label: 'Cihaz anahtarı (tekrar)',
+          prefixIcon: Icons.key_rounded,
+          monospace: true,
+          onSubmitted: (_) => _useManualKey(),
+        ),
+        const SetupInfoRow(
+          key: Key('manual_key_warning'),
+          icon: Icons.warning_amber_rounded,
+          color: SetupColors.warn,
+          text: 'Yanlış anahtar panonun bulut bağlantısını bozar ve USB gerektirir.',
         ),
         const SizedBox(height: 10),
         OutlinedButton.icon(
           key: const Key('btn_use_key'),
-          onPressed: w.busy
-              ? null
-              : () {
-                  if (w.useManualKey(_key.text.trim()) && mounted) _key.clear();
-                },
+          onPressed: w.busy ? null : _useManualKey,
           icon: Icon(Icons.vpn_key_rounded, size: accentIconSize(context, base: 18)),
           label: const Text('Bu Anahtarı Kullan'),
           style: accentOutlinedButtonStyle(context, AppFamilies.sky),
         ),
       ],
+    );
+  }
+
+  /// Elle girilen anahtarı iki yazımla birlikte kullanır; başarıda alanlar temizlenir.
+  void _useManualKey() {
+    if (_w.useManualKey(_key.text.trim(), confirm: _keyConfirm.text.trim()) && mounted) {
+      _key.clear();
+      _keyConfirm.clear();
+    }
+  }
+
+  /// "Ağ bağlantısını yeniden kur" (servis_kurulum-7): tamamlanmış 5. adım baştan yapılabilir (meşgulken kapalı).
+  Widget _restartNetworkButton(BuildContext context) {
+    final w = _w;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        key: const Key('btn_restart_network_setup'),
+        style: setupInlineActionStyle(),
+        onPressed: w.busy ? null : w.restartNetworkSetup,
+        icon: Icon(Icons.restart_alt_rounded, size: accentIconSize(context, base: 18)),
+        label: const Text('Ağ bağlantısını yeniden kur'),
+      ),
     );
   }
 
@@ -461,6 +529,7 @@ class _Step5WifiState extends State<Step5Wifi> {
             autoCheck: true,
             qrScanner: _panelScanner,
             onResult: w.acceptWifiResult,
+            serviceMode: true, // servis sihirbazı: hazırlık yönlendirmesi sihirbaza
           ),
         ],
       ),
@@ -589,6 +658,7 @@ class _Step5WifiState extends State<Step5Wifi> {
               color: SetupColors.info,
               text: '6. adım panoya bu adresten bağlanır ve bulut kimliğini yazar (telefon ev ağında, internet gerekir).',
             ),
+            _restartNetworkButton(context),
           ],
         ),
       );
@@ -633,6 +703,7 @@ class _Step5WifiState extends State<Step5Wifi> {
                   text: 'Panonun ev ağındaki adresi (IP) bildirilmedi: 6. adımda modem arayüzündeki cihaz listesinden '
                       'IP adresini yazmanız gerekecek.',
                 ),
+              _restartNetworkButton(context),
             ],
           ),
         ),

@@ -1,6 +1,8 @@
 import '../../../../models/api_models.dart';
 import '../../../../models/automation_models.dart';
+import '../../../../services/api_exception.dart';
 import '../../../../services/automation_api_service.dart';
+import '../service_target.dart';
 import '../setup_context.dart';
 import '../setup_problem.dart';
 import '../setup_steps.dart';
@@ -53,6 +55,12 @@ class CloudLogic extends SetupLogic {
   bool get credentialWritten => _credentialWritten;
   bool get online => _online;
 
+  bool _keyMismatch = false;
+
+  /// Ethernet'le doğrulanan panodaki anahtarın izi (`lk_fp`) sunucudakiyle uyuşmuyor (servis_kurulum-1): onaylı
+  /// "Panonun Anahtarını Eşitle" ([syncBoardKey]) gerekir.
+  bool get keyMismatch => _keyMismatch;
+
   /// Pano sunucuda zaten çevrimiçiydi: bulut kimliği yeniden üretilip yazılmadı.
   bool get alreadyOnline => _alreadyOnline;
   DateTime? get lastSeenAt => _lastSeenAt;
@@ -99,6 +107,7 @@ class CloudLogic extends SetupLogic {
             return;
           }
           final api = await ctx.ensureDeviceReady();
+          await _checkKeyFingerprint(api, t);
           _baselineSeen = current?.lastSeenAt;
           // Aktif ev bu eve ait olmayabilir: istemci yetki kapısı (aktif eve bağlı) atlanır, yetkiyi
           // sunucu (servis personeli / servis oturumu / süper) denetler.
@@ -115,6 +124,70 @@ class CloudLogic extends SetupLogic {
           _credentialWritten = true;
         }
         await _waitForCloud(t.homeId, t.deviceUuid);
+      });
+
+  static const SetupProblem _keyMismatchProblem = SetupProblem(
+    kind: SetupProblemKind.deviceRejected,
+    title: 'Panodaki anahtar sunucudakinden farklı',
+    why: 'Pano Ethernet üzerinden anahtarsız erişilebildiği için fark bağlantıda görünmedi: panodaki cihaz anahtarının izi '
+        'sunucudaki kayıtla uyuşmuyor. Bu haliyle pano bulut kimliğini kendisi alamaz ve ev sahibinin yerel erişimi çalışmaz.',
+    todo: '"Panonun Anahtarını Eşitle"ye basın: panonun anahtarı sunucudakiyle değiştirilir.',
+    retryable: false,
+  );
+
+  static const SetupProblem _keySyncFailed = SetupProblem(
+    kind: SetupProblemKind.deviceRejected,
+    title: 'Panonun anahtarı eşitlenemedi',
+    why: 'Anahtar panoya yazıldı ama pano hâlâ farklı bir anahtar izi bildiriyor.',
+    todo: 'Birkaç saniye bekleyip yeniden deneyin; olmazsa anahtarı servis yazılımıyla (USB) yazın.',
+  );
+
+  /// Pano Ethernet adresinden doğrulandıysa (orada `auth/check` her zaman 200: anahtar uyuşmazlığı görünmez) panonun
+  /// `lk_fp`'si sunucunun `local_key_fp`'siyle karşılaştırılır (servis_kurulum-1; CONTRACTS sözleşme 1). Personel / servis
+  /// PIN oturumunda; süper yöneticiye sunucu anahtar vermez. Biri iz bildirmiyorsa (eski firmware / sunucu) karşılaştırma
+  /// yapılmaz. Uygulama HMAC hesaplamaz.
+  Future<void> _checkKeyFingerprint(AutomationApiService api, ServiceTarget t) async {
+    _keyMismatch = false;
+    if (ctx.access.isSuperUser || !_onEthernet(t)) return;
+    final ({String key, String? fp}) info;
+    try {
+      info = await ctx.cloud.localKeyInfo(t.homeId, t.deviceUuid);
+    } on ApiException catch (e) {
+      if (e.isNetwork || e.isUnauthorized || e.isServiceSessionExpired || e.isServerError) rethrow;
+      return; // anahtar verilmedi: karşılaştırma yapılamaz
+    }
+    final serverFp = info.fp;
+    if (serverFp == null) return;
+    final status = await api.fetchStatus();
+    ctx.ensureActive();
+    final boardFp = status.lkFp;
+    if (boardFp == null || boardFp == serverFp) return;
+    _keyMismatch = true;
+    throw const SetupProblemException(_keyMismatchProblem);
+  }
+
+  /// Hedef adres panonun Ethernet adresi mi (son kimlik yoklamasından).
+  bool _onEthernet(ServiceTarget t) {
+    final id = ctx.link.lastIdentity;
+    return id != null && id.ethConnected == true && id.ethIp.isNotEmpty && id.ethIp == t.ip.trim();
+  }
+
+  /// Panonun anahtarını sunucudakiyle eşitler (onaylı; servis_kurulum-1): `POST /api/auth/rekey` Ethernet'ten anahtarsız
+  /// da kabul edilir (karar 1). Sonra durum yeniden okunur; izler eşleşmezse sorun bildirilir. Süper yöneticide yoktur.
+  Future<bool> syncBoardKey() => run('Panonun anahtarı eşitleniyor', () async {
+        if (ctx.access.isSuperUser) return;
+        final t = ctx.requireTarget;
+        final api = await ctx.ensureDeviceReady();
+        final info = await ctx.cloud.localKeyInfo(t.homeId, t.deviceUuid);
+        await api.rekey(info.key);
+        ctx.ensureActive();
+        ctx.useManualKey(info.key, manual: false);
+        final status = await (await ctx.ensureDeviceReady()).fetchStatus();
+        ctx.ensureActive();
+        if (info.fp != null && status.lkFp != null && status.lkFp != info.fp) {
+          throw const SetupProblemException(_keySyncFailed);
+        }
+        _keyMismatch = false;
       });
 
   /// Kimliği sunucudan yeniden üretip panoya yeniden yazar (eski kimlik geçersiz olur).

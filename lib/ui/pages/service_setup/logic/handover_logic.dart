@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import '../../../../models/api_models.dart';
 import '../../../../models/automation_models.dart';
 import '../../../../models/json_utils.dart';
+import '../../../../services/automation_api_service.dart';
 import '../setup_context.dart';
 import '../setup_problem.dart';
 import '../setup_steps.dart';
@@ -104,7 +105,10 @@ class HandoverLogic extends SetupLogic {
     final unusedRelays = relays.unusedCount;
     final visualRelays = relays.relays.where((r) => r.verdict == RelayVerdict.ok && r.visualOnly).length;
     final relayDetail = relays.relays.isEmpty
-        ? 'Röle bildirilmedi'
+        ? (relays.shutterRelays.isNotEmpty
+            // Yalnız panjur röleli pano (servis_kurulum-6).
+            ? 'Lamba/darbe rölesi yok (tüm röleler panjur; 8. adımda test edildi)'
+            : 'Röle bildirilmedi')
         : '$okRelays röle doğrulandı'
             '${visualRelays > 0 ? ' ($visualRelays darbe rölesi pano geri bildirimi olmadan gözle doğrulandı)' : ''}'
             '${unusedRelays > 0 ? ', $unusedRelays kullanılmıyor (teknisyen beyanı)' : ''}';
@@ -116,6 +120,9 @@ class HandoverLogic extends SetupLogic {
     String shutterDetail;
     if (shutters.hasNoShutters) {
       shutterDetail = 'Panoda panjur yok';
+    } else if (shutters.noMotorizedDeclared && shutters.shutters.every((s) => s.unused)) {
+      // Teknisyen beyanı (servis_kurulum-3).
+      shutterDetail = 'Panoda ${shutters.shutters.length} panjur çifti tanımlı; dairede motorlu panjur yok (teknisyen beyanı)';
     } else {
       final parts = <String>[
         for (final s in shutters.shutters)
@@ -197,6 +204,7 @@ class HandoverLogic extends SetupLogic {
           ));
         }
         final t = ctx.requireTarget;
+        await _ensureProvisioned(t.ip, t.deviceUuid);
         await _refresh();
         final checks = buildChecks();
         final notes = _composeNotes();
@@ -220,6 +228,19 @@ class HandoverLogic extends SetupLogic {
         }
         _completedAt = ctx.clock.now();
       });
+
+  /// Teslimden önce panonun hazırlığı anahtarsız denetlenir (servis_kurulum-1): [_readLan] hataları yuttuğu için ayrı
+  /// denetim gerekir. Panoya ulaşılamazsa (telefon başka ağda) atlanır; hazırlanmamış panoda teslim reddedilir.
+  Future<void> _ensureProvisioned(String ip, String uid) async {
+    if (ip.trim().isEmpty) return;
+    try {
+      final identity = await ctx.link.probe(ip, expectedUid: uid);
+      if (identity.provisioned == false) throw const SetupProblemException(SetupContext.unprovisionedProblem);
+    } on LocalApiException catch (e) {
+      if (!e.isNetwork && e.code != 'not_configured') rethrow;
+    }
+    ctx.ensureActive();
+  }
 
   String _composeNotes() {
     final parts = <String>[

@@ -125,6 +125,9 @@ class _MagicLinkPageState extends State<MagicLinkPage> {
   }
 
   String _linkError(Object e) {
+    if (e is ApiException && e.isAccountPending) {
+      return '${friendlyError(e)} $kAccountActivationHint'; // davet bekleyen hesap (uyelik-10)
+    }
     if (e is ApiException && (e.isGone || e.statusCode == 400 || e.isUnauthorized)) {
       return 'Bu bağlantının süresi dolmuş veya daha önce kullanılmış. Yeni bir bağlantı isteyin.';
     }

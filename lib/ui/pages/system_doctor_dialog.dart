@@ -433,6 +433,8 @@ class _ReportView extends StatelessWidget {
   }
 
   String _networkSubtitle() {
+    // Hiç bağlanmamış pano (bireysel-12): "internet yok / son görülme" yerine kurulum durumu.
+    if (report.neverSeen) return 'Pano henüz buluta hiç bağlanmadı';
     switch (report.networkLevel) {
       case DoctorLevel.unknown:
         return _noData;
@@ -522,9 +524,11 @@ class _ReportView extends StatelessWidget {
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 3),
                     child: Text(
-                      '${d.name ?? d.deviceUuid}: '
-                      '${d.online == null ? _noData : (d.online! ? 'çevrimiçi' : 'çevrimdışı')} • Son görülme: '
-                      '${DoctorReport.seenText(d.secondsSinceSeen) ?? _noData}',
+                      d.neverSeen
+                          ? '${d.name ?? d.deviceUuid}: henüz buluta hiç bağlanmadı'
+                          : '${d.name ?? d.deviceUuid}: '
+                              '${d.online == null ? _noData : (d.online! ? 'çevrimiçi' : 'çevrimdışı')} • Son görülme: '
+                              '${DoctorReport.seenText(d.secondsSinceSeen) ?? _noData}',
                       style: TextStyle(fontSize: 12.5, color: muted),
                     ),
                   ),
@@ -576,8 +580,8 @@ class _ReportView extends StatelessWidget {
             key: const Key('btn_doctor_recovery'),
             onPressed: onRecovery,
             icon: Icon(Icons.wifi_rounded, size: accentIconSize(context, base: 18)),
-            label: const Text(
-              'Modem veya şifre değiştiyse: Wi-Fi kurtarma',
+            label: Text(
+              r.neverSeen ? 'Pano Wi-Fi Kurulumu' : 'Modem veya şifre değiştiyse: Wi-Fi kurtarma',
               textAlign: TextAlign.center,
               textWidthBasis: TextWidthBasis.longestLine,
             ),

@@ -48,6 +48,34 @@ String valveFaultText(String kind) => kind == 'gas'
     ? "Gaz vanası kapanmadı! Sayaçtaki ana gaz vanasını elle kapatın, ortamı havalandırın ve 187'yi arayın."
     : 'Vana kapanmadı! Ana vanayı elle kapatın.';
 
+/// Arızalı (`fault`) vanaların akışkanına göre arıza satırları (guvenlik-11): gaz vanası arızası gaz metniyle, su vanası
+/// arızası su metniyle. Arızalı vana bilinmiyorsa alarmın türüne göre tek satır.
+List<String> valveFaultTextsFor(Iterable<ActuatorItem> faultedValves, String alarmKind) {
+  final media = <String>{for (final v in faultedValves) v.medium ?? 'water'};
+  if (media.isEmpty) return <String>[valveFaultText(alarmKind)];
+  return <String>[
+    if (media.contains('gas')) valveFaultText('gas'),
+    if (media.contains('water')) valveFaultText('water'),
+  ];
+}
+
+/// Tehlike kümesinin başlığı (guvenlik-11): "Duman algılandı + Su baskını". Küme boşsa [primary] türün başlığı.
+String safetyHazardTitle(String primary, List<String> kinds) =>
+    kinds.isEmpty ? safetyKindTitle(primary) : kinds.map(safetyKindTitle).join(' + ');
+
+/// Tehlike kümesinin davranış talimatı (guvenlik-11): gaz ve duman talimatları birleşir; kümede su varsa duman metnindeki
+/// "Pano su vanasını kapatmaz" cümlesi yazılmaz (pano su vanasını kapatır). Talimat yoksa `null`.
+String? safetyHazardInstruction(List<String> kinds) {
+  final parts = <String>[
+    if (kinds.contains('gas')) safetyKindInstruction('gas')!,
+    if (kinds.contains('smoke'))
+      kinds.contains('water')
+          ? "Evde biri varsa hemen dışarı çıkın ve 112'yi arayın. Havalandırma fanları durduruldu."
+          : safetyKindInstruction('smoke')!,
+  ];
+  return parts.isEmpty ? null : parts.join(' ');
+}
+
 /// Gaz vanası satırının kalıcı açıklaması ("Vanayı Aç" düğmesinin yerine; F2.A.6).
 const String kGasValveLocalOnlyNote =
     'Gaz vanası güvenlik gereği yalnız yerinde açılır: vananın yanındaki düğme ya da vananın kurma kolu.';

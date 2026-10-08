@@ -95,6 +95,61 @@ void main() {
     expect(sentTokens.last, 'refresh-new');
   });
 
+  test('uyelik-3: yazım hatasını kaydedip bildiren callback (AutomationState gibi): yenileme başarılı; ikinci yenileme '
+      'bellekteki token\'ı gönderir (depodaki eski token benimsenmez)', () async {
+    var storage = 'refresh-memory';
+    final storageErrors = <String>[];
+    service
+      ..refreshGate = gate
+      ..readStoredRefreshToken = (() async => storage)
+      ..onTokenRefreshed = (access, refresh) async {
+        try {
+          throw StateError('depo yazılamadı');
+        } catch (e) {
+          storageErrors.add('$e'); // kullanıcıya storageError olarak gösterilir
+          rethrow; // ... ve başarısızlık çağırana bildirilir
+        }
+      };
+    expect(await service.refreshSession(), isTrue, reason: 'yazım hatası yenilemeyi başarısız saymaz');
+    expect(service.currentRefreshToken, 'refresh-new');
+    expect(storageErrors, hasLength(1));
+    api.on('POST', '/api/v1/auth/refresh', (r) {
+      sentTokens.add(r.json?['refresh_token'] as String);
+      return okResponse(<String, dynamic>{'access_token': 'access-3', 'refresh_token': 'refresh-3'});
+    });
+    service.onTokenRefreshed = (access, refresh) async => storage = refresh!;
+    expect(await service.refreshSession(), isTrue);
+    expect(sentTokens, <String>['refresh-memory', 'refresh-new']);
+  });
+
+  test('uyelik-3: giriş (beginSession) sonrası depo durumu bilinmiyor: depodaki eski token benimsenmez; '
+      'markRefreshPersisted sonrası kapılı benimseme yeniden çalışır', () async {
+    var storage = 'refresh-onceki-oturum'; // giriş yazımı başarısız oldu: depoda eski oturumun token'ı kaldı
+    service
+      ..beginSession(accessToken: 'access-login', refreshToken: 'refresh-login')
+      ..refreshGate = gate
+      ..readStoredRefreshToken = (() async => storage)
+      ..onTokenRefreshed = (access, refresh) async => storage = refresh!;
+    expect(service.storedRefreshKnown, isFalse);
+    expect(await service.refreshSession(), isTrue);
+    expect(sentTokens, <String>['refresh-login'], reason: 'bilinmiyorken depodan benimseme yapılmaz');
+
+    // Yeni giriş: yazım bitti (AutomationState bildirir); ardından arka plan servisi token'ı döndürdü.
+    service.beginSession(accessToken: 'access-login-2', refreshToken: 'refresh-login-2');
+    storage = 'refresh-login-2';
+    service.markRefreshPersisted('refresh-login-2');
+    expect(service.storedRefreshKnown, isTrue);
+    storage = 'refresh-by-background';
+    expect(await service.refreshSession(), isTrue);
+    expect(sentTokens.last, 'refresh-by-background');
+  });
+
+  test('uyelik-3: markRefreshPersisted bellekteki token değilse (eski yazım) yok sayılır', () async {
+    service.beginSession(accessToken: 'a', refreshToken: 'refresh-current');
+    service.markRefreshPersisted('refresh-stale');
+    expect(service.storedRefreshKnown, isFalse);
+  });
+
   test('depoyu başka isolate döndürdüyse (son görülenden farklı) yenisi benimsenir', () async {
     var storage = 'refresh-memory';
     service
@@ -109,6 +164,76 @@ void main() {
     });
     expect(await service.refreshSession(), isTrue);
     expect(sentTokens, <String>['refresh-memory', 'refresh-by-background']);
+  });
+
+  group('uyelik-4: arka plan izleyicide ret sonrası depo yoklaması', () {
+    late FakeClock clock;
+    late MockApi local;
+    late EvCloudApiService bg;
+    late List<String> sent;
+    late List<SessionEndReason> ended;
+    var storage = '';
+
+    setUp(() {
+      clock = FakeClock();
+      local = MockApi();
+      sent = <String>[];
+      ended = <SessionEndReason>[];
+      storage = 'refresh-old';
+      bg = EvCloudApiService(baseUrl: 'https://api.test/api', client: local.client, clock: clock)
+        ..setAuthToken('access-old')
+        ..setRefreshToken('refresh-old')
+        ..refreshGate = _RecordingGate()
+        ..storedSessionIsAuthoritative = true
+        ..readStoredRefreshToken = (() async => storage)
+        ..onTokenRefreshed = ((access, refresh) async => storage = refresh!)
+        ..onSessionExpired = ended.add;
+      local.on('POST', '/api/v1/auth/refresh', (r) {
+        final token = r.json?['refresh_token'] as String;
+        sent.add(token);
+        if (token == 'refresh-old') return errorResponse(401, 'Oturum iptal edildi.', code: 'INVALID_TOKEN');
+        return okResponse(<String, dynamic>{'access_token': 'access-after', 'refresh_token': 'refresh-after'});
+      });
+    });
+
+    tearDown(() => bg.dispose());
+
+    test('ret sonrası depoda (ön planın şifre değişimi) yeni token belirirse benimsenir ve bir kez daha denenir', () async {
+      final future = bg.refreshSession();
+      await clock.elapse(const Duration(seconds: 2));
+      expect(ended, isEmpty, reason: 'ret hemen oturumu bitirmez');
+      storage = 'refresh-from-foreground';
+      await clock.elapse(const Duration(seconds: 1));
+      expect(await future, isTrue);
+      expect(sent, <String>['refresh-old', 'refresh-from-foreground']);
+      expect(bg.currentRefreshToken, 'refresh-after');
+      expect(storage, 'refresh-after');
+      expect(ended, isEmpty);
+    });
+
+    test('depo 10 sn içinde değişmezse oturum biter', () async {
+      final future = bg.refreshSession();
+      await clock.elapse(const Duration(seconds: 11));
+      expect(await future, isFalse);
+      expect(sent, <String>['refresh-old']);
+      expect(ended, hasLength(1));
+      expect(bg.hasSession, isFalse);
+    });
+  });
+
+  test('ön plan (depo yetkili değil): ret hemen oturumu bitirir (yoklama yok)', () async {
+    final ended = <SessionEndReason>[];
+    api.on('POST', '/api/v1/auth/refresh', (r) {
+      sentTokens.add(r.json?['refresh_token'] as String);
+      return errorResponse(401, 'x', code: 'INVALID_TOKEN');
+    });
+    gate.inside = true;
+    service
+      ..refreshGate = gate
+      ..readStoredRefreshToken = (() async => 'refresh-memory')
+      ..onSessionExpired = ended.add;
+    expect(await service.refreshSession(), isFalse);
+    expect(ended, hasLength(1));
   });
 
   test('arka plan: depo boşsa (çıkış yapılmış) yenileme YAPILMAZ ve oturum biter', () async {

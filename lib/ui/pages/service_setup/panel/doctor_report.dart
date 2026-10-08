@@ -16,11 +16,18 @@ class DoctorDevice {
     this.level,
     this.secondsSinceSeen,
     this.firmware,
+    this.networkStatus,
   });
 
   final String deviceUuid;
   final String? name;
   final bool? online;
+
+  /// Panonun ağ durumu (`network_status`: `OK | WARNING | OFFLINE | NEVER_SEEN`; büyük harfli); yoksa `null`.
+  final String? networkStatus;
+
+  /// Pano buluta hiç bağlanmadı (sunucu sözleşme 15; bireysel-12).
+  bool get neverSeen => networkStatus == 'NEVER_SEEN';
 
   /// `ok | warning | error` (sunucu seviyesi); yoksa `null`.
   final String? level;
@@ -39,6 +46,7 @@ class DoctorDevice {
       level: asNonEmptyString(map['level'])?.toLowerCase(),
       secondsSinceSeen: asInt(map['seconds_since_last_seen']),
       firmware: asNonEmptyString(map['firmware_version']),
+      networkStatus: asNonEmptyString(map['network_status'])?.toUpperCase(),
     );
   }
 }
@@ -130,7 +138,8 @@ class DoctorReport {
     }
   }
 
-  /// Ev ağı katmanı seviyesi.
+  /// Ev ağı katmanı seviyesi. `NEVER_SEEN` (pano buluta hiç bağlanmadı: kurulum eksik, arıza değil) uyarıdır; bu sürümün
+  /// tanımadığı bir durum hata sayılmaz, "bilinmiyor" gösterilir (bireysel-12; sunucu sözleşme 15).
   DoctorLevel get networkLevel {
     switch (networkStatus) {
       case null:
@@ -139,13 +148,20 @@ class DoctorReport {
       case 'OK':
         return DoctorLevel.ok;
       case 'WARNING':
+      case 'NEVER_SEEN':
         return DoctorLevel.warning;
       case 'UNCLAIMED':
         return DoctorLevel.notApplicable;
-      default:
+      case 'OFFLINE':
+      case 'ERROR':
         return DoctorLevel.error;
+      default:
+        return DoctorLevel.unknown;
     }
   }
+
+  /// Birincil pano buluta hiç bağlanmadı (`home_network.status == NEVER_SEEN`).
+  bool get neverSeen => networkStatus == 'NEVER_SEEN';
 
   /// Pano gücü katmanı seviyesi.
   DoctorLevel get powerLevel {
@@ -165,7 +181,8 @@ class DoctorReport {
   /// Wi-Fi kurtarma önerilir: ev ağı kapalı / bilinmiyor / hatalı (ya da bilgi hiç gelmedi).
   bool get suggestsWifiRecovery {
     final level = networkLevel;
-    return level == DoctorLevel.error || level == DoctorLevel.unknown;
+    // Hiç bağlanmamış pano: çoğunlukla ev ağı (Wi-Fi) kurulumu eksiktir.
+    return level == DoctorLevel.error || level == DoctorLevel.unknown || neverSeen;
   }
 
   /// Sunucu hiçbir tanı alanı göndermedi.

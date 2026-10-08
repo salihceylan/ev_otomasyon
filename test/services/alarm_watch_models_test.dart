@@ -43,10 +43,23 @@ void main() {
       expect(out.first.name, 'Evim');
     });
 
-    test('servis personeli, süper kullanıcı, servis oturumu ve bilinmeyen rol hiçbir evi izleyemez', () {
-      for (final role in <String?>['service_user', 'super_user', 'service_session', 'installer', null, 'bilinmeyen']) {
+    test('servis oturumu ve bilinmeyen rol hiçbir evi izleyemez', () {
+      for (final role in <String?>['service_session', null, 'bilinmeyen']) {
         expect(eligibleWatchHomes(globalRole: role, homes: homes), isEmpty, reason: '$role');
       }
+    });
+
+    test('guvenlik-12: kendi evinin sahibi/sakini olan personel ve süper kullanıcı izler; müşteri evindeki servis rolü izlemez',
+        () {
+      for (final role in <String>['service_user', 'super_user', 'installer']) {
+        final out = eligibleWatchHomes(globalRole: role, homes: homes);
+        expect(out.map((h) => h.id), <String>['h1', 'h2', 'h5'], reason: role);
+      }
+      // Müşteri evindeki servis üyeliği (ev rolü service_user) hiçbir küresel rolde izlenmez.
+      expect(
+        eligibleWatchHomes(globalRole: 'service_user', homes: <HomeModel>[_home('c1', 'service_user')]),
+        isEmpty,
+      );
     });
   });
 
@@ -103,6 +116,17 @@ void main() {
 
       now = now.add(const Duration(days: 8));
       expect(await d.markIfNew('k4'), isTrue, reason: '7 günden eski kayıt atılır');
+    });
+
+    test('guvenlik-9: touch hâlâ etkin alarmın kayıt zamanını tazeler (yalnız var olan kayıt)', () async {
+      var now = DateTime(2026, 10, 9, 12);
+      final d = AlarmDedupeStore(MemoryAlarmWatchStore(), now: () => now);
+      expect(await d.markIfNew('z|h|u|1|aid-1'), isTrue);
+      now = now.add(const Duration(days: 6));
+      await d.touch(<String>['z|h|u|1|aid-1', 'yok']);
+      now = now.add(const Duration(days: 6));
+      expect(await d.markIfNew('z|h|u|1|aid-1'), isFalse, reason: 'tazelendi: 12 gün sonra hâlâ kayıtlı');
+      expect(await d.markIfNew('yok'), isTrue, reason: 'touch kayıt EKLEMEZ');
     });
 
     test('bozuk kayıt boş sayılır', () async {

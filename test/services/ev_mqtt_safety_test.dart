@@ -40,8 +40,10 @@ String v3State({
       'safety': <String, dynamic>{
         'policy': 'on',
         'mode': mode,
+        // Firmware `safety.zones[]`'a YALNIZ normal olmayan bölgeleri yazar (CONTRACTS §2.6; guvenlik-10).
         'zones': <Map<String, dynamic>>[
-          <String, dynamic>{'id': 1, 'st': zoneSt, 'kind': 'water', 'aid': aid, 'silenced': silenced, 'srcs': <String>['d3']},
+          if (zoneSt != 'normal')
+            <String, dynamic>{'id': 1, 'st': zoneSt, 'kind': 'water', 'aid': aid, 'silenced': silenced, 'srcs': <String>['d3']},
         ],
       },
     });
@@ -127,6 +129,28 @@ void main() {
     expect(raised.aid, '9f3a11c0-1');
     expect(raised.kind, 'water');
     expect(raised.initial, isFalse);
+  });
+
+  test('guvenlik-10: kilit kalkınca (bölge listeden çıkar) alarmCleared; fault -> normal valveFaultCleared + alarmCleared',
+      () async {
+    deliver(v3State(zoneSt: 'latched'));
+    deliver(v3State());
+    await pumpEventQueue();
+    expect(events.map((e) => e.type), <SafetyEventType>[SafetyEventType.alarmRaised, SafetyEventType.alarmCleared]);
+    expect(events.last.zone, 1);
+    expect(events.last.aid, '9f3a11c0-1');
+    expect(events.last.kind, 'water');
+
+    events.clear();
+    deliver(v3State(zoneSt: 'fault', aid: 'bb-2'));
+    deliver(v3State());
+    await pumpEventQueue();
+    expect(events.map((e) => e.type), <SafetyEventType>[
+      SafetyEventType.alarmRaised,
+      SafetyEventType.valveFault,
+      SafetyEventType.valveFaultCleared,
+      SafetyEventType.alarmCleared,
+    ]);
   });
 
   test('özdeş kalp atışı olay üretmez', () async {

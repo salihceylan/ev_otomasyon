@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -16,6 +18,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/settings/accent_button.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/orb/orb.dart';
+import '../wifi_recovery_dialog.dart';
 
 String _humanDuration(Duration d) {
   final seconds = d.inSeconds;
@@ -60,10 +63,21 @@ String claimErrorMessage(Object error) {
   return friendlyError(error, fallback: 'Eşleştirme tamamlanamadı. Lütfen tekrar deneyin.');
 }
 
-/// Eşleştirme sonrası bilgi: pano buluta kendiliğinden bağlanır (CONTRACTS §3f bootstrap).
+/// Eşleştirme sonrası bilgi: pano (v1.3.0+) buluta kendiliğinden bağlanır (CONTRACTS §3f bootstrap). Eski yazılımlı pano
+/// bunu yapamaz (bireysel-1); Wi-Fi kurulumunun yeri doğru düğmeyle söylenir (bireysel-11).
 const String claimCloudBootstrapNote =
-    'Pano internete bağlı olduğunda birkaç dakika içinde kendiliğinden buluta bağlanır. Pano henüz ev ağına bağlı '
-    "değilse 'Pano Wi-Fi Kurulumu' ile bağlayın.";
+    'Pano yazılımı v1.3.0 ve üstüyse pano internete bağlı olduğunda birkaç dakika içinde kendiliğinden buluta bağlanır. '
+    'Pano henüz ev ağına bağlı değilse Ayarlar > Wi-Fi Şifre Değişimi & Kurtarma (girişsiz: giriş ekranındaki Pano Wi-Fi '
+    'Kurulumu) ile bağlayın.';
+
+/// Art arda ikinci PIN kilidinde gösterilen yönlendirme (bireysel-7).
+const String claimRepeatedLockHint =
+    'Başka bir hesaptan hatalı denemeler olabilir; etiket sizdeyse satıcınıza/yetkili servise başvurun.';
+
+/// Wi-Fi sihirbazında hazırlanmamış görülen pano için eşleme öncesi uyarı (bireysel-13).
+const String claimUnprovisionedWarning =
+    'Bu pano ilk hazırlığı (provizyon) görmemiş; sahiplenseniz de bu haliyle buluta bağlanamaz. Satıcınıza / yetkili '
+    'servise başvurun; ev sahibiyseniz servise Yetkili Servis İçin Geçici PIN verebilirsiniz.';
 
 /// Sunucu mesajı + kalan deneme (mesaj sayıyı zaten içeriyorsa tekrarlanmaz).
 String _withRemaining(ApiException error) {
@@ -135,6 +149,9 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
 
   String? _error;
   _ClaimSuccessView? _success;
+
+  /// Art arda alınan PIN kilidi (423) sayısı (bireysel-7); başka bir sonuçta sıfırlanır.
+  int _pinLockStreak = 0;
 
   @override
   void initState() {
@@ -301,14 +318,33 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
         otpCode: otp,
       );
       if (!mounted) return;
-      final hasExtra = res.warnings.isNotEmpty || (res.customerAccount?.created ?? false);
+      _pinLockStreak = 0;
+      final account = res.customerAccount;
+      // Müşteri hesabı zaten vardı ama etkinleştirilmemiş (uyelik-1): bilgi kapanmadan gösterilir.
+      final pending = account != null && !account.created && account.status == 'pending_invite';
+      final hasExtra = res.warnings.isNotEmpty || (account?.created ?? false) || pending;
       if (!hasExtra) {
+        // Servis rolü olmayan kullanıcıya panoyu ev ağına bağlamanın yolu (bireysel-11): diyalog kapandıktan sonra da
+        // açılabilsin diye kök gezginin bağlamı tutulur.
+        final perms = _permsOf(state);
+        final serviceRole = perms.isStaff || perms.isSuperUser;
+        final navContext = Navigator.of(context, rootNavigator: true).context;
+        final deviceUuid = res.deviceUuid.isNotEmpty ? res.deviceUuid : uid;
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
           SnackBar(
             content: const Text('Cihaz başarıyla evinize eşleştirildi.'),
             // Beyaz yazılı dolgu tonu (ham yeşil zeminde beyaz metin ≈2.5:1 idi).
             backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
             behavior: SnackBarBehavior.floating,
+            action: serviceRole
+                ? null
+                : SnackBarAction(
+                    label: 'Wi-Fi Kurulumu',
+                    textColor: Colors.white,
+                    onPressed: () {
+                      if (navContext.mounted) unawaited(WifiRecoveryDialog.show(navContext, deviceUuid: deviceUuid));
+                    },
+                  ),
           ),
         );
         Navigator.of(context).pop(true);
@@ -320,22 +356,65 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
         _success = _ClaimSuccessView(
           homeName: res.homeName,
           warnings: res.warnings,
-          customerCreated: res.customerAccount?.created ?? false,
-          inviteSent: res.customerAccount?.inviteSent ?? false,
+          customerCreated: account?.created ?? false,
+          customerPending: pending,
+          securityReset: account?.securityReset ?? false,
+          inviteSent: account?.inviteSent ?? false,
           technicianUntil: res.technicianAccessExpiresAt,
         );
       });
     } catch (e) {
       if (!mounted) return;
+      // Aynı sahibin yeniden sahiplenmesi (yanıtı kaybolan önceki deneme; bireysel-3): başarı sayılır.
+      if (e is ApiException && e.statusCode == 409 && e.reason == 'ALREADY_YOURS') {
+        await _adoptAlreadyYours(state, e);
+        return;
+      }
+      var message = claimErrorMessage(e);
+      if (e is ApiException && e.isPinLocked) {
+        _pinLockStreak++;
+        if (_pinLockStreak >= 2) message = '$message $claimRepeatedLockHint';
+      } else {
+        _pinLockStreak = 0;
+      }
+      if (e is ApiException && e.isNetwork) {
+        // İstek sunucuda tamamlanmış olabilir (yanıt kayboldu): ev listesi arka planda yenilenir (bireysel-3).
+        unawaited(state.fetchHomes(autoSelect: false));
+        message = '$message İşlem sunucuda tamamlanmış olabilir; ev listeniz yenileniyor.';
+      }
       setState(() {
         _isLoading = false;
-        _error = claimErrorMessage(e);
+        _error = message;
       });
       if (e is ApiException && (e.isPinLocked || e.isRateLimited)) {
         final wait = e.retryAfter ?? e.resendAfter;
         if (wait != null) _pinLock.start(wait);
       }
     }
+  }
+
+  /// `409 CONFLICT reason:ALREADY_YOURS` (data: {home_id, home_name}): cihaz zaten bu hesabın evinde. Ev listesi yenilenir,
+  /// (müşteri kullanıcısında) o ev seçilir ve diyalog başarıyla kapanır (bireysel-3).
+  Future<void> _adoptAlreadyYours(AutomationState state, ApiException e) async {
+    final data = asMap(e.details?['data']);
+    final homeId = asNonEmptyString(data?['home_id']);
+    final perms = _permsOf(state);
+    final staff = perms.isStaff || perms.isSuperUser;
+    try {
+      await state.fetchHomes(autoSelect: false);
+      final home = homeId == null ? null : state.homeById(homeId);
+      if (!staff && home != null) await state.selectHome(home);
+    } catch (_) {
+      // Liste yenilenemese de cihazın evde olduğu bilinir.
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(staff ? 'Cihaz zaten müşterinin evine bağlı.' : 'Cihaz zaten evinizde.'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    Navigator.of(context).pop(true);
   }
 
   // ---------------------------------------------------------------------------
@@ -431,9 +510,14 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
             style: TextStyle(color: AppTheme.getTextMuted(context), fontSize: 13, height: 1.4),
           ),
           const SizedBox(height: 18),
+          if (_knownUnprovisioned(context)) ...[
+            const InlineMessage.warning(claimUnprovisionedWarning, key: Key('claim_unprovisioned_warning')),
+            const SizedBox(height: 12),
+          ],
           TextFormField(
             key: const Key('field_claim_uid'),
             controller: _uidController,
+            onChanged: (_) => setState(() {}), // hazırlanmamış pano uyarısı kimliğe göre (bireysel-13)
             readOnly: locked,
             enabled: !_isLoading,
             textCapitalization: TextCapitalization.characters,
@@ -645,6 +729,12 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
     ];
   }
 
+  /// Bu kimlik Wi-Fi sihirbazında hazırlanmamış (`provisioned:false`) görüldü mü (bireysel-13).
+  bool _knownUnprovisioned(BuildContext context) {
+    final uid = QrClaimParser.normalizeUid(_uidController.text);
+    return uid != null && context.read<AutomationState>().isKnownUnprovisioned(uid);
+  }
+
   Widget _buildSuccess(_ClaimSuccessView view) {
     final items = <String>[
       ...view.warnings,
@@ -652,6 +742,12 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
         view.inviteSent
             ? 'Müşteri için yeni hesap açıldı ve davet e-postası gönderildi.'
             : 'Müşteri için yeni hesap açıldı; davet e-postası gönderilemedi, müşteriye şifre sıfırlama bağlantısı gönderin.',
+      if (view.customerPending)
+        view.inviteSent
+            ? 'Müşteri hesabı henüz etkinleştirilmedi; davet yeniden gönderildi.'
+            : 'Müşteri hesabı henüz etkinleştirilmedi; davet gönderilemedi; müşteri Şifremi unuttum ile etkinleştirebilir.',
+      if (view.securityReset && !view.warnings.any((w) => w.contains('güvenlik için sıfırlandı')))
+        'Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası gönderildi.',
       if (view.technicianUntil != null)
         'Kurulum erişiminiz ${formatLocalDateTime(view.technicianUntil!)} tarihine kadar sürer.',
     ];
@@ -714,12 +810,16 @@ class _ClaimSuccessView {
     required this.warnings,
     required this.customerCreated,
     required this.inviteSent,
+    this.customerPending = false,
+    this.securityReset = false,
     this.technicianUntil,
   });
 
   final String homeName;
   final List<String> warnings;
   final bool customerCreated;
+  final bool customerPending;
+  final bool securityReset;
   final bool inviteSent;
   final DateTime? technicianUntil;
 }

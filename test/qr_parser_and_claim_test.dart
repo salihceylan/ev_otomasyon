@@ -5,6 +5,7 @@ import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/ui/common/qr_flow.dart';
 import 'package:ev_otomasyon/ui/pages/claim/claim_manual_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/family/join_home_dialog.dart';
+import 'package:ev_otomasyon/ui/pages/wifi_recovery_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -145,7 +146,23 @@ void main() {
       expect(find.byType(ClaimManualDialog), findsOneWidget);
     });
 
-    testWidgets('eşleştirme yetkisi olmayan hesap (misafir/servis oturumu) için form yerine açık mesaj gösterilir', (tester) async {
+    testWidgets('eşleştirme yetkisi olmayan hesap (servis oturumu) için form yerine açık mesaj gösterilir', (tester) async {
+      final env = e2Env(role: 'owner');
+      env.cloud.restoreServiceSession(
+        accessToken: 'servis',
+        info: ServiceSessionInfo(homeId: kHomeA, homeName: 'Servis', expiresAt: kTestNow.add(const Duration(hours: 2))),
+      );
+      env.state
+        ..setCurrentUserForTesting(const UserModel(id: '', email: '', fullName: 'Servis', role: 'service_session'))
+        ..setHomesForTesting(<HomeModel>[testHome(role: 'service_session')], activeHome: testHome(role: 'service_session'));
+      await open(tester, env);
+
+      expect(find.byKey(const Key('claim_forbidden')), findsOneWidget);
+      expect(find.byKey(const Key('field_claim_uid')), findsNothing);
+    });
+
+    testWidgets('bireysel-2: aktif evi misafir olan küresel kullanıcı kendi panosunu eşleyebilir (form açılır)',
+        (tester) async {
       final env = e2Env(
         role: 'guest',
         home: HomeModel(
@@ -158,8 +175,8 @@ void main() {
       );
       await open(tester, env);
 
-      expect(find.byKey(const Key('claim_forbidden')), findsOneWidget);
-      expect(find.byKey(const Key('field_claim_uid')), findsNothing);
+      expect(find.byKey(const Key('claim_forbidden')), findsNothing);
+      expect(find.byKey(const Key('field_claim_uid')), findsOneWidget);
     });
 
     testWidgets('kısmi başarı uyarıları kullanıcıya GÖSTERİLİR (başarı ekranında)', (tester) async {
@@ -253,9 +270,13 @@ void main() {
       expect(claimErrorMessage(apiError(403, 'Bu işlem için yetkiniz yok.', code: 'FORBIDDEN')), contains('yetkiniz yok'));
     });
 
-    testWidgets('ağ hatası: bağlantı mesajı', (tester) async {
+    testWidgets('ağ hatası: bağlantı mesajı (+ yanıtı kaybolan istek ipucu; bireysel-3)', (tester) async {
       await submitWithError(tester, apiError(0, 'ham ağ hatası', code: 'NETWORK'));
-      expect(textOf(tester, 'claim_error'), 'Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.');
+      expect(
+        textOf(tester, 'claim_error'),
+        'Sunucuya ulaşılamadı. İnternet bağlantınızı kontrol edip tekrar deneyin. '
+        'İşlem sunucuda tamamlanmış olabilir; ev listeniz yenileniyor.',
+      );
     });
 
     testWidgets('hatalı PIN (401) kalan deneme hakkıyla gösterilir', (tester) async {
@@ -450,11 +471,11 @@ void main() {
       expect(tester.widget<TextFormField>(find.byKey(const Key('field_join_code'))).controller!.text, 'ABCDEF123456');
     });
 
-    testWidgets('Wi-Fi karekodu burada kullanılamaz: açık Türkçe uyarı, diyalog açılmaz', (tester) async {
+    testWidgets('Wi-Fi karekodu eşleme/katılım sayılmaz: Wi-Fi Kurulum sihirbazı açılır (bireysel-11)', (tester) async {
       await pumpHost(tester);
       await tapKey(tester, 'qr_wifi');
 
-      expect(find.textContaining('Bu bir Wi-Fi karekodu'), findsOneWidget);
+      expect(find.byType(WifiRecoveryDialog), findsOneWidget);
       expect(find.byType(ClaimManualDialog), findsNothing);
       expect(find.byType(JoinHomeDialog), findsNothing);
     });

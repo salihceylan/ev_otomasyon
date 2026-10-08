@@ -3,7 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../../models/automation_models.dart';
-import '../../ui/widgets/safety_labels.dart' show safetyKindInstruction, safetyKindTitle, valveFaultText;
+import '../../ui/widgets/safety_labels.dart'
+    show safetyHazardInstruction, safetyHazardTitle, safetyKindInstruction, valveFaultTextsFor;
 import '../push/peace_notice.dart';
 import '../push/safety_notice.dart';
 
@@ -129,13 +130,16 @@ AlarmNoticePlan planAlarmNotices({
         if (zone == null) continue;
         final alarm = after.alarmForZone(zone);
         final kind = alarm?.kind ?? event.kind ?? 'unknown';
-        final title = '${safetyKindTitle(kind)}: ${sourceLabel(alarm?.sources ?? const <String>[], zone)} — $home';
+        // Başlık ve gövde tehlike kümesinden (guvenlik-11; uygulama içi kartla aynı): "Duman algılandı + Su baskını".
+        final kinds = alarm == null ? const <String>[] : alarmHazardKinds(alarm, after.sensors);
+        final title = '${safetyHazardTitle(kind, kinds)}: ${sourceLabel(alarm?.sources ?? const <String>[], zone)} — $home';
+        final instruction = kinds.isEmpty ? safetyKindInstruction(kind) : safetyHazardInstruction(kinds);
         show.add(AlarmNotice(
           type: AlarmNoticeType.alarm,
           dedupeKey: 'z|$homeId|$uid|$zone|${event.aid ?? '-'}',
           notificationId: zoneId('z', zone),
           title: title,
-          body: safetyKindInstruction(kind) ?? 'Alarmı görmek ve vanayı yönetmek için dokunun.',
+          body: instruction ?? 'Alarmı görmek ve vanayı yönetmek için dokunun.',
           homeId: homeId,
           deviceUid: after.deviceUid,
           zone: zone,
@@ -144,12 +148,17 @@ AlarmNoticePlan planAlarmNotices({
       case SafetyEventType.valveFault:
         if (zone == null) continue;
         final kind = after.alarmForZone(zone)?.kind ?? event.kind ?? 'unknown';
+        // Metin arızalı vananın akışkanından (guvenlik-11): gaz alarmında su vanası arızası su metniyle.
+        final faulted = <ActuatorItem>[
+          for (final a in after.actuators)
+            if (a.isValve && a.fault && a.zones.contains(zone)) a,
+        ];
         show.add(AlarmNotice(
           type: AlarmNoticeType.valveFault,
           dedupeKey: 'f|$homeId|$uid|$zone|${event.aid ?? '-'}',
           notificationId: zoneId('f', zone),
           title: 'Vana kapanmadı (arıza) — $home',
-          body: valveFaultText(kind),
+          body: valveFaultTextsFor(faulted, kind).join(' '),
           homeId: homeId,
           deviceUid: after.deviceUid,
           zone: zone,
@@ -157,7 +166,8 @@ AlarmNoticePlan planAlarmNotices({
         ));
       case SafetyEventType.valveFaultCleared:
         if (zone == null) continue;
-        cancel.add(AlarmNoticeCancel(notificationId: zoneId('f', zone), forgetPrefix: 'f|$homeId|$uid|$zone|-'));
+        // Önek aid'li kaydı da kapsar (guvenlik-8): aynı alarm içinde arıza yeniden çıkarsa yine bildirilir.
+        cancel.add(AlarmNoticeCancel(notificationId: zoneId('f', zone), forgetPrefix: 'f|$homeId|$uid|$zone|'));
       case SafetyEventType.safeModeEntered:
         show.add(AlarmNotice(
           type: AlarmNoticeType.safeMode,
@@ -186,7 +196,7 @@ AlarmNoticePlan planAlarmNotices({
       if (!before.zoneStatus(zone).isAlarm || after.zoneStatus(zone).isAlarm) continue;
       cancel
         ..add(AlarmNoticeCancel(notificationId: zoneId('z', zone), forgetPrefix: 'z|$homeId|$uid|$zone|-'))
-        ..add(AlarmNoticeCancel(notificationId: zoneId('f', zone), forgetPrefix: 'f|$homeId|$uid|$zone|-'));
+        ..add(AlarmNoticeCancel(notificationId: zoneId('f', zone), forgetPrefix: 'f|$homeId|$uid|$zone|'));
     }
   }
 
@@ -199,6 +209,16 @@ AlarmNoticePlan planAlarmNotices({
     for (var zone = 1; zone <= 4; zone++) {
       if (after.zoneStatus(zone).isAlarm) continue;
       cancel.add(AlarmNoticeCancel(notificationId: zoneId('z', zone), forgetPrefix: 'z|$homeId|$uid|$zone|-'));
+    }
+    // Servis kapalıyken biten hırsız alarmı ve düzelen vana arızası bildirimleri tepside kalmasın (guvenlik-9): ilk
+    // görüntüde etkin değillerse bildirim silinir ve kayıt unutulur (yeniden olursa yine bildirilir).
+    final armNow = after.arm;
+    if (armNow == null || !armNow.isAlarm) {
+      cancel.add(AlarmNoticeCancel(notificationId: stableNotificationId('i|$homeId|$uid'), forgetPrefix: 'i|$homeId|$uid|'));
+    }
+    for (var zone = 1; zone <= 4; zone++) {
+      if (after.zoneStatus(zone) == ZoneStatus.fault) continue;
+      cancel.add(AlarmNoticeCancel(notificationId: zoneId('f', zone), forgetPrefix: 'f|$homeId|$uid|$zone|'));
     }
   }
 
@@ -228,6 +248,23 @@ AlarmNoticePlan planAlarmNotices({
     show: List<AlarmNotice>.unmodifiable(show),
     cancel: List<AlarmNoticeCancel>.unmodifiable(cancel),
   );
+}
+
+/// Hâlâ etkin alarmların tekilleştirme anahtarları ([planAlarmNotices] ile aynı biçim; guvenlik-9): arka plan motoru her
+/// `state`'te bunların kayıt zamanını tazeler; aylarca süren (retained) kilit, 7 günlük kayıt ömrü dolunca servis yeniden
+/// başladığında "yeni alarm" sayılıp yeniden çalmaz.
+List<String> activeAlarmDedupeKeys({required String homeId, required SafetyState state}) {
+  if (!state.supported) return const <String>[];
+  final uid = state.deviceUid ?? '-';
+  final out = <String>[];
+  for (final a in state.alarms) {
+    if (!a.isActive) continue;
+    out.add('z|$homeId|$uid|${a.zone}|${a.aid ?? '-'}');
+    if (a.isFault) out.add('f|$homeId|$uid|${a.zone}|${a.aid ?? '-'}');
+  }
+  final arm = state.arm;
+  if (arm != null && arm.isAlarm) out.add('i|$homeId|$uid|${arm.aid ?? '-'}');
+  return out;
 }
 
 /// Bildirime dokunuşun yükünü uygulamanın mevcut alarm yönlendirmesine ([SafetyPushNotice], "opened") çevirir.

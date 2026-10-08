@@ -53,18 +53,159 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
   String? _removingId;
   int _loadSeq = 0;
 
+  /// Bekleyen davetler (ev_uyelik-6; yalnız üye yönetebilen rolde). `null` = yüklenmedi / desteklenmiyor.
+  List<PendingInvitation>? _invites;
+  String? _invitesError;
+  String? _revokingId;
+  int _inviteSeq = 0;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_loadMembers());
+      if (!mounted) return;
+      unawaited(_loadMembers());
+      unawaited(_loadInvites());
     });
   }
 
   @override
   void dispose() {
     _loadSeq++;
+    _inviteSeq++;
     super.dispose();
+  }
+
+  /// Bekleyen davetleri yükler (ev_uyelik-6). Yetkisiz rolde istek atılmaz; eski sunucu (404/405) bölümü gizler.
+  Future<void> _loadInvites() async {
+    final state = context.read<AutomationState>();
+    if (state.activeHome == null || !state.capabilities.canManageMembers) {
+      if (_invites != null || _invitesError != null) {
+        setState(() {
+          _invites = null;
+          _invitesError = null;
+        });
+      }
+      return;
+    }
+    final seq = ++_inviteSeq;
+    try {
+      final list = await state.fetchPendingInvitations().timeout(_loadTimeout);
+      if (!mounted || seq != _inviteSeq) return;
+      setState(() {
+        _invites = list;
+        _invitesError = null;
+      });
+    } catch (e) {
+      if (!mounted || seq != _inviteSeq) return;
+      final unsupported = e is ApiException && (e.statusCode == 404 || e.statusCode == 405);
+      setState(() {
+        _invites = unsupported ? null : (_invites ?? const <PendingInvitation>[]);
+        _invitesError = unsupported ? null : friendlyError(e, fallback: 'Bekleyen davetler alınamadı.');
+      });
+    }
+  }
+
+  Future<void> _confirmRevokeInvite(PendingInvitation invite) async {
+    if (_revokingId != null) return;
+    final state = context.read<AutomationState>();
+    final who = invite.isGuest
+        ? (invite.guestName == null ? 'misafir davetini' : '"${invite.guestName}" misafir davetini')
+        : 'aile bireyi davetini';
+    final confirmed = await showSimpleConfirm(
+      context,
+      title: 'Davet iptal edilsin mi?',
+      message: 'Bu $who iptal ederseniz kod artık kullanılamaz.',
+      confirmLabel: 'İptal Et',
+      cancelLabel: 'Vazgeç',
+      destructive: true,
+      icon: Icons.cancel_schedule_send_rounded,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _revokingId = invite.id);
+    var message = 'Davet iptal edildi.';
+    var color = AppTheme.accentGreen;
+    try {
+      await state.revokeInvitation(invite.id);
+    } catch (e) {
+      if (e is ApiException && e.statusCode == 404) {
+        // Davet bu arada kullanıldı / süresi doldu: liste yenilenir.
+        message = 'Davet zaten kullanılmış ya da süresi dolmuş; liste yenilendi.';
+        color = AppTheme.accentAmber;
+      } else {
+        message = friendlyError(e, fallback: 'Davet iptal edilemedi. Lütfen tekrar deneyin.');
+        color = AppTheme.accentRed;
+      }
+    } finally {
+      if (mounted) setState(() => _revokingId = null);
+    }
+    if (!mounted) return;
+    await _loadInvites();
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        key: const Key('snack_invite_revoke'),
+        content: Text(message),
+        backgroundColor: AppTheme.filledAccent(color),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Widget _buildPendingInvites(BuildContext context) {
+    final invites = _invites ?? const <PendingInvitation>[];
+    final muted = AppTheme.getTextMuted(context);
+    final primary = AppTheme.getTextPrimary(context);
+    return Column(
+      key: const Key('pending_invitations'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Bekleyen davetler', style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.bold, color: primary)),
+        const SizedBox(height: 8),
+        if (_invitesError != null)
+          InlineMessage.error(_invitesError!, key: const Key('pending_invitations_error'))
+        else if (invites.isEmpty)
+          Text('Bekleyen davet yok.', key: const Key('pending_invitations_empty'), style: TextStyle(fontSize: 12.5, color: muted))
+        else
+          for (final inv in invites)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SurfaceCard(
+                key: Key('pending_invite_${inv.id}'),
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      inv.isGuest ? 'Misafir${inv.guestName == null ? '' : ': ${inv.guestName}'}' : 'Aile bireyi',
+                      style: TextStyle(fontWeight: FontWeight.w700, color: primary),
+                    ),
+                    if (inv.expiresAt != null)
+                      Text(
+                        'Kod son geçerlilik: ${formatLocalDateTime(inv.expiresAt!)}',
+                        style: TextStyle(fontSize: 12, color: muted),
+                      ),
+                    if (inv.guestValidUntil != null)
+                      Text(
+                        'Misafir erişimi: ${inv.guestValidFrom == null ? '' : '${formatLocalDateTime(inv.guestValidFrom!)} - '}'
+                        '${formatLocalDateTime(inv.guestValidUntil!)}',
+                        style: TextStyle(fontSize: 12, color: muted),
+                      ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        key: Key('btn_revoke_invite_${inv.id}'),
+                        onPressed: _revokingId != null ? null : () => _confirmRevokeInvite(inv),
+                        icon: const Icon(Icons.cancel_outlined, size: 18),
+                        label: const Text('İptal Et'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+      ],
+    );
   }
 
   /// Üye listesini yükler. Dönüş: liste **başarıyla** yenilendi mi (hata / bayat yanıt / kapanma = `false`).
@@ -209,6 +350,10 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildHeaderCard(context, view),
+              if (view.canManageMembers && view.hasHome && (_invites != null || _invitesError != null)) ...[
+                const SizedBox(height: 20),
+                _buildPendingInvites(context),
+              ],
               const SizedBox(height: 20),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -350,7 +495,9 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                 key: const Key('btn_invite_family'),
                 onPressed: () async {
                   await InviteFamilyDialog.show(context);
-                  if (mounted) await _loadMembers(silent: true);
+                  if (!mounted) return;
+                  unawaited(_loadInvites());
+                  await _loadMembers(silent: true);
                 },
                 icon: Icon(Icons.person_add_alt_1_rounded, size: accentIconSize(context)),
                 // NBSP: "(QR Üret)" bölünmez (yetim "Üret)" satırı yok); iki satıra sararsa ortalı.

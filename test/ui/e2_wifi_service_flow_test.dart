@@ -52,6 +52,8 @@ void main() {
         expect(textOf(tester, 'wifi_connection_title'), 'Pano ile bağlantı kuruldu (Pano)');
         expect(find.byKey(const Key('wifi_network_0')), findsOneWidget);
 
+        // Eski yazılımlı (1.1.0) sahte panoda bulut uyarısı da çıkar (bireysel-1): ağ satırı görünür alana kaydırılır.
+        await tester.ensureVisible(find.byKey(const Key('wifi_network_0')));
         await tester.tap(find.byKey(const Key('wifi_network_0')));
         await tester.pump();
         expect(fieldText(tester, 'field_wifi_ssid'), 'EvAgi');

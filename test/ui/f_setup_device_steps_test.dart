@@ -389,10 +389,13 @@ void main() {
       expect(c.conn.problem!.title, 'Pano cihaz anahtarını kabul etmedi');
       expect(c.conn.problem!.todo, contains('elle girin'));
 
-      // Elle doğru anahtar girilince bağlanır.
+      // Elle doğru anahtar girilince bağlanır; elle girilen anahtar sunucudakinden farklı olduğundan panonun anahtarı
+      // sunucudakine çevrilir (servis_kurulum-5: sahibin yerel erişimi ve panonun bulut kimliği sunucu anahtarıyla çalışır).
       expect(await drive(env, c.conn.useManualKey(newKey)), isTrue);
       expect(c.conn.ready, isTrue);
-      expect(c.target!.localKey, newKey);
+      expect(env.device.rekeyCount, 1);
+      expect(env.device.localKey, kLocalKey);
+      expect(c.target!.localKey, kLocalKey);
     });
 
     test('sunucuda taze anahtar varsa: eskimiş anahtar reddedilince taze anahtar bir kez denenir ve bağlanılır', () async {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show SocketException;
 
 import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/automation_models.dart';
@@ -207,6 +208,15 @@ void main() {
       );
       expect((await failWith(LocalApiException.network())).reason, CommandFailureReason.network);
       expect((await failWith(StateError('x'))).reason, CommandFailureReason.rejected);
+
+      // kullanim-9: yanıt zaman aşımı (istek sunucuya gitmiş olabilir) "geri alındı" DEĞİL; nötr mesaj + yeniden okuma.
+      final timedOut = await failWith(ApiException.network(cause: TimeoutException('yanıt yok')));
+      expect(timedOut.reason, CommandFailureReason.timeout);
+      expect(timedOut.message, 'Yanıt alınamadı; durum yeniden kontrol ediliyor.');
+      // Gönderim öncesi bağlantı hatası (istek gitmedi): geri alındı.
+      final unreachable = await failWith(ApiException.network(cause: const SocketException('bağlantı yok')));
+      expect(unreachable.reason, CommandFailureReason.network);
+      expect(unreachable.message, contains('geri alındı'));
     });
 
     test('onay penceresi İLETİMDEN başlar: REST 2.0 sn sürse de state 2.7 sn sonra gelirse YANLIŞ zaman aşımı yok', () async {
@@ -265,6 +275,8 @@ void main() {
       expect(failures, isEmpty);
       await clock.elapse(const Duration(seconds: 2));
       expect(failures.single.reason, CommandFailureReason.network);
+      // kullanim-9: istek gitmiş olabilir: "geri alındı" denmez, durum yeniden okunur.
+      expect(failures.single.message, 'Yanıt alınamadı; durum yeniden kontrol ediliyor.');
       expect((await dispatchFuture).status, CommandDispatchStatus.failed);
 
       gate.complete(); // yanıt sonunda geldi

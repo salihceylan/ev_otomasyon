@@ -13,7 +13,8 @@ import 'e2_support.dart';
 /// UYELIK-08 (D25): "Şifremi Unuttum"da kimlik telefon numarasıysa (yalnız BİÇİMDEN; sunucu yanıtına bağlı
 /// değil, hesap varlığı sızmaz) bilgi ipucu gösterilir.
 void main() {
-  const phoneHint = 'Yalnızca telefonla açılmış hesapların şifresi ve e-postası yoktur; bu hesaplara sıfırlama kodu gönderilemez.';
+  // uyelik-16: kod telefonla istense de hesabın e-postasına gider; yalnız e-postasız (telefonla açılmış) hesaba gitmez.
+  const phoneHint = 'Telefonla açılmış (e-postasız) hesaplara kod gönderilemez; diğer hesaplarda kod kayıtlı e-postaya gider.';
 
   group('UYELIK-07 (D24): profil e-postası', () {
     Future<void> openProfile(WidgetTester tester, E2Env env) async {

@@ -68,13 +68,31 @@ class SafetyPendingItem {
   }
 }
 
+/// Sunucunun pano başına çevrimdışı yapılandırma kuyruğu sınırı (`CONFIG_QUEUE_FULL`; guvenlik-4).
+const int kMaxQueuedSafetyPatches = 16;
+
+/// Çevrimdışı panoya gönderilecek plan kuyruğa sığmıyor (guvenlik-4): hiç gönderilmez (ya da kuyruğa giren ilk yama geri
+/// alınır); plan yerel ağdan yazılmalıdır.
+class SafetyQueueLimitExceeded implements Exception {
+  const SafetyQueueLimitExceeded();
+
+  String get message => 'Pano çevrimdışıyken en çok $kMaxQueuedSafetyPatches değişiklik sıraya alınabilir; yerel ağdan '
+      'yazın.';
+
+  @override
+  String toString() => message;
+}
+
 /// Panodaki yapılandırma bu arada değişti (`409 CONFIG_CHANGED_ON_DEVICE` ya da LAN `cfg_conflict`, F2.D.3). [rev]
-/// panonun bildirdiği güncel sürüm (bilinmiyorsa `null`).
+/// panonun bildirdiği güncel sürüm (bilinmiyorsa `null`). [rolledBack]: bu kayıtta kuyruğa alınan kısmi yamalar geri
+/// alındı (çevrimdışı zincir geçersiz; guvenlik-4): kullanıcıya "iptal + yeniden gönder" sunulur, otomatik yeniden
+/// deneme yapılmaz.
 class SafetyConfigConflict implements Exception {
-  const SafetyConfigConflict({this.rev, required this.message});
+  const SafetyConfigConflict({this.rev, required this.message, this.rolledBack = false});
 
   final int? rev;
   final String message;
+  final bool rolledBack;
 
   @override
   String toString() => message;
@@ -142,14 +160,30 @@ class CloudSafetyConfigTransport implements SafetyConfigTransport {
   /// Kuyruk varsa yeni yamanın `base_rev`'i (sunucu `next_base_rev`).
   int? nextBaseRev;
 
+  /// Pano sunucuda çevrimiçi mi (çağıranın en iyi çaba bilgisi; `null` = bilinmiyor). Çevrimdışı bilinen panoya kuyruk
+  /// sınırını aşan plan hiç gönderilmez (guvenlik-4).
+  bool? deviceOnline;
+
   @override
   bool get isCloud => true;
+
+  /// Kopya henüz yok (`404` ya da `409 CONFIG_NOT_AVAILABLE`): sunucu `cfg_get` tetikledi; kopya gelene kadar yeniden okunur.
+  static bool _copyMissing(ApiException e) =>
+      e.statusCode == 404 || (e.statusCode == 409 && e.code == 'CONFIG_NOT_AVAILABLE');
 
   @override
   Future<Map<String, dynamic>> read({int? minRev}) async {
     final deadline = clock.now().add(copyWait);
     while (true) {
-      final data = await cloud.safetyConfig(homeId, deviceId);
+      final Map<String, dynamic> data;
+      try {
+        data = await cloud.safetyConfig(homeId, deviceId);
+      } on ApiException catch (e) {
+        // Boş (yapılandırılmamış) panonun kopyası ilk istekte yoktur (guvenlik-3): süre dolana kadar yeniden okunur.
+        if (!_copyMissing(e) || !clock.now().add(pollInterval).isBefore(deadline)) rethrow;
+        await delay(pollInterval);
+        continue;
+      }
       final rev = asInt(data['rev']);
       final stateRev = asInt(data['state_rev']);
       pending = <SafetyPendingItem>[
@@ -175,8 +209,13 @@ class CloudSafetyConfigTransport implements SafetyConfigTransport {
 
   @override
   Future<SafetyApplyResult> apply(List<Map<String, dynamic>> patches, {required int baseRev}) async {
+    final pendingAtStart = pending.length;
+    final room = kMaxQueuedSafetyPatches - pendingAtStart;
+    // Çevrimdışı bilinen panoya sığmayan plan hiç gönderilmez (guvenlik-4).
+    if (deviceOnline == false && patches.length > room) throw const SafetyQueueLimitExceeded();
     var rev = baseRev;
     var queued = false;
+    var queuedInRun = 0;
     int? position;
     DateTime? expiresAt;
     for (final patch in patches) {
@@ -190,18 +229,27 @@ class CloudSafetyConfigTransport implements SafetyConfigTransport {
           commandId: _commandId(),
         );
       } on ApiException catch (e) {
+        // Zincir ortasında hata (kuyruk dolu, bekleyen var, zincir geçersiz, ağ ...): bu kayıtta kuyruğa giren kısmi plan
+        // geri alınır (yarım plan pano bağlanınca uygulanmasın; guvenlik-4).
+        final rolledBack = await _rollbackPartial(queuedInRun, pendingAtStart);
         if (e.statusCode == 409 && e.code == 'CONFIG_CHANGED_ON_DEVICE') {
           final data = asMap(e.details?['data']) ?? e.details;
-          throw SafetyConfigConflict(rev: asInt(data?['rev']), message: e.message);
+          throw SafetyConfigConflict(rev: asInt(data?['rev']), message: e.message, rolledBack: rolledBack);
         }
         rethrow;
       }
       if (asBool(res['queued']) == true) {
         // Pano çevrimdışı: kuyruk zinciri `base_rev + 1` ile sürer (F2.D.2).
         queued = true;
+        queuedInRun++;
         position = asInt(res['position']) ?? position;
         expiresAt = asDate(res['expires_at']) ?? expiresAt;
         rev += 1;
+        if (queuedInRun == 1 && patches.length > room) {
+          // Pano çevrimdışı çıktı ve plan kuyruğa sığmıyor: kuyruğa giren ilk yama geri alınır (guvenlik-4).
+          await _rollbackPartial(queuedInRun, pendingAtStart);
+          throw const SafetyQueueLimitExceeded();
+        }
         continue;
       }
       if (asBool(res['applied']) == true) {
@@ -212,6 +260,18 @@ class CloudSafetyConfigTransport implements SafetyConfigTransport {
       return SafetyApplyResult(rev: rev, unconfirmed: true);
     }
     return SafetyApplyResult(rev: rev, queued: queued, position: position, expiresAt: expiresAt);
+  }
+
+  /// Bu çağrıda kuyruğa alınan yamaları geri alır (`DELETE …/safety-config/pending`). Yalnız kuyruk bu kayıt başlarken
+  /// boşsa (başkasının bekleyen değişikliği silinmez). En iyi çaba: silinemezse `false`.
+  Future<bool> _rollbackPartial(int queuedInRun, int pendingAtStart) async {
+    if (queuedInRun == 0 || pendingAtStart > 0) return false;
+    try {
+      await cloud.clearSafetyConfigPending(homeId, deviceId);
+      return true;
+    } on Exception {
+      return false;
+    }
   }
 
   String _commandId() {

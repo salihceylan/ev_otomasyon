@@ -13,6 +13,37 @@ import '../support/support.dart';
 /// başlatılan, çıkışı en çok 1 sn geciktiren ve ENGELLEMEYEN kancalar (push belirtecini silmek için).
 /// Kancalar yalnızca `logout()`'ta çalışır; `logoutAll()` kendisi çalıştırmaz.
 void main() {
+  group('uyelik-12: servis (PIN) oturumundan çıkış', () {
+    test('servis oturumunda logout sunucuya servis JWT\'siyle bildirilir; ağ hatasında da yerel çıkış olur', () async {
+      for (final failing in <bool>[false, true]) {
+        final h = await readyHarness();
+        h.cloud.homes = <HomeModel>[testHome(id: kHomeB, name: 'Servis Evi', role: 'service_session', topic: 'h_b')];
+        h.cloud.endpoints[kHomeB] = testEndpoints(homeId: kHomeB);
+        if (failing) h.cloud.serviceRevokeError = ApiException.network();
+        await h.state.loginWithServicePin('123456');
+        await pumpEventQueue();
+        expect(h.state.isServiceSession, isTrue);
+
+        await h.state.logout();
+        await pumpEventQueue();
+        expect(h.cloud.revokedServiceTokens, <String>['service-access'], reason: 'hata=$failing');
+        expect(h.state.isAuthenticated, isFalse);
+        expect(h.state.isServiceSession, isFalse);
+        h.dispose();
+      }
+    });
+
+    test('normal oturumda servis çıkışı yapılmaz; refresh_token iptali aynen', () async {
+      final h = await readyHarness();
+      addTearDown(h.dispose);
+      h.cloud.setRefreshToken('refresh-normal');
+      await h.state.logout();
+      await pumpEventQueue();
+      expect(h.cloud.revokedServiceTokens, isEmpty);
+      expect(h.cloud.revokedRefreshTokens, contains('refresh-normal'));
+    });
+  });
+
   /// Giriş yapılmamış, ev verisi hazır bir donanım (automation_state_session_test.dart ile aynı desen).
   StateHarness loggedOutHarness() {
     SharedPreferences.setMockInitialValues(<String, Object>{});

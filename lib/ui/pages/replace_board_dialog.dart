@@ -15,6 +15,7 @@ import '../widgets/orb/glass_icon_button.dart';
 import '../widgets/orb/orb_core.dart';
 import '../widgets/orb/orb_icon_badge.dart';
 import '../widgets/settings/accent_button.dart';
+import 'claim/claim_manual_dialog.dart' show claimCloudBootstrapNote;
 import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/uncertain_outcome_card.dart';
 import 'service_setup/service_setup_wizard_page.dart';
@@ -25,6 +26,7 @@ import 'service_setup/setup_style.dart';
 import 'service_setup/setup_widgets.dart';
 import 'service_setup/steps/step_common.dart';
 import '../theme/feature_accent.dart';
+import 'wifi_recovery_dialog.dart';
 
 /// Pano değişimi (arızalı panonun ayarlarını yeni panoya aktarma).
 ///
@@ -321,9 +323,17 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
   /// tekrarı) `pop()` ile az önce açılan sihirbazı kapatıp ikincisini açardı (çift denetleyici, çift kurulum durumu).
   bool _wizardOpened = false;
 
+  /// Kurulum sihirbazı yalnız personel / servis PIN oturumu için açılır (bireysel-4): ev sahibi sihirbaza giremez, süper
+  /// yöneticiye sihirbazda cihaz anahtarı verilmez.
+  bool get _canOpenWizard {
+    final access = ServiceSetupAccess.fromState(context.read<AutomationState>());
+    return access != null && !access.isSuperUser;
+  }
+
   void _openWizard(ReplaceBoardResult result) {
     final homeId = result.homeId ?? _homeId;
-    if (homeId == null || _wizardOpened) return;
+    // Sihirbaz açılamıyorsa diyalog kapanmaz (sonuç ekranı kaybolmasın).
+    if (homeId == null || _wizardOpened || !_canOpenWizard) return;
     _wizardOpened = true;
     final navigator = Navigator.of(context);
     final scanner = widget.scanner;
@@ -339,6 +349,15 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
         ),
       ),
     );
+  }
+
+  /// Ev sahibi (sihirbazsız) yolu: diyalog kapanır ve yeni pano için Wi-Fi Kurulum & Kurtarma sihirbazı açılır (bireysel-4).
+  void _openWifi(ReplaceBoardResult result) {
+    if (_wizardOpened) return;
+    _wizardOpened = true;
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    unawaited(WifiRecoveryDialog.show(navigator.context, deviceUuid: result.newDeviceUuid));
   }
 
   @override
@@ -414,12 +433,24 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
               ),
               Divider(color: SetupColors.border(context), height: 24),
               if (_result != null)
-                _ResultView(
-                  result: _result!,
-                  fromStatusCheck: _resultFromCheck,
-                  homeName: _homeName,
-                  onOpenWizard: () => _openWizard(_result!),
-                  onClose: () => Navigator.of(context).pop(),
+                Builder(
+                  builder: (context) {
+                    final state = context.read<AutomationState>();
+                    final access = ServiceSetupAccess.fromState(state);
+                    final canWizard = access != null && !access.isSuperUser;
+                    final isSuper = access?.isSuperUser ?? false;
+                    return _ResultView(
+                      result: _result!,
+                      fromStatusCheck: _resultFromCheck,
+                      homeName: _homeName,
+                      onOpenWizard: canWizard ? () => _openWizard(_result!) : null,
+                      superNote: isSuper,
+                      onOpenWifi: !canWizard && !isSuper && state.capabilities.canOpenWifiRecovery
+                          ? () => _openWifi(_result!)
+                          : null,
+                      onClose: () => Navigator.of(context).pop(),
+                    );
+                  },
                 )
               else if (_homeId == null)
                 const ServiceCard(
@@ -784,6 +815,8 @@ class _ResultView extends StatelessWidget {
     this.fromStatusCheck = false,
     required this.homeName,
     required this.onOpenWizard,
+    this.superNote = false,
+    this.onOpenWifi,
     required this.onClose,
   });
 
@@ -792,8 +825,27 @@ class _ResultView extends StatelessWidget {
   /// Sonuç sunucu yanıtından değil, durum kontrolünden: aktarılan kanal sayısı bilinmiyor.
   final bool fromStatusCheck;
   final String homeName;
-  final VoidCallback onOpenWizard;
+
+  /// Kurulum sihirbazını açar; yalnız personel / servis PIN oturumunda (diğer rollerde `null`: düğme ve metin yok).
+  final VoidCallback? onOpenWizard;
+
+  /// Süper yönetici: sihirbaz anahtar vermez; panonun bağlanma yolu notu gösterilir.
+  final bool superNote;
+
+  /// Ev sahibi / sakin: yeni panoyu Wi-Fi'ye bağlama (Wi-Fi Kurulum & Kurtarma) yolu.
+  final VoidCallback? onOpenWifi;
   final VoidCallback onClose;
+
+  /// Ev sahibine sonraki adım (bireysel-4): Ethernet'te iş yok; Wi-Fi'de ev ağı yüklenir; hazırlanmamış / bağlanmayan pano
+  /// için servis PIN'i.
+  static const String ownerNextStep = 'Yeni pano Ethernet ile bağlıysa bir şey yapmanız gerekmez. Wi-Fi ile bağlanacaksa '
+      'ev ağını yükleyin; hazırlanmış pano (v1.3.0+) internete çıkınca bulut kimliğini kendisi alır. Pano hazırlanmamışsa '
+      "ya da 10 dk içinde çevrimiçi olmazsa Servis PIN'i oluşturup yetkili servise verin.";
+
+  /// Süper yöneticiye sonraki adım: sihirbazda cihaz anahtarı verilmez (M4-02).
+  static const String superNextStep = 'Süper yönetici hesabına cihaz anahtarı verilmediği için kurulum sihirbazı buradan '
+      'açılmaz. Yeni panonun ağ ve bulut bağlantısını servis yazılımıyla (USB) yapın ya da ev sahibinden servis PIN\'i '
+      'alıp servis girişiyle sihirbazı açın.';
 
   /// "Etiket: KİMLİK" satırı: kimlik tek satır mono, sığmazsa küçülür (tireden bölünmez).
   Widget _idRow(BuildContext context, String label, String uid) {
@@ -912,23 +964,53 @@ class _ResultView extends StatelessWidget {
               text: 'Çocuk kilidi, yeni pano çevrimiçi olunca yeniden uygulanacak.',
             ),
           ),
-        const ServiceCard(
-          key: Key('replace_next_step'),
-          accent: SetupColors.primary,
-          child: SetupInfoRow(
-            icon: Icons.arrow_forward_rounded,
-            color: SetupColors.primary,
-            text: 'Sıradaki iş: yeni panoya Wi-Fi ve bulut kimliğinin yazılması. Kurulum sihirbazı bu adımları sizin '
-                'için yürütür.',
+        if (onOpenWizard != null) ...[
+          const ServiceCard(
+            key: Key('replace_next_step'),
+            accent: SetupColors.primary,
+            child: SetupInfoRow(
+              icon: Icons.arrow_forward_rounded,
+              color: SetupColors.primary,
+              text: 'Sıradaki iş: yeni panoya Wi-Fi ve bulut kimliğinin yazılması. Kurulum sihirbazı bu adımları sizin '
+                  'için yürütür.',
+            ),
           ),
-        ),
-        const SizedBox(height: 14),
-        SetupPrimaryButton(
-          key: const Key('btn_replace_open_wizard'),
-          label: 'Yeni Panoyu Şimdi Bağla',
-          icon: Icons.wifi_rounded,
-          onPressed: onOpenWizard,
-        ),
+          const SizedBox(height: 14),
+          SetupPrimaryButton(
+            key: const Key('btn_replace_open_wizard'),
+            label: 'Yeni Panoyu Şimdi Bağla',
+            icon: Icons.wifi_rounded,
+            onPressed: onOpenWizard,
+          ),
+        ] else if (superNote)
+          const ServiceCard(
+            key: Key('replace_super_note'),
+            accent: SetupColors.info,
+            child: SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.info, text: superNextStep),
+          )
+        else ...[
+          const ServiceCard(
+            key: Key('replace_owner_next'),
+            accent: SetupColors.primary,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SetupInfoRow(icon: Icons.arrow_forward_rounded, color: SetupColors.primary, text: ownerNextStep),
+                SizedBox(height: 6),
+                SetupInfoRow(icon: Icons.cloud_sync_outlined, color: SetupColors.info, text: claimCloudBootstrapNote),
+              ],
+            ),
+          ),
+          if (onOpenWifi != null) ...[
+            const SizedBox(height: 14),
+            SetupPrimaryButton(
+              key: const Key('btn_replace_open_wifi'),
+              label: "Yeni Panoyu Wi-Fi'ye Bağla",
+              icon: Icons.wifi_rounded,
+              onPressed: onOpenWifi,
+            ),
+          ],
+        ],
         const SizedBox(height: 8),
         TextButton(
           key: const Key('btn_replace_close'),

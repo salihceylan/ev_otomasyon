@@ -285,12 +285,13 @@ class TemplateLogic extends SetupLogic {
     }
     switch (e.code) {
       case 'local_loosen_forbidden':
+        // Yerel ağdan şablon uygulamasında gevşetme kuralı yoktur (karar 2): bu kodu yalnız eski firmware döndürür (atolye-16).
         return const SetupProblem(
           kind: SetupProblemKind.forbidden,
-          title: 'Şablon bu bağlantıdan yazılamaz',
-          why: 'Panodaki güvenlik ayarı bu şablonla gevşer; atölyede USB ile yazın. '
-              'Güvenlik gereği yerel ağdan (Wi-Fi) güvenlik ayarı gevşetilemez; panoda hiçbir şey değişmedi.',
-          todo: 'Şablonu atölyede servis yazılımıyla USB kablosundan yazın ya da bu kurulumda şablonsuz devam edin.',
+          title: 'Pano şablonu kabul etmedi',
+          why: 'Pano şablonu kabul etmedi (eski firmware olabilir).',
+          todo: 'Pano yazılımını güncelleyin ya da şablonu atölyede servis yazılımıyla USB kablosundan yazın; bu kurulumda '
+              'şablonsuz da devam edebilirsiniz.',
           retryable: false,
         );
       case 'zone_latched':

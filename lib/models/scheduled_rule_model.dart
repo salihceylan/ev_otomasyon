@@ -30,6 +30,7 @@ class ScheduledRule {
     this.label,
     required this.enabled,
     this.createdByName,
+    this.creatorActive = true,
   });
 
   final String id;
@@ -46,6 +47,10 @@ class ScheduledRule {
   final String? label;
   final bool enabled;
   final String? createdByName;
+
+  /// Kuralı kuran kişinin bu evde kural yetkisi sürüyor mu (`creator_active`; kullanim-5). `false` ise sunucu kuralı
+  /// ÇALIŞTIRMAZ; yetkili bir üye düzenleyip kaydederse kuralı üstlenir. Alan yoksa (eski sunucu) `true`.
+  final bool creatorActive;
 
   static const List<String> validActions = ['on', 'off', 'open', 'close'];
   static const List<String> validChannelTypes = ['relay', 'shutter'];
@@ -98,6 +103,7 @@ class ScheduledRule {
       label: asNonEmptyString(json['label']),
       enabled: asBool(json['enabled']) ?? true,
       createdByName: asNonEmptyString(json['created_by_name'] ?? json['createdByName']),
+      creatorActive: asBool(json['creator_active'] ?? json['creatorActive']) ?? true,
     );
   }
 
@@ -256,6 +262,7 @@ class ScheduledRule {
       label: label ?? this.label,
       enabled: enabled ?? this.enabled,
       createdByName: createdByName,
+      creatorActive: creatorActive,
     );
   }
 }

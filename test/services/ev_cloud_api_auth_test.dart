@@ -399,6 +399,39 @@ void main() {
     });
   });
 
+  group('uyelik-12: servis (PIN) oturumundan çıkış sunucuya bildirilir', () {
+    test('revokeServiceSession: gövdesiz POST /auth/logout + Authorization: Bearer <servis JWT>', () async {
+      api.on('POST', '/api/v1/auth/logout', (r) => okResponse(null));
+      expect(await service.revokeServiceSession('svc-jwt-1'), isTrue);
+      final req = api.where('POST', '/api/v1/auth/logout').single;
+      final auth = req.headers.entries.firstWhere((e) => e.key.toLowerCase() == 'authorization').value;
+      expect(auth, 'Bearer svc-jwt-1');
+      expect(req.json?.containsKey('refresh_token') ?? false, isFalse);
+    });
+
+    test('ağ hatası fırlatmaz (false)', () async {
+      api.on('POST', '/api/v1/auth/logout', (r) => throw http.ClientException('bağlantı yok'));
+      expect(await service.revokeServiceSession('svc-jwt-1'), isFalse);
+    });
+
+    test('logout(): servis oturumunda Bearer ile; normal oturumda refresh_token yolu aynen', () async {
+      api.on('POST', '/api/v1/auth/logout', (r) => okResponse(null));
+      service.restoreServiceSession(
+        accessToken: 'svc-jwt-2',
+        info: ServiceSessionInfo(homeId: kHome, homeName: 'Servis', expiresAt: clock.now().add(const Duration(hours: 1))),
+      );
+      await service.logout();
+      var req = api.where('POST', '/api/v1/auth/logout').last;
+      expect(req.headers.entries.firstWhere((e) => e.key.toLowerCase() == 'authorization').value, 'Bearer svc-jwt-2');
+      expect(service.hasSession, isFalse);
+
+      signedIn();
+      await service.logout();
+      req = api.where('POST', '/api/v1/auth/logout').last;
+      expect(req.json?['refresh_token'], 'refresh-old');
+    });
+  });
+
   group('logoutAll', () {
     test('başarı: tüm cihazlar iptal edilir ve yerel oturum silinir', () async {
       signedIn();

@@ -717,7 +717,12 @@ void main() {
 
   group('doğrudan mod durum akışı (AutomationState)', () {
     Future<StateHarness> lan({Map<String, dynamic>? status}) async {
-      final h = await readyHarness(); // oturum açık + bulut hazır
+      // Oturum açık + bulut hazır. Aktif evin panosu adresteki pano (kullanim-3: başka evin panosu gösterilmez).
+      final h = await readyHarness(
+        configure: (h) => h.cloud.devicesByHome[kHomeA] = <DeviceInfo>[
+          const DeviceInfo(deviceUuid: 'AHBU-S3-A1B2C3', name: 'Pano', online: true, firmware: '1.1.0'),
+        ],
+      );
       h.directMock.on('GET', '/api/status', (r) => jsonResponse(status ?? fullStatus()));
       await h.state.setMode(AppMode.direct);
       await h.state.setHost('192.168.1.30');
@@ -740,7 +745,8 @@ void main() {
       expect(h.state.directError, contains('anahtar'));
     });
 
-    test('kısıtlı özet + provisioned:false: "cihaz kurulmamış"', () async {
+    // bireysel-13: servis rolü olmayan kullanıcıya açamayacağı servis sihirbazı değil, satıcı / servis yolu söylenir.
+    test('kısıtlı özet + provisioned:false: hazırlanmamış pano mesajı (servis rolü olmayan kullanıcı)', () async {
       final h = await lan(status: <String, dynamic>{
         'device': 'AHBU-S3-A1B2C3',
         'name': 'Pano',
@@ -750,7 +756,7 @@ void main() {
       });
       addTearDown(h.dispose);
       expect(h.state.status, isNull);
-      expect(h.state.directError, contains('kurulmamış'));
+      expect(h.state.directError, kUnprovisionedBoardUserMessage);
     });
 
     test('tam durum: kimlik `device` alanından, hayalet panjur süzülmüş, hata temizlenir', () async {

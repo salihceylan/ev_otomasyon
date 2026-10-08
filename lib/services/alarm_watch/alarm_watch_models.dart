@@ -43,12 +43,14 @@ class WatchedHome {
   String toString() => 'WatchedHome($id)';
 }
 
-/// Arka plan alarm bildirimi alabilecek evler: yalnız **ev sahibi ve sakin** (misafir ✖, servis rolleri ✖).
+/// Arka plan alarm bildirimi alabilecek evler: yalnız **ev rolü sahip ya da sakin** olan evler (misafir ✖, ev rolü
+/// `service_user` ✖; sunucunun güvenlik push'u kuralıyla aynı: owner + resident).
 ///
-/// Hesap düzeyinde servis rolü (servis personeli, süper kullanıcı, servis PIN oturumu) hiçbir evde alamaz: bu roller
-/// başkasının evinde alarm takibi yapmaz (sunucunun güvenlik push'u kuralıyla aynı: owner + resident).
+/// Ev rolü belirleyicidir (guvenlik-12): kendi evinin sahibi olan servis sorumlusu / süper kullanıcı da izler; başkasının
+/// evindeki servis üyeliği izlenmez. Servis PIN oturumu ve tanınmayan küresel rol hiçbir evi izlemez.
 List<WatchedHome> eligibleWatchHomes({required String? globalRole, required List<HomeModel> homes}) {
-  if (GlobalRole.parse(globalRole) != GlobalRole.user) return const <WatchedHome>[];
+  final global = GlobalRole.parse(globalRole);
+  if (global == GlobalRole.serviceSession || global == GlobalRole.unknown) return const <WatchedHome>[];
   final out = <WatchedHome>[];
   for (final h in homes) {
     final role = HomeRole.parse(h.role);
@@ -242,6 +244,21 @@ class AlarmDedupeStore {
   Future<void> forget(String dedupeKey) async {
     final map = await _load();
     if (map.remove(dedupeKey) != null) await _save(map);
+  }
+
+  /// Var olan kayıtların zamanını tazeler (guvenlik-9: hâlâ etkin alarm). Kayıt EKLEMEZ. Gereksiz yazım olmasın diye
+  /// yalnız [minInterval]'den eski kayıtlar güncellenir.
+  Future<void> touch(Iterable<String> keys, {Duration minInterval = const Duration(hours: 1)}) async {
+    final map = await _load();
+    final now = _now().millisecondsSinceEpoch;
+    var changed = false;
+    for (final key in keys) {
+      final at = map[key];
+      if (at == null || now - at < minInterval.inMilliseconds) continue;
+      map[key] = now;
+      changed = true;
+    }
+    if (changed) await _save(map);
   }
 
   /// Önekle başlayan kayıtları siler.

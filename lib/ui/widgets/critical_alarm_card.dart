@@ -145,18 +145,38 @@ class SafetyAlertsView {
   bool isAckPending(AlarmItem a) => pending.contains(ackTag(a));
   String? openBlock(ActuatorItem a) => openBlocks[tag(a)];
 
-  /// Bir alarmın bölgesindeki, alarm türünün akışkanına uyan vanalar [K-3] (duman: vana yok; tür bilinmiyorsa hepsi).
-  List<ActuatorItem> valvesFor(AlarmItem alarm) => <ActuatorItem>[
+  /// Alarmın tehlike türü kümesi (guvenlik-11): alarmın türü + kaynak sensörlerin (aynı pano) su/gaz/duman türleri.
+  List<String> hazardKindsFor(AlarmItem alarm) => alarmHazardKinds(alarm, sensors);
+
+  /// Bir alarmın bölgesindeki, tehlike kümesindeki akışkanlara (su, gaz) uyan vanalar [K-3] (guvenlik-11): yalnız duman
+  /// varsa vana yok; tehlike türü bilinmiyorsa bölgedeki bütün vanalar.
+  List<ActuatorItem> valvesFor(AlarmItem alarm) {
+    final kinds = hazardKindsFor(alarm);
+    return <ActuatorItem>[
+      for (final a in actuators)
+        if (a.isValve && a.deviceUid == alarm.deviceUid && a.zones.contains(alarm.zone) && _mediumMatches(a, kinds)) a,
+    ];
+  }
+
+  /// Bölgedeki ARIZALI (`fault`) vanalar (aynı pano; arıza satırının metni bunların akışkanından seçilir).
+  List<ActuatorItem> faultedValvesFor(AlarmItem alarm) => <ActuatorItem>[
         for (final a in actuators)
-          if (a.isValve && a.deviceUid == alarm.deviceUid && a.zones.contains(alarm.zone) && _mediumMatches(a, alarm.kind)) a,
+          if (a.isValve && a.fault && a.deviceUid == alarm.deviceUid && a.zones.contains(alarm.zone)) a,
       ];
 
-  /// Bölgedeki sensörler. Not: [SensorItem] pano kimliği taşımaz; çok panolu evde aynı bölge numarası birleşir
-  /// (yalnız ıslaklık metni/düğme etiketi için kullanılır; komut hedefi alarmın panosudur).
-  List<SensorItem> sensorsFor(AlarmItem alarm) => <SensorItem>[
-        for (final s in sensors)
-          if (s.zone == alarm.zone) s,
-      ];
+  /// Alarmın ıslaklık / kaynak hesabına giren sensörler (guvenlik-2): AYNI pano ve AYNI bölgedeki su, gaz ve duman
+  /// sensörleri. Kapı/pencere/hareket sensörleri ve yerel kumanda rolleri katılmaz (açık kapı "ıslak" sayılıp onay
+  /// düğmesini gizlerdi); başka panonun aynı numaralı bölgesi de katılmaz.
+  List<SensorItem> sensorsFor(AlarmItem alarm) {
+    final uid = alarm.deviceUid?.toUpperCase();
+    return <SensorItem>[
+      for (final s in sensors)
+        if (s.zone == alarm.zone &&
+            kHazardKinds.contains(s.kind) &&
+            (uid == null || s.deviceUid == null || s.deviceUid!.toUpperCase() == uid))
+          s,
+    ];
+  }
 
   /// Bölgedeki fanlar (gaz alarmında fan satırı; F2.A.6).
   List<ActuatorItem> fansFor(AlarmItem alarm) => <ActuatorItem>[
@@ -164,10 +184,10 @@ class SafetyAlertsView {
           if (a.kind == ActuatorKind.fan && a.deviceUid == alarm.deviceUid && a.zones.contains(alarm.zone)) a,
       ];
 
-  static bool _mediumMatches(ActuatorItem valve, String kind) {
-    if (kind == 'smoke') return false;
-    if (kind != 'water' && kind != 'gas') return true;
-    return valve.medium == null || valve.medium == kind;
+  static bool _mediumMatches(ActuatorItem valve, List<String> kinds) {
+    final fluids = <String>[for (final k in kinds) if (k == 'water' || k == 'gas') k];
+    if (fluids.isEmpty) return kinds.isEmpty; // yalnız duman: vana yok; tür bilinmiyorsa hepsi
+    return valve.medium == null || fluids.contains(valve.medium);
   }
 
   /// Alarmsız bölgede kapalı su vanası: "Su kesik" bilgi kartı.
@@ -388,23 +408,28 @@ class CriticalAlarmCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.read<AutomationState>();
+    // Islaklık ve kaynak adı yalnız aynı panonun aynı bölgedeki tehlike sensörlerinden (guvenlik-2).
     final sensors = view.sensorsFor(alarm);
+    final kinds = view.hazardKindsFor(alarm); // tehlike kümesi (guvenlik-11)
     final valves = view.valvesFor(alarm);
     final wet = sensors.any((s) => s.isWet);
+    final unresponsive = sensors.any((s) => !s.ok);
     final openValves = <ActuatorItem>[for (final v in valves) if (!v.isClosedOrClosing && !view.isPending(v)) v];
     final ackPending = view.isAckPending(alarm);
     final fault = alarm.isFault;
-    final instruction = safetyKindInstruction(alarm.kind);
-    final fans = alarm.kind == 'gas' ? view.fansFor(alarm) : const <ActuatorItem>[];
+    final instruction = kinds.isEmpty ? safetyKindInstruction(alarm.kind) : safetyHazardInstruction(kinds);
+    final fans = kinds.contains('gas') || alarm.kind == 'gas' ? view.fansFor(alarm) : const <ActuatorItem>[];
+    final faultTexts = fault ? valveFaultTextsFor(view.faultedValvesFor(alarm), alarm.kind) : const <String>[];
 
-    // Başlık: "Su baskını: <ilk kaynak sensör>" (ad yoksa kimlikten okunur ad, kaynak yoksa bölge).
+    // Başlık: "Su baskını: <ilk kaynak sensör>" (ad yoksa kimlikten okunur ad, kaynak yoksa bölge). Kaynak adı aynı
+    // süzülmüş listeden (başka panonun / türün sensör adı kullanılmaz).
     String? sourceName;
     for (final id in alarm.sources) {
       final match = sensors.where((s) => s.id == id);
       sourceName = match.isEmpty ? sensorIdLabel(id) : sensorLabel(match.first);
       break;
     }
-    final title = '${safetyKindTitle(alarm.kind)}: ${sourceName ?? 'Bölge ${alarm.zone}'}';
+    final title = '${safetyHazardTitle(alarm.kind, kinds)}: ${sourceName ?? 'Bölge ${alarm.zone}'}';
     final since = epochToDate(alarm.sinceEpoch);
     final subtitle = <String>[
       'Bölge ${alarm.zone}',
@@ -488,7 +513,7 @@ class CriticalAlarmCard extends StatelessWidget {
                 ),
               ),
             ),
-          if (valves.isNotEmpty || fault || fans.isNotEmpty) const SizedBox(height: 10),
+          if (valves.isNotEmpty || fault || fans.isNotEmpty || unresponsive) const SizedBox(height: 10),
           for (final v in valves) ...[
             _InfoLine(
               icon: valvePosIcon(v.pos),
@@ -512,12 +537,19 @@ class CriticalAlarmCard extends StatelessWidget {
                   ? (f.on == false ? '${f.name}: Havalandırma fanı kapalı' : '${f.name}: Havalandırma çalışıyor')
                   : '${f.name}: Fan güvenlik gereği çalıştırılmıyor (gaz)',
             ),
-          if (fault)
+          for (final text in faultTexts)
             _InfoLine(
               icon: Icons.error_rounded,
               color: AppTheme.dangerText(context),
-              text: valveFaultText(alarm.kind),
+              text: text,
               bold: true,
+            ),
+          if (unresponsive)
+            _InfoLine(
+              key: Key('note_sensor_unresponsive_${alarm.zone}'),
+              icon: Icons.link_off_rounded,
+              color: AppTheme.warningText(context),
+              text: 'Sensör yanıt vermiyor; alarm kalkamaz',
             ),
           if (alarm.silenced && wet)
             _InfoLine(

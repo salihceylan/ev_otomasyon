@@ -13,6 +13,14 @@ import '../models/json_utils.dart';
 import 'board_network_binding.dart';
 import 'clock.dart';
 
+/// Hazırlanmamış (provizyonsuz) pano mesajı, servis rolü OLMAYAN kullanıcıya (bireysel-13): açamayacağı servis sihirbazına
+/// yönlendirilmez; satıcı / yetkili servis ve ev sahibinin verebileceği servis PIN'i söylenir. Servis rolündeki kullanıcı
+/// (personel, süper, servis PIN oturumu) sihirbaz yönlendirmesini görür.
+const String kUnprovisionedBoardUserMessage =
+    'Bu pano ilk hazırlığı (provizyon) görmemiş; bu haliyle buluta bağlanamaz. Satıcınıza / yetkili servise başvurun; '
+    'ev sahibiyseniz servise Yetkili Servis İçin Geçici PIN verebilirsiniz (servis 5. adımda Panoyu Hazırla ile '
+    'tamamlar).';
+
 /// Cihazın yerel (LAN / AP) HTTP API hatası (CONTRACTS §3).
 ///
 /// Gövde biçimi: `{"error":"unauthorized"}`, `{"error":"locked","retry_after":60}`,

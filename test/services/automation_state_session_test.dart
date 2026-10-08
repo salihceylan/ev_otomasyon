@@ -1002,6 +1002,36 @@ void main() {
       h.dispose();
     });
 
+    test('kullanim-6: servis PIN oturumunda arka plandan dönünce canlı (MQTT) bağlantı yeniden kurulur', () async {
+      final h = await readyHarness();
+      h.cloud.homes = <HomeModel>[testHome(id: kHomeB, name: 'Servis Evi', role: 'service_session', topic: 'h_b')];
+      h.cloud.endpoints[kHomeB] = testEndpoints(homeId: kHomeB);
+      h.cloud.serviceSessionToReturn = ServiceSessionInfo(
+        homeId: kHomeB,
+        homeName: 'Servis Evi',
+        expiresAt: h.clock.now().add(const Duration(hours: 2)),
+        technicianName: 'Usta',
+      );
+      await h.state.loginWithServicePin('123456', technicianName: 'Usta');
+      await settle();
+      expect(h.state.isServiceSession, isTrue);
+      expect(h.mqtt.isConnected, isTrue);
+      final starts = h.mqtt.startCount;
+      final endpoints = h.cloud.count('fetchEndpoints');
+
+      h.state.handleLifecycleState(AppLifecycleState.paused);
+      await settle();
+      expect(h.mqtt.isConnected, isFalse);
+
+      h.state.handleLifecycleState(AppLifecycleState.resumed);
+      await settle();
+      expect(h.mqtt.startCount, starts + 1, reason: 'canlı kanal yeniden başlar');
+      expect(h.mqtt.isConnected, isTrue);
+      expect(h.state.brokerConnected, isTrue);
+      expect(h.cloud.count('fetchEndpoints'), endpoints + 1, reason: 'tek snapshot');
+      h.dispose();
+    });
+
     test('tekrarlanan paused/resumed olayları tek geçiş sayılır (çift snapshot yok)', () async {
       final h = await readyHarness();
       final fetches = h.cloud.count('fetchHomes');

@@ -3,6 +3,7 @@ import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/ui/common/qr_flow.dart';
 import 'package:ev_otomasyon/ui/pages/claim/claim_manual_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/family/join_home_dialog.dart';
+import 'package:ev_otomasyon/ui/pages/wifi_recovery_dialog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -63,10 +64,11 @@ void main() {
       expect(find.byType(SnackBar), findsOneWidget);
     });
 
-    testWidgets('misafir cihaz eşleyemez: diyalog açılmaz, açıklama gösterilir', (tester) async {
+    testWidgets('bireysel-2: aktif evi misafir olan kullanıcı kendi panosunu eşleyebilir (sahiplenme ev kapsamlı değil)',
+        (tester) async {
       await scan(tester, claimUrl(), home: guestHome());
-      expect(find.byType(ClaimManualDialog), findsNothing);
-      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.byType(ClaimManualDialog), findsOneWidget);
+      expect(textFieldValues(tester), contains('AHBU-S3-ABC123'));
     });
 
     testWidgets('servis PIN oturumu cihaz eşleyemez', (tester) async {
@@ -97,11 +99,11 @@ void main() {
   });
 
   group('Wi-Fi karekodu ve tanınmayan içerik', () {
-    testWidgets('Wi-Fi karekodu bu ekranda eşleme/katılım olarak yorumlanmaz; açıklama gösterilir', (tester) async {
+    testWidgets('Wi-Fi karekodu eşleme/katılım olarak yorumlanmaz; Wi-Fi Kurulum sihirbazı açılır (bireysel-11)', (tester) async {
       await scan(tester, 'WIFI:T:WPA;S:EvAgi;P:parola12345;;');
       expect(find.byType(ClaimManualDialog), findsNothing);
       expect(find.byType(JoinHomeDialog), findsNothing);
-      expect(find.textContaining('Wi-Fi karekodu'), findsOneWidget);
+      expect(find.byType(WifiRecoveryDialog), findsOneWidget);
     });
 
     testWidgets('tanınmayan içerik Türkçe mesaj verir ve ham metni yansıtmaz', (tester) async {

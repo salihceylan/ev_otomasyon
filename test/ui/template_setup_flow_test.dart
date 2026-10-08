@@ -223,7 +223,8 @@ void main() {
         status: 403,
         code: 'local_loosen_forbidden',
         path: null,
-        text: 'Panodaki güvenlik ayarı bu şablonla gevşer; atölyede USB ile yazın',
+        // atolye-16: LAN şablon uygulamasında gevşetme kuralı yok (karar 2); bu kod yalnız eski firmware'den gelir.
+        text: 'Pano şablonu kabul etmedi (eski firmware olabilir).',
         retry: false,
       ),
       (status: 409, code: 'zone_latched', path: null, text: 'alarm', retry: true),
@@ -260,7 +261,8 @@ void main() {
       env.device.templateRejectOnce = (403, 'local_loosen_forbidden', null);
       await drive(env, c.template.apply());
       expect(c.template.problem!.kind, SetupProblemKind.forbidden);
-      expect(c.template.problem!.why, contains('USB'));
+      expect(c.template.problem!.why, 'Pano şablonu kabul etmedi (eski firmware olabilir).'); // atolye-16
+      expect(c.template.problem!.todo, contains('USB'));
     });
   });
 

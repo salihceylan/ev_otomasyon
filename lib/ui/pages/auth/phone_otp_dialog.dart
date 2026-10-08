@@ -112,7 +112,9 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
       if (!mounted) return;
       // Yeniden gönderim başarısızsa (saatlik sınır, 503, ağ) kod adımı KORUNUR: önceki kod sunucuda hâlâ geçerlidir
       // (sunucu onu yalnız yeni kod üretince tüketir); kod alanı ve "Giriş Yap" kalır, yalnız hata iletisi (UYELIK-01).
-      setState(() => _error = friendlyError(e, fallback: 'Kod gönderilemedi. Lütfen tekrar deneyin.'));
+      var text = friendlyError(e, fallback: 'Kod gönderilemedi. Lütfen tekrar deneyin.');
+      if (e is ApiException && e.isAccountPending) text = '$text $kAccountActivationHint'; // uyelik-10
+      setState(() => _error = text);
       if (e is ApiException && e.isRateLimited) {
         final wait = e.resendAfter ?? e.retryAfter;
         if (wait != null) _resend.start(wait);
@@ -148,7 +150,9 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
       int? remaining;
       if (e is ApiException) {
         remaining = e.remainingAttempts;
-        if (e.isGone) {
+        if (e.isAccountPending) {
+          text = '$text $kAccountActivationHint'; // davet bekleyen hesap (uyelik-10)
+        } else if (e.isGone) {
           text = 'Kodun süresi dolmuş. Yeni bir kod isteyin.';
         } else if (e.isRateLimited) {
           final wait = e.retryAfter ?? e.resendAfter;

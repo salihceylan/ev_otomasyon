@@ -102,6 +102,55 @@ void main() {
     });
   });
 
+  group('guvenlik-8/9: arıza tekrarı ve servis yeniden başlangıcı', () {
+    test('aynı aid içinde fault -> latched -> fault: arıza kaydı (aid\'li) unutulur, ikinci arıza yine bildirilir', () {
+      final cleared = _plan(_state(st: 'fault'), _state(st: 'latched'));
+      final prefixes = cleared.cancel.map((c) => c.forgetPrefix).whereType<String>().toList();
+      expect(prefixes, contains('f|$_home|$_uid|1|'), reason: 'sondaki "-" olmadan: aid\'li anahtar da unutulur');
+      expect('f|$_home|$_uid|1|9f3a11c0-3'.startsWith(prefixes.firstWhere((p) => p.startsWith('f|'))), isTrue);
+      final again = _plan(_state(st: 'latched'), _state(st: 'fault')).show.single;
+      expect(again.type, AlarmNoticeType.valveFault);
+      expect(again.dedupeKey, 'f|$_home|$_uid|1|9f3a11c0-3');
+    });
+
+    test('alarm kalkınca arıza kaydı (aid\'li) unutulur', () {
+      final plan = _plan(_state(st: 'fault'), _state());
+      expect(plan.cancel.map((c) => c.forgetPrefix), contains('f|$_home|$_uid|1|'));
+    });
+
+    test('ilk görüntü (servis yeniden başladı): kip alarm değilse hırsız bildirimi iptal edilir ve kaydı unutulur', () {
+      final plan = _plan(null, _state(arm: <String, dynamic>{'mode': 'away', 'st': 'armed', 'ok': true}));
+      expect(plan.cancel.map((c) => c.notificationId), contains(stableNotificationId('i|$_home|$_uid')));
+      expect(plan.cancel.map((c) => c.forgetPrefix), contains('i|$_home|$_uid|'));
+    });
+
+    test('ilk görüntü: arıza (fault) olmayan bölgelerin arıza bildirimi iptal edilir; latched bölgede de', () {
+      final plan = _plan(null, _state(st: 'latched'));
+      expect(plan.show.single.type, AlarmNoticeType.alarm);
+      final ids = plan.cancel.map((c) => c.notificationId).toSet();
+      expect(ids, contains(stableNotificationId('f|$_home|$_uid|1')), reason: 'latched (fault değil) bölge');
+      expect(ids, contains(stableNotificationId('f|$_home|$_uid|2')));
+      expect(plan.cancel.map((c) => c.forgetPrefix), contains('f|$_home|$_uid|1|'));
+      final faultFirst = _plan(null, _state(st: 'fault'));
+      expect(faultFirst.cancel.map((c) => c.notificationId), isNot(contains(stableNotificationId('f|$_home|$_uid|1'))));
+    });
+
+    test('etkin alarmların tekilleştirme anahtarları (touch için)', () {
+      expect(
+        activeAlarmDedupeKeys(homeId: _home, state: _state(st: 'fault')),
+        unorderedEquals(<String>['z|$_home|$_uid|1|9f3a11c0-3', 'f|$_home|$_uid|1|9f3a11c0-3']),
+      );
+      expect(
+        activeAlarmDedupeKeys(
+          homeId: _home,
+          state: _state(arm: <String, dynamic>{'mode': 'away', 'st': 'alarm', 'ok': true, 'aid': 'x-1'}),
+        ),
+        <String>['i|$_home|$_uid|x-1'],
+      );
+      expect(activeAlarmDedupeKeys(homeId: _home, state: _state()), isEmpty);
+    });
+  });
+
   group('kalkış -> bildirim silinir', () {
     test('alarm kalkınca bölgenin alarm ve arıza bildirimleri silinir, aid\'siz kayıt unutulur', () {
       final plan = _plan(_state(st: 'latched'), _state());

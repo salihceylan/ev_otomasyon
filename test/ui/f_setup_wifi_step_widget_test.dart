@@ -156,7 +156,15 @@ void main() {
       expect(present('wifi_provision_nokey'), isTrue, reason: 'internet yok ve bellekte anahtar yok: açıklama');
       expect(buttonEnabled(tester, 'btn_factory_init'), isFalse);
 
+      // servis_kurulum-5: anahtar iki kez yazılır; ikinci yazım uyuşmazsa "Panoyu Hazırla" kapalı kalır.
+      expect(present('manual_key_warning'), isTrue);
       await typeKey(tester, 'field_local_key', kLocalKey);
+      await typeKey(tester, 'field_local_key_confirm', '${kLocalKey}x');
+      await tapKey(tester, 'btn_use_key');
+      await tester.pump();
+      expect(buttonEnabled(tester, 'btn_factory_init'), isFalse);
+      expect(find.text('Anahtarlar eşleşmiyor'), findsWidgets);
+      await typeKey(tester, 'field_local_key_confirm', kLocalKey);
       await tapKey(tester, 'btn_use_key');
       await pumpUntil(tester, env, () => buttonEnabled(tester, 'btn_factory_init'));
       expect(present('wifi_provision_nokey'), isFalse);

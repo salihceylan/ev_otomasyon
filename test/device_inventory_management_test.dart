@@ -482,6 +482,8 @@ void main() {
 
       await tapKey(tester, 'btn_reissue_label_$kUidStock');
       expect(buttonEnabled(tester, 'btn_confirm_destructive'), isFalse);
+      // atolye-2: yerel anahtar artık yenilenmez; onay metni bunu iddia etmez.
+      expect(find.textContaining('yerel anahtar'), findsNothing);
       await typeConfirmPhrase(tester, kUidStock);
       await tapKey(tester, 'btn_confirm_destructive');
       await settle(tester);
@@ -489,7 +491,10 @@ void main() {
       expect(env.cloud.reissued, <String>[kUidStock]);
       expect(find.byKey(const Key('reissue_warning')), findsOneWidget);
       expect(find.text('705 318'), findsOneWidget, reason: 'PIN okunaklı gruplanır');
-      expect(find.text(kReissuedKey), findsOneWidget);
+      // atolye-2: sunucu (eski sürüm) yerel anahtar gönderse bile gösterilmez; anahtar değişmez.
+      expect(find.text(kReissuedKey), findsNothing);
+      expect(find.byKey(const Key('btn_copy_reissue_key')), findsNothing);
+      expect(find.text('Yalnız PIN/karekod yenilendi; yerel anahtar değişmedi. Kurulum ağı (AP) parolası sunucuda saklanmaz: kayıp etiketteki AP parolası hâlâ geçerli. Yeni AP parolalı tam etiket için kartı servis yazılımındaki USB Etiketi Yeniden Bas akışından geçirin.'), findsOneWidget);
       expect(find.byType(SelectableText), findsNothing,
           reason: 'gizli değerler seçilebilir metin değildir: panoya tek giriş yolu, silinen "Kopyala" düğmesidir');
 
@@ -550,7 +555,7 @@ void main() {
       env.cloud.reissueGate!.complete();
       await settle(tester, frames: 20);
       expect(find.text('705 318'), findsOneWidget, reason: 'tek seferlik PIN yine de gösterildi');
-      expect(find.text(kReissuedKey), findsOneWidget);
+      expect(find.text(kReissuedKey), findsNothing, reason: 'atolye-2: yerel anahtar satırı yok');
 
       await tapKey(tester, 'btn_reissue_close');
       await settle(tester, frames: 20);

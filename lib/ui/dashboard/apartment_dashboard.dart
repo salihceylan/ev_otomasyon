@@ -338,10 +338,19 @@ class _DirectContent extends StatelessWidget {
         error: s.directError,
         host: s.host,
         canWifi: s.capabilities.canOpenWifiRecovery,
-        canSwitch: s.capabilities.canSwitchMode,
+        // Buluta dönüş giriş yapmış kullanıcıya HER ZAMAN açık (kullanim-1): rolü düşen / misafir kalan kullanıcı doğrudan
+        // kipte mahsur kalmasın (`setMode(cloud)` yetki kapısızdır).
+        canSwitch: s.capabilities.canSwitchMode || s.isAuthenticated,
         canGroup: s.capabilities.canUseGroupCommands,
       ),
     );
+    Widget goCloud() => OutlinedButton.icon(
+          key: const Key('btn_go_cloud'),
+          style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
+          onPressed: () => unawaited(state.setMode(AppMode.cloud)),
+          icon: const Icon(Icons.cloud_outlined, size: 18),
+          label: const Text('Bulut moduna geç'),
+        );
 
     final Widget body;
     if (vm.hasStatus) {
@@ -403,6 +412,7 @@ class _DirectContent extends StatelessWidget {
               icon: const Icon(Icons.settings_outlined, size: 18),
               label: const Text('Ayarları aç'),
             ),
+          if (vm.canSwitch) goCloud(),
         ],
       );
     } else {
@@ -431,14 +441,7 @@ class _DirectContent extends StatelessWidget {
               icon: const Icon(Icons.wifi_find, size: 18),
               label: const Text('Wi-Fi Kurtarma Modu'),
             ),
-          if (vm.canSwitch)
-            OutlinedButton.icon(
-              key: const Key('btn_go_cloud'),
-              style: OutlinedButton.styleFrom(minimumSize: const Size(48, 48)),
-              onPressed: () => unawaited(state.setMode(AppMode.cloud)),
-              icon: const Icon(Icons.cloud_outlined, size: 18),
-              label: const Text('Bulut moduna geç'),
-            ),
+          if (vm.canSwitch) goCloud(),
         ],
       );
     }

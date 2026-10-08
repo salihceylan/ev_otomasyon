@@ -60,6 +60,38 @@ void main() {
     );
   });
 
+  test('guvenlik-3: kopya henüz yokken (404 / 409 CONFIG_NOT_AVAILABLE) 15 sn boyunca pollInterval ile yeniden okunur',
+      () async {
+    var calls = 0;
+    cloud.safetyConfigHandler = (home, device) async {
+      calls++;
+      if (calls == 1) {
+        throw const ApiException(statusCode: 404, code: 'CONFIG_NOT_AVAILABLE', message: 'Yapılandırma yok.');
+      }
+      if (calls == 2) {
+        throw const ApiException(statusCode: 409, code: 'CONFIG_NOT_AVAILABLE', message: 'Okunuyor.');
+      }
+      return <String, dynamic>{'rev': 0, 'state_rev': 0};
+    };
+    final data = await transport.read();
+    expect(data['rev'], 0);
+    expect(calls, 3, reason: 'sunucu cfg_get tetikledi; kopya gelene kadar yeniden okunur');
+  });
+
+  test('guvenlik-3: kopya 15 sn içinde gelmezse mevcut hata', () async {
+    var calls = 0;
+    cloud.safetyConfigHandler = (home, device) async {
+      calls++;
+      throw const ApiException(statusCode: 404, code: 'CONFIG_NOT_AVAILABLE', message: 'Yapılandırma yok.');
+    };
+    await expectLater(
+      transport.read(),
+      throwsA(isA<ApiException>().having((e) => e.code, 'code', 'CONFIG_NOT_AVAILABLE')),
+    );
+    expect(calls, greaterThan(5));
+    expect(calls, lessThanOrEqualTo(16));
+  });
+
   test('apply: sırayla, her yama bir öncekinin rev\'iyle; gövde {base_rev, set|del, id}', () async {
     cloud.patchHandler = (call) async => <String, dynamic>{'applied': true, 'rev': call.baseRev + 1, 'command_id': call.commandId};
     final result = await transport.apply(<Map<String, dynamic>>[set1, set2], baseRev: 7);

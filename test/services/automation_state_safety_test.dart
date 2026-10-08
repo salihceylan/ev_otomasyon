@@ -1,3 +1,4 @@
+import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
@@ -150,6 +151,29 @@ void main() {
       addTearDown(h.dispose);
       expect(h.state.relayItems.map((r) => r.id), <int>[1, 2, 5, 6], reason: 'vana/siren kanalları (7-9) yok');
       expect(h.state.openLightsCount, 0, reason: 'NC selenoidin açık rölesi lamba sayılmaz');
+    });
+
+    test('guvenlik-1: cihaz listesi değişip A panosu evden çıkınca A\'nın güvenlik kartı ve alarm öğeleri kaybolur', () async {
+      final h = await safetyHarness();
+      addTearDown(h.dispose);
+      h.mqtt.emitStateJson(safetyJson(zoneSt: 'latched', sensorActive: true));
+      await pumpEventQueue();
+      expect(h.state.safetyByDevice.keys, contains(_uid));
+      expect(h.state.alarmItems, isNotEmpty);
+
+      // Pano değişimi: evde artık yalnız yeni pano var (eskisinin retained/son state'i bellekte kalmamalı).
+      h.cloud.devicesByHome[kHomeA] = <DeviceInfo>[
+        const DeviceInfo(deviceUuid: 'AHBU-S3-NEW001', name: 'Yeni Pano', online: true, firmware: '1.3.0'),
+      ];
+      var notified = 0;
+      h.state.addListener(() => notified++);
+      await h.state.refresh(silent: true);
+      await pumpEventQueue();
+
+      expect(h.state.safetyByDevice.containsKey(_uid), isFalse);
+      expect(h.state.alarmItems, isEmpty);
+      expect(h.state.actuatorItems, isEmpty);
+      expect(notified, greaterThan(0));
     });
 
     test('ev değişiminde güvenlik durumu sıfırlanır', () async {

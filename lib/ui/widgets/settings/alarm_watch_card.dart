@@ -74,7 +74,9 @@ class _AlarmWatchCardState extends State<AlarmWatchCard> with WidgetsBindingObse
     final status = !c.loaded
         ? 'Durum alınıyor…'
         : on
-            ? (c.notificationsAllowed ? 'Açık' : 'Açık • bildirim izni kapalı')
+            ? (!c.running
+                ? 'Durdu - yeniden başlatılıyor' // uyelik-4: servis kendini durdurmuş (ör. oturum bitti)
+                : (c.notificationsAllowed ? 'Açık' : 'Açık • bildirim izni kapalı'))
             : 'Kapalı';
     final canToggle = c.loaded && !c.busy && (on || c.eligible);
 
@@ -119,7 +121,7 @@ class _AlarmWatchCardState extends State<AlarmWatchCard> with WidgetsBindingObse
           ),
           if (!c.eligible && !on) ...[
             const SizedBox(height: 6),
-            const CardCaption('Yalnız ev sahibi ve ev sakinleri açabilir (misafir ve servis hesapları ✖).'),
+            const CardCaption('Yalnız ev sahibi ve ev sakinleri açabilir (misafir ve müşteri evindeki servis hesapları ✖).'),
           ],
           if (on && !c.notificationsAllowed)
             _ActionRow(

@@ -215,6 +215,15 @@ class FakeDevice {
   String? receivedMqttPass;
   int mqttConfigCount = 0;
   int factoryInitCount = 0;
+
+  /// `factory/init` isteklerinin gittiği adresler (servis_kurulum-1/7).
+  final List<String> factoryInitHosts = <String>[];
+
+  /// `POST /api/auth/rekey` sayısı (servis_kurulum-1/5).
+  int rekeyCount = 0;
+
+  /// Atanırsa tam durumda `lk_fp` = bu işlevin panodaki anahtar için verdiği değer (firmware 1.3.1).
+  String Function(String key)? lkFpOf;
   final Map<int, int> runtimeSec = <int, int>{};
 
   /// Darbe rölesi tetikleme sayısı (geri bildirimsiz).
@@ -297,10 +306,31 @@ class FakeDevice {
   int? testResultFbMs;
   bool testResultOk = true;
 
+  /// `test_result` olayının halkaya düşme gecikmesi. `null` (varsayılan): firmware `SafetyFsm.stepTest` gibi başarılı
+  /// sonuç hemen, BAŞARISIZ sonuç (geri bildirimli vana kapanmadı) ancak bölgenin geri bildirim süresi
+  /// ([feedbackTimeoutFor]) dolunca gelir. Çok uzun süre = sonuç hiç gelmez / okunamaz.
+  Duration? testResultDelay;
+
+  /// Bölgedeki geri bildirimli vanaların en uzun `fb_timeout_s`'si (yapılandırma kopyasından; 0 / yoksa firmware
+  /// varsayılanı 60 sn).
+  Duration feedbackTimeoutFor(int zone) {
+    var seconds = 0;
+    for (final raw in (savedSafetyConfig?['actuators'] as List?) ?? const <dynamic>[]) {
+      final a = Map<String, dynamic>.from(raw as Map);
+      final zones = (a['zones'] as List?) ?? const <dynamic>[];
+      if (a['kind'] != 'valve' || ((a['fb_di'] as int?) ?? 0) <= 0 || !zones.contains(zone)) continue;
+      final t = (a['fb_timeout_s'] as int?) ?? 0;
+      final s = t > 0 ? t : 60;
+      if (s > seconds) seconds = s;
+    }
+    return Duration(seconds: seconds > 0 ? seconds : 60);
+  }
+
   void _install() {
     _route('GET', '/api/status', _status);
     _route('GET', '/api/auth/check', _authCheck);
     _route('POST', '/api/factory/init', _factoryInit);
+    _route('POST', '/api/auth/rekey', _rekey);
     _route('POST', '/api/wifi/connect', _wifiConnect);
     _route('GET', '/api/wifi/scan', _wifiScan);
     _route('GET', '/api/wifi/status', _wifiStatus);
@@ -445,16 +475,24 @@ class FakeDevice {
         'fw': firmware,
         'provisioned': provisioned,
         'wifi_connected': wifiConnected,
+        // v1.3.0: ağ türü kısıtlı durumda da (eth_ip yalnız tam durumda).
+        if (ethConnected != null) ...<String, dynamic>{
+          'eth_connected': ethConnected,
+          'net_if': ethConnected! ? 'eth' : (wifiConnected ? 'wifi' : 'none'),
+        },
       });
     }
     final denied = _auth(r);
     if (denied != null) return denied;
+    final fpOf = lkFpOf;
     return _json(<String, dynamic>{
       'device': uid,
       'name': 'Pano',
       'device_name': 'Pano',
       'fw': firmware,
-      'provisioned': true,
+      // Firmware 1.3.1: gerçek değer (Ethernet'ten anahtarsız gelen istek provizyonsuz panoda da tam durumu alır).
+      'provisioned': provisioned,
+      if (fpOf != null && provisioned && localKey != null) 'lk_fp': fpOf(localKey!),
       'ip': wifiConnected ? staIp : (ethConnected == true ? ethIp : apHost),
       'wifi_rssi': wifiConnected ? -52 : 0,
       'uptime_sec': 100,
@@ -522,8 +560,22 @@ class FakeDevice {
     return denied ?? _json(<String, dynamic>{'status': 'ok'});
   }
 
+  /// `POST /api/auth/rekey` (CONTRACTS sözleşme 5): yalnız provizyonlu panoda; Ethernet'ten anahtarsız da kabul edilir.
+  http.Response _rekey(RecordedRequest r) {
+    _reach(r);
+    if (!provisioned || localKey == null) return _err(403, 'unprovisioned');
+    final denied = _auth(r);
+    if (denied != null) return denied;
+    final key = (r.json ?? const <String, dynamic>{})['local_key'];
+    if (key is! String || key.length < 8 || key.length > 32) return _err(400, 'invalid_key');
+    localKey = key;
+    rekeyCount++;
+    return _json(<String, dynamic>{'status': 'ok'});
+  }
+
   http.Response _factoryInit(RecordedRequest r) {
     _reach(r);
+    factoryInitHosts.add(r.url.host);
     if (provisioned) return _err(403, 'already_provisioned');
     final body = r.json ?? const <String, dynamic>{};
     final key = body['local_key'];
@@ -803,13 +855,21 @@ class FakeDevice {
     if (!safetyCaps) return _err(404, 'not_found');
     final zone = (r.json?['zone'] as int?) ?? 0;
     alarmTests.add(zone);
-    events.add(<String, dynamic>{
-      'eid': 'a1b2c3d4-${events.length + 1}',
-      'type': 'test_result',
-      'zone': zone,
-      'ok': testResultOk,
-      'fb_ms': ?testResultFbMs,
-    });
+    final ok = testResultOk;
+    final fbMs = testResultFbMs;
+    void emit() => events.add(<String, dynamic>{
+          'eid': 'a1b2c3d4-${events.length + 1}',
+          'type': 'test_result',
+          'zone': zone,
+          'ok': ok,
+          'fb_ms': ?fbMs,
+        });
+    final delay = testResultDelay ?? (ok ? Duration.zero : feedbackTimeoutFor(zone));
+    if (delay <= Duration.zero) {
+      emit();
+    } else {
+      clock.timer(delay, emit);
+    }
     return _json(<String, dynamic>{'ok': true, 'id': r.json?['id']});
   }
 
@@ -1002,6 +1062,9 @@ class ServiceFakeCloud extends FakeCloudApi {
     topicId: 'h_kurulum',
   );
   List<String> claimWarnings = const <String>[];
+
+  /// Atanırsa claim yanıtındaki `customer_account` (uyelik-1: bekleyen / sıfırlanmış hesap); yoksa yeni hesap.
+  CustomerAccountInfo? claimCustomerAccount;
 
   List<EndpointModel> _claimedEndpoints() => <EndpointModel>[
         for (var p = 1; p <= 2; p++) ...<EndpointModel>[
@@ -1228,7 +1291,7 @@ class ServiceFakeCloud extends FakeCloudApi {
       homeName: homeName ?? 'Yeni Daire',
       deviceUuid: deviceUuid,
       deviceCredential: claimCredential,
-      customerAccount: const CustomerAccountInfo(created: true, status: 'pending_invite', inviteSent: true),
+      customerAccount: claimCustomerAccount ?? const CustomerAccountInfo(created: true, status: 'pending_invite', inviteSent: true),
       technicianAccessExpiresAt: DateTime.utc(2026, 10, 4, 12),
       warnings: claimWarnings,
     );
@@ -1367,6 +1430,9 @@ class ServiceFakeCloud extends FakeCloudApi {
             'status': d.status,
             'created_at': d.createdAt.toUtc().toIso8601String(),
             'claimed_home_name': d.claimedHomeName,
+            'claimed_home_id': ?d.claimedHomeId,
+            'failed_attempts': d.failedAttempts,
+            'locked_until': ?d.lockedUntil?.toUtc().toIso8601String(),
           },
       ],
       'stats': <String, dynamic>{
@@ -1416,6 +1482,36 @@ class ServiceFakeCloud extends FakeCloudApi {
     inventoryDeleted.add(uuid);
     inventory = inventory.where((d) => d.deviceUuid != uuid).toList();
     return true;
+  }
+
+  /// `clear-pin-lock` çağrıları (bireysel-7) ve hatası.
+  final List<String> pinLocksCleared = <String>[];
+  Object? clearPinLockError;
+
+  @override
+  Future<void> clearInventoryPinLock(String uuid) async {
+    calls.add('clearInventoryPinLock:$uuid');
+    final error = clearPinLockError;
+    if (error != null) throw error;
+    pinLocksCleared.add(uuid);
+    inventory = <InventoryDeviceModel>[
+      for (final d in inventory)
+        d.deviceUuid != uuid
+            ? d
+            : InventoryDeviceModel(
+                id: d.id,
+                serialNo: d.serialNo,
+                deviceUuid: d.deviceUuid,
+                macAddress: d.macAddress,
+                model: d.model,
+                batchNo: d.batchNo,
+                status: d.status,
+                createdAt: d.createdAt,
+                claimedHomeName: d.claimedHomeName,
+                claimedHomeId: d.claimedHomeId,
+                qrClaimUrl: d.qrClaimUrl,
+              ),
+    ];
   }
 
   @override

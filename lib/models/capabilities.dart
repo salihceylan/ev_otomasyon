@@ -273,7 +273,9 @@ class Capabilities {
     final isSuper = g == GlobalRole.superUser;
     final isSession = g == GlobalRole.serviceSession || h == HomeRole.serviceSession;
     final isStaffGlobal = g == GlobalRole.serviceUser;
-    final isStaffHome = h == HomeRole.serviceUser;
+    // Evdeki `service_user` üyeliği yalnız küresel personel (servis sorumlusu / süper kullanıcı) için geçerlidir
+    // (sunucu requireHomeAccess): küresel rolü `user`'a düşürülen hesabın eski servis üyeliği yetki vermez (uyelik-13).
+    final isStaffHome = h == HomeRole.serviceUser && (g == GlobalRole.serviceUser || g == GlobalRole.superUser);
     final isStaff = isStaffGlobal || isStaffHome;
     final isOwner = h == HomeRole.owner;
     final isResident = h == HomeRole.resident;
@@ -320,14 +322,9 @@ class Capabilities {
     // Güvenli yön (vanayı kapat, sireni sustur) misafir dahil herkes; onay ve açma misafirde yok (7.2b karar 4).
     final safetyMember = homeAccess && (isSuper || isStaffHome || isSession || isOwner || isResident);
 
-    // Cihaz sahiplenme: oturum PIN'i ✖, misafir ✖; ev rolü olmayan sade kullanıcı ✔
-    // (yeni müşteri ilk cihazını eşler); bilinmeyen ev rolü ✖.
-    final claim = !isSession &&
-        (isSuper ||
-            isStaff ||
-            h == null ||
-            h == HomeRole.owner ||
-            h == HomeRole.resident);
+    // Cihaz sahiplenme ev kapsamlı DEĞİLDİR (bireysel-2; sunucu: küresel rolü user olan herkes): aktif evdeki rol
+    // (misafir, süresi dolmuş misafir, bilinmeyen) önemsizdir; yalnız servis PIN oturumu ✖.
+    final claim = !isSession && (isSuper || isStaff || g == GlobalRole.user);
 
     return Capabilities._raw(
       isAuthenticated: true,
@@ -483,12 +480,13 @@ class Capabilities {
   /// Bölge testi (`alarm_test`): owner, kalıcı servis personeli, servis oturumu, süper kullanıcı.
   final bool canTestSafety;
 
-  /// Hırsız alarmı kipini kurma/çözme (Faz 2 F2.B.6, karar F2-3; sunucu `safety_arm` = owner, resident). Misafir ve
-  /// servis rolleri (süper, servis personeli, servis oturumu) buluttan YAPAMAZ; yerel anahtar (LAN) resident düzeyidir.
-  /// Mevcut bayraklardan türetilir (eşitlik maskesi değişmez).
+  /// Hırsız alarmı kipini kurma/çözme (Faz 2 F2.B.6, karar F2-3; sunucu `safety_arm` = owner, resident). **Ev rolü
+  /// belirleyicidir** (guvenlik-12): kendi evinin sahibi/sakini olan servis sorumlusu ya da süper kullanıcı da kurar;
+  /// misafir ve başkasının evindeki servis rolleri (ev rolü `service_user`, servis oturumu, üyeliksiz süper) buluttan
+  /// YAPAMAZ; yerel anahtar (LAN) resident düzeyidir. Mevcut bayraklardan türetilir (eşitlik maskesi değişmez).
   bool get canArm {
     if (!isAuthenticated) return canControlActuators; // yerel anahtar sahibi (Capabilities.localKeyHolder)
-    return hasHomeAccess && (isOwner || isResident) && !isSuperUser && !isStaff && !isServiceSession;
+    return hasHomeAccess && (isOwner || isResident) && !isServiceSession;
   }
 
   /// Site / kurulum şablonlarını görme ve panoya uygulama (CONTRACTS §3e, K-Ş7): süper kullanıcı ve küresel servis

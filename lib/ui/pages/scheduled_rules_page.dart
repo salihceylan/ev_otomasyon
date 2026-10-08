@@ -58,7 +58,8 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
   }
 
   static String _signature(List<ScheduledRule> rules) => rules
-      .map((r) => '${r.id}|${r.enabled}|${r.action}|${r.hour}:${r.minute}|${r.daysOfWeek.join()}|${r.label}')
+      .map((r) =>
+          '${r.id}|${r.enabled}|${r.action}|${r.hour}:${r.minute}|${r.daysOfWeek.join()}|${r.label}|${r.creatorActive}')
       .join(';');
 
   void _snack(String message, {SnackBarAction? action, bool warning = false}) {
@@ -202,6 +203,16 @@ class _ScheduledRulesPageState extends State<ScheduledRulesPage> {
                   onEdit: () => unawaited(_openDialog(existing: rule)),
                   onDelete: () => unawaited(_confirmDelete(rule, ruleChannelName(rule, options))),
                 ),
+              ),
+            ),
+          // Kapalı / çalışmayan kural varken (kullanim-5): kuranın erişimi biterse kural çalışmaz; düzenleyip kaydeden üstlenir.
+          if (rules.any((r) => !r.enabled || !r.creatorActive))
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 8),
+              child: Text(
+                'Kuralı oluşturan kişinin erişimi sona erdiyse kural çalışmaz; kaydederseniz sizin adınıza çalışır.',
+                key: const Key('hint_rule_creator'),
+                style: TextStyle(fontSize: 12, height: 1.35, color: AppTheme.getTextMuted(context)),
               ),
             ),
         ],
@@ -437,6 +448,23 @@ class _RuleCard extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         _DayChips(days: rule.daysOfWeek, family: family, enabled: rule.enabled),
+        if (!rule.creatorActive) ...[
+          const SizedBox(height: 8),
+          Row(
+            key: Key('note_rule_creator_${rule.id}'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded, size: 16, color: AppTheme.warningText(context)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Çalışmıyor: kuralı kuranın erişimi bitti. Düzenleyip kaydederek kuralı üstlenin.',
+                  style: TextStyle(fontSize: 12, height: 1.35, fontWeight: FontWeight.w600, color: AppTheme.warningText(context)),
+                ),
+              ),
+            ],
+          ),
+        ],
       ],
     );
 

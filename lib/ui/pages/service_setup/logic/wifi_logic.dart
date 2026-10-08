@@ -56,6 +56,9 @@ class WifiLogic extends SetupLogic {
   bool _ethernetMode = false;
   bool _viaEthernet = false;
 
+  /// Ethernet'le ev ağında ama hazırlanmamış panonun adresi (ilk hazırlık bu adrese yapılır; servis_kurulum-1).
+  String? _ethProvisionIp;
+
   /// Teknisyen "Pano kabloyla (Ethernet) bağlı" yolunu seçti (ya da pano Ethernet bildirdi): kurulum ağı ve ev Wi-Fi
   /// bilgisi adımları gizlenir; pano Ethernet IP'sinden doğrulanır ([confirmEthernet]).
   bool get ethernetMode => _ethernetMode;
@@ -76,6 +79,9 @@ class WifiLogic extends SetupLogic {
 
   /// Pano henüz hazırlanmamış (anahtar yok): önce ilk hazırlık gerekir.
   bool get needsProvision => _needsProvision;
+
+  /// Hazırlanmamış Ethernet panosunun adresi (biliniyorsa).
+  String? get ethProvisionIp => _ethProvisionIp;
 
   /// İlk hazırlık yapıldı; pano kurulum ağını yeniden başlatıyor (telefon yeniden bağlanmalı).
   bool get awaitingReconnect => _awaitingReconnect;
@@ -137,8 +143,12 @@ class WifiLogic extends SetupLogic {
         // Wi-Fi bilgisi gönderilecek pano **kurulum ağındaki** (AP) panodur; kimliği anahtarsız doğrulanır.
         final identity = await DeviceIdentity.verify(apApi, t.deviceUuid);
         _identity = identity;
-        // Pano kablolu ağda olduğunu bildiriyor: Wi-Fi bilgisi gerekmez, Ethernet yolu önerilir.
-        if (identity.ethConnected == true) _ethernetMode = true;
+        // Kimlik kurulum ağından doğrulandı: hedef kurulum ağı adresidir (mevcut cihaz / kayıttan devamdaki eski ev IP'si
+        // değil; servis_kurulum-7). Ev IP'sini sonra Wi-Fi sonucu ya da IP doğrulaması yazar.
+        ctx.target = ctx.requireTarget.copyWith(ip: IdentifyLogic.apHost);
+        // Pano kablolu ağda olduğunu bildiriyor: Wi-Fi bilgisi gerekmez, Ethernet yolu önerilir. Hazırlanmamış pano bu yola
+        // alınmaz: önce ilk hazırlık (servis_kurulum-1).
+        if (identity.ethConnected == true && identity.provisioned != false) _ethernetMode = true;
         if (identity.provisioned == false) {
           _needsProvision = true;
           return;
@@ -146,14 +156,26 @@ class WifiLogic extends SetupLogic {
         _awaitingReconnect = false;
       });
 
-  /// Cihaz anahtarı elle girildi (8-32 görünür ASCII): ilk hazırlıkta kullanılmak üzere bellekte tutulur.
-  bool useManualKey(String key) {
+  /// Cihaz anahtarı elle girildi (8-32 görünür ASCII): ilk hazırlıkta kullanılmak üzere bellekte tutulur. [confirm] ikinci
+  /// yazımdır (servis_kurulum-5): uyuşmazsa anahtar kullanılmaz ("Panoyu Hazırla" kapalı kalır); yanlış anahtar panonun
+  /// bulut bağlantısını bozar ve USB gerektirir.
+  bool useManualKey(String key, {String? confirm}) {
     if (!AutomationApiService.isValidLocalKey(key)) {
       fail(const SetupProblem(
         kind: SetupProblemKind.validation,
         title: 'Cihaz anahtarı geçersiz',
         why: 'Anahtar 8-32 karakter olmalı; boşluk içeremez.',
         todo: 'Anahtarı fabrika/servis kaydından aynen kopyalayın.',
+        retryable: false,
+      ));
+      return false;
+    }
+    if (confirm != null && confirm != key) {
+      fail(const SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Anahtarlar eşleşmiyor',
+        why: 'İkinci kez yazılan anahtar ilkiyle aynı değil.',
+        todo: 'Anahtarı iki alana da aynen yazın. Yanlış anahtar panonun bulut bağlantısını bozar ve USB gerektirir.',
         retryable: false,
       ));
       return false;
@@ -177,7 +199,7 @@ class WifiLogic extends SetupLogic {
             retryable: false,
           ));
         }
-        ctx.useManualKey(key);
+        ctx.useManualKey(key, manual: false); // sunucudan alındı: elle girilmiş sayılmaz (servis_kurulum-5)
       });
 
   /// Panonun ilk hazırlığı: yerel anahtar + kurulum ağı parolası panoya yazılır (`factory/init`).
@@ -208,16 +230,111 @@ class WifiLogic extends SetupLogic {
           retryable: false,
         ));
       }
-      // Anahtarlı olmayan bu çağrıdan önce de kimlik doğrulanır (yanlış panoya yazılmaz).
-      await ctx.link.probe(t.ip.isEmpty ? IdentifyLogic.apHost : t.ip, expectedUid: t.deviceUuid);
+      // Anahtarlı olmayan bu çağrıdan önce de kimlik doğrulanır (yanlış panoya yazılmaz). Bu yol DAİMA kurulum ağı
+      // adresidir (servis_kurulum-7): mevcut cihaz / kayıttan devamda hedefte eski ev IP'si kalmış olabilir. Ethernet yolu:
+      // [provisionViaEthernet].
+      await ctx.link.probe(IdentifyLogic.apHost, expectedUid: t.deviceUuid);
       ctx.link.useKey(key);
       await ctx.link.verifiedApi.factoryInit(localKey: key, apPass: apPass);
       ctx.link.invalidate();
-      ctx.target = ctx.requireTarget.copyWith(localKey: key);
+      ctx.target = ctx.requireTarget.copyWith(ip: IdentifyLogic.apHost, localKey: key);
       _needsProvision = false;
       _awaitingReconnect = true;
       _identity = null;
     });
+  }
+
+  static const SetupProblem _ethNoKey = SetupProblem(
+    kind: SetupProblemKind.unauthorized,
+    title: 'Cihaz anahtarı yok',
+    why: 'Panoyu hazırlamak için cihaz anahtarı gerekiyor; sunucu bu hesaba anahtar vermedi (süper yönetici hesabı ya da '
+        'yetki yok).',
+    todo: 'Fabrika/servis kaydındaki anahtarı elle (iki kez) girin, sonra "Panoyu Hazırla"ya basın.',
+    retryable: false,
+  );
+
+  static const SetupProblem _ethProvisionUnconfirmed = SetupProblem(
+    kind: SetupProblemKind.deviceRejected,
+    title: 'Pano hazırlanmış görünmüyor',
+    why: 'İlk hazırlık gönderildi ama pano hâlâ cihaz anahtarı olmadığını bildiriyor.',
+    todo: 'Birkaç saniye bekleyip "Panoyu Hazırla"yı yeniden deneyin; olmazsa panoyu servis yazılımıyla (USB) hazırlayın.',
+  );
+
+  /// Ethernet'le ev ağındaki **hazırlanmamış** panonun ilk hazırlığı (servis_kurulum-1): `factory/init` panonun Ethernet
+  /// adresine gider (karar 2: her arayüzden kabul edilir). Telefon ev ağındadır (internet var): anahtar bellekte yoksa
+  /// sunucudan alınır (süper yöneticide elle girilir). Hazırlıktan sonra pano yeniden okunur; `provisioned` doğrulanmadan
+  /// adım tamamlanmaz.
+  Future<bool> provisionViaEthernet({required String ip, required String apPass}) {
+    final bytes = utf8.encode(apPass).length;
+    if (bytes < 8 || bytes > 32) {
+      fail(const SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Kurulum ağı parolası geçersiz',
+        why: 'Parola 8-32 karakter olmalı.',
+        todo: 'Pano etiketindeki "AĞ PAROLASI (AP)" değerini aynen yazın.',
+        retryable: false,
+      ));
+      return Future<bool>.value(false);
+    }
+    final error = validateHost(ip);
+    if (error != null) {
+      fail(SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Pano adresi geçersiz',
+        why: error,
+        todo: 'Modem arayüzündeki cihaz listesinden panonun kablolu (Ethernet) IP adresine bakın.',
+        retryable: false,
+      ));
+      return Future<bool>.value(false);
+    }
+    return run(provisionLabel, () async {
+      final clean = ip.trim();
+      final t = ctx.requireTarget;
+      var key = t.localKey ?? ctx.link.key;
+      if (key == null || key.isEmpty) {
+        key = await ctx.fetchLocalKey();
+        ctx.ensureActive();
+        if (key != null && key.isNotEmpty) ctx.useManualKey(key, manual: false);
+      }
+      if (key == null || key.isEmpty) throw const SetupProblemException(_ethNoKey);
+      // Kimlik anahtarsız doğrulanır (yanlış panoya yazılmaz).
+      await ctx.link.probe(clean, expectedUid: t.deviceUuid);
+      ctx.link.useKey(key);
+      await ctx.link.verifiedApi.factoryInit(localKey: key, apPass: apPass);
+      ctx.link.invalidate();
+      final after = await ctx.link.probe(clean, expectedUid: t.deviceUuid);
+      ctx.ensureActive();
+      if (after.provisioned != true) throw const SetupProblemException(_ethProvisionUnconfirmed);
+      ctx.target = ctx.requireTarget.copyWith(ip: clean, localKey: key);
+      _identity = after;
+      _needsProvision = false;
+      _ethProvisionIp = null;
+      _connected = true;
+      _viaEthernet = true;
+      _ethernetMode = true;
+      _lostContact = false;
+      _homeIp = clean;
+    });
+  }
+
+  /// Ağ kurulumunu baştan yapar (servis_kurulum-7): mevcut cihazda / kayıttan devamda tamamlanmış 5. adım (ör. yanlış ev
+  /// ağı, modem değişti) yeniden yapılabilsin. Pano ve sunucuya istek atılmaz; kayıt güncellenir.
+  void restartNetworkSetup() {
+    if (busy) return;
+    _connected = false;
+    _viaEthernet = false;
+    _ethernetMode = false;
+    _lostContact = false;
+    _awaitingReconnect = false;
+    _needsProvision = false;
+    _ethProvisionIp = null;
+    _identity = null;
+    _lastResult = null;
+    _homeIp = null;
+    clearProblem();
+    ctx.link.invalidate();
+    ctx.notify();
+    ctx.persist();
   }
 
   /// E2'nin Wi-Fi bileşeninin ([WifiProvisionPanel]) bağlanma sonucunu geçiş koşuluna çevirir. Başarı
@@ -327,6 +444,20 @@ class WifiLogic extends SetupLogic {
       final clean = ip.trim();
       final t = ctx.requireTarget;
       final identity = await ctx.link.probe(clean, expectedUid: t.deviceUuid);
+      if (identity.provisioned == false) {
+        // Ethernet'ten anahtarsız erişim provizyonsuz panoda da çalışır (karar 1) ama pano bu haliyle buluta bağlanamaz:
+        // adım tamamlanmaz, ilk hazırlık istenir (servis_kurulum-1).
+        _identity = identity;
+        _needsProvision = true;
+        _ethProvisionIp = clean;
+        throw const SetupProblemException(SetupProblem(
+          kind: SetupProblemKind.deviceRejected,
+          title: 'Pano hazırlanmamış (cihaz anahtarı yok)',
+          why: 'Pano Ethernet ile ev ağında ama ilk hazırlığı (cihaz anahtarı) yapılmamış; bu haliyle buluta bağlanamaz.',
+          todo: "Etiketteki AP parolasını girip Panoyu Hazırla'ya basın.",
+          retryable: false,
+        ));
+      }
       var eth = identity.ethConnected;
       if (eth == null) {
         final key = t.localKey ?? ctx.link.key;

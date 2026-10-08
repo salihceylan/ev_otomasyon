@@ -167,6 +167,26 @@ class _Step4ClaimState extends State<Step4Claim> {
                       ? 'Müşteri için yeni hesap açıldı; etkinleştirme e-postası gönderildi.'
                       : 'Müşteri için yeni hesap açıldı ancak davet e-postası gönderilemedi.',
                 ),
+              // Hesap zaten vardı ama etkinleştirilmemiş (uyelik-1): müşteri giriş yapamıyorsa nedeni budur.
+              if (s.customerAccountPending)
+                SetupInfoRow(
+                  key: const Key('claim_customer_pending'),
+                  icon: Icons.mark_email_unread_outlined,
+                  color: SetupColors.warn,
+                  text: s.inviteSent == true
+                      ? 'Müşteri hesabı henüz etkinleştirilmedi; davet yeniden gönderildi.'
+                      : 'Müşteri hesabı henüz etkinleştirilmedi; davet gönderilemedi; müşteri Şifremi unuttum ile '
+                          'etkinleştirebilir.',
+                ),
+              // Sıfırlama bilgisi sunucu uyarılarında yoksa (eski sunucu) burada söylenir; varsa ikinci kez yazılmaz.
+              if (s.customerSecurityReset && !s.warnings.any((w) => w.contains('güvenlik için sıfırlandı')))
+                const SetupInfoRow(
+                  key: Key('claim_customer_reset'),
+                  icon: Icons.lock_reset_rounded,
+                  color: SetupColors.warn,
+                  text: 'Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası '
+                      'gönderildi.',
+                ),
               if (s.technicianAccessExpiresAt != null)
                 SetupInfoRow(
                   icon: Icons.schedule_rounded,
@@ -216,10 +236,13 @@ class _Step4ClaimState extends State<Step4Claim> {
                 key: const Key('claim_key_state'),
                 icon: s.localKeyReady ? Icons.key_rounded : Icons.key_off_rounded,
                 color: s.localKeyReady ? SetupColors.ok : SetupColors.warn,
-                text: s.localKeyReady
-                    ? 'Cihaz anahtarı şimdiden (yalnızca bellekte) hazırlandı: hazırlanmamış bir pano çıkarsa kurulum '
-                        'ağında kullanılabilir.'
-                    : 'Cihaz anahtarı şimdi alınamadı; sorun değil: 6. adımda, internet geri gelince alınacak.',
+                // Süper yöneticiye sunucu anahtar vermez (M4-02): "6. adımda alınacak" yanlış olurdu (servis_kurulum-5).
+                text: widget.controller.access.isSuperUser
+                    ? 'Süper yönetici hesabına cihaz anahtarı verilmez; gerekirse elle girilir.'
+                    : (s.localKeyReady
+                        ? 'Cihaz anahtarı şimdiden (yalnızca bellekte) hazırlandı: hazırlanmamış bir pano çıkarsa kurulum '
+                            'ağında kullanılabilir.'
+                        : 'Cihaz anahtarı şimdi alınamadı; sorun değil: 6. adımda, internet geri gelince alınacak.'),
               ),
             ],
           ),

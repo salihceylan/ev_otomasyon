@@ -19,6 +19,7 @@ import '../widgets/orb/orb.dart';
 import '../widgets/settings/accent_button.dart';
 import '../widgets/surface_card.dart';
 import '../theme/feature_accent.dart';
+import 'service_setup/service_target.dart' show ServiceSetupAccess;
 
 /// Wi-Fi kurulum & kurtarma sihirbazı: ev Wi-Fi bilgileri değiştiğinde (ya da servis kurulumunda)
 /// panoya yenisini yükler. **Giriş yapmış olmak ve internet GEREKMEZ** (canlı test listesi Aşama 16).
@@ -125,14 +126,20 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
   /// Yalnızca **yerel** okuma yapılır (ağ yok); anahtar yoksa istekler anahtarsız (AP kaynaklı) gider.
   /// [status] `null` ise (pano bulunamadı) önceki panoya ait anahtar bırakılmaz.
   Future<void> _onDeviceChecked(DeviceStatus? status) async {
+    final uid = QrClaimParser.normalizeUid(status?.uid);
+    // Panonun hazırlık durumu hatırlanır (bireysel-13): sahiplenme diyaloğu hazırlanmamış panoda eşlemeden önce uyarır.
+    if (uid != null) _state.noteBoardProvisioned(uid, status?.provisioned);
     if (!_ownsApi) return; // çağıranın verdiği istemciye dokunulmaz
     _api.localKey = null;
-    final uid = QrClaimParser.normalizeUid(status?.uid);
     if (uid == null) return;
     final key = await WifiRecoveryDialog.readCachedKey(_state, uid);
     if (!mounted) return;
     if (AutomationApiService.isValidLocalKey(key)) _api.localKey = key;
   }
+
+  /// Pano evin cihaz listesinde çevrimiçi ya da daha önce görülmüş mü (bulut kimliği panoda var; bireysel-1).
+  bool _boardSeenOnline(String uid) =>
+      _state.devices.any((d) => d.deviceUuid.toUpperCase() == uid && (d.online || d.lastSeenAt != null));
 
   /// Adım 4'ün sonu: Android'de uygulama pano ağını kendisi seçer (mobil veri açık kalabilir); diğer
   /// platformlarda eski yönerge.
@@ -230,6 +237,9 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
                 numberedSteps: true,
                 qrScanner: widget.qrScanner,
                 onDeviceChecked: _onDeviceChecked,
+                // Servis rolü yoksa hazırlanmamış panoda sihirbaz önerilmez (bireysel-13); eski yazılım uyarısı (bireysel-1).
+                serviceMode: ServiceSetupAccess.fromState(_state) != null,
+                boardSeenOnline: _boardSeenOnline,
                 onResult: (result) {
                   if (result.isSuccess && mounted) setState(() => _done = true);
                 },
@@ -237,8 +247,9 @@ class _WifiRecoveryDialogState extends State<WifiRecoveryDialog> {
               if (_done) ...[
                 const SizedBox(height: 14),
                 Text(
-                  'Pano bulut bağlantısını birkaç saniye içinde yeniden kurar; uygulamada çevrimiçi '
-                  'görünene kadar bekleyin.',
+                  // Sahiplenilmemiş pano buluta bağlanmaz (bireysel-11): eşleme yolu söylenir.
+                  'Pano sahiplenildiyse birkaç dakika içinde buluta bağlanır; henüz sahiplenmediyseniz etiketteki 1. '
+                  'karekodla eşleyin.',
                   key: const Key('wifi_done_text'),
                   style: TextStyle(fontSize: 12.5, color: textMuted, height: 1.4),
                   textAlign: TextAlign.center,

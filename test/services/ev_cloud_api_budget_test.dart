@@ -399,14 +399,16 @@ void main() {
       expect(clock.activeTimerCount, 0);
     });
 
-    test('yazım HATA verirse (sınır içinde) hata aynen iletilir: davranış değişmez', () async {
+    test('uyelik-3: yazım HATA verirse yenileme yine başarılıdır (belirteçler bellekte); istek yeniden denenir', () async {
       stubRefreshThenOk();
       service.onTokenRefreshed = (access, refresh) => throw StateError('depo yazılamadı');
 
       final call = track(service.fetchHomes());
       await clock.elapse(const Duration(seconds: 1));
-      expect(call.error, isA<StateError>());
-      expect(api.count('GET', '/api/v1/homes'), 1, reason: 'yazım hatasında istek yeniden denenmez (eski davranış)');
+      expect(call.error, isNull, reason: 'yazım hatası yenilemeyi başarısız saymaz');
+      expect(call.done, isTrue);
+      expect(api.count('GET', '/api/v1/homes'), 2, reason: '401 sonrası yeni belirteçle bir kez yeniden denenir');
+      expect(service.storedRefreshKnown, isTrue, reason: 'depodan geri yüklenen eski değer bilinir; yenisi yazılamadı');
     });
 
     test('sınırı aşan yazımın GEÇ dönen hatası yutulur: ele alınmamış (zone) hata üretmez', () async {

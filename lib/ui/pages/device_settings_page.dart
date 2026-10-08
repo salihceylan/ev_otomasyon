@@ -18,6 +18,7 @@ import '../widgets/settings/service_pin_card.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/settings/settings_card.dart';
+import 'channels_page.dart';
 
 typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatus});
 
@@ -29,12 +30,13 @@ typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatu
 /// |---|---|
 /// | Çocuk kilidi | `canViewState` (misafir salt-okunur görür; değiştirme `canChangeChildLock`) |
 /// | Gece huzur bildirimi | bulut modu + `canChangeChildLock` |
-/// | Arka planda alarm bildirimi | bulut modu + ev sahibi / sakin (servis rolleri ✖) |
+/// | Arka planda alarm bildirimi | bulut modu + ev rolü sahip / sakin (müşteri evindeki servis rolü ve servis oturumu ✖) |
 /// | Zamanlı kurallar | bulut modu + `canManageRules` |
 /// | Sistem doktoru | aktif eve erişim + `canChangeChildLock` |
 /// | Servis PIN'i | bulut modu + `canGenerateServicePin` (ev sahibi) |
 /// | Wi-Fi kurtarma / cihaz adresi | `canOpenWifiRecovery` / `canEditDeviceHost` (misafir ✖) |
 /// | Pano değişimi | `canReplaceBoard` |
+/// | Kanallar ve panjurlar | bulut modu + `canCalibrate` (ev sahibi, personel, servis oturumu, süper) |
 /// | Telemetri | cihaz yanıt verdi + misafir değil |
 ///
 /// Sayfa kökü durumu izlemez; yalnızca kart görünürlüğü için tek bir `select` kullanır, kartlar
@@ -63,9 +65,9 @@ class DeviceSettingsPage extends StatelessWidget {
           if (caps.canViewState) const ChildLockCard(),
           if (vm.hasUser) const BiometricCard(),
           if (cloud && caps.canGenerateServicePin) const ServicePinCard(),
-          // Arka planda alarm bildirimi: yalnız ev sahibi / sakin (misafir ve servis rolleri ✖).
-          if (cloud && (caps.isOwner || caps.isResident) && !caps.isSuperUser && !caps.isStaff && !caps.isServiceSession)
-            const AlarmWatchCard(),
+          // Arka planda alarm bildirimi: ev rolü belirleyici (guvenlik-12): yalnız ev sahibi / sakin; kendi evinin sahibi
+          // olan servis sorumlusu / süper kullanıcı da açabilir. Misafir, müşteri evindeki servis üyeliği ve servis oturumu ✖.
+          if (cloud && (caps.isOwner || caps.isResident) && !caps.isServiceSession) const AlarmWatchCard(),
         ],
       ),
       ('Görünüm', Icons.palette_rounded, AppFeature.appearance.accentFamily, [const ThemeSelectorCard()]),
@@ -77,7 +79,10 @@ class DeviceSettingsPage extends StatelessWidget {
           if (caps.hasHomeAccess && caps.canChangeChildLock) const SystemDoctorCard(),
           if (caps.canOpenWifiRecovery) const WifiRecoveryCard(),
           if (caps.canReplaceBoard) const ReplaceBoardCard(),
-          if (caps.canEditDeviceHost) const DeviceHostCard(),
+          // Kanal adı / odası / tipi ve panjur süresi (bireysel-10): kendi kuran ev sahibi de düzenler.
+          if (cloud && caps.canCalibrate) const ChannelsCard(),
+          // Girişsiz yerel kipte anahtar henüz yokken de (bireysel-5): adres ve anahtar ancak buradan girilir.
+          if (caps.canEditDeviceHost || (direct && !vm.hasUser)) const DeviceHostCard(),
           if (vm.hasStatus && !caps.isGuest) const TelemetryCard(),
         ],
       ),

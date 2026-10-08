@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 
 import '../automation_state.dart';
 import '../push/safety_notice.dart';
@@ -10,8 +11,11 @@ import 'alarm_watch_service.dart';
 
 /// "Arka planda alarm bildirimi" ayarının ön plan denetleyicisi (Android; Firebase'siz).
 ///
-/// * Kapalı başlar. Yalnız hesap rolü `user` olan ve en az bir evde **ev sahibi / sakin** olan kullanıcı açabilir
-///   ([eligible]); misafir ve servis rolleri ✖.
+/// * Kapalı başlar. En az bir evde **ev rolü sahip / sakin** olan kullanıcı açabilir ([eligible]; guvenlik-12: kendi
+///   evinin sahibi olan servis sorumlusu / süper kullanıcı dahil); misafir, müşteri evindeki servis üyeliği ve servis
+///   oturumu ✖.
+/// * Servis kendini durdurmuş olabilir (ör. şifre değişince oturumu bitti; uyelik-4): ön plana dönüşte ve durum
+///   değişimlerinde (en çok 60 sn'de bir) gerçek durumu sorar; ayar açıkken çalışmıyorsa yeniden başlatır.
 /// * Açınca: bildirim izni (Android 13+) istenir, ayar (kullanıcı + uygun evler) paylaşılan depoya yazılır ve ön plan
 ///   servisi başlatılır. Kapatınca servis durur.
 /// * Çıkış yapılınca (ya da oturum kesin olarak bitince) ayar kapanır ve servis durur; başka kullanıcı girerse aynısı.
@@ -26,7 +30,18 @@ class AlarmWatchController extends ChangeNotifier {
   })  : platform = platform ?? createAlarmWatchPlatform(),
         _repo = AlarmWatchSettingsRepository(store ?? (_defaultStore())) {
     state.addListener(_onStateChanged);
+    try {
+      _lifecycle = AppLifecycleListener(onResume: handleResume);
+    } catch (_) {
+      // Widget bağlayıcısı yok (saf Dart testi): yaşam döngüsü dinlenmez.
+    }
   }
+
+  AppLifecycleListener? _lifecycle;
+
+  /// Durum değişimlerinde servisin gerçekten çalışıp çalışmadığının en sık sorulma aralığı (uyelik-4).
+  static const Duration _runningCheckEvery = Duration(seconds: 60);
+  DateTime? _lastRunningCheck;
 
   static AlarmWatchStore _defaultStore() =>
       alarmWatchPlatformSupported ? PrefsAlarmWatchStore() : MemoryAlarmWatchStore();
@@ -204,7 +219,36 @@ class AlarmWatchController extends ChangeNotifier {
     }
     // Yeniden giriş sonrası (servis oturum bitince kendini durdurmuş olabilir) gerçek durum yeniden sorulur.
     if (authChanged) _running = false;
-    if (!_running) unawaited(_ensureRunning());
+    if (!_running) {
+      unawaited(_ensureRunning());
+    } else {
+      unawaited(_checkRunning()); // en çok 60 sn'de bir (uyelik-4)
+    }
+  }
+
+  /// Uygulama ön plana döndü (uyelik-4): servis bu arada kendini durdurmuş olabilir; gerçek durum hemen sorulur.
+  void handleResume() => unawaited(_checkRunning(force: true));
+
+  /// Ayar açık, oturum açık ve uygun ev varken servis çalışmıyorsa yeniden başlatır. [force] değilse en çok
+  /// [_runningCheckEvery]'de bir platforma sorulur.
+  Future<void> _checkRunning({bool force = false}) async {
+    if (_disposed || !_loaded || !platform.isSupported || _busy) return;
+    if (!_settings.enabled || !state.isAuthenticated || eligibleHomes.isEmpty) return;
+    final now = state.clock.now();
+    final last = _lastRunningCheck;
+    if (!force && last != null && now.difference(last) < _runningCheckEvery) return;
+    _lastRunningCheck = now;
+    try {
+      final running = await platform.isRunning();
+      if (_disposed) return;
+      if (running != _running) {
+        _running = running;
+        _notify();
+      }
+      if (!running) await _ensureRunning();
+    } catch (_) {
+      // Platform sorgusu en iyi çabadır.
+    }
   }
 
   bool _starting = false;
@@ -233,6 +277,7 @@ class AlarmWatchController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _lifecycle?.dispose();
     state.removeListener(_onStateChanged);
     _tapSub?.cancel();
     _opened.close();

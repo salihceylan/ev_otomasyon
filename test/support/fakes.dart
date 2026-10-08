@@ -179,6 +179,10 @@ class InMemorySecureStore implements SecureKeyValueStore {
   int deleteAllCount = 0;
 
   final Map<String, int> _writesByKey = <String, int>{};
+  final Map<String, int> _readsByKey = <String, int>{};
+
+  /// Belirli bir anahtarın kaç kez okunduğu (ör. biyometrik istem kaydı hiç okunmadı mı).
+  int readCountFor(String key) => _readsByKey[key] ?? 0;
 
   /// Belirli bir anahtara yapılan `write` sayısı (ör. `ahbu_homes_cache`: gereksiz yeniden yazma denetimi).
   int writeCountFor(String key) => _writesByKey[key] ?? 0;
@@ -186,6 +190,7 @@ class InMemorySecureStore implements SecureKeyValueStore {
   @override
   Future<String?> read(String key) async {
     startedReads++;
+    _readsByKey[key] = readCountFor(key) + 1;
     if (failReads || failReadKeys.contains(key)) throw Exception('okuma hatası');
     final hang = hangReads;
     if (hang != null) await hang.future;
@@ -529,6 +534,32 @@ class FakeCloudApi extends EvCloudApiService {
     return snapshot;
   }
 
+  /// `updateEndpoint` çağrıları (bireysel-10) ve hatası.
+  final List<Map<String, Object?>> endpointUpdateArgs = <Map<String, Object?>>[];
+  Object? endpointUpdateError;
+
+  @override
+  Future<Map<String, dynamic>> updateEndpoint({
+    required String homeId,
+    required String endpointId,
+    String? name,
+    String? room,
+    String? type,
+    int? shutterDurationSec,
+  }) async {
+    calls.add('updateEndpoint:$endpointId');
+    endpointUpdateArgs.add(<String, Object?>{
+      'endpointId': endpointId,
+      'name': name,
+      'room': room,
+      'type': type,
+      'shutterDurationSec': shutterDurationSec,
+    });
+    final error = endpointUpdateError;
+    if (error != null) throw error;
+    return <String, dynamic>{'id': endpointId};
+  }
+
   @override
   Future<List<DeviceInfo>> devices(String homeId) async {
     calls.add('devices:$homeId');
@@ -673,10 +704,14 @@ class FakeCloudApi extends EvCloudApiService {
     return <String, dynamic>{'applied': true, 'rev': baseRev + 1, 'command_id': commandId};
   }
 
+  /// Atanırsa bekleyen kuyruk silinince çağrılır (testlerin `safetyConfigHandler`'ı kuyruğu boşaltsın; guvenlik-4).
+  void Function()? onPendingCleared;
+
   @override
   Future<int> clearSafetyConfigPending(String homeId, String deviceId) async {
     calls.add('clearSafetyConfigPending:$deviceId');
     pendingCleared++;
+    onPendingCleared?.call();
     return 1;
   }
 
@@ -902,6 +937,19 @@ class FakeCloudApi extends EvCloudApiService {
     return true;
   }
 
+  /// `revokeServiceSession` (uyelik-12) ile sunucuya bildirilen servis oturumu belirteçleri.
+  final List<String> revokedServiceTokens = <String>[];
+
+  /// Atanırsa servis oturumu çıkış isteği bu hatayla biter (gerçek istemci fırlatmaz: `false` döner).
+  Object? serviceRevokeError;
+
+  @override
+  Future<bool> revokeServiceSession(String accessToken) async {
+    calls.add('revokeServiceSession');
+    revokedServiceTokens.add(accessToken);
+    return serviceRevokeError == null;
+  }
+
   @override
   Future<String> localKey(String homeId, String deviceUuid) async {
     calls.add('localKey:$deviceUuid');
@@ -914,10 +962,42 @@ class FakeCloudApi extends EvCloudApiService {
     return value;
   }
 
+  /// `localKeyInfo` parmak izi (`local_key_fp`; servis_kurulum-1); `null` = eski sunucu.
+  String? localKeyFp;
+
+  @override
+  Future<({String key, String? fp})> localKeyInfo(String homeId, String deviceUuid) async {
+    final key = await localKey(homeId, deviceUuid);
+    return (key: key, fp: localKeyFp);
+  }
+
   @override
   Future<List<HomeMember>> getHomeMembers(String homeId) async {
     calls.add('getHomeMembers:$homeId');
     return List<HomeMember>.of(members);
+  }
+
+  /// Bekleyen davetler (ev_uyelik-6) ve iptal kayıtları.
+  List<PendingInvitation> pendingInvitations = <PendingInvitation>[];
+  Object? listInvitationsError;
+  Object? revokeInvitationError;
+  final List<String> revokedInvitations = <String>[];
+
+  @override
+  Future<List<PendingInvitation>> listInvitations(String homeId) async {
+    calls.add('listInvitations:$homeId');
+    final error = listInvitationsError;
+    if (error != null) throw error;
+    return List<PendingInvitation>.of(pendingInvitations);
+  }
+
+  @override
+  Future<void> revokeInvitation(String homeId, String invitationId) async {
+    calls.add('revokeInvitation:$invitationId');
+    final error = revokeInvitationError;
+    if (error != null) throw error;
+    revokedInvitations.add(invitationId);
+    pendingInvitations = pendingInvitations.where((i) => i.id != invitationId).toList();
   }
 
   @override
