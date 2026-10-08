@@ -110,15 +110,37 @@ inline uint32_t stateIp(bool wifiUp, uint32_t wifiIp, bool ethIsUp, uint32_t eth
   }
 }
 
-// Kurtarma AP politikası girdisi "connected" (NetUtil::ApPolicy::In::connected): Ethernet bağlıyken de "bağlı" sayılır ->
-// kurtarma penceresi açılmaz / kararlı bağlantıda kapanır (K-Ş1). Servis AP penceresi (AP ON) bundan bağımsızdır.
-inline bool apPolicyConnected(bool wifiUp, bool ethIsUp) { return wifiUp || ethIsUp; }
+// Kurtarma AP politikası girdisi "connected" (NetUtil::ApPolicy::In::connected): provizyonlu kartta Ethernet bağlıyken de "bağlı"
+// sayılır -> kurtarma penceresi açılmaz / kararlı bağlantıda kapanır (K-Ş1). PROVİZYONSUZ kartta Ethernet sayılmaz: kurulum AP'si
+// (açık AP + POST /api/factory/init yalnız AP'den, inceleme R1-1) Ethernet kablosu takılıyken de açılabilmelidir.
+// Servis AP penceresi (AP ON) bundan bağımsızdır.
+inline bool apPolicyConnected(bool wifiUp, bool ethIsUp, bool provisioned) { return wifiUp || (ethIsUp && provisioned); }
 
 // SNTP: herhangi bir arayüz adres aldığında istek bırakılır (pending); ağ varken bir kez başlatılır.
 inline bool sntpDue(bool pending, bool wifiUp, bool ethIsUp) { return pending && netUp(wifiUp, ethIsUp); }
 
 // MQTT görev kapısı: ağ yoksa bağlantı denenmez, yarım TLS soketi kapatılır.
 inline bool mqttNetOk(bool wifiUp, bool ethIsUp) { return netUp(wifiUp, ethIsUp); }
+
+// MQTT (inceleme R1-5): bağlantı kurulduğu andaki etkin arayüz saklanır; etkin arayüz başka bir arayüze geçerse (ör. Ethernet'le bağlıyken
+// Wi-Fi geldi -> varsayılan rota Wi-Fi) TLS soketi eski arayüze bağlı kalmasın diye bağlantı bırakılıp hemen yeniden kurulur. Ağ tamamen
+// giderse (NONE) karar mqttNetOk'tadır; bağlantı yokken (via NONE) değişim sayılmaz.
+inline bool mqttIfChanged(NetIf connectedVia, NetIf active) {
+  return connectedVia != NetIf::NONE && active != NetIf::NONE && active != connectedVia;
+}
+
+// DNS (inceleme R1-4): lwIP DNS sunucusu GENEL'dir ve son DHCP kira alan arayüz onu ezer. Her arayüzün DHCP DNS'i adres alındığı anda
+// saklanır; etkin arayüz değiştiğinde ya da herhangi bir arayüz yeni adres aldığında (dirty) etkin arayüzün DNS'i yeniden yazılır.
+struct DnsInfo {
+  uint32_t main;
+  uint32_t backup;
+  DnsInfo() : main(0), backup(0) {}
+};
+
+inline bool dnsShouldApply(NetIf lastApplied, NetIf active, bool dirty, const DnsInfo& activeDns) {
+  if (active == NetIf::NONE || activeDns.main == 0) return false;
+  return dirty || active != lastApplied;
+}
 
 // "a.b.c.d" (IPAddress gösterimi: ilk sekizli en düşük bayt). buf en az 16 bayt.
 inline void ipToStr(uint32_t ip, char* buf, unsigned cap) {

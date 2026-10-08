@@ -1,24 +1,29 @@
 #pragma once
 // ============================================================================
-// template/TemplateApply.h - Kurulum şablonunun kartta ATOMİK uygulanması (v1.3.0 İP-2.4, K-Ş3/K-Ş4). BAĞLAYICI: kararlar
+// template/TemplateApply.h - Kurulum şablonunun kartta uygulanması (v1.3.0 İP-2.4, K-Ş3/K-Ş4; inceleme R1-2/R1-6). BAĞLAYICI: kararlar
 // template/TemplateParse (biçim/şablon kuralları) ve template/TemplateRules'tadır (saf, testli).
 //
-// İki giriş, tek uygulayıcı:
-//  * LAN: POST /api/template/apply (WebPortal; KEYED). Ayrıştırma web görevinde, uygulama loopTask'ta (JOB_TEMPLATE_APPLY).
-//  * USB: seri "TPL COMMIT" (main.cpp; zaten loopTask). Fiziksel erişim: gevşetme yasağı uygulanmaz, provizyon gerekmez.
+// İki giriş, tek uygulayıcı: LAN POST /api/template/apply (WebPortal; KEYED) ve seri "TPL COMMIT" (main.cpp). İkisi de gövdeyi
+// startApply() ile ayrı bir işçi görevine ("tpl_apply", Core 1, öncelik 0, TWDT'ye kayıtlı DEĞİL) verir; loopTask yalnız canlı takası
+// yapar (serviceLoop, kısa; NVS yazımı ve JSON ayrıştırması loopTask'ta YAPILMAZ).
 //
-// applyOnLoop (YALNIZ loopTask; ConfigLock + güvenlik yazıcı kilidi tüm iş boyunca tutulur):
-//   1) Aday ana yapılandırma = CANLI yapılandırma + şablonun ad/ek modül/röle/DI alanları (kimlik/Wi-Fi/MQTT o anki değerinde kalır).
-//   2) Karar (TemplateRules::decideApply): kilitli bölge 409 zone_latched, kurulu alarm 409 armed, panjur hareketi 409 busy,
-//      validateSystemChange (açılış güvenli maskesi) 409 cfg_invalid, LAN gevşetme 403 local_loosen_forbidden, NVS payı 507 storage.
-//   3) NVS: güvenlik yapılandırması TAMAMI (rev+1; "ver" işaretli yazım) -> ana yapılandırma (değişen anahtarlar) -> ahbu_tpl.
-//      Herhangi biri başarısızsa yazılanlar ESKİ değerlerine geri yazılır (güvenlik: pay denetimsiz, ana: saveCandidate(eski),
-//      ahbu_tpl: eski kayıt / silme) ve 507 storage döner. Canlı RAM'e bu aşamada HİÇ dokunulmaz.
-//   4) Canlı: ana yapılandırma RAM'e, ardından güvenlik yapılandırması (SafetyManager::applyReplacedOnLoop) aynı loopTask turunda.
-//      Güvenlik canlıya alınamazsa ana yapılandırma RAM'i geri yüklenir ve NVS 3) gibi geri alınır.
-//   "Hiçbir şey değişmez" garantisi: başarısız uygulamada canlı durum hiç değişmemiş, NVS eski değerlerine dönmüş olur. İstisna: geri yazım
-//   da başarısız olursa (NVS arızası) güvenlik bölümünün "ver" işareti geçersiz kalır -> sonraki açılış cfg_corrupt güvenli kipi (karışık
-//   tablo kullanılmaz; mevcut RV-4 kuralı) ve ahbu_tpl "şablon yok" okunur. Elektrik kesintisi 3)'ün ortasına denk gelirse aynı sonuç.
+// İşçi (güvenlik yazıcı kilidi writeMux_ tüm iş boyunca tutulur):
+//   1) Ayrıştırma + doğrulama (taban = canlı ana yapılandırma kopyası).
+//   2) ConfigLock altında: aday = CANLI yapılandırma + şablonun ad/ek modül/röle/DI alanları; karar (TemplateRules::decideApply):
+//      kilitli bölge 409 zone_latched, kurulu alarm 409 armed, panjur hareketi 409 busy, validateSystemChange 409 cfg_invalid,
+//      LAN gevşetme / güvenli kip / yarım işlem 403 local_loosen_forbidden, NVS payı 507 storage.
+//   3) Aynı ConfigLock altında NVS İŞLEMİ: "ahbu_tpl/txn"=1 İLK -> güvenlik yapılandırması tamamı (rev+1, "ver" işaretli) -> ana
+//      yapılandırmanın değişen anahtarları (saveCandidate; canlı RAM'e dokunmaz) -> ahbu_tpl kaydı. Canlı RAM bu aşamada DEĞİŞMEZ.
+//   4) ConfigLock bırakılır, canlı takas loopTask'a postalanır (ana + güvenlik aynı turda; loopTask kilit/panjuru yeniden denetler).
+//      Takas 1,5 sn içinde alınmaz ya da reddedilirse NVS geri alınır (aşağıda).
+//   5) Başarıda ConfigLock altında ana yapılandırma NVS'e CANLI değerden yeniden eşitlenir (aradaki başka bir save() eski değerleri
+//      yazdıysa düzelir) ve "txn" EN SON silinir.
+// Geri alma (2-4 arası hata): ahbu_tpl eski kayda, ana yapılandırma eski değerlere, güvenlik bölümü TemplateRules::safetyRollbackKind'e göre
+// (eskisi / ad alanı silinir / "ver" geçersiz). Hepsi başarılıysa "txn" silinir; değilse kalır.
+// GARANTİ SINIRI: geri alma da başarısız olursa ya da elektrik 3)-5) arasında kesilirse NVS karışık olabilir; bu durumda "txn" işareti
+// kalır -> sonraki açılışta güvenlik yapılandırması KULLANILMAZ (cfg_corrupt güvenli kipi, röleler güvenli maskede), durum "tpl_incomplete"
+// bildirir ve kart yalnız seri TPL ile yeniden uygulanarak kurtarılır. "Hiçbir şey değişmez" yalnız geri almanın başarılı olduğu durum
+// içindir.
 // ============================================================================
 #include <stddef.h>
 #include <stdint.h>
@@ -30,16 +35,24 @@ namespace tpl {
 struct ApplyOutcome {
   ApplyResult r;
   char code[32];           // makine kodu (README / cfgErrText)
-  char path[TPL_PATH_LEN]; // INVALID için alan yolu
+  char path[TPL_PATH_LEN]; // INVALID için alan yolu (sanitizePath'ten geçmiş)
   char detail[24];         // CFG_INVALID: cfgErrText
   uint32_t rev;            // OK: yeni güvenlik rev'i
 };
 
-// Gövdeyi (uygulama zarfı JSON) ayrıştırıp doğrular; taban = canlı ana yapılandırmanın kopyası. Herhangi bir görevden.
-// false: out.r = INVALID (code/path) ya da INTERNAL (bellek).
+// Gövdeyi (uygulama zarfı JSON) ayrıştırıp doğrular; taban = canlı ana yapılandırmanın kopyası. loopTask DIŞINDA çağrılır.
 bool parseBody(const char* json, size_t len, TplCandidate& cand, ApplyOutcome& out);
 
-// YALNIZ loopTask. viaLan: true = LAN (K-Ş4 gevşetme kuralı), false = seri (fiziksel erişim).
-ApplyOutcome applyOnLoop(const TplCandidate& cand, bool viaLan);
+// Gövdenin sahipliği alınır (malloc'lu; her durumda serbest bırakılır). false: başka bir uygulama sürüyor ya da görev açılamadı.
+// viaLan=false (seri): sonuç işçi tarafından seri porta "OK tpl_applied <id> <ver>" / "ERR <kod> [path]" olarak basılır.
+bool startApply(char* body, size_t len, bool viaLan);
+
+// LAN: işçinin bitmesini en çok timeoutMs bekler. true: bitti (out/id/ver geçerli). false: hâlâ sürüyor (istemciye 202 pending).
+bool waitApply(uint32_t timeoutMs, ApplyOutcome& out, char* id, size_t idCap, uint32_t& ver);
+
+bool applyRunning();
+
+// loopTask her tur: bekleyen canlı takası uygular (kısa; NVS yok).
+void serviceLoop();
 
 }  // namespace tpl

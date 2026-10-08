@@ -107,7 +107,9 @@ yanlışlıkla "hata" olmasın).
 Yeni (provizyonsuz) kart: `POST /api/factory/init` yalnız kurulum AP'sinden kabul edilir; Ethernet/STA'dan
 403 `factory_ap_only` (atölye zinciri: USB flash → USB `FACTORYINIT` → şablon USB ya da Ethernet).
 Yarım kalmış uygulama (elektrik kesintisi): kart güvenli kipe girer; yalnız seri `TPL` ile yeniden uygulanarak düzelir
-(LAN reddeder).
+(LAN reddeder). Bildirim: tam durumda `"tpl_incomplete":true`, `GET /api/template`'te `"incomplete":true`, seri
+`STATUS` `Sablon:` satırında `YARIM (...)` eki. `ahbu_tpl` ayrıca `txn` (u8) tutar. Bir uygulama sürerken ikinci LAN
+isteği `503 busy`, ikinci seri `COMMIT` `ERR busy` alır.
 Hata (400): `{"error":"<kod>","path":"relays[3].runtime_s"}` — `path` isteğe bağlı ama sunucu/araç her zaman doldurur.
 LAN gevşetme yasağı: 403 `local_loosen_forbidden`; kilitli bölge 409 `zone_latched`; kurulu alarm 409 `armed`;
 panjur hareket halinde 409 `busy`; NVS yetersiz 507 `storage`.

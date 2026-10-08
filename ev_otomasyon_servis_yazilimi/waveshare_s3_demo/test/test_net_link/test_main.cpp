@@ -33,7 +33,8 @@ void test_without_ethernet_every_decision_equals_wifi_only_behavior() {
     const bool wifi = w == 1;
     TEST_ASSERT_EQUAL(wifi, netUp(wifi, ethUp(none)));
     TEST_ASSERT_EQUAL(wifi, mqttNetOk(wifi, ethUp(none)));
-    TEST_ASSERT_EQUAL(wifi, apPolicyConnected(wifi, ethUp(none)));
+    TEST_ASSERT_EQUAL(wifi, apPolicyConnected(wifi, ethUp(none), true));
+    TEST_ASSERT_EQUAL(wifi, apPolicyConnected(wifi, ethUp(none), false));
     TEST_ASSERT_EQUAL(wifi, sntpDue(true, wifi, ethUp(none)));
     TEST_ASSERT_FALSE(sntpDue(false, wifi, ethUp(none)));
     // tam durum: eski kural "staConnected ? staIp : apIp"
@@ -61,7 +62,8 @@ void test_link_then_dhcp_brings_ethernet_up_and_cable_pull_takes_it_down() {
   ethApply(s, EthEvent::GOT_IP, ip(10, 0, 0, 7), MASK24, ip(10, 0, 0, 1));
   TEST_ASSERT_TRUE(ethUp(s));
   TEST_ASSERT_TRUE(netUp(false, ethUp(s)));
-  TEST_ASSERT_TRUE(apPolicyConnected(false, ethUp(s)));   // Ethernet bağlı: kurtarma AP'si açılmaz
+  TEST_ASSERT_TRUE(apPolicyConnected(false, ethUp(s), true));    // provizyonlu + Ethernet bağlı: kurtarma AP'si açılmaz
+  TEST_ASSERT_FALSE(apPolicyConnected(false, ethUp(s), false));  // provizyonsuz: kurulum AP'si Ethernet varken de açılır (R1-1)
   TEST_ASSERT_TRUE(mqttNetOk(false, ethUp(s)));
   TEST_ASSERT_TRUE(sntpDue(true, false, ethUp(s)));
   TEST_ASSERT_EQUAL_UINT(ip(10, 0, 0, 7), statusIp(false, 0, ethUp(s), s.ip, ip(192, 168, 4, 1)));
@@ -71,7 +73,7 @@ void test_link_then_dhcp_brings_ethernet_up_and_cable_pull_takes_it_down() {
   ethApply(s, EthEvent::LINK_DOWN);
   TEST_ASSERT_FALSE(ethUp(s));
   TEST_ASSERT_EQUAL_UINT(0, s.ip);
-  TEST_ASSERT_FALSE(apPolicyConnected(false, ethUp(s)));
+  TEST_ASSERT_FALSE(apPolicyConnected(false, ethUp(s), true));
   // yeniden takıldı: link tek başına yetmez, yeni DHCP adresi gerekir
   ethApply(s, EthEvent::LINK_UP);
   TEST_ASSERT_FALSE(ethUp(s));
@@ -141,6 +143,25 @@ void test_ap_access_ethernet_subnet_overlap_closes_ap_origin() {
   TEST_ASSERT_FALSE(ApAccess::clientOnSoftAp(true, client, apIp, MASK24, ip(192, 168, 4, 9), MASK24, 0, 0));
 }
 
+void test_mqtt_reconnects_when_active_interface_changes() {
+  TEST_ASSERT_FALSE(mqttIfChanged(NetIf::NONE, NetIf::WIFI));    // bağlantı yokken değişim yok
+  TEST_ASSERT_FALSE(mqttIfChanged(NetIf::WIFI, NetIf::WIFI));
+  TEST_ASSERT_TRUE(mqttIfChanged(NetIf::ETH, NetIf::WIFI));      // Ethernet'le bağlıyken Wi-Fi geldi (varsayılan rota Wi-Fi)
+  TEST_ASSERT_TRUE(mqttIfChanged(NetIf::WIFI, NetIf::ETH));      // Wi-Fi koptu, Ethernet sürüyor
+  TEST_ASSERT_FALSE(mqttIfChanged(NetIf::WIFI, NetIf::NONE));    // ağ tamamen yok: karar mqttNetOk'ta
+}
+
+void test_dns_applied_on_switch_or_new_lease_only_when_known() {
+  DnsInfo wifiDns, none;
+  wifiDns.main = ip(192, 168, 1, 1);
+  TEST_ASSERT_TRUE(dnsShouldApply(NetIf::NONE, NetIf::WIFI, false, wifiDns));   // ilk etkin arayüz
+  TEST_ASSERT_FALSE(dnsShouldApply(NetIf::WIFI, NetIf::WIFI, false, wifiDns));  // değişiklik yok
+  TEST_ASSERT_TRUE(dnsShouldApply(NetIf::WIFI, NetIf::WIFI, true, wifiDns));    // başka arayüz kira aldı: genel DNS'i ezmiş olabilir
+  TEST_ASSERT_TRUE(dnsShouldApply(NetIf::ETH, NetIf::WIFI, false, wifiDns));    // arayüz değişti
+  TEST_ASSERT_FALSE(dnsShouldApply(NetIf::ETH, NetIf::WIFI, true, none));       // DNS bilinmiyor: dokunma
+  TEST_ASSERT_FALSE(dnsShouldApply(NetIf::WIFI, NetIf::NONE, true, wifiDns));   // ağ yok
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_without_ethernet_every_decision_equals_wifi_only_behavior);
@@ -150,5 +171,7 @@ int main(int, char**) {
   RUN_TEST(test_wifi_has_priority_when_both_are_up);
   RUN_TEST(test_ip_to_string);
   RUN_TEST(test_ap_access_ethernet_subnet_overlap_closes_ap_origin);
+  RUN_TEST(test_mqtt_reconnects_when_active_interface_changes);
+  RUN_TEST(test_dns_applied_on_switch_or_new_lease_only_when_known);
   return UNITY_END();
 }

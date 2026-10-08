@@ -384,6 +384,21 @@ void test_patch_parser_still_parses_items_after_refactor() {
   TEST_ASSERT_EQUAL_STRING("bad_relay", run("{\"set\":{\"light\":{\"relay\":41}}}", e));
 }
 
+// Hata yolu seri satıra / JSON'a basılmadan önce temizlenir (R1-7): istemciden gelen alan adı satır sonu / tırnak / UTF-8 taşıyamaz.
+void test_error_path_is_sanitized() {
+  Parsed p;
+  parseText(mutated("\"name\": \"Salon Panjur Butonu\"", "\"name\": \"Salon Panjur Butonu\", \"k\\\"ö\\nx\": 1"), false, p);
+  TEST_ASSERT_FALSE(p.ok);
+  TEST_ASSERT_EQUAL_STRING("bad_field", p.err.code);
+  TEST_ASSERT_EQUAL_STRING("dis[0].k????x", p.err.path);   // tırnak, "ö" (2 bayt) ve satır sonu -> "?"
+  char s[] = "relays[3].runtime_s";
+  sanitizePath(s);
+  TEST_ASSERT_EQUAL_STRING("relays[3].runtime_s", s);
+  char t[] = "a b\r\x7f{}";
+  sanitizePath(t);
+  TEST_ASSERT_EQUAL_STRING("a?b????", t);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_fixture_directory_has_all_shared_examples);
@@ -399,5 +414,6 @@ int main(int, char**) {
   RUN_TEST(test_meta_rules);
   RUN_TEST(test_shutter_dis_mode_must_target_up_relay_and_light_dimmer_rules);
   RUN_TEST(test_patch_parser_still_parses_items_after_refactor);
+  RUN_TEST(test_error_path_is_sanitized);
   return UNITY_END();
 }

@@ -3,7 +3,7 @@
 > **DONANIMDA DENENMEDİ.** Bu imaj hiçbir karta yazılmadı ve hiçbir kartta açılmadı; Ethernet (W5500) hiç kabloyla denenmedi.
 > Dosya düzeyinde doğrulandı (esptool `image_info`: checksum + validation hash geçerli; 0x0000-0xFFFF bölgesi v1.2.1 ile bayt bayt
 > aynı; 0x10000 sonrası = uygulama imajı; imajda "1.3.0" var, "1.2.1" yok) ve saf mantık donanımsız testlerle sınandı (firmware'in kendi
-> Unity testleri MSVC ile: 23 takım / 394 test, yeni 4 takım: `test_template_parse` (ortak 31 örnek dosya), `test_template_rules`,
+> Unity testleri MSVC ile: 23 takım / 400 test, yeni 4 takım: `test_template_parse` (ortak 31 örnek dosya), `test_template_rules`,
 > `test_tpl_serial`, `test_net_link`). Toplu üretimden ve sahaya çıkmadan önce aşağıdaki "İlk kartta denenecekler" listesinin tamamı tek
 > bir test kartında yapılmalıdır. `version_info.json` bu paketle GÜNCELLENMEDİ (yayın kararı ayrıca verilir).
 
@@ -14,17 +14,42 @@ Plan: `docs/superpowers/plans/2026-10-08-site-sablon-kurulum.md` Faz 2 (İP-2.1.
 
 | Dosya | Boyut (bayt) | Amaç |
 | --- | --- | --- |
-| `firmware_combined_0x0.bin` | 1379136 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
-| `app_0x10000_v1.3.0.bin` | 1313600 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
+| `firmware_combined_0x0.bin` | 1383216 | **Karta yazılacak ana imaj** (0x0 adresine). Bootloader + bölüm tablosu + boot_app0 + uygulama birleşik. |
+| `app_0x10000_v1.3.0.bin` | 1317680 | Yalnızca uygulama (yedek; OTA alıcısı YOKTUR). Gerekirse esptool ile 0x10000'a yazılır; **0x0'a yazmayın**. |
 | `SHA256SUMS.txt` | - | `sha256sum -c SHA256SUMS.txt` ile doğrulayın. |
 
-SHA-256 (ana imaj): `97c21d1577a38b946ca7e860f2e3328bd2efcc0f305677fd1699fdf7f263fd53`
-SHA-256 (yalnız uygulama): `c1a42e2d00e932b9c7345b1306353fef0cdc89a0629a85b17b74d5e437b517d3`
-ELF SHA-256: `d39bb384761849a277090c33fcbb53b9a6e5d69c2f0c7fbd245197d74fd8539d`
+SHA-256 (ana imaj): `3ce05170182109a7f2fcd6d7dd5539ab161e926a98cc8375c93a3d28d97f016e`
+SHA-256 (yalnız uygulama): `9b62c9484e62308c32c9b3228cdeb24e21a5b558b8c57077dd647f846c786c2b`
+ELF SHA-256: `219a587cb20400f71dd98c87badebd322414c2df615193581b9f15b32d2a914d`
 
 Derleme: PlatformIO espressif32@7.1.3 (Arduino-ESP32 2.0.17 / IDF 4.4, çekirdek DEĞİŞMEDİ), esptool 4.11.0 `merge_bin`
 (`--flash_mode dio --flash_freq 80m --flash_size 16MB`, 0x0 bootloader / 0x8000 bölüm tablosu / 0xe000 boot_app0 / 0x10000 uygulama).
-Boyut: Flash 1256049 -> 1313233 bayt (+57184, %41,7 / 3 MB), statik RAM 68624 -> 69136 bayt (+512).
+Boyut: Flash 1256049 -> 1317313 bayt (+61264, %41,9 / 3 MB), statik RAM 68624 -> 69256 bayt (+632).
+
+## İnceleme turu 1 düzeltmeleri (paket yeniden üretildi; önceki 1.3.0 özetleri `97c21d15…` / `c1a42e2d…` GEÇERSİZ)
+
+- **R1-1 `POST /api/factory/init` yalnız kurulum AP'sinden:** anahtarsız ilk provizyon yalnız SoftAP alt ağındaki istemciye açık
+  (`ApAccess::clientOnSoftAp`, STA/Ethernet alt ağı çakışmasında kapalı); Ethernet ya da STA'dan gelen istek `403 factory_ap_only`.
+  Seri `FACTORYINIT` değişmedi. Provizyonsuz kartta Ethernet bağlı olsa da kurulum AP'si açılır (AP politikası Ethernet'i yalnız
+  provizyonlu kartta "bağlı" sayar).
+- **R1-2 işlem işareti:** uygulama NVS'e İLK `ahbu_tpl/txn=1` yazar, sonra güvenlik -> ana yapılandırma -> şablon kaydı, en son `txn`'i
+  siler. Açılışta `txn` varsa uygulama yarıda kalmıştır: güvenlik yapılandırması kullanılmaz (cfg_corrupt güvenli kipi, röleler güvenli
+  maskede), tam durumda `"tpl_incomplete":true`, `GET /api/template`'te `"incomplete":true`, seri STATUS `Sablon:` satırı sonunda
+  `YARIM (guvenli kip; seri TPL ile yeniden yazin)`. Yalnız seri TPL ile yeniden uygulanınca temizlenir.
+- **R1-3 LAN "fabrika durumu":** güvenlik ad alanı HİÇ yazılmamış + yapılandırma kullanılabilir + güvenli kip yok + yarım işlem yok.
+  Güvenli kipte / kullanılamayan yapılandırmada / yarım işlemde LAN uygulaması `403 local_loosen_forbidden` (yalnız seri TPL kurtarır).
+  Geri almada güvenlik bölümü: hiç yazılmamışsa silinir, kullanılamıyorsa "ver" geçersiz bırakılır, aksi eskisi yazılır.
+- **R1-4 DNS:** her arayüzün DHCP DNS'i kira anında saklanır; etkin arayüz değişince ya da başka arayüz kira alınca genel lwIP DNS'i
+  etkin arayüzünkine çekilir.
+- **R1-5 MQTT:** bağlantı kurulduğu arayüz saklanır; etkin arayüz değişirse bağlantı bırakılıp hemen yeniden kurulur.
+- **R1-6 loopTask'ta NVS/JSON yok:** ayrıştırma + NVS işlemi ayrı işçi görevde (`tpl_apply`, Core 1, öncelik 0); loopTask yalnız canlı
+  takası yapar (ana + güvenlik aynı turda; kilit/panjur yeniden denetlenir). Takas reddedilirse NVS geri alınır. Başarıda ana
+  yapılandırma NVS'i canlıdan yeniden eşitlenir, `txn` en son silinir. Seri `TPL COMMIT` yanıtı (`OK tpl_applied` / `ERR`) işçi bitince
+  basılır; o sürede yeni COMMIT `ERR busy`.
+- **R1-7** hata yolu (`path`) seri satıra / JSON'a basılmadan önce `[A-Za-z0-9_.[]]` dışı her bayt `?` yapılır.
+- **R1-8** HTTP uygulaması 10 sn içinde bitmezse `202 {"pending":true}` (uygulama sürer; istemci `GET /api/template` ile doğrular);
+  başka uygulama sürerken `503 busy`.
+- **R1-9** aynı şablonun EŞİT sürümü LAN'dan kabul (idempotent yeniden deneme) ama gevşetme denetimi yine yapılır.
 
 ## v1.2.1'den farklar
 
@@ -47,22 +72,20 @@ eskisiyle aynı sonucu verir: `test_net_link`). Mevcut durum alanları ve seri `
   yapılandırması (politika, hırsız gecikmeleri, bölgeler, sensörler, eylemciler, dimmer seçenekleri) TEK iş olarak doğrulanır ve yazılır.
   - `POST /api/template/apply` (KEYED, gövde en çok 24 KB) `{"template":{...},"label":"..."}` -> `200 {"ok":true,"template_id","version","rev"}`.
     Hatalar: `400 {"error":<şablon kodu>,"path":...}`, `403 local_loosen_forbidden`, `409 zone_latched|armed|busy|cfg_invalid(+detail)`,
-    `413 too_large`, `507 storage`, `503 busy`, bozuk JSON `400 invalid_json` (diğer uçlarla aynı ad).
+    `413 too_large`, `507 storage`, `503 busy`, `202 {"pending":true}` (10 sn'de bitmedi, sürüyor), bozuk JSON `400 invalid_json`.
   - `GET /api/template` (KEYED) -> `{"template_id":"…"|null,"version":N|0,"label":"…","applied_at_uptime_s":N|null}`.
-  - LAN kuralı (K-Ş4): kartın güvenlik yapılandırması fabrika durumundaysa (sensör/eylemci yok, politika açık, kuruluk 10 sn, hırsız
-    gecikmeleri varsayılan) ya da AYNI şablonun aynı/yeni sürümü yalnız sıkılaştırıyorsa (mevcut gevşetme sınıflandırması, DI geçmişiyle)
-    uygulanır; aksi `403 local_loosen_forbidden` ("USB ile yazın").
+  - LAN kuralı (K-Ş4, R1-3): kart fabrika durumundaysa (güvenlik ad alanı hiç yazılmamış, kullanılabilir, güvenli kip ve yarım işlem
+    yok) ya da AYNI şablonun aynı/yeni sürümü yalnız sıkılaştırıyorsa uygulanır; aksi `403 local_loosen_forbidden` ("USB ile yazın").
   - Seri `TPL BEGIN <bayt> <crc32> | TPL DATA <base64> | TPL COMMIT | TPL ABORT | TPL STATUS` (fiziksel erişim: provizyon gerekmez,
     gevşetme serbest; kilit/kurulu alarm/panjur hareketi yine reddedilir). En çok 24576 bayt, CRC-32 IEEE, 30 sn zaman aşımı, `TPL DATA`
     satırları yankılanmaz. Yanıtlar `OK tpl_begin` / `OK tpl_data <n>` / `OK tpl_applied <id> <ver>` / `OK tpl_abort` /
     `TPL <id|-> <ver> <label>` / `ERR <kod> [path]`.
-  - Atomiklik: uygulama loopTask'ta tek işte yürür. Önce NVS (güvenlik tamamı rev+1 -> ana yapılandırmanın değişen anahtarları ->
-    `ahbu_tpl`), herhangi biri yazılamazsa yazılanlar eski değerlerine geri yazılır ve `507 storage` döner; canlı RAM bu aşamada
-    hiç değişmez. Sonra ana + güvenlik yapılandırması aynı loopTask turunda canlıya alınır. Elektrik kesintisi NVS yazımının ortasına
-    denk gelirse güvenlik bölümünün "ver" işareti geçersiz kalır (açılış `cfg_corrupt` güvenli kipi; karışık tablo kullanılmaz) ve
-    `ahbu_tpl` "şablon yok" okunur: araç şablonu yeniden yazar.
+  - Atomiklik (R1-2/R1-6): ayrıştırma + NVS işlemi işçi görevde; NVS sırası `txn=1` -> güvenlik tamamı (rev+1) -> ana yapılandırmanın
+    değişen anahtarları -> `ahbu_tpl` kaydı; canlı RAM bu aşamada değişmez. Sonra ana + güvenlik yapılandırması aynı loopTask turunda
+    canlıya alınır, `txn` en son silinir. Herhangi bir adım başarısızsa yazılanlar geri alınır (`507 storage` / ret kodu). Geri alma da
+    başarısız olursa ya da elektrik bu aralıkta kesilirse `txn` kalır -> sonraki açılış güvenli kip + `tpl_incomplete`; seri TPL ile kurtarılır.
   - `device_name` = `label`, boşsa `meta.name`'in ilk 31 baytı (UTF-8 karakteri bölünmez).
-  - NVS ad alanı `ahbu_tpl` (`ver` u32, `id`, `label`); fabrika sıfırlaması siler.
+  - NVS ad alanı `ahbu_tpl` (`txn` u8, `ver` u32, `id`, `label`); fabrika sıfırlaması siler.
 - **Seri STATUS:** en sona iki yeni satır: `  - Ethernet: <bagli|yok> <ip|->` ve `  - Sablon: <id|-> v<ver>`. Eski satırlar aynen.
 - **İç yeniden düzenleme (davranış değişmez):** `safety/SafetyCfgApi` sensör/eylemci/ışık öğe ayrıştırıcıları yama ve şablon için ortak
   (`parse*Item`); UTF-8 yardımcıları saf `Utf8Util.h`'ye taşındı; `ConfigManager::saveCandidate` (canlı RAM'e dokunmadan NVS yazımı).
@@ -87,6 +110,7 @@ Yetmezse hiçbir şey yazılmaz (`507 storage` / `ERR storage`). Dolu bir kartta
 
 ## İlk kartta denenecekler (tamamı yapılmadan sahaya çıkmaz)
 
+0. `factory/init` Ethernet'ten 403 `factory_ap_only`, kurulum AP'sinden 200; provizyonsuz kartta Ethernet takılıyken kurulum AP'si açılıyor.
 1. Kablosuz açılış: `[ETH] W5500 basladi` / süre satırı; `STATUS` eski satırlar + `Ethernet: yok -`, `Sablon: - v0`; Wi-Fi, MQTT, AP
    penceresi v1.2.1 gibi.
 2. Kablo tak: `[ETH] IP alindi`, `GET /api/status` `eth_connected:true`, `net_if` (Wi-Fi yoksa `eth`), MQTT Ethernet'ten bağlanır
@@ -97,3 +121,5 @@ Yetmezse hiçbir şey yazılmaz (`507 storage` / `ERR storage`). Dolu bir kartta
    `403`; aynı şablonun yeni sürümü (sıkılaştırma) LAN'dan kabul.
 6. NVS: dolu kartta 16 ve 40 kanallı şablon (`[SABLON] NVS bos girdi yetersiz` satırı / `nvs_get_stats`).
 7. Fabrika sıfırlaması (`/api/system/reset`) sonrası `tpl` yok.
+8. Uygulama sırasında güç kesme (NVS yazımı ortası): açılışta güvenli kip + `tpl_incomplete`; seri TPL ile yeniden yazınca normal.
+9. Ethernet <-> Wi-Fi geçişinde MQTT yeniden bağlanıyor, DNS etkin arayüzünkine dönüyor (`[AG] Etkin arayuz ... DNS ...`).

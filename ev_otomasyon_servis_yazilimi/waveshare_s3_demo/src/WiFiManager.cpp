@@ -194,6 +194,7 @@ void WiFiManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       onConnected();
+      NetLink::captureDns(netlink::NetIf::WIFI);   // DHCP'nin az once yazdigi genel DNS = Wi-Fi'nin DNS'i (R1-4)
       printf("[WiFi Event] IP alindi: %s | Gateway: %s | Sinyal: %d dBm\r\n",
              WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
       break;
@@ -262,6 +263,8 @@ void WiFiManager::tick() {
 
   // Ethernet: olay kacmissa (baglanti var, adres yok) IP durumu esp_netif'ten tamamlanir (v1.3.0).
   EthLink::service();
+  // DNS: etkin arayuz degistiyse ya da bir arayuz yeni kira aldiysa genel DNS etkin arayuzunkine cekilir (R1-4).
+  NetLink::serviceDns(isConnected());
 
   // SNTP: herhangi bir arayuzde (Wi-Fi GOT_IP ya da Ethernet DHCP) adres alindiktan sonra bir kez baslatilir (periyodik yenilemeyi lwIP
   // SNTP kendisi yapar). Karar NetLinkCore::sntpDue (Ethernet yokken bugunku "Wi-Fi bagli" kosuluyla ayni).
@@ -592,7 +595,7 @@ void WiFiManager::stepAp(uint32_t now) {
   const bool ethUp = NetLink::ethUp();   // v1.3.0 (K-Ş1): Ethernet bagliyken kurtarma AP'si acilmaz (NetLinkCore::apPolicyConnected)
   {
     MutexGuard g(_mutex, 100);
-    in.connected = netlink::apPolicyConnected(_connected, ethUp);
+    in.connected = netlink::apPolicyConnected(_connected, ethUp, provisioned);   // provizyonsuz kartta Ethernet sayilmaz (R1-1)
     in.staConfigured = (_ssid.length() > 0);
   }
   in.apActive = _apActive;

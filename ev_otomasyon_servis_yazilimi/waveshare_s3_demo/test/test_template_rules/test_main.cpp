@@ -90,22 +90,35 @@ ApplyIn okIn(bool lan) {
 
 }  // namespace
 
-void test_factory_safety_detection() {
-  SafetyConfig c;
-  c.setDefaults();
-  TEST_ASSERT_TRUE(isFactorySafety(c));
-  memcpy(c.zones[1].name, "Mutfak", 7);      // bölge adı ve ışık seçeneği emniyet sürmez
-  c.light[2].dimmable = 1;
-  TEST_ASSERT_TRUE(isFactorySafety(c));
-  c.pol.policy_on = 0;
-  TEST_ASSERT_FALSE(isFactorySafety(c));
-  c.setDefaults();
-  c.pol.dry_hold_ms = 20000;
-  TEST_ASSERT_FALSE(isFactorySafety(c));
-  c.setDefaults();
-  c.pol.exit_s = 60;
-  TEST_ASSERT_FALSE(isFactorySafety(c));
-  TEST_ASSERT_FALSE(isFactorySafety(withValve()));
+SafetyState factoryState() {
+  SafetyState st;
+  st.stored = false;
+  st.usable = true;
+  st.safeMode = false;
+  st.txnInterrupted = false;
+  return st;
+}
+
+SafetyState storedState() {
+  SafetyState st = factoryState();
+  st.stored = true;
+  return st;
+}
+
+void test_factory_state_requires_never_written_usable_not_safe_mode_no_txn() {
+  TEST_ASSERT_TRUE(isFactoryState(factoryState()));
+  SafetyState st = factoryState();
+  st.stored = true;                            // boş tablolu ama yazılmış yapılandırma fabrika durumu DEĞİL
+  TEST_ASSERT_FALSE(isFactoryState(st));
+  st = factoryState();
+  st.usable = false;
+  TEST_ASSERT_FALSE(isFactoryState(st));
+  st = factoryState();
+  st.safeMode = true;
+  TEST_ASSERT_FALSE(isFactoryState(st));
+  st = factoryState();
+  st.txnInterrupted = true;
+  TEST_ASSERT_FALSE(isFactoryState(st));
 }
 
 void test_lan_rule_factory_board_accepts_any_template() {
@@ -114,29 +127,67 @@ void test_lan_rule_factory_board_accepts_any_template() {
   TplRecord none;
   tplRecordClear(none);
   SafetyConfig next = withValve();
-  TEST_ASSERT_TRUE(lanRule(cur, none, ID_A, 1, next, 0) == LanRule::ALLOW_FACTORY);
+  TEST_ASSERT_TRUE(lanRule(factoryState(), cur, none, ID_A, 1, next, 0) == LanRule::ALLOW_FACTORY);
   next.pol.policy_on = 0;                      // fabrika durumundan gevşek bir şablon bile (atölye: kartlar fabrika durumunda)
-  TEST_ASSERT_TRUE(lanRule(cur, none, ID_A, 1, next, 0) == LanRule::ALLOW_FACTORY);
+  TEST_ASSERT_TRUE(lanRule(factoryState(), cur, none, ID_A, 1, next, 0) == LanRule::ALLOW_FACTORY);
+  // aynı boş tablo ama ad alanı yazılmış: fabrika değil, şablon kaydı da yok -> yasak
+  TEST_ASSERT_TRUE(lanRule(storedState(), cur, none, ID_A, 1, withValve(), 0) == LanRule::FORBID);
+}
+
+void test_lan_rule_forbids_everything_in_safe_mode_unusable_or_interrupted_txn() {
+  const SafetyConfig cur = withValve();
+  SafetyConfig tighter = withValve();
+  tighter.sens[1] = water(6);
+  tighter.nSens = 2;
+  SafetyState st = storedState();
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::ALLOW_SAME_TEMPLATE);
+  st.safeMode = true;
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
+  st = storedState();
+  st.usable = false;
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
+  st = storedState();
+  st.txnInterrupted = true;
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
+  st = factoryState();                         // fabrika + yarım işlem (önceki yazım hiç tamamlanmadı)
+  st.txnInterrupted = true;
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::FORBID);
 }
 
 void test_lan_rule_same_template_newer_or_same_version_only_if_not_loosening() {
+  const SafetyState st = storedState();
   const SafetyConfig cur = withValve();
   SafetyConfig tighter = withValve();
   tighter.sens[1] = water(6);
   tighter.nSens = 2;                           // sensör ekleme = sıkılaştırma
-  TEST_ASSERT_TRUE(lanRule(cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::ALLOW_SAME_TEMPLATE);
-  TEST_ASSERT_TRUE(lanRule(cur, rec(ID_A, 3), ID_A, 3, cur, 0) == LanRule::ALLOW_SAME_TEMPLATE);   // aynı sürüm yeniden yazımı
-  TEST_ASSERT_TRUE(lanRule(cur, rec(ID_A, 3), ID_A, 2, tighter, 0) == LanRule::FORBID);           // eski sürüm
-  TEST_ASSERT_TRUE(lanRule(cur, rec(ID_A, 3), ID_B, 9, tighter, 0) == LanRule::FORBID);           // başka şablon
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, tighter, 0) == LanRule::ALLOW_SAME_TEMPLATE);
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 3, cur, 0) == LanRule::ALLOW_SAME_TEMPLATE);   // aynı sürüm (idempotent yeniden deneme)
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 2, tighter, 0) == LanRule::FORBID);           // eski sürüm
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_B, 9, tighter, 0) == LanRule::FORBID);           // başka şablon
   TplRecord none;
   tplRecordClear(none);
-  TEST_ASSERT_TRUE(lanRule(cur, none, ID_A, 9, tighter, 0) == LanRule::FORBID);                   // kartta şablon kaydı yok
+  TEST_ASSERT_TRUE(lanRule(st, cur, none, ID_A, 9, tighter, 0) == LanRule::FORBID);                   // kartta şablon kaydı yok
   SafetyConfig looser = withValve();
   looser.nAct = 0;                             // vanayı silmek = gevşetme
-  TEST_ASSERT_TRUE(lanRule(cur, rec(ID_A, 3), ID_A, 4, looser, 0) == LanRule::FORBID);
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, looser, 0) == LanRule::FORBID);
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 3, looser, 0) == LanRule::FORBID);           // EŞİT sürümle de gevşetilemez
   SafetyConfig offPol = withValve();
   offPol.pol.policy_on = 0;
-  TEST_ASSERT_TRUE(lanRule(cur, rec(ID_A, 3), ID_A, 4, offPol, 0) == LanRule::FORBID);
+  TEST_ASSERT_TRUE(lanRule(st, cur, rec(ID_A, 3), ID_A, 4, offPol, 0) == LanRule::FORBID);
+}
+
+void test_safety_rollback_kind() {
+  TEST_ASSERT_TRUE(safetyRollbackKind(storedState()) == SafetyRollback::REWRITE_OLD);
+  TEST_ASSERT_TRUE(safetyRollbackKind(factoryState()) == SafetyRollback::ERASE);       // fabrika durumu korunur
+  SafetyState st = storedState();
+  st.usable = false;                                                                    // cfg_corrupt: geçersiz kalır
+  TEST_ASSERT_TRUE(safetyRollbackKind(st) == SafetyRollback::MARK_CORRUPT);
+  st = factoryState();
+  st.txnInterrupted = true;
+  TEST_ASSERT_TRUE(safetyRollbackKind(st) == SafetyRollback::MARK_CORRUPT);
+  st = storedState();
+  st.safeMode = true;                                                                   // ör. crash_loop: yapılandırma sağlam -> eskisi
+  TEST_ASSERT_TRUE(safetyRollbackKind(st) == SafetyRollback::REWRITE_OLD);
 }
 
 void test_decide_apply_precedence_and_cli_ignores_loosen_rule() {
@@ -187,8 +238,8 @@ void test_nvs_entries_unchanged_config_costs_nothing_and_new_channels_count_full
   c.ext_module_enabled = true;
   c.ext_module_channels = 8;                   // 8 yeni kanal: her biri 3 anahtar (ad 2 + tip 1 + süre 1 = 4) x2 (röle + DI)
   TEST_ASSERT_EQUAL_UINT(2 + 8 * 4 * 2, sysConfigNvsEntries(a, c));
-  TEST_ASSERT_EQUAL_UINT(1 + 3 + 2, tplNvsEntries("A-12"));
-  TEST_ASSERT_EQUAL_UINT(1 + 3 + 2, tplNvsEntries("1234567890123456789012345678901"));   // 31 bayt + NUL = 32 -> 1 veri girdisi
+  TEST_ASSERT_EQUAL_UINT(1 + 1 + 3 + 2, tplNvsEntries("A-12"));   // txn + ver + id + label
+  TEST_ASSERT_EQUAL_UINT(1 + 1 + 3 + 2, tplNvsEntries("1234567890123456789012345678901"));   // 31 bayt + NUL = 32 -> 1 veri girdisi
 }
 
 void test_nvs_budget_numbers_for_report() {
@@ -238,9 +289,11 @@ void test_nvs_budget_numbers_for_report() {
 
 int main(int, char**) {
   UNITY_BEGIN();
-  RUN_TEST(test_factory_safety_detection);
+  RUN_TEST(test_factory_state_requires_never_written_usable_not_safe_mode_no_txn);
+  RUN_TEST(test_lan_rule_forbids_everything_in_safe_mode_unusable_or_interrupted_txn);
   RUN_TEST(test_lan_rule_factory_board_accepts_any_template);
   RUN_TEST(test_lan_rule_same_template_newer_or_same_version_only_if_not_loosening);
+  RUN_TEST(test_safety_rollback_kind);
   RUN_TEST(test_decide_apply_precedence_and_cli_ignores_loosen_rule);
   RUN_TEST(test_http_mapping_matches_readme);
   RUN_TEST(test_nvs_entries_unchanged_config_costs_nothing_and_new_channels_count_fully);

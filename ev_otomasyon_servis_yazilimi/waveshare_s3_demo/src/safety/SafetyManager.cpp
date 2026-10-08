@@ -21,7 +21,7 @@ SafetyManager::SafetyManager()
     : di_(nullptr), cfgMux_(nullptr), rejMux_(nullptr), viewMux_(nullptr), writeMux_(nullptr), sensorQ_(nullptr), actuatorMask_(0),
       sensorDiMask_(0), bootLevel_(0), safeMaskA_(0), safeMaskL_(0), relayGuard_(0), diHist_(0), diHistDirty_(false), bootAt_(0), bootCount_(0), bn_(0), lastSirenSave_(0), lastViewAt_(0), epoch_(0), viewSig_(0),
       rejSeq_(0), masksGen_(0), sirenSaved_(0), active_(false), localReady_(false), extOk_(false), extActuator_(false),
-      posSaveForced_(false), cfgUsable_(false), scanBlocked_(false), safeMode_(false), latchedMask_(0), pendingState_(0), pendingOk_(0), pendingVia_(0),
+      posSaveForced_(false), cfgUsable_(false), cfgStored_(false), forceCorrupt_(false), scanBlocked_(false), safeMode_(false), latchedMask_(0), pendingState_(0), pendingOk_(0), pendingVia_(0),
       pendingCfg_(nullptr), lastRej_(Rej::OK) {
   cfg_.setDefaults();
   crashClear(crash_);
@@ -68,6 +68,13 @@ void SafetyManager::begin(const digate::DiGate* gate, uint32_t now_ms) {
 
   bool present = false, crcOk = true;
   SafetyStore::loadConfig(cfg_, present, crcOk);
+  cfgStored_ = present;
+  if (forceCorrupt_) {                                 // yarım şablon işlemi (ahbu_tpl/txn): tablo karışık olabilir -> kullanılmaz [R1-2]
+    printf("[GUVENLIK] Yarim kalmis sablon uygulamasi: yapilandirma kullanilmiyor (cfg_corrupt); seri TPL ile yeniden yazin.\r\n");
+    present = true;
+    crcOk = false;
+    cfg_.setDefaults();
+  }
   static LatchRecord latch;                            // 164 B; yalnız açılışta
   const bool haveLatch = SafetyStore::loadLatch(latch);
   SafetyStore::reserveLatch();
@@ -541,6 +548,7 @@ CfgOutcome SafetyManager::submitEdit(const CfgEdit& e, bool hasBase, uint32_t ba
     o.r = CfgResult::STORAGE;
     return finishEdit(o, curP, nextP);
   }
+  cfgStored_ = true;                                   // ad alanı artık yazılı (v1.3.0 LAN şablon kuralı: fabrika durumu değil)
   bool applied = false;
   if (inLoop) {
     applied = applyConfigOnLoop(next, via, curLevels, millis());

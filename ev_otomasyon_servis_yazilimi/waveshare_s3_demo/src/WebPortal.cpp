@@ -438,8 +438,7 @@ enum LoopJobType : uint8_t {
   JOB_RS485_RELAY,      // SmartAutomation::rs485ControlExtRelay (yalniz loopTask)
   JOB_CONFIG_APPLY,     // dogrulanmis yapilandirmayi canliya uygula
   JOB_RS485_BAUD,       // cfg.rs485_baud + rs485Begin
-  JOB_FACTORY_RESET,    // ConfigManager::resetToDefaults
-  JOB_TEMPLATE_APPLY    // v1.3.0: kurulum sablonu (tpl::applyOnLoop; NVS + canli ayni loopTask isinde)
+  JOB_FACTORY_RESET     // ConfigManager::resetToDefaults
 };
 enum LoopJobResult : uint8_t { JR_OK = 0, JR_FAILED = 1, JR_BUSY_SHUTTER = 2 };
 enum JobStatus : uint8_t { JS_DONE, JS_BUSY, JS_NOT_STARTED, JS_STILL_RUNNING };
@@ -452,10 +451,8 @@ struct LoopJob {
   uint8_t action;
   uint32_t baud;
   SystemConfig* cfg;      // JOB_CONFIG_APPLY: gecici kopya. Is KABUL edilince sahiplik loopTask'a gecer (orada free edilir)
-  tpl::TplCandidate* tpl; // JOB_TEMPLATE_APPLY: aday. Sahiplik cfg ile ayni kural (loopTask free eder)
   volatile uint8_t result;
   char response[96];
-  tpl::ApplyOutcome tplOut;   // JOB_TEMPLATE_APPLY sonucu (g_job statik: web gorevi vazgecse de yazim gecerli bellege)
 };
 LoopJob g_job;            // statik depolama: sifir baslatilir (state = 0)
 
@@ -498,10 +495,9 @@ uint8_t applyConfigOnLoop(SystemConfig* tmp) {
 // JS_DONE: result/response gecerli. JS_BUSY / JS_NOT_STARTED: is kabul EDILMEDI (cfg sahipligi cagirandadir).
 // JS_STILL_RUNNING: loopTask isi aldi ama beklenen surede bitirmedi (cfg'yi o free eder; sonuc bilinmiyor).
 JobStatus runLoopJob(uint8_t type, uint8_t slaveId, uint8_t channel, uint8_t action, uint32_t baud,
-                     SystemConfig* cfg, uint8_t& result, String* response, tpl::TplCandidate* tplCand = nullptr) {
+                     SystemConfig* cfg, uint8_t& result, String* response) {
   if (g_job.state == 3) g_job.state = 0;   // onceki (zaman asimina ugramis) isin artigi
   if (g_job.state != 0) return JS_BUSY;
-  g_job.tpl = tplCand;
   g_job.type = type;
   g_job.slaveId = slaveId;
   g_job.channel = channel;
@@ -569,17 +565,6 @@ void WebPortal::loop() {
         tpl::TemplateStore::setRam(none, 0);
       }
       break;
-    case JOB_TEMPLATE_APPLY: {
-      tpl::TplCandidate* c = g_job.tpl;
-      g_job.tpl = nullptr;
-      if (c) {
-        g_job.tplOut = tpl::applyOnLoop(*c, true);
-        memset(c, 0, sizeof(*c));   // aday, kimlik alanlarinin kopyasini tasir
-        free(c);
-        result = JR_OK;
-      }
-      break;
-    }
     default:
       break;
   }
@@ -1000,7 +985,7 @@ void WebPortal::sendFullStatus() {
   const uint8_t nP = nR / 2;
   const uint8_t nD = (snap.totalDIs > MAX_TOTAL_DIS) ? (uint8_t)MAX_TOTAL_DIS : snap.totalDIs;
 
-  const size_t cap = JSON_OBJECT_SIZE(48) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
+  const size_t cap = JSON_OBJECT_SIZE(49) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
                      JSON_ARRAY_SIZE(nP) + (size_t)nP * JSON_OBJECT_SIZE(8) + JSON_ARRAY_SIZE(nD) +
                      (size_t)nD * JSON_OBJECT_SIZE(3) + 512;
   DynamicJsonDocument doc(cap);
@@ -1049,6 +1034,8 @@ void WebPortal::sendFullStatus() {
     t["id"] = (const char*)tplRec.id;
     t["ver"] = tplRec.ver;
   }
+  // Yarim kalmis sablon uygulamasi (R1-2): guvenlik yapilandirmasi kullanilmiyor (cfg_corrupt); seri TPL ile yeniden uygulanmali.
+  if (tpl::TemplateStore::txnInterrupted()) doc["tpl_incomplete"] = true;
 
   JsonArray rArr = doc.createNestedArray("relays");
   for (uint8_t i = 0; i < nR; i++) {
@@ -1805,6 +1792,12 @@ void WebPortal::handleApiFactoryInit() {
     sendError(403, "already_provisioned");
     return;
   }
+  // v1.3.0 (inceleme R1-1): anahtarsız ilk provizyon yalnız kurulum AP'sindeki istemciye (SoftAP alt ağı; ApAccess::clientOnSoftAp,
+  // STA/Ethernet alt ağı çakışmasında kapalı). Ethernet ya da STA (LAN) üzerinden gelen istek 403 factory_ap_only; seri FACTORYINIT değişmedi.
+  if (!remoteOnSoftAp()) {
+    sendError(403, "factory_ap_only");
+    return;
+  }
   String body;
   if (!readJsonBody(body)) return;
   DynamicJsonDocument doc(jsonCapacityFor(body.length()));
@@ -2172,10 +2165,11 @@ void WebPortal::handleApiSafetyConfigPost() {
 // ============================================================================
 // Kurulum sablonu (v1.3.0, IP-2.5; docs/contracts/template/README.md "Kartta uygulama zarfi", CONTRACTS 3e). KEYED.
 // POST /api/template/apply {"template":{ahbu-template/1},"label":"..."} -> 200 {"ok":true,"template_id","version","rev"}
-//   400 {"error":<sablon kodu>,"path":...} | 403 local_loosen_forbidden (K-S4 LAN kurali) | 409 zone_latched / armed / busy /
-//   cfg_invalid (+detail) | 413 too_large | 507 storage | 503 busy. Ayristirma burada (web gorevi), uygulama loopTask'ta (JOB_TEMPLATE_APPLY):
-//   NVS + canli yapilandirma ayni loopTask isinde degisir ya da hicbiri degismez (tpl::applyOnLoop).
-// GET /api/template -> {"template_id":"..."|null,"version":N|0,"label":"...","applied_at_uptime_s":N|null}
+//   400 {"error":<sablon kodu>,"path":...} | 403 local_loosen_forbidden (K-S4 LAN kurali; guvenli kip / yarim islem dahil) |
+//   409 zone_latched / armed / busy / cfg_invalid (+detail) | 413 too_large | 507 storage | 503 busy (baska uygulama suruyor) |
+//   202 {"pending":true} (inceleme R1-8): uygulama bekleme siniri (10 sn) icinde bitmedi ve SURUYOR; istemci GET /api/template ile dogrular.
+// Ayristirma + NVS islemi ayri isci gorevinde (tpl_apply), canli takas loopTask'ta (tpl::serviceLoop); web gorevi yalniz bekler.
+// GET /api/template -> {"template_id":"..."|null,"version":N|0,"label":"...","applied_at_uptime_s":N|null[,"incomplete":true]}
 // ============================================================================
 void WebPortal::handleApiTemplateApply() {
   auto sendOutcome = [this](const tpl::ApplyOutcome& o) {
@@ -2188,7 +2182,7 @@ void WebPortal::handleApiTemplateApply() {
     const tpl::HttpErr h = tpl::httpOf(o.r);
     DynamicJsonDocument d(384);
     d["error"] = (const char*)o.code;
-    if (o.path[0]) d["path"] = (const char*)o.path;      // alan adlari istemciden gelebilir: ArduinoJson kacislar
+    if (o.path[0]) d["path"] = (const char*)o.path;      // sanitizePath'ten gecmis ([A-Za-z0-9_.[]])
     if (o.detail[0]) d["detail"] = (const char*)o.detail;
     String out;
     serializeJson(d, out);
@@ -2197,39 +2191,23 @@ void WebPortal::handleApiTemplateApply() {
 
   String body;
   if (!readJsonBody(body)) return;
-  tpl::TplCandidate* cand = (tpl::TplCandidate*)malloc(sizeof(tpl::TplCandidate));
-  if (!cand) {
+  const size_t len = body.length();
+  char* copy = (char*)malloc(len + 1);
+  if (!copy) {
+    sendError(503, "busy");
+    return;
+  }
+  memcpy(copy, body.c_str(), len + 1);
+  body = String();   // ~24 KB govde iki kez tutulmaz
+  if (!tpl::startApply(copy, len, true)) {   // sahiplik gecti (basarisizlikta da serbest birakildi)
     sendError(503, "busy");
     return;
   }
   tpl::ApplyOutcome out;
-  memset(&out, 0, sizeof(out));
-  if (!tpl::parseBody(body.c_str(), body.length(), *cand, out)) {
-    memset(cand, 0, sizeof(*cand));
-    free(cand);
-    sendOutcome(out);
-    return;
-  }
-  body = String();   // ~24 KB gövde, uygulama süresince tutulmaz
   char id[tpl::TPL_ID_LEN + 1];
-  memcpy(id, cand->templateId, sizeof(id));
-  const uint32_t ver = cand->version;
-
-  uint8_t jr = JR_FAILED;
-  const JobStatus js = runLoopJob(JOB_TEMPLATE_APPLY, 0, 0, 0, 0, nullptr, jr, nullptr, cand);
-  if (js == JS_BUSY || js == JS_NOT_STARTED) {   // is kabul edilmedi: aday bizde
-    memset(cand, 0, sizeof(*cand));
-    free(cand);
-    sendError(503, "busy");
-    return;
-  }
-  if (js == JS_STILL_RUNNING) {                  // loopTask isi aldi ama bitiremedi (adayi o free eder; sonuc bilinmiyor)
-    sendError(503, "busy");
-    return;
-  }
-  out = g_job.tplOut;
-  if (jr != JR_OK) {
-    sendError(503, "busy");
+  uint32_t ver = 0;
+  if (!tpl::waitApply(10000, out, id, sizeof(id), ver)) {
+    sendJson(202, "{\"pending\":true}");
     return;
   }
   if (out.r != tpl::ApplyResult::OK) {
@@ -2260,6 +2238,7 @@ void WebPortal::handleApiTemplateGet() {
   d["label"] = (const char*)label;
   if (applied) d["applied_at_uptime_s"] = at;
   else d["applied_at_uptime_s"] = nullptr;
+  if (tpl::TemplateStore::txnInterrupted()) d["incomplete"] = true;
   String out;
   serializeJson(d, out);
   sendJson(200, out);

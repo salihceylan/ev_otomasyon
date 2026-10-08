@@ -31,4 +31,9 @@ public:
   static bool ethUp();                     // Ethernet bağlı + DHCP adresi var
   static Snapshot snapshot();              // Wi-Fi (WiFiManager) + Ethernet birlikte
   static bool up();                        // Wi-Fi VEYA Ethernet
+
+  // DNS (inceleme R1-4): lwIP DNS'i geneldir; son kira alan arayüz ezer. GOT_IP olayında (DHCP'nin DNS'i yazdığı an) o arayüzün DNS'i
+  // saklanır; wifi_task her tur serviceDns() ile etkin arayüzün DNS'ini (değiştiyse / yeni kira geldiyse) yeniden yazar.
+  static void captureDns(netlink::NetIf which);
+  static void serviceDns(bool wifiUp);
 };

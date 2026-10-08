@@ -123,6 +123,18 @@ bool SafetyStore::saveConfig(const SafetyConfig& c, bool* touched, bool checkRoo
   return ok && nvs_commit(hd.h) == ESP_OK;
 }
 
+bool SafetyStore::eraseConfig() {
+  Handle hd(NVS_NS_SAFETY, NVS_READWRITE);
+  if (!hd.ok) return false;
+  return nvs_erase_all(hd.h) == ESP_OK && nvs_commit(hd.h) == ESP_OK;
+}
+
+bool SafetyStore::markCorrupt() {
+  Handle hd(NVS_NS_SAFETY, NVS_READWRITE);
+  if (!hd.ok) return false;
+  return nvs_set_u8(hd.h, K_VER, 0) == ESP_OK && nvs_commit(hd.h) == ESP_OK;
+}
+
 bool SafetyStore::loadLatch(LatchRecord& r) {
   latchClear(r);
   Handle hd(NVS_NS_LATCH, NVS_READONLY);

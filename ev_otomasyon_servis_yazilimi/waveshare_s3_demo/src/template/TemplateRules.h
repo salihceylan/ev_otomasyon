@@ -31,22 +31,45 @@ struct TplRecord {
 
 inline void tplRecordClear(TplRecord& r) { memset(&r, 0, sizeof(r)); }
 
-// "Fabrika durumu": sensör ve eylemci tablosu boş, politika açık, kuruluk varsayılan, hırsız gecikmeleri varsayılan.
-// Bölge adları ve ışık (dimmer) seçenekleri emniyet sürmez; karara girmez.
-inline bool isFactorySafety(const safety::SafetyConfig& c) {
-  return c.nSens == 0 && c.nAct == 0 && c.pol.policy_on == 1 && c.pol.dry_hold_ms == safety::DRY_HOLD_DEFAULT_MS && c.pol.exit_s == 0 &&
-         c.pol.entry_s == 0;
-}
+// Kartın güvenlik yapılandırması durumu (SafetyManager + TemplateStore bayrakları; inceleme R1-3).
+struct SafetyState {
+  bool stored;            // "ahbu_safety" ad alanına yapılandırma HİÇ yazıldı mı (açılışta vardı ya da sonradan yazıldı)
+  bool usable;            // açılışta yapılandırma kullanılabilir (CRC + ana yapılandırmayla çapraz doğrulama) ya da sonradan uygulandı
+  bool safeMode;          // güvenli kip (cfg_corrupt / latch_orphan / crash_loop)
+  bool txnInterrupted;    // yarım kalmış şablon uygulaması ("ahbu_tpl/txn" açılışta işaretliydi; yeniden uygulanana dek)
+};
+
+// "Fabrika durumu" (LAN'dan her şablon uygulanabilir): güvenlik ad alanı HİÇ yazılmamış + kullanılabilir + güvenli kip yok + yarım işlem
+// yok. Boş tablolu ama yazılmış yapılandırma (ör. kullanıcı her şeyi sildi) fabrika durumu DEĞİLDİR.
+inline bool isFactoryState(const SafetyState& st) { return !st.stored && st.usable && !st.safeMode && !st.txnInterrupted; }
 
 enum class LanRule : uint8_t { ALLOW_FACTORY = 0, ALLOW_SAME_TEMPLATE = 1, FORBID = 2 };
 
-inline LanRule lanRule(const safety::SafetyConfig& cur, const TplRecord& curTpl, const char* newId, uint32_t newVer,
+inline LanRule lanRule(const SafetyState& st, const safety::SafetyConfig& cur, const TplRecord& curTpl, const char* newId, uint32_t newVer,
                        const safety::SafetyConfig& next, uint64_t diHist) {
-  if (isFactorySafety(cur)) return LanRule::ALLOW_FACTORY;
+  // Güvenli kip / kullanılamayan yapılandırma / yarım işlem: yalnız seri TPL (fiziksel erişim) kurtarır.
+  if (st.safeMode || !st.usable || st.txnInterrupted) return LanRule::FORBID;
+  if (isFactoryState(st)) return LanRule::ALLOW_FACTORY;
+  // Aynı şablonun aynı ya da yeni sürümü, yalnız gevşetmiyorsa. EŞİT sürüm bilinçli olarak kabul edilir: araç zaman aşımı / 202 sonrası
+  // aynı yazımı yeniden dener (idempotent); aynı sürüm aynı gövdedir (sunucuda sürümler değişmez, K-Ş6) ve gevşetme denetimi yine yapılır,
+  // yani eşit sürümle güvenlik tablosu gevşetilemez. Eski sürüme dönüş LAN'dan yasaktır.
   if (curTpl.present && newId && strcmp(curTpl.id, newId) == 0 && newVer >= curTpl.ver && !safety::isLoosening(cur, next, diHist)) {
     return LanRule::ALLOW_SAME_TEMPLATE;
   }
   return LanRule::FORBID;
+}
+
+// Başarısız uygulamada güvenlik bölümünün geri alınma biçimi (inceleme R1-2/R1-3):
+//  * yapılandırma kullanılamıyordu (cfg_corrupt) ya da önceki şablon işlemi yarımdı -> "ver" geçersiz bırakılır (MARK_CORRUPT): boş/
+//    varsayılan bir tabloyu "geçerli" diye yazmak güvenli kipten sessizce çıkarırdı;
+//  * ad alanı hiç yazılmamıştı -> silinir (ERASE): kart fabrika durumunda kalır (LAN kuralı R1-3 bunu "yazılmamış" diye tanır);
+//  * aksi halde eski yapılandırma geri yazılır (REWRITE_OLD; pay denetimsiz [FW2-3]).
+enum class SafetyRollback : uint8_t { REWRITE_OLD = 0, ERASE = 1, MARK_CORRUPT = 2 };
+
+inline SafetyRollback safetyRollbackKind(const SafetyState& st) {
+  if (!st.usable || st.txnInterrupted) return SafetyRollback::MARK_CORRUPT;
+  if (!st.stored) return SafetyRollback::ERASE;
+  return SafetyRollback::REWRITE_OLD;
 }
 
 // ---- NVS bütçesi -----------------------------------------------------------------------------------------------
@@ -78,9 +101,9 @@ inline uint16_t sysConfigNvsEntries(const SystemConfig& o, const SystemConfig& n
   return e;
 }
 
-// ahbu_tpl: "ver" (u32, önce 0 = geçersiz işaret, en son gerçek değer) + "id" (36) + "label".
+// ahbu_tpl: "txn" (u8, işlem işareti) + "ver" (u32, önce 0 = geçersiz işaret, en son gerçek değer) + "id" (36) + "label".
 inline uint16_t tplNvsEntries(const char* label) {
-  return (uint16_t)(1 + nvsStrEntries(36) + nvsStrEntries(label ? strlen(label) : 0));
+  return (uint16_t)(1 + 1 + nvsStrEntries(36) + nvsStrEntries(label ? strlen(label) : 0));
 }
 
 inline uint32_t templateNvsNeed(const safety::SafetyConfig& next, uint16_t sysEntries, uint16_t tplEntries) {

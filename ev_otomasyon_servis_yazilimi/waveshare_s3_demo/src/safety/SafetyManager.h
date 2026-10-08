@@ -118,6 +118,11 @@ public:
   bool lockWriter(uint32_t timeoutMs);
   void unlockWriter();
   bool intrusionArmed() const { return intr_.mode() != ArmMode::OFF; }   // hırsız alarmı kurulu (home/away)
+  // İnceleme R1-2/R1-3: yarım kalmış şablon işlemi ("ahbu_tpl/txn") açılışta cfg_corrupt sayılır (begin()'den ÖNCE çağrılır).
+  void forceCorruptAtBoot() { forceCorrupt_ = true; }
+  bool cfgStored() const { return cfgStored_; }            // "ahbu_safety" bu kartta hiç yazıldı mı (açılışta vardı / sonradan yazıldı)
+  bool cfgUsable() const { return cfgUsable_; }            // yapılandırma kullanılabilir (cfg_corrupt / latch_orphan değil)
+  void noteCfgStored() { cfgStored_ = true; }
   // Yalnız loopTask, yazıcı kilidi altında: NVS'e zaten yazılmış tam yapılandırmayı canlıya alır (applyConfigOnLoop; çalışma durumu kimliğe
   // göre taşınır). false: kilitli bölgeye dokunuyor ya da yapılandırma kilidi alınamadı (çağıran NVS'i geri alır).
   bool applyReplacedOnLoop(const SafetyConfig& next, uint8_t via, uint64_t curLevels, uint32_t now_ms);
@@ -182,7 +187,9 @@ private:
   bool extOk_;
   bool extActuator_;
   bool posSaveForced_;
-  bool cfgUsable_;                // yapılandırma kullanılabilir (cfg_corrupt değil): açılış güvenli maskesi yalnız o zaman yazılır
+  volatile bool cfgUsable_;       // yapılandırma kullanılabilir (cfg_corrupt değil): açılış güvenli maskesi yalnız o zaman yazılır
+  volatile bool cfgStored_;       // v1.3.0: güvenlik ad alanı yazılı (LAN şablon kuralı "fabrika durumu")
+  bool forceCorrupt_;             // v1.3.0: yarım şablon işlemi -> açılışta cfg_corrupt
   volatile bool scanBlocked_;
   volatile bool safeMode_;
   volatile uint8_t latchedMask_;

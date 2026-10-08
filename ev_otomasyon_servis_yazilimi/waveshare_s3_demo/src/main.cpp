@@ -75,6 +75,9 @@ void setup() {
   ConfigManager::instance().begin();
   printf("[BOOT] ConfigManager tamam.\r\n");
   tpl::TemplateStore::begin();     // v1.3.0: karta yazılmış kurulum şablonu kaydı (NVS "ahbu_tpl")
+  // Yarım kalmış şablon uygulaması (txn işareti; R1-2): güvenlik yapılandırması kullanılmaz -> cfg_corrupt güvenli kipi (röleler güvenli
+  // maskede). SafetyManager::begin (SmartAutomation::begin içinde) bunu görür; seri TPL ile yeniden uygulanınca işaret silinir.
+  if (tpl::TemplateStore::txnInterrupted()) safety::SafetyManager::instance().forceCorruptAtBoot();
 
   printf("[BOOT] SmartAutomation basliyor...\r\n");
   // Akıllı Otomasyon Yöneticisi (komut kuyruğu, interlock, panjur FSM, butonlar, RS485)
@@ -204,7 +207,8 @@ static void cliPrintStatus() {
     Serial.printf("  - Ethernet: %s %s\r\n", netlink::ethUp(e) ? "bagli" : "yok", netlink::ethUp(e) ? ip : "-");
     tpl::TplRecord r;
     tpl::TemplateStore::get(r);
-    Serial.printf("  - Sablon: %s v%lu\r\n", r.present ? r.id : "-", (unsigned long)(r.present ? r.ver : 0));
+    Serial.printf("  - Sablon: %s v%lu%s\r\n", r.present ? r.id : "-", (unsigned long)(r.present ? r.ver : 0),
+                  tpl::TemplateStore::txnInterrupted() ? " YARIM (guvenli kip; seri TPL ile yeniden yazin)" : "");
   }
 }
 
@@ -341,7 +345,7 @@ static void cliSafety(const String& cmd) {
 
 // ---- Kurulum şablonu (v1.3.0, İP-2.6; docs/contracts/template/README.md "Seri protokol", K-Ş5) -----------------------------------------
 // USB = fiziksel erişim: provizyon gerekmez, güvenlik tablosunu tamamen değiştirebilir (gevşetme yasağı yok; kilitli bölge / kurulu alarm /
-// panjur hareketi yine reddedilir). Çerçeveleme saf mantığı template/TplSerial.h (testli); uygulama tpl::applyOnLoop (bu görev = loopTask).
+// panjur hareketi yine reddedilir). Çerçeveleme saf mantığı template/TplSerial.h (testli); uygulama tpl::startApply (işçi görev; loopTask yalnız canlı takası yapar).
 // "TPL DATA" satırları yankılanmaz (handleCliLine). Yanıtlar araç tarafından ayrıştırılır: "OK tpl_*" / "ERR <kod> [path]" / "TPL <id|-> ...".
 static tpl::TplRx s_tplRx;
 
@@ -385,31 +389,10 @@ static void cliTpl(const String& cmd) {
       Serial.printf("ERR %s\r\n", tpl::rxErrText(e));
       return;
     }
+    // Ayrıştırma + NVS işlemi ayrı işçi görevde (R1-6; loopTask bloklanmaz). Yanıt ("OK tpl_applied <id> <ver>" / "ERR <kod> [path]")
+    // işçi bitince seri porta basılır; o sürede başka COMMIT "ERR busy" alır.
     uint8_t* body = s_tplRx.takeBuffer();
-    tpl::TplCandidate* cand = (tpl::TplCandidate*)malloc(sizeof(tpl::TplCandidate));
-    tpl::ApplyOutcome o;
-    memset(&o, 0, sizeof(o));
-    if (!cand) {
-      free(body);
-      Serial.printf("ERR busy\r\n");
-      return;
-    }
-    const bool parsed = tpl::parseBody((const char*)body, len, *cand, o);
-    free(body);
-    if (parsed) o = tpl::applyOnLoop(*cand, false);
-    char id[tpl::TPL_ID_LEN + 1];
-    memcpy(id, cand->templateId, sizeof(id));
-    id[tpl::TPL_ID_LEN] = '\0';
-    const uint32_t ver = cand->version;
-    memset(cand, 0, sizeof(*cand));
-    free(cand);
-    if (o.r == tpl::ApplyResult::OK) {
-      Serial.printf("OK tpl_applied %s %lu\r\n", id, (unsigned long)ver);
-    } else {
-      const char* extra = o.path[0] ? o.path : o.detail;
-      if (extra[0]) Serial.printf("ERR %s %s\r\n", o.code, extra);
-      else Serial.printf("ERR %s\r\n", o.code);
-    }
+    if (!tpl::startApply((char*)body, len, false)) Serial.printf("ERR busy\r\n");   // gövde her durumda serbest bırakıldı
   } else if (eq(sub, "ABORT")) {
     tplFreeBuffer();
     s_tplRx.abort();
@@ -895,5 +878,6 @@ void loop() {
   }
   SmartAutomation::instance().loop();
   WebPortal::instance().loop();
+  tpl::serviceLoop();                   // şablon uygulamasının canlı takası (yalnız loopTask; kısa)
   vTaskDelay(pdMS_TO_TICKS(5));
 }

@@ -56,5 +56,8 @@ bool parseTemplate(JsonObject t, const SystemConfig& base, TplCandidate& out, Tp
 
 // Yardımcılar (testli)
 bool isLowerUuid(const char* s);
+// Hata yolu seri satıra / JSON'a basılmadan önce temizlenir (inceleme R1-7): yalnız [A-Za-z0-9_.[]] kalır, diğer her bayt '?'.
+// (Yol istemciden gelen alan adlarını içerebilir: satır sonu / tırnak / UTF-8.)
+void sanitizePath(char* p);
 
 }  // namespace tpl

@@ -12,18 +12,21 @@ namespace {
 bool fail(TplError& e, const char* code, const char* path) {
   e.code = code;
   snprintf(e.path, sizeof(e.path), "%s", path ? path : "");
+  sanitizePath(e.path);
   return false;
 }
 
 bool failIdx(TplError& e, const char* code, const char* fmt, unsigned i) {
   e.code = code;
   snprintf(e.path, sizeof(e.path), fmt, i);
+  sanitizePath(e.path);
   return false;
 }
 
 bool failIdx2(TplError& e, const char* code, const char* fmt, unsigned i, const char* field) {
   e.code = code;
   snprintf(e.path, sizeof(e.path), fmt, i, field);
+  sanitizePath(e.path);
   return false;
 }
 
@@ -376,6 +379,16 @@ bool parseSafety(JsonVariant v, const SystemConfig& sys, uint8_t n, safety::Safe
 }
 
 }  // namespace
+
+void sanitizePath(char* p) {
+  if (!p) return;
+  for (; *p; p++) {
+    const char c = *p;
+    const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '[' ||
+                    c == ']';
+    if (!ok) *p = '?';
+  }
+}
 
 bool isLowerUuid(const char* s) {
   if (!s || strlen(s) != TPL_ID_LEN) return false;

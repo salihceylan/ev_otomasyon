@@ -34,6 +34,10 @@ public:
   // touched: false dönüşte NVS'e bir şey yazıldı mı (çağıran eski yapılandırmayı geri yazar).
   // checkRoom=false: boş girdi payı denetlenmez (yalnız başarısız yazımdan sonra ESKİ yapılandırmanın geri yazımı; inceleme turu 2 FW2-3).
   static bool saveConfig(const SafetyConfig& c, bool* touched = nullptr, bool checkRoom = true);
+  // v1.3.0 şablon geri alması (TemplateRules::safetyRollbackKind): ad alanını tamamen siler (kart "hiç yazılmamış" durumuna döner) ya da
+  // yalnız "ver" işaretini geçersiz yapar (sonraki açılış cfg_corrupt güvenli kipi; karışık/boş tablo "geçerli" sayılmaz).
+  static bool eraseConfig();
+  static bool markCorrupt();
 
   static bool loadLatch(LatchRecord& r);          // false: yok ya da bozuk (r boş kayıt olur)
   static bool saveLatch(const LatchRecord& r);

@@ -44,6 +44,7 @@ void onIpEvent(void*, esp_event_base_t, int32_t id, void* data) {
   if (id == IP_EVENT_ETH_GOT_IP && data) {
     const ip_event_got_ip_t* e = (const ip_event_got_ip_t*)data;
     NetLink::ethEvent(netlink::EthEvent::GOT_IP, e->ip_info.ip.addr, e->ip_info.netmask.addr, e->ip_info.gw.addr);
+    NetLink::captureDns(netlink::NetIf::ETH);   // DHCP'nin az önce yazdığı genel DNS = Ethernet'in DNS'i (R1-4)
     WiFiManager::instance().requestSntp();   // saat: SNTP herhangi bir arayüzden (wifi_task başlatır)
     char ip[16];
     netlink::ipToStr(e->ip_info.ip.addr, ip, sizeof(ip));

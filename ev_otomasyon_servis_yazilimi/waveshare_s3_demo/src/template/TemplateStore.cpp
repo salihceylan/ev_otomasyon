@@ -15,6 +15,8 @@ namespace {
 const char* const K_VER = "ver";
 const char* const K_ID = "id";
 const char* const K_LABEL = "label";
+const char* const K_TXN = "txn";
+volatile bool s_txn = false;   // açılışta txn işareti vardı (yarım işlem)
 
 portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 TplRecord s_rec;            // s_mux altında
@@ -52,6 +54,12 @@ bool load(TplRecord& r) {
 void TemplateStore::begin() {
   TplRecord r;
   load(r);
+  {
+    Handle hd(NVS_NS_TPL, NVS_READONLY);
+    uint8_t t = 0;
+    s_txn = hd.ok && nvs_get_u8(hd.h, K_TXN, &t) == ESP_OK && t != 0;
+  }
+  if (s_txn) printf("[SABLON] UYARI: yarim kalmis sablon uygulamasi (txn); seri TPL ile yeniden yazilmali.\r\n");
   taskENTER_CRITICAL(&s_mux);
   s_rec = r;
   s_appliedValid = false;
@@ -87,8 +95,30 @@ bool TemplateStore::save(const TplRecord& r) {
 bool TemplateStore::erase() {
   Handle hd(NVS_NS_TPL, NVS_READWRITE);
   if (!hd.ok) return false;
-  return nvs_erase_all(hd.h) == ESP_OK && nvs_commit(hd.h) == ESP_OK;
+  bool ok = true;
+  for (const char* k : {K_VER, K_ID, K_LABEL}) {
+    const esp_err_t e = nvs_erase_key(hd.h, k);
+    if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) ok = false;
+  }
+  return ok && nvs_commit(hd.h) == ESP_OK;
 }
+
+bool TemplateStore::txnBegin() {
+  Handle hd(NVS_NS_TPL, NVS_READWRITE);
+  if (!hd.ok) return false;
+  return nvs_set_u8(hd.h, K_TXN, 1) == ESP_OK && nvs_commit(hd.h) == ESP_OK;
+}
+
+bool TemplateStore::txnEnd() {
+  Handle hd(NVS_NS_TPL, NVS_READWRITE);
+  if (!hd.ok) return false;
+  const esp_err_t e = nvs_erase_key(hd.h, K_TXN);
+  const bool ok = (e == ESP_OK || e == ESP_ERR_NVS_NOT_FOUND) && nvs_commit(hd.h) == ESP_OK;
+  if (ok) s_txn = false;
+  return ok;
+}
+
+bool TemplateStore::txnInterrupted() { return s_txn; }
 
 void TemplateStore::setRam(const TplRecord& r, uint32_t appliedUptimeS) {
   taskENTER_CRITICAL(&s_mux);

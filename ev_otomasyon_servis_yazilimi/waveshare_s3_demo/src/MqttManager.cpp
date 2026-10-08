@@ -605,6 +605,24 @@ void MqttManager::taskLoop() {
       continue;
     }
 
+    // v1.3.0 (inceleme R1-5): baglanti kuruldugu andaki etkin arayuz saklanir; etkin arayuz degisirse (Ethernet <-> Wi-Fi) TLS soketi
+    // eski arayuzde kalmasin diye baglanti birakilip hemen yeniden kurulur (NetLinkCore::mqttIfChanged).
+    {
+      static netlink::NetIf s_via = netlink::NetIf::NONE;   // yalniz MQTT gorevi
+      const netlink::NetIf active = netlink::activeIf(WiFiManager::instance().isConnected(), NetLink::ethUp());
+      if (!_mqttClient.connected()) {
+        s_via = netlink::NetIf::NONE;
+      } else if (s_via == netlink::NetIf::NONE) {
+        s_via = active;
+      } else if (netlink::mqttIfChanged(s_via, active)) {
+        printf("[MQTTS] Etkin ag arayuzu degisti (%s -> %s): yeniden baglaniliyor.\r\n", netlink::netIfName(s_via),
+               netlink::netIfName(active));
+        dropConnection("ag arayuzu degisti", false);
+        s_via = netlink::NetIf::NONE;
+        _reconnect.reset();
+      }
+    }
+
     if (!_mqttClient.connected()) {
       if (_connected) {
         dropConnection("broker baglantisi koptu", false);
