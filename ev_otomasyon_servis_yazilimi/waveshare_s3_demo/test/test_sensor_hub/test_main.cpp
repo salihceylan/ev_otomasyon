@@ -354,6 +354,49 @@ void test_di_sensor_mask_and_momentary_cleanup(void) {
   TEST_ASSERT_EQUAL_UINT8(digate::NONE, dec.action);
 }
 
+// pano-4: ek modul kanal sayisi (modul etkinken) arttiginda yeni kanallarin DI kapisi ilk taze okumaya kadar baslatilmamistir (kararli=false:
+// NC sensorde "aktif" okunurdu). O kanallardaki sensor "okunamadi" (ok=false, aktif degil) sayilir -> NC gaz/duman sahte alarm uretmez.
+// Mevcut kanallar etkilenmez (toplu ext-ok dusurulseydi daha once okunmus gaz sensoru ariza -> SF_FAULT_CLOSE ile sahte gaz alarmi verirdi).
+void test_di_sensor_new_ext_channels_unknown_until_first_read(void) {
+  digate::DiGate g;
+  DiSensor d(&g);
+  d.setLocalReady(true);
+  d.setExtOk(true);
+  d.setExtReady(8);                                     // DI 9..16 okundu; DI 17.. (yeni kanallar) henuz okunmadi
+  const SensorConfig cs[2] = {mk(0, 9, SensorKind::GAS, 1, 1), mk(0, 17, SensorKind::GAS, 1, 1)};
+  g.init(8, true, 0);                                   // DI 9: NC kontak kapali (normal)
+  TEST_ASSERT_TRUE(d.sample(cs[0], 0).ok);
+  TEST_ASSERT_FALSE(d.sample(cs[1], 0).ok);            // yeni kanal: bilinmiyor
+  SensorHub h;
+  h.configure(cs, 2, 0);
+  uint32_t t = 0;
+  for (; t < 2000; t += 10) {
+    for (uint8_t i = 0; i < 2; i++) {
+      const SensorSample sm = d.sample(cs[i], t);
+      h.update(i, sm.level, sm.ok, t);
+    }
+    h.finish(t);
+  }
+  TEST_ASSERT_EQUAL_UINT8(0, h.zoneWet(1));            // sahte gaz alarmi yok (mevcut kanal da ok kaldi)
+  TEST_ASSERT_TRUE(h.ok(0));
+  g.init(16, true, t);                                  // ilk taze okuma: yeni kanal kenarsiz baslatilir (NC kapali = normal)
+  d.setExtReady(16);
+  TEST_ASSERT_TRUE(d.sample(cs[1], t).ok);
+  TEST_ASSERT_TRUE(d.sample(cs[1], t).level);
+  for (uint32_t e = t + 2000; t < e; t += 10) {
+    for (uint8_t i = 0; i < 2; i++) {
+      const SensorSample sm = d.sample(cs[i], t);
+      h.update(i, sm.level, sm.ok, t);
+    }
+    h.finish(t);
+  }
+  TEST_ASSERT_EQUAL_UINT8(0, h.zoneWet(1));
+  TEST_ASSERT_TRUE(h.ok(1));
+  DiSensor d2(&g);                                      // varsayilan (setExtReady yok): yalniz setExtOk karar verir (eski davranis)
+  d2.setExtOk(true);
+  TEST_ASSERT_TRUE(d2.sample(cs[1], 0).ok);
+}
+
 // ---------------------------------------------------------------------------- BridgeSensor
 void test_bridge_heartbeat(void) {
   BridgeSensor b;
@@ -404,6 +447,7 @@ int main(int, char**) {
   RUN_TEST(test_di_sensor_local_ok_only_after_first_read);
   RUN_TEST(test_di_sensor_ext_ok_requires_module);
   RUN_TEST(test_di_sensor_mask_and_momentary_cleanup);
+  RUN_TEST(test_di_sensor_new_ext_channels_unknown_until_first_read);
   RUN_TEST(test_bridge_heartbeat);
   return UNITY_END();
 }

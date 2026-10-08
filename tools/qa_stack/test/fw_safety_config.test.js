@@ -7,7 +7,7 @@ import {
   encodeActuator, configCrc, latchClear, latchSeal, latchValid, latchAny, latchZoneMask, latchAssert64, latchLevel64, latchSetMasks,
   encodeLatch, crashClear, crashOnBoot, crashLoop, crashStableTick, CRASH_STABLE_MS, SafeReason, decideBootMode, safeReasonText,
   nvsBlobEntries, configNvsEntries, NVS_SAFETY_RESERVE_ENTRIES, NVS_GC_PAGE_ENTRIES, nvsRoomForConfig, bootMaskForSystem, validateSystemChange,
-  encodePolicy, DRY_HOLD_DEFAULT_MS,
+  encodePolicy, DRY_HOLD_DEFAULT_MS, latchCovered,
 } from '../sim/fw/safety_config.js';
 import { SF_REACT, SF_ENTRY, SF_AWAY_ONLY } from '../sim/fw/sensor_hub.js';
 import { SensorKind, SensorSrc, defaultFlags, defaultConfirmMs, makeSensorConfig } from '../sim/fw/sensor_hub.js';
@@ -254,6 +254,28 @@ test('fw_safety_config: acilis kipi karari', () => {
   assert.equal(safeReasonText(SafeReason.CRASH_LOOP), 'crash_loop');
   assert.equal(safeReasonText(SafeReason.LATCH_ORPHAN), 'latch_orphan');
   assert.equal(safeReasonText(SafeReason.CFG_CORRUPT), 'cfg_corrupt');
+});
+
+// pano-1 (Unity: test_boot_mode_sensor_only_latch_is_normal): yalniz sensorlu kurulumun (eylemci yok) kilidi hicbir role istemiyor -> acilis
+// NORMAL kip; kilit tabloda olmayan roleyi istiyorsa LATCH_ORPHAN kalir.
+test('fw_safety_config: role istemeyen kilit (yalniz sensorlu kurulum) acilista normal kip; gercek uyusmazlik latch_orphan (pano-1)', () => {
+  const cfg = defaultSafetyConfig();
+  cfg.sens = [sensor(3, SensorKind.GAS, 1, 1)];
+  cfg.nSens = 1;
+  const crash = crashClear();
+  const latch = latchClear();
+  latch.z[0].st = 1;
+  latchSeal(latch);
+  assert.equal(latchAssert64(latch), 0n);
+  assert.equal(decideBootMode(true, true, latch, cfg, crash), SafeReason.NONE);
+  assert.equal(decideBootMode(false, false, latch, defaultSafetyConfig(), crash), SafeReason.NONE);
+  latchSetMasks(latch, 1n << 4n, 0n);
+  latchSeal(latch);
+  assert.equal(decideBootMode(true, true, latch, cfg, crash), SafeReason.LATCH_ORPHAN);
+  assert.equal(latchCovered(0n, 0n), true);
+  assert.equal(latchCovered(1n << 4n, (1n << 4n) | (1n << 5n)), true);
+  assert.equal(latchCovered(1n << 4n, 0n), false);
+  assert.equal(latchCovered((1n << 4n) | (1n << 20n), 1n << 4n), false);
 });
 
 // ---- Inceleme turu (entegrasyon) (Unity: test_safety_config) ----

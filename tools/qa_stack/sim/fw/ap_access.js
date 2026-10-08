@@ -49,14 +49,20 @@ export function subnetsOverlap(ipA, maskA, ipB, maskB) {
  *  * STA bagliysa (staIp != 0) ve STA alt agi AP alt agiyla KESISIYORSA (or. ev modemi de 192.168.4.0/24) ag konumu AP/LAN ayirt ettirmez:
  *    istemci AP istemcisi SAYILMAZ (kapali basarisizlik). STA maskesi bilinmiyorsa (tutarsiz durum) STA adresinin AP alt aginda olmasi da
  *    ayni sonucu verir.
+ *  * v1.3.0 (Ethernet; ApAccess.h 8 parametreli bicim): Ethernet bagliyken (ethIp != 0) Ethernet alt agi AP alt agiyla kesisiyorsa da istemci AP
+ *    istemcisi SAYILMAZ (STA kuralinin aynisi). ethIp verilmezse (0) sonuc eskisiyle birebir aynidir.
  */
-export function clientOnSoftAp(apActive, remoteIp, apIp, apMask, staIp, staMask) {
+export function clientOnSoftAp(apActive, remoteIp, apIp, apMask, staIp, staMask, ethIp = 0, ethMask = 0) {
   if (!apActive) return false;
   if (u32(remoteIp) === 0 || u32(apIp) === 0 || u32(apMask) === 0) return false;
   if (u32(remoteIp) === u32(apIp)) return false;
   if (!sameSubnet(remoteIp, apIp, apMask)) return false;
   if (u32(staIp) !== 0) {
     const overlap = u32(staMask) !== 0 ? subnetsOverlap(staIp, staMask, apIp, apMask) : sameSubnet(staIp, apIp, apMask);
+    if (overlap) return false;
+  }
+  if (u32(ethIp) !== 0) {
+    const overlap = u32(ethMask) !== 0 ? subnetsOverlap(ethIp, ethMask, apIp, apMask) : sameSubnet(ethIp, apIp, apMask);
     if (overlap) return false;
   }
   return true;

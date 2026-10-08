@@ -5,8 +5,9 @@
 //  * SafetyView: SafetyManager'ın loopTask'ta ürettiği, görevler arası KOPYALANAN sabit yapı (adsız: sensör/eylemci/bölge adları
 //    state'e yazılmaz [B12]; cfg_dump ve GET /api/safety/config ile gelir).
 //  * writeStateExtras(): MqttManager::publishState ve WebPortal tam durumu (GET /api/status) için JSON eki. Ek, mevcut v:2
-//    nesnesinin SONUNA eklenir (her anahtar virgülle başlar). Yapılandırılmamış panoda yalnız caps, boot, bn, time_ok, epoch yazılır
-//    [B14]; cfg/sensors/actuators/safety anahtarları yalnız güvenlik katmanı etkinse (sensör/eylemci/kilit/güvenli kip) yazılır.
+//    nesnesinin SONUNA eklenir (her anahtar virgülle başlar). Yapılandırılmamış panoda yalnız caps, boot, bn, time_ok, epoch ve
+//    cfg.safety{rev,crc} yazılır [B14] (cfg v1.3.1'den beri her zaman: guvenlik-3); sensors/actuators/safety anahtarları yalnız güvenlik
+//    katmanı etkinse (sensör/eylemci/kilit/güvenli kip) yazılır.
 //  * viewSignature(): yayın tetiği (MqttManager StateSignature). Yalnız zamanla değişen alanlar (since_up) imzaya GİRMEZ.
 //  * Faz 2 (F2.B.7): caps'e "intrusion"; safety.arm {mode, st, ok, until_up?, aid?, srcs?} yalnız hırsız sensörü varsa (ya da kip kuruluysa).
 //    until_up sabit bir değerdir (gecikmenin bittiği uptime saniyesi): geri sayım imzayı değiştirmez.
@@ -234,12 +235,14 @@ inline void writeStateExtras(const SafetyView& v, const StateMeta& m, ev_detail:
     w.raw(rejText((Rej)m.rej));
     w.raw("\"}");
   }
-  if (!v.configured) return;
+  // cfg.safety {rev, crc} yapılandırılmamış panoda da yazılır (guvenlik-3): bulut ilk yamayı base_rev ile gönderebilir (yoksa bulut
+  // yapılandırması hiç başlatılamıyordu). Diğer güvenlik ekleri yalnız katman etkinken.
   w.raw(",\"cfg\":{\"safety\":{\"rev\":");
   w.u32(v.rev);
   w.raw(",\"crc\":\"");
   w.hex8(v.crc);
   w.raw("\"}}");
+  if (!v.configured) return;
 
   w.raw(",\"sensors\":[");
   for (uint8_t i = 0; i < v.nSens && i < MAX_SENSORS; i++) {

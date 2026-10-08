@@ -1343,3 +1343,80 @@ test('automation: bos NVS ile ilk acilis firmware varsayilanlari yazar; resetToD
   assert.equal(stored.sta_en, false);
   assert.equal(stored.cfg_init, true);
 });
+
+// pano-8: kuyruga alinip cekirdekte reddedilen KIMLIKLI genel komutlar state.last_rej {id, code} yazar (bulut 'yanit yok' zaman asimina
+// dusmez). Yalniz mevcut kodlar: bad_cmd (gecersiz role/cift, panjur olmayan cift, eslesmeyen panjur rolesi, gecersiz sure/konum) ve busy
+// (yeniden baslatma bekliyor, RS485 taramasi suruyor, panjur hareketteyken SET_RUNTIME). Kimliksiz red last_rej'i degistirmez.
+test('automation: reddedilen kimlikli genel komutlar last_rej uretir: bad_cmd / busy; kimliksiz red yazmaz (pano-8)', () => {
+  const rej = (r) => r.a.safety.lastReject();
+  const r = new Rig();
+  r.cmd(T.RELAY_SET, 99, 1, 'g-role');
+  r.run(30);
+  assert.deepEqual(rej(r), { id: 'g-role', code: 'bad_cmd' });
+  r.cmd(T.SHUTTER_UP, 3, 0, 'g-cift');               // cift 3 = role 5-6 (lamba): panjur degil
+  r.run(30);
+  assert.deepEqual(rej(r), { id: 'g-cift', code: 'bad_cmd' });
+  r.cmd(T.SHUTTER_POS, 1, 150, 'g-konum');
+  r.run(30);
+  assert.deepEqual(rej(r), { id: 'g-konum', code: 'bad_cmd' });
+  r.cmd(T.SET_RUNTIME, 1, 999, 'g-sure');
+  r.run(30);
+  assert.deepEqual(rej(r), { id: 'g-sure', code: 'bad_cmd' });
+  r.cmd(T.SHUTTER_UP, 1);
+  r.run(300);
+  r.cmd(T.SET_RUNTIME, 1, 10, 'g-hareket');
+  r.run(30);
+  assert.deepEqual(rej(r), { id: 'g-hareket', code: 'busy' });
+  r.cmd(T.SHUTTER_STOP, 1);
+  r.run(700);
+  r.cmd(T.RELAY_SET, 99, 1);                          // kimliksiz red: last_rej degismez
+  r.run(30);
+  assert.deepEqual(rej(r), { id: 'g-hareket', code: 'busy' });
+  // yeniden baslatma beklenirken yurutulen komut (baska gorevin istegiyle ayni turda bosaltilan kuyruk / satir ici submit): busy
+  r.a.requestRestart(600, r.t);
+  const c = makeCommand(T.RELAY_SET, CmdSource.MQTT, 5, 1);
+  c.id = 'g-restart';
+  assert.equal(r.a.executeCommand(c, r.t), false);
+  assert.deepEqual(rej(r), { id: 'g-restart', code: 'busy' });
+  const o = new Rig({ configure: (cm) => { cm.config.relays[1].type = RelayType.LIGHT; cm.config.relays[1].runtime_sec = 0; } });
+  o.cmd(T.RELAY_SET, 1, 1, 'g-yetim');                // eslesmeyen panjur rolesi
+  o.run(30);
+  assert.deepEqual(rej(o), { id: 'g-yetim', code: 'bad_cmd' });
+});
+
+test('automation: RS485 taramasi surerken reddedilen ek modul panjur komutu last_rej busy uretir (pano-8)', () => {
+  const ext = makeExt(8);
+  ext.baud = 115200;
+  const r = new Rig({ ext, configure: extShutter });
+  r.run(1000);
+  assert.equal(r.a.rs485StartScan(r.t), true);
+  r.run(100);
+  r.cmd(T.SHUTTER_UP, 5, 0, 'g-tarama1');
+  r.run(50);
+  assert.deepEqual(r.a.safety.lastReject(), { id: 'g-tarama1', code: 'busy' });
+  r.cmd(T.RELAY_SET, 9, 1, 'g-tarama2');               // ek modul panjur rolesi (ham)
+  r.run(50);
+  assert.deepEqual(r.a.safety.lastReject(), { id: 'g-tarama2', code: 'busy' });
+});
+
+// pano-4: ek modul ETKINKEN kanal sayisi arttiginda (CLI EXTMOD / POST /api/config / sablon) yeni kanallarin DI kapisi hic baslatilmamisti
+// (kararli = "kontak acik"): ilk okumada surekli kapali kontak sahte "basis" kenari uretip roleyi degistiriyordu. Duzeltme: yeni kanallar ilk
+// taze okumayla kenarsiz baslatilir; gercek basislar sonra olagan yoldan islenir.
+test('automation: ek modul kanal sayisi artinca yeni kanal DI kapisi ilk okumada kenarsiz baslar; sahte basis yok (pano-4)', () => {
+  const ext = makeExt(16);
+  ext.rawDi[8] = true;                                   // DI 17: kontak surekli kapali
+  const r = new Rig({ ext, configure: (cm) => { cm.config.ext_module_enabled = true; cm.config.ext_module_channels = 8; } });
+  r.run(2000);
+  assert.equal(r.relay(5), false);
+  r.cm.config.ext_module_channels = 16;                  // 8 -> 16 kanal; DI 17 -> role 5 TOGGLE
+  r.cm.config.dis[16].target_relay = 5;
+  r.cm.config.dis[16].mode = DIMode.TOGGLE;
+  r.run(2000);
+  assert.equal(r.relay(5), false, 'ilk okuma basis sayilmadi (role degismedi)');
+  assert.equal(r.eventsOf('di_press').filter((e) => e.di === 17).length, 0);
+  ext.rawDi[8] = false;                                  // gercek birakma + basis olagan yoldan islenir
+  r.run(300);
+  ext.rawDi[8] = true;
+  r.run(300);
+  assert.equal(r.relay(5), true, 'gercek basis TOGGLE yapar');
+});

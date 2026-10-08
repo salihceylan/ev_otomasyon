@@ -6,6 +6,7 @@ import http from 'node:http';
 import { DeviceSimulator } from '../sim/device_sim.js';
 import { isLoopbackAddress, isAllowedHost, originMatchesHost, ROUTES } from '../sim/local_api.js';
 import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
+import { compute as lkFp } from '../sim/fw/local_key_fp.js';
 import { safeEqual } from '../lib/util.js';
 import { sleep, waitFor } from './_helpers.js';
 
@@ -147,7 +148,8 @@ test('kimlik: anahtarsiz/yanlis anahtar 401; dogru anahtar 200; anahtarsiz yalni
     assert.equal((await j('GET', '/api/config')).status, 200);
 
     const restricted = await j('GET', '/api/status', { key: null });
-    assert.deepEqual(Object.keys(restricted.json).sort(), ['device', 'fw', 'name', 'provisioned', 'wifi_connected']);
+    assert.deepEqual(Object.keys(restricted.json).sort(), ['device', 'eth_connected', 'fw', 'name', 'net_if', 'provisioned', 'wifi_connected']);
+    assert.equal('lk_fp' in restricted.json, false, 'kisitli durumda ASLA lk_fp yok (pano-5)');
     assert.equal(restricted.json.device, UID);
     assert.equal(restricted.json.provisioned, true);
     assert.equal(restricted.json.fw, FW_VERSION_DEFAULT, 'firmware surumu (= WiFiManager.h FW_VERSION; sim_device.test.js "surum:")');
@@ -159,6 +161,7 @@ test('kimlik: anahtarsiz/yanlis anahtar 401; dogru anahtar 200; anahtarsiz yalni
       'mqtt_configured', 'mqtt_connected', 'ext_module_enabled', 'ext_module_channels', 'ext_module_address', 'ext_module_responding', 'total_relays',
       'total_dis', 'child_lock', 'last_id', 'relays', 'shutters', 'dis']) assert.ok(k in full, `eksik alan: ${k}`);
     assert.equal(full.provisioned, true);
+    assert.equal(full.lk_fp, lkFp(KEY, UID), 'provizyonlu tam durumda lk_fp (pano-5)');
     assert.equal(full.total_relays, 8);
     assert.equal(full.last_id, '', 'last_id her zaman metin (bos olabilir)');
     assert.equal(typeof full.relays[0].type, 'number', 'HTTP durumunda role tipi tamsayi');
@@ -1328,9 +1331,69 @@ test('bos "X-Device-Key:" basligi = baslik YOK (arduino-esp32 WebServer::hasHead
   try {
     const st = await j('GET', '/api/status', { key: '' });
     assert.equal(st.status, 200);
-    assert.deepEqual(Object.keys(st.json).sort(), ['device', 'fw', 'name', 'provisioned', 'wifi_connected']);
+    assert.deepEqual(Object.keys(st.json).sort(), ['device', 'eth_connected', 'fw', 'name', 'net_if', 'provisioned', 'wifi_connected']);
     for (let i = 0; i < 7; i++) assert.deepEqual([(await j('GET', '/api/config', { key: '' })).status, sim.qaState().http_lock.fail_count], [401, 0]);
     assert.equal((await j('GET', '/api/status', { key: 'x' })).status, 401, 'bos olmayan yanlis anahtar: kimlik denetimi + sayac');
+  } finally {
+    await sim.stop();
+  }
+});
+
+// ====================================================================================================================
+// v1.3.0 kullanici karari 1 (Ethernet) + v1.3.1 duzeltmeleri. Istemci ag konumu modellenir: clientNet 'eth' = kablolu LAN konagi, baglantinin
+// panodaki yerel ucu Ethernet IP'si (NetLinkCore::requestViaEth). Ethernet'ten gelen istek anahtarsiz ve provizyonsuz yetkilidir; Wi-Fi/AP
+// istekleri anahtarli kalir.
+// ====================================================================================================================
+test('ethernet: kablolu istemci anahtarsiz yetkili; tam durumda provisioned gercek deger, lk_fp yalniz provizyonluyken; kisitli durumda lk_fp yok (servis_kurulum-1, pano-5)', async () => {
+  const { sim, j } = await startSim();
+  try {
+    sim.setClientNet({ mode: 'eth' });
+    assert.equal((await j('GET', '/api/config', { key: null })).status, 200, 'Ethernet anahtarsiz (karar 1)');
+    const full = await j('GET', '/api/status', { key: 'herhangi-bir-deger' });   // Ethernet'te baslik degeri dogrulanmaz
+    assert.equal(full.status, 200);
+    assert.equal(full.json.provisioned, true);
+    assert.equal(full.json.lk_fp, lkFp(KEY, UID));
+    assert.equal(full.json.eth_connected, true);
+    const r = (await j('GET', '/api/status', { key: null })).json;
+    assert.deepEqual(Object.keys(r).sort(), ['device', 'eth_connected', 'fw', 'name', 'net_if', 'provisioned', 'wifi_connected']);
+    assert.equal(r.eth_connected, true);
+  } finally {
+    await sim.stop();
+  }
+});
+
+test('ethernet: provizyonsuz pano tam durumda provisioned:false (lk_fp yok); rekey 403 unprovisioned, yarim provizyon yok; factory/init calisir (servis_kurulum-1, pano-7)', async () => {
+  const { sim, j } = await startSim({ localKey: '', wifiConnected: false });
+  try {
+    sim.setClientNet({ mode: 'eth' });
+    const full = await j('GET', '/api/status', { key: 'bir-anahtar-123' });
+    assert.equal(full.status, 200);
+    assert.ok(Array.isArray(full.json.relays), 'Ethernet + baslik: tam durum');
+    assert.equal(full.json.provisioned, false, 'tam durumda gercek deger (eskiden sabit true)');
+    assert.equal('lk_fp' in full.json, false);
+    const rk = await j('POST', '/api/auth/rekey', { key: null, body: { local_key: 'ethernet-anahtar-1' } });
+    assert.deepEqual([rk.status, rk.json], [403, { error: 'unprovisioned' }]);
+    assert.equal(sim.isProvisioned(), false, 'AP parolasiz yarim provizyon yok');
+    const init = await j('POST', '/api/factory/init', { key: null, body: { local_key: 'fabrika-anahtar-1', ap_pass: 'ap-pass-1234' } });
+    assert.equal(init.status, 200, 'ilk anahtar factory/init ile (karar 2: her arayuzden)');
+    const full2 = (await j('GET', '/api/status', { key: 'x' })).json;
+    assert.equal(full2.provisioned, true);
+    assert.equal(full2.lk_fp, lkFp('fabrika-anahtar-1', UID));
+  } finally {
+    await sim.stop();
+  }
+});
+
+test('ethernet: SoftAP istemcisinin panonun Ethernet IP adresine istegi Ethernet SAYILMAZ (anahtar gerekir); gercek Ethernet istemcisi etkilenmez (pano-3)', async () => {
+  const { sim, j } = await startApSim();
+  try {
+    sim.setEthernet({ up: true });
+    const cn = sim.setClientNet({ mode: 'ap', local_ip: sim.qaClientNet().eth_ip });
+    assert.equal(cn.on_softap, true);
+    assert.equal((await j('GET', '/api/config', { key: null })).status, 401, 'AP istemcisi anahtarsiz yetkili DEGIL');
+    assert.equal((await j('GET', '/api/config')).status, 200, 'anahtarla calisir');
+    sim.setClientNet({ mode: 'eth' });
+    assert.equal((await j('GET', '/api/config', { key: null })).status, 200, 'gercek Ethernet istemcisi anahtarsiz');
   } finally {
     await sim.stop();
   }

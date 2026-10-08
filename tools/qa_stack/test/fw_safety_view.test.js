@@ -49,12 +49,17 @@ class Bench {
 
 const meta = (timeOk = true) => ({ boot: 57, bn: 0x9f3a11c0, timeOk, epoch: timeOk ? 1791273600 : 0, rejId: '', rej: Rej.OK });
 
-test('fw_safety_view: yapilandirilmamis panoda yalniz caps/boot/bn/time_ok/epoch', () => {
+// guvenlik-3: yapilandirilmamis panoda da cfg.safety{rev,crc} (bulut ilk yamayi base_rev ile gonderebilir); diger ekler yalniz katman etkinken.
+test('fw_safety_view: yapilandirilmamis panoda yalniz caps/boot/bn/time_ok/epoch + cfg.safety (guvenlik-3)', () => {
   const b = new Bench();
   b.start();
   const v = b.view();
   assert.equal(v.configured, 0);
-  assert.equal(writeStateExtras(v, meta(false)), ',"caps":["safety","actuator","event","cfg","intrusion"],"boot":57,"bn":"9f3a11c0","time_ok":false,"epoch":0');
+  const s = writeStateExtras(v, meta(false));
+  assert.equal(s, `,"caps":["safety","actuator","event","cfg","intrusion"],"boot":57,"bn":"9f3a11c0","time_ok":false,"epoch":0,"cfg":{"safety":{"rev":0,"crc":"${hex8(configCrc(b.cfg))}"}}`);
+  assert.equal(s.includes('"sensors"'), false);
+  assert.equal(s.includes('"actuators"'), false);
+  assert.equal(s.includes('"safety":{"policy"'), false);
   assert.equal(relayActText(v, 5), null);
 });
 

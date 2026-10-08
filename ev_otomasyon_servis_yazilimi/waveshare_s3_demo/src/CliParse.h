@@ -88,4 +88,23 @@ inline FactoryInitStatus parseFactoryInit(const char* line, bool provisioned, ch
   return FI_OK;
 }
 
+// Seri DEFAULT_DI / SET_SHUTTER_DI: varsayılan panjur DI düzeni (2 kablolu tek buton): DI1 -> P1 (röle 1) STEP, DI2 boşta, DI3 -> P2 (röle 3)
+// STEP, DI4 boşta; DI 5.. dokunulmaz. main.cpp bunu ÖNCE aday kopyaya uygular ve güvenlik çapraz denetiminden (validateSystemChange) geçerse
+// kaydeder (pano-9): sensör DI'sini duvar butonu yapan değişiklik kaydedilmez (aksi halde sonraki açılışta cfg_corrupt güvenli kipi).
+inline void applyDefaultShutterDis(SystemConfig& c) {
+  using sysconfig_detail::copyStr;
+  copyStr(c.dis[0].name, "Salon Panjur Butonu");
+  c.dis[0].target_relay = 1;
+  c.dis[0].mode = DI_MODE_SHUTTER_STEP;
+  copyStr(c.dis[1].name, "Giris 2 (Bosta / Serbest)");
+  c.dis[1].target_relay = 0;
+  c.dis[1].mode = DI_MODE_TOGGLE;
+  copyStr(c.dis[2].name, "Oda Panjur Butonu");
+  c.dis[2].target_relay = 3;
+  c.dis[2].mode = DI_MODE_SHUTTER_STEP;
+  copyStr(c.dis[3].name, "Giris 4 (Bosta / Serbest)");
+  c.dis[3].target_relay = 0;
+  c.dis[3].mode = DI_MODE_TOGGLE;
+}
+
 }  // namespace cliparse

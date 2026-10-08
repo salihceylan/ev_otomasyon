@@ -335,6 +335,8 @@ export class Automation {
     this.rawDi = new Array(MAX_TOTAL_DIS).fill(false);
     this.extDiInit = false;
     this.extEnabledPrev = false;
+    this.extChPrev = 0;          // syncConfig'in en son isledigi ek modul kanal sayisi (pano-4)
+    this.extDiReadyCh = 0;       // ilk taze okumayla (kenarsiz) baslatilmis ek DI kanali sayisi (DiSensor.setExtReady)
     this.lastLocalPairMask = 0xFF;
     this.childLockEnabled = false;
     this.seenResetCount = 0;
@@ -494,6 +496,7 @@ export class Automation {
     this.#loadShutterPositions();
 
     this.extEnabledPrev = cfg.ext_module_enabled;
+    this.extChPrev = cfg.ext_module_channels;   // pano-4: acilistaki kanal sayisi "degisim" sayilmaz
     // Acilis bekleme penceresi (500 ms) surucu olu zamanini da karsilar; pencere kisaltilmissa (QA/test) eksik kismi baslangic damgasindan dusulur
     const initAt = u32(now + this.bootHoldMs - BOOT_HOLD_MS);
     this.nowMs = now;
@@ -572,7 +575,31 @@ export class Automation {
       this.extPollGap = 0;
       this.extRetryGap = 0;
       this.extDiInit = false;
+      this.extDiReadyCh = 0;
       this.extModuleResponding = false;
+      this.extChPrev = cfg.ext_module_channels;   // gecisin kendisi: kanal degisimi ayrica islenmez
+    } else if (cfg.ext_module_enabled && cfg.ext_module_channels !== this.extChPrev) {
+      // pano-4: modul etkin kalirken kanal sayisi degisti. Yeni kanallarin DI kapilari bir sonraki basarili ayrik giris yoklamasinda kenarsiz
+      // baslatilir; o zamana dek o kanallarin guvenlik sensorleri "okunamadi" (setExtReady). Toplu ext-ok DUSURULMEZ (bilinen gaz sensoru
+      // ariza -> SF_FAULT_CLOSE sahte alarm verirdi). Degisen araliktaki ek roleler "bilinmiyor" (KAPAT yeniden yazilir).
+      const oldCh = this.extChPrev;
+      const newCh = cfg.ext_module_channels;
+      const lo = 8 + Math.min(oldCh, newCh);
+      const hi = 8 + Math.max(oldCh, newCh);
+      let changed = 0n;
+      for (let i = lo; i < hi && i < MAX_TOTAL_RELAYS; i++) {
+        this.want[i] = false;
+        this.hw[i] = true;
+        this.hwKnown[i] = false;
+        this.impulseActive[i] = false;
+        this.adoptNextPoll[i] = false;
+        changed |= 1n << BigInt(i);
+      }
+      this.extGuard.forceHw((this.extGuard.hw() | changed) & M64);
+      if (this.extDiReadyCh > lo - 8) this.extDiReadyCh = lo - 8;
+      this.extChPrev = newCh;
+      this.event('ext_channels_changed', { from: oldCh, to: newCh });
+      this.markChanged();
     }
 
     let pairMaskExt = 0;
@@ -637,17 +664,21 @@ export class Automation {
     const isStop = cmd.type === CmdType.SHUTTER_STOP || cmd.type === CmdType.ALL_SHUTTERS_STOP;
     if (this.restartPending && !isStop) {
       this.event('cmd_rejected', { source: cmd.source, cmd: cmd.type, reason: 'restart_pending' });
+      if (cmd.id) this.safety.noteReject(cmd.id, Rej.BUSY);   // pano-8
       return false;
     }
 
     const idx = cmd.index > 0 ? cmd.index - 1 : 0xFF;
     let ok = true;
     let reason = '';
+    // pano-8: ok=false dallarinin ret kodu (kimlikli komutta sonda last_rej). Yalniz mevcut kodlar: BAD_CMD / BUSY. Eylemci rolesi ve
+    // guvenlik komutlari kendi kodlarini zaten yazar (burada OK kalir).
+    let rej = Rej.OK;
 
     switch (cmd.type) {
       case CmdType.RELAY_SET:
       case CmdType.RELAY_TOGGLE: {
-        if (idx >= totalR) { ok = false; reason = 'invalid_relay'; break; }
+        if (idx >= totalR) { ok = false; reason = 'invalid_relay'; rej = Rej.BAD_CMD; break; }
         // Guvenlik eylemcisi rolesi (spec 2.3 madde 4): yalniz GUVENLI yone giden ham komut; acma yonu actuator_relay. Maske 0 ise tutmaz.
         if (this.actuatorMask & (1n << BigInt(idx))) {
           const level = cmd.type === CmdType.RELAY_SET ? cmd.value !== 0 : !this.want[idx];
@@ -663,12 +694,12 @@ export class Automation {
         this.adoptNextPoll[idx] = false;
         if (rtype === RelayType.SHUTTER_UP || rtype === RelayType.SHUTTER_DOWN) {
           const p = Math.floor(idx / 2);
-          if (!this.pairConfigured(p)) { ok = false; reason = 'orphan_shutter_relay'; break; }
+          if (!this.pairConfigured(p)) { ok = false; reason = 'orphan_shutter_relay'; rej = Rej.BAD_CMD; break; }
           const isUp = rtype === RelayType.SHUTTER_UP;
           let on;
           if (cmd.type === CmdType.RELAY_SET) on = cmd.value !== 0;
           else on = !(this.fsm[p].isMoving() || this.fsm[p].isWaiting());
-          if (on && p >= 4 && this.scan.state === 'running') { ok = false; reason = 'rs485_scan_running'; break; }   // tarama hatti tutarken ek modul panjuru baslatilmaz
+          if (on && p >= 4 && this.scan.state === 'running') { ok = false; reason = 'rs485_scan_running'; rej = Rej.BUSY; break; }   // tarama hatti tutarken ek modul panjuru baslatilmaz
           if (on) { if (isUp) this.fsm[p].cmdUp(now); else this.fsm[p].cmdDown(now); } else this.fsm[p].cmdStop(now);
         } else if (rtype === RelayType.IMPULSE) {
           const on = cmd.type === CmdType.RELAY_SET ? cmd.value !== 0 : !this.impulseActive[idx];
@@ -685,15 +716,15 @@ export class Automation {
       case CmdType.SHUTTER_STOP:
       case CmdType.SHUTTER_STEP:
       case CmdType.SHUTTER_POS: {
-        if (idx >= totalPairs || !this.pairConfigured(idx)) { ok = false; reason = 'not_a_shutter_pair'; break; }
+        if (idx >= totalPairs || !this.pairConfigured(idx)) { ok = false; reason = 'not_a_shutter_pair'; rej = Rej.BAD_CMD; break; }
         // Tarama hatti (RS485 mutex'i) tutarken ek module KAPAT gonderilemez: hareket baslatilmaz (DURDURMA serbest)
-        if (idx >= 4 && cmd.type !== CmdType.SHUTTER_STOP && this.scan.state === 'running') { ok = false; reason = 'rs485_scan_running'; break; }
+        if (idx >= 4 && cmd.type !== CmdType.SHUTTER_STOP && this.scan.state === 'running') { ok = false; reason = 'rs485_scan_running'; rej = Rej.BUSY; break; }
         if (cmd.type === CmdType.SHUTTER_UP) this.fsm[idx].cmdUp(now);
         else if (cmd.type === CmdType.SHUTTER_DOWN) this.fsm[idx].cmdDown(now);
         else if (cmd.type === CmdType.SHUTTER_STOP) this.fsm[idx].cmdStop(now);
         else if (cmd.type === CmdType.SHUTTER_STEP) this.fsm[idx].cmdStep(now);
         else {
-          if (cmd.value < 0 || cmd.value > 100) { ok = false; reason = 'bad_position'; break; }
+          if (cmd.value < 0 || cmd.value > 100) { ok = false; reason = 'bad_position'; rej = Rej.BAD_CMD; break; }
           this.fsm[idx].cmdPosition(now, cmd.value);
         }
         break;
@@ -720,9 +751,9 @@ export class Automation {
         break;
       case CmdType.SET_RUNTIME: {
         if (idx >= totalPairs || !this.pairConfigured(idx) || cmd.value < SHUTTER_RUNTIME_MIN_SEC || cmd.value > SHUTTER_RUNTIME_MAX_SEC) {
-          ok = false; reason = 'invalid_set_runtime'; break;
+          ok = false; reason = 'invalid_set_runtime'; rej = Rej.BAD_CMD; break;
         }
-        if (this.fsm[idx].isMoving() || this.fsm[idx].isWaiting()) { ok = false; reason = 'shutter_busy'; break; }
+        if (this.fsm[idx].isMoving() || this.fsm[idx].isWaiting()) { ok = false; reason = 'shutter_busy'; rej = Rej.BUSY; break; }
         const rUp = idx * 2;
         const rDown = rUp + 1;
         cfg.relays[rUp].runtime_sec = cmd.value;
@@ -739,7 +770,7 @@ export class Automation {
           const r = this.safety.handleCommand(cmd, now);
           if (r !== Rej.OK) { ok = false; reason = rejText(r); }
         } else {
-          ok = false; reason = 'unknown_type';
+          ok = false; reason = 'unknown_type'; rej = Rej.BAD_CMD;
         }
         break;
     }
@@ -750,6 +781,7 @@ export class Automation {
       this.event('cmd_applied', { source: cmd.source, cmd: cmd.type, index: cmd.index, value: cmd.value, id: cmd.id || undefined });
     } else {
       this.event('cmd_rejected', { source: cmd.source, cmd: cmd.type, index: cmd.index, reason });
+      if (rej !== Rej.OK && cmd.id) this.safety.noteReject(cmd.id, rej);   // pano-8: state.last_rej
     }
     return ok;
   }
@@ -1277,13 +1309,17 @@ export class Automation {
         if (dIdx >= MAX_TOTAL_DIS) break;
         this.diGate.init(dIdx, bits[k], now);
       }
+      this.extDiReadyCh = extCh;
       return;
     }
     for (let k = 0; k < extCh; k++) {
       const dIdx = 8 + k;
       if (dIdx >= MAX_TOTAL_DIS) break;
-      this.#handleDiEdge(dIdx, bits[k], now);
+      // pano-4: kanal sayisi arttiysa yeni kanallar bu ilk taze okumayla kenarsiz baslatilir; digerleri olagan kenar yolu
+      if (k >= this.extDiReadyCh) this.diGate.init(dIdx, bits[k], now);
+      else this.#handleDiEdge(dIdx, bits[k], now);
     }
+    if (this.extDiReadyCh < extCh) this.extDiReadyCh = extCh;
   }
 
   #emergencyAllOff(now) {
@@ -1351,7 +1387,7 @@ export class Automation {
       return;
     }
     const cfg = this.#cfg();
-    this.safety.setDiHealth(this.localDiRead, cfg.ext_module_enabled && this.extDiInit && this.extModuleResponding && this.scan.state !== 'running');
+    this.safety.setDiHealth(this.localDiRead, cfg.ext_module_enabled && this.extDiInit && this.extModuleResponding && this.scan.state !== 'running', this.extDiReadyCh);
     this.safety.tick(now, this.epochFn());
     const { assert, level } = this.safety.outputs();
     for (let i = 0; i < MAX_TOTAL_RELAYS; i++) {

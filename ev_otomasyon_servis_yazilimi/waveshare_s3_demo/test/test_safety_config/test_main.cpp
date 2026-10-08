@@ -369,6 +369,35 @@ void test_boot_mode_decision(void) {
   TEST_ASSERT_EQUAL_STRING("cfg_corrupt", safeReasonText(SafeReason::CFG_CORRUPT));
 }
 
+// pano-1: yalniz sensorlu guvenlik kurulumu (eylemci yok) kilitliyken elektrik kesildi. Kilit kaydi hicbir role istemiyor (need = 0):
+// acilis NORMAL kiptir (LATCHED bolge geri yuklenir, onay + kuruluk temizler). Eskiden "nAct == 0" tek basina latch_orphan sayiliyordu ve
+// eylemcisiz kurulum guvenli kipten hic cikamiyordu. Kilit eylemci tablosunda olmayan roleyi istiyorsa LATCH_ORPHAN kalir (degismedi).
+void test_boot_mode_sensor_only_latch_is_normal(void) {
+  SafetyConfig cfg;
+  cfg.setDefaults();
+  cfg.sens[0] = sensor(3, SensorKind::GAS, 1, 1);             // yalniz NC gaz sensoru, eylemci yok
+  cfg.nSens = 1;
+  CrashLog crash;
+  crashClear(crash);
+  LatchRecord latch;
+  latchClear(latch);
+  latch.z[0].st = 1;                                          // bolge 1 kilitli, role maskesi bos
+  latchSeal(latch);
+  TEST_ASSERT_EQUAL_UINT64(0, latchAssert64(latch));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SafeReason::NONE, (uint8_t)decideBootMode(true, true, &latch, cfg, crash));
+  SafetyConfig empty;
+  empty.setDefaults();                                        // fabrika sifirlamasi sonrasi da role istemeyen kilit normal kipte temizlenir
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SafeReason::NONE, (uint8_t)decideBootMode(false, false, &latch, empty, crash));
+  latchSetMasks(latch, 1ULL << 4, 0);                         // kilit role 5'i istiyor, tabloda eylemci yok: gercek uyusmazlik
+  latchSeal(latch);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SafeReason::LATCH_ORPHAN, (uint8_t)decideBootMode(true, true, &latch, cfg, crash));
+  // ortak kural (acilis karari + guvenli kipte uygulanan yapilandirmanin cikis kullanilabilirligi)
+  TEST_ASSERT_TRUE(latchCovered(0, 0));
+  TEST_ASSERT_TRUE(latchCovered(1ULL << 4, (1ULL << 4) | (1ULL << 5)));
+  TEST_ASSERT_FALSE(latchCovered(1ULL << 4, 0));
+  TEST_ASSERT_FALSE(latchCovered((1ULL << 4) | (1ULL << 20), 1ULL << 4));
+}
+
 // Inceleme turu (entegrasyon) RV-3: yapilandirma yazimi, kilit kaydi/act_pos/guvenli maske guncellemeleri icin ayrilan bos girdi payini
 // (NVS_SAFETY_RESERVE_ENTRIES) yiyemez. Girdi tahmini: blob = indeks + veri basligi + 32 B'lik veri girdileri.
 void test_nvs_entry_budget(void) {
@@ -495,6 +524,7 @@ int main(int, char**) {
   RUN_TEST(test_latch_record_seal_and_masks);
   RUN_TEST(test_crash_loop_counter);
   RUN_TEST(test_boot_mode_decision);
+  RUN_TEST(test_boot_mode_sensor_only_latch_is_normal);
   RUN_TEST(test_nvs_entry_budget);
   RUN_TEST(test_boot_mask_for_system_filters_shutter_and_missing);
   RUN_TEST(test_nvs_budget_excludes_gc_page);

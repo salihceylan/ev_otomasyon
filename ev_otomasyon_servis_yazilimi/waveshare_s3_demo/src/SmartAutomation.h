@@ -279,6 +279,8 @@ private:
   uint8_t _diActTarget[MAX_TOTAL_DIS];    // MOMENTARY: basış anındaki hedef röle (bırakmada AYNI röle kapatılır)
   bool _extDiInit;
   bool _extEnabledPrev;
+  uint8_t _extChPrev;                     // syncConfig'in en son işlediği ek modül kanal sayısı (pano-4: etkinken değişim)
+  uint8_t _extDiReadyCh;                  // ilk taze okumayla (kenarsız) başlatılmış ek DI kanalı sayısı (DiSensor::setExtReady)
   uint8_t _lastLocalPairMask;
   volatile bool _childLockEnabled;       // canlı bayrak (yalnız Core 1 yazar, her çekirdek okuyabilir)
   uint32_t _seenResetCount;               // ConfigManager::resetCount() ile fabrika sıfırlamayı fark etmek için

@@ -1,5 +1,5 @@
 // SafetyView (src/safety/SafetyView.h) birim testleri: state v:3 ekinin (spec 3.1-3.2, CONTRACTS 2.6) saf uretimi. SAF MANTIK.
-// Kapsam: yapilandirilmamis panoda yalniz caps/boot/bn/time_ok/epoch [B14]; modul dizileri yalniz yapilandirilmissa; adsiz sensor/eylemci/bolge
+// Kapsam: yapilandirilmamis panoda yalniz caps/boot/bn/time_ok/epoch + cfg.safety{rev,crc} [B14][guvenlik-3]; modul dizileri yalniz yapilandirilmissa; adsiz sensor/eylemci/bolge
 // satirlari [B12]; kilitli bolge (aid, since, since_up, srcs); guvenli kip nedeni; last_rej; role satirina `act`; yayin imzasi alarmda degisir,
 // yalniz zamanla degisen alanlarda (since_up, epoch) degismez [B14]; tasmada kesik JSON uretilmez.
 #include <unity.h>
@@ -96,15 +96,26 @@ static const char* render(const SafetyView& v, const StateMeta& m, char* buf, si
   return w.ok ? buf : "<TASTI>";
 }
 
+// guvenlik-3: yapilandirilmamis panoda da cfg.safety{rev,crc} yazilir (bulut ilk yamayi base_rev ile gonderebilsin); sensors/actuators/safety
+// ekleri yine yalniz katman etkinken.
 static void test_unconfigured_board_only_meta_keys(void) {
   Bench b;
   b.start();
   static SafetyView v;
   buildView(b.cfg, b.hub, b.act, b.core, b.t, v);
   TEST_ASSERT_EQUAL_UINT8(0, v.configured);
+  char want[512];
+  ev_detail::Writer ww(want, sizeof(want));
+  ww.raw(",\"caps\":[\"safety\",\"actuator\",\"event\",\"cfg\",\"intrusion\"],\"boot\":57,\"bn\":\"9f3a11c0\",\"time_ok\":false,\"epoch\":0"
+         ",\"cfg\":{\"safety\":{\"rev\":0,\"crc\":\"");
+  ww.hex8(configCrc(b.cfg));
+  ww.raw("\"}}");
+  TEST_ASSERT_TRUE(ww.ok);
   char buf[512];
-  TEST_ASSERT_EQUAL_STRING(",\"caps\":[\"safety\",\"actuator\",\"event\",\"cfg\",\"intrusion\"],\"boot\":57,\"bn\":\"9f3a11c0\",\"time_ok\":false,\"epoch\":0",
-                           render(v, meta(false), buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING(want, render(v, meta(false), buf, sizeof(buf)));
+  TEST_ASSERT_NULL(strstr(buf, "\"sensors\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"actuators\""));
+  TEST_ASSERT_NULL(strstr(buf, "\"safety\":{\"policy\""));
   TEST_ASSERT_TRUE(relayActText(v, 5) == nullptr);
 }
 

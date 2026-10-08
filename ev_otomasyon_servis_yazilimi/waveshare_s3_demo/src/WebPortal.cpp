@@ -1,6 +1,7 @@
 #include "WebPortal.h"
 #include "WebPortalPage.h"
 #include "ConfigManager.h"
+#include "LocalKeyFp.h"
 #include "SmartAutomation.h"
 #include "DeviceCommand.h"
 #include "MqttManager.h"
@@ -603,8 +604,9 @@ void WebPortal::dispatch(Handler handler, Access access) {
   (this->*handler)();
 }
 
+// pano-3: yerel uç Ethernet IP'si VE istemci SoftAP istemcisi değil (bir AP istemcisi panonun Ethernet IP'sine bağlanırsa "kablodan" sayılmaz).
 bool WebPortal::requestViaEthernet() {
-  return netlink::requestViaEth(NetLink::eth(), (uint32_t)_server.client().localIP());
+  return netlink::requestViaEth(NetLink::eth(), (uint32_t)_server.client().localIP(), remoteOnSoftAp());
 }
 
 void WebPortal::setupRoutes() {
@@ -970,6 +972,9 @@ void WebPortal::sendFullStatus() {
   const String uid = wm.getDeviceUid();
   const String apSsid = wm.getRecoveryApSSID();
   const WiFiManager::ConnectStatus cs = wm.getConnectStatus();
+  // v1.3.1 (pano-5, sözleşme 1): yerel anahtar parmak izi yalnız provizyonluyken (kısıtlı durumda ASLA yok).
+  char lkFp[lkfp::FP_BUF];
+  const bool haveFp = ConfigManager::instance().localKeyFp(uid.c_str(), lkFp, sizeof(lkFp));
 
   // Guvenlik gorunumu ve ek (spec 3.5 [D3]): MQTT state ile ayni alanlar; JSON kilit DISINDA uretilir [B13].
   auto& sm = safety::SafetyManager::instance();
@@ -1018,7 +1023,9 @@ void WebPortal::sendFullStatus() {
   doc["name"] = (const char*)v->deviceName;
   doc["device_name"] = (const char*)v->deviceName;
   doc["fw"] = FW_VERSION;
-  doc["provisioned"] = true;
+  // v1.3.1 (servis_kurulum-1): gerçek değer. Ethernet'ten anahtarsız gelen istek provizyonsuz panoda da tam durumu alır; eskiden burada sabit
+  // true yazılıyordu ve provizyonsuz Ethernet panosu "provizyonlu" görünüyordu.
+  doc["provisioned"] = v->provisioned;
   doc["ip"] = (const char*)ipStr;
   doc["wifi_rssi"] = staConnected ? WiFi.RSSI() : 0;
   doc["uptime_sec"] = (uint32_t)(esp_timer_get_time() / 1000000ULL);
@@ -1048,6 +1055,7 @@ void WebPortal::sendFullStatus() {
   doc["eth_ip"] = (const char*)ethIpStr;
   doc["net_if"] = netlink::netIfName(netlink::activeIf(staConnected, ethUp));
   doc["bootstrap"] = MqttManager::instance().bootstrapStatus();   // CONTRACTS §3f
+  if (haveFp) doc["lk_fp"] = (const char*)lkFp;                     // v1.3.1: yalnız provizyonluyken (pano-5)
   if (tplRec.present) {
     JsonObject t = doc.createNestedObject("tpl");
     t["id"] = (const char*)tplRec.id;
@@ -1858,8 +1866,13 @@ void WebPortal::handleApiFactoryInit() {
   sendOk();
 }
 
-// Yerel anahtari mevcut anahtarla degistirir
+// Yerel anahtari mevcut anahtarla degistirir. YALNIZ provizyonlu panoda (pano-7): Ethernet'ten anahtarsiz gelen istek (kullanici karari)
+// provizyonsuz panoya AP parolasiz anahtar yazip yarim provizyon birakiyordu; ilk anahtar yalniz factory/init ya da seri FACTORYINIT ile.
 void WebPortal::handleApiRekey() {
+  if (!ConfigManager::instance().hasLocalKey()) {   // govde okunmadan (Ethernet dahil)
+    sendError(403, "unprovisioned");
+    return;
+  }
   String body;
   if (!readJsonBody(body)) return;
   DynamicJsonDocument doc(jsonCapacityFor(body.length()));
@@ -1876,8 +1889,19 @@ void WebPortal::handleApiRekey() {
     return;
   }
   // Bicim yukarida dogrulandi (SystemConfig::setLocalKey ile ayni kural): false yalniz NVS kalicilastirma hatasidir ->
-  // 503 storage (CONTRACTS §3b). RAM geri alinir: eski anahtar gecerli kalir.
-  if (!ConfigManager::instance().setLocalKey(key)) {
+  // 503 storage (CONTRACTS §3b). RAM geri alinir: eski anahtar gecerli kalir. Provizyon denetimi yazmayla AYNI (ozyinelemeli) kilit altinda
+  // yinelenir: govde okunurken seri RESETKEY anahtari sildiyse yeni anahtar yazilmaz (403 unprovisioned).
+  bool provisioned = false, ok = false;
+  {
+    ConfigManager::ConfigLock lk(ConfigManager::instance());
+    provisioned = ConfigManager::instance().hasLocalKey();
+    if (provisioned) ok = ConfigManager::instance().setLocalKey(key);
+  }
+  if (!provisioned) {
+    sendError(403, "unprovisioned");
+    return;
+  }
+  if (!ok) {
     sendError(503, "storage");
     return;
   }

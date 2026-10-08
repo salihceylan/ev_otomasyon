@@ -14,6 +14,7 @@ import {
   SHUTTER_RUNTIME_DEFAULT_SEC, CAP, isAsciiRange, LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN, AP_PASS_MIN_LEN, AP_PASS_MAX_LEN,
 } from './sysconfig.js';
 import { cCopy } from './netutil.js';
+import { compute as computeLocalKeyFp } from './local_key_fp.js';
 
 /**
  * ConfigManager::ProvisionResult (firmware) karsiligi; degerler HTTP hata kodlariyla ayni adlidir.
@@ -103,11 +104,31 @@ export class ConfigManager {
     this.config = new SystemConfig();
     this.generation = 0;
     this.resetCount = 0;
+    this.keyGen_ = 0;            // pano-5: yerel anahtar degisim sayaci (lk_fp onbellegi + MQTT durum imzasi)
+    this.fpCache = null;         // { gen, fp }
     this.applyDefaults();
+  }
+
+  /** Anahtar degisim sayaci (ConfigManager::keyGeneration). */
+  keyGeneration() { return this.keyGen_; }
+
+  #keyChanged() { this.keyGen_ = (this.keyGen_ + 1) >>> 0; }
+
+  /**
+   * Yerel anahtar parmak izi (ConfigManager::localKeyFp, LocalKeyFp.h): provizyonluyken 8 kucuk harf hex, provizyonsuzsa null. Onbellek anahtar
+   * her degistiginde (applyDefaults/load, setLocalKey, clearLocalKey, provisionIfEmpty, resetToDefaults) gecersizlenir.
+   */
+  localKeyFp(uid) {
+    if (!this.config.hasLocalKey()) return null;
+    if (this.fpCache && this.fpCache.gen === this.keyGen_ && this.fpCache.uid === uid) return this.fpCache.fp;
+    const fp = computeLocalKeyFp(this.config.local_key, uid);
+    if (fp !== null) this.fpCache = { gen: this.keyGen_, uid, fp };
+    return fp;
   }
 
   /** RAM'i varsayilana ceker; NVS'e DOKUNMAZ. Kimlik alanlari bos kalir. (ConfigManager::applyDefaults) */
   applyDefaults() {
+    this.#keyChanged();   // local_key silindi (load/resetToDefaults sonra geri yazar): lk_fp onbellegi gecersiz
     const c = new SystemConfig();
     c.device_name = 'AHBU Akilli Ev Kontrol';
     c.wifi_sta_enabled = false;
@@ -274,7 +295,7 @@ export class ConfigManager {
   setLocalKey(key) {
     const old = this.config.local_key;
     if (!this.config.setLocalKey(key)) return false;
-    if (this.nvs.putKey('cfg', 'lk', this.config.local_key)) return true;
+    if (this.nvs.putKey('cfg', 'lk', this.config.local_key)) { this.#keyChanged(); return true; }
     this.config.local_key = old;
     return false;
   }
@@ -290,6 +311,7 @@ export class ConfigManager {
   /** Seri RESETKEY: RAM her zaman silinir; NVS'ten silinemezse false (yeniden acilista NVS'teki anahtar doner; firmware ile ayni). */
   clearLocalKey() {
     this.config.local_key = '';
+    this.#keyChanged();
     return this.nvs.removeKey('cfg', 'lk');
   }
 

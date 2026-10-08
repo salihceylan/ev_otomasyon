@@ -21,9 +21,12 @@
 // NetLink (MQTT kapisi / SNTP / kurtarma AP politikasi / durum "ip" Wi-Fi VEYA Ethernet; Ethernet bagliyken kurtarma AP'si acilmaz),
 // durum + MQTT state yeni alanlar eth_connected / eth_ip / net_if / tpl; kurulum sablonu (ahbu-template/1): POST /api/template/apply
 // (KEYED, LAN gevsetme kurali K-S4), GET /api/template, seri TPL BEGIN/DATA/COMMIT/ABORT/STATUS, atomik ana + guvenlik yapilandirmasi
-// yazimi, NVS "ahbu_tpl"; STATUS'a "Ethernet:" ve "Sablon:" satirlari (eski satirlar ayni). DONANIMDA DENENMEDI.
+// yazimi, NVS "ahbu_tpl"; STATUS'a "Ethernet:" ve "Sablon:" satirlari (eski satirlar ayni). Kartta acilis + bulut 2026-10-08'de denendi.
+// 1.3.1 (2026-10-08 mantik denetimi): yerel anahtar parmak izi lk_fp (tam durum, MQTT state, seri "Anahtar izi:"), ev/{t}/status JSON
+// {"status","uid"} (LWT dahil), tam durumda gercek "provisioned", provizyonsuz panoda set_local_key/rekey yok sayilir, genel komut
+// retlerinde last_rej, latch_orphan kurtarma, ek modul DI baslatma, DEFAULT_DI guvenlik denetimi, cfg{rev,crc} her zaman.
 #ifndef FW_VERSION
-#define FW_VERSION "1.3.0"
+#define FW_VERSION "1.3.1"
 #endif
 
 // ============================================================================

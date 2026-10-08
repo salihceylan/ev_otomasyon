@@ -351,12 +351,17 @@ export function crashStableTick(c, uptimeMs) {
 export const SafeReason = Object.freeze({ NONE: 0, CFG_CORRUPT: 1, LATCH_ORPHAN: 2, CRASH_LOOP: 3 });
 export const safeReasonText = (r) => ['', 'cfg_corrupt', 'latch_orphan', 'crash_loop'][r] ?? '';
 
+/** Kilit kaydinin dayattigi roleler (need) eylemci rolelerince (have) kapsaniyor mu? Role istemeyen kilit (yalniz sensorlu kurulum) her
+ * tabloyla kapsanir (pano-1). Acilis karari ve guvenli kipte uygulanan yapilandirmanin cikis kullanilabilirligi ayni kurali kullanir. */
+export const latchCovered = (need, have) => (BigInt(need) & ~BigInt(have)) === 0n;
+
+/** LATCH_ORPHAN yalniz kilit tabloda OLMAYAN roleyi istiyorsa (eskiden "nAct === 0" tek basina guvenli kipti; pano-1). */
 export function decideBootMode(cfgPresent, cfgCrcOk, latch, cfg, crash) {
   if (cfgPresent && !cfgCrcOk) return SafeReason.CFG_CORRUPT;
   if (latch && latchAny(latch)) {
     const need = latchAssert64(latch);
     const have = actuatorRelayMask(cfg.act, cfg.nAct);
-    if (cfg.nAct === 0 || (need & ~have) !== 0n) return SafeReason.LATCH_ORPHAN;
+    if (!latchCovered(need, have)) return SafeReason.LATCH_ORPHAN;
   }
   if (crashLoop(crash)) return SafeReason.CRASH_LOOP;
   return SafeReason.NONE;

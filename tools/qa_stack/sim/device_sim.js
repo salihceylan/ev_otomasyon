@@ -21,6 +21,7 @@ import { MqttManager, QA_TIMING, FIRMWARE_TIMING } from './fw/mqtt_manager.js';
 import { WifiManager, WifiWorld, AUTH_FAIL_REASONS, AP_IP, FW_VERSION_DEFAULT } from './fw/wifi_manager.js';
 import { MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, RelayType, DIMode } from './fw/sysconfig.js';
 import { clientOnSoftAp, ipToU32, u32ToIp } from './fw/ap_access.js';
+import { ethUp, requestViaEth } from './fw/net_link.js';
 import { PhysicalObserver } from './fw/observer.js';
 import { parseSensorId, parseActuatorId } from './fw/safety_cfg_api.js';
 import { SensorSrc } from './fw/sensor_hub.js';
@@ -78,9 +79,14 @@ const DEFAULTS = {
   // 'lan' = ev aginda. Varsayilan: ev agina bagli baslayan cihaz icin 'lan', degilse 'ap' (STA yokken cihaza tek yol SoftAP'dir).
   clientNet: null,
   staIp: null,   // QA: STA adresi (varsayilan 192.168.1.<30..129>); 192.168.4.x vermek "ev modemi de 192.168.4.0/24" cakismasini sinar
+  // QA (v1.3.0 Ethernet): kablolu Ethernet (W5500) takili + DHCP adresi var mi; adresi (varsayilan 192.168.10.57/24). Surucu olaylari modellenmez.
+  eth: false,
+  ethIp: null,
 };
 
-export const CLIENT_NET_MODES = Object.freeze(['ap', 'lan']);
+// 'eth' (v1.3.0): istemci kablolu LAN'da, baglantinin panodaki yerel ucu Ethernet IP'si (anahtarsiz yetki; kullanici karari 2026-10-08).
+export const CLIENT_NET_MODES = Object.freeze(['ap', 'lan', 'eth']);
+const ETH_MASK = '255.255.255.0';
 /** QA NVS yazma arizasi enjekte edilebilen kimlik anahtarlari (firmware ConfigManager: "lk" = local_key, "ap_pw" = ap_pass). */
 export const NVS_FAILABLE_KEYS = Object.freeze(['ap_pw', 'lk']);
 const CLIENT_AP_IP = '192.168.4.2';   // SoftAP DHCP'sinin ilk istemci adresi
@@ -105,9 +111,16 @@ export class DeviceSimulator {
     this.staIp = o.staIp || `192.168.1.${30 + ([...this.uid].reduce((a, c) => a + c.charCodeAt(0), 0) % 100)}`;
     if (!ipToU32(this.staIp)) throw new Error(`gecersiz staIp: ${o.staIp}`);
     const cn = o.clientNet || (o.wifiConnected ? 'lan' : 'ap');
-    if (!CLIENT_NET_MODES.includes(cn)) throw new Error(`clientNet ap|lan olmali: ${o.clientNet}`);
-    /** HTTP istemcisinin ag konumu modeli (bkz. DEFAULTS.clientNet). remoteIp: acik IP gecersiz kilma; apClients: SoftAP istasyon sayisi gecersiz kilma (null = tureti) */
-    this.clientNet = { mode: cn, remoteIp: null, apClients: null };
+    if (!CLIENT_NET_MODES.includes(cn)) throw new Error(`clientNet ap|lan|eth olmali: ${o.clientNet}`);
+    /**
+     * HTTP istemcisinin ag konumu modeli (bkz. DEFAULTS.clientNet). remoteIp: acik IP gecersiz kilma; apClients: SoftAP istasyon sayisi gecersiz
+     * kilma (null = tureti); localIp: baglantinin panodaki yerel ucu gecersiz kilma (null = moddan; or. SoftAP istemcisi Ethernet IP'sine: pano-3).
+     */
+    this.clientNet = { mode: cn, remoteIp: null, apClients: null, localIp: null };
+    this.ethIp = o.ethIp || '192.168.10.57';
+    if (!ipToU32(this.ethIp)) throw new Error(`gecersiz ethIp: ${o.ethIp}`);
+    /** Ethernet (W5500) modeli: up = kablo takili + DHCP adresi (firmware ethUp). 'eth' istemci modu kabloyu takili sayar. */
+    this.ethNet = { up: !!o.eth || cn === 'eth', ip: this.ethIp, mask: ETH_MASK };
 
     this.eventSeq = 0;
     this.events = [];
@@ -243,6 +256,7 @@ export class DeviceSimulator {
       hooks,
       timing: this.opts.wifiTiming || {},
       uidOverride: this.uidOverride,
+      ethUp: () => ethUp(this.ethState()),   // v1.3.0: kurtarma AP politikasi Ethernet girdisi
     });
     const mqttTiming = { ...(this.opts.firmwareTiming ? FIRMWARE_TIMING : QA_TIMING), ...(this.opts.mqttTiming || {}) };
     const mqtt = new MqttManager({
@@ -437,7 +451,7 @@ export class DeviceSimulator {
   }
 
   // =========================================================================== QA kontrolleri
-  /** MQTT baglantisini ANORMAL keser (soket yok edilir) -> broker LWT 'offline' yayinlar. online'a kadar kapali kalir. */
+  /** MQTT baglantisini ANORMAL keser (soket yok edilir) -> broker LWT {"status":"offline","uid"} yayinlar (v1.3.1). online'a kadar kapali kalir. */
   forceOffline() {
     this.event('qa_offline', {});
     this.fw?.mqtt.qaForceOffline();
@@ -448,7 +462,7 @@ export class DeviceSimulator {
     this.fw?.mqtt.qaForceOnline();
   }
 
-  /** Sessiz kayip: temiz DISCONNECT (broker LWT YAYINLAMAZ) ve 'offline' de yayinlanmaz -> retained 'online' bayat kalir. */
+  /** Sessiz kayip: temiz DISCONNECT (broker LWT YAYINLAMAZ) ve offline durumu da yayinlanmaz -> retained {"status":"online",...} bayat kalir. */
   crash() {
     this.event('qa_crash', {});
     this.fw?.mqtt.qaCrash();
@@ -547,10 +561,38 @@ export class DeviceSimulator {
     const cn = this.clientNet;
     if (cn.remoteIp) return cn.remoteIp;
     if (cn.mode === 'ap') return CLIENT_AP_IP;
+    if (cn.mode === 'eth') {   // Ethernet LAN'indaki baska bir konak (.20; panonun adresi .20 ise .21)
+      const e = ipToU32(this.ethNet.ip);
+      const last = (e >>> 24) & 255;
+      return u32ToIp(((e & 0x00FFFFFF) | ((last === 20 ? 21 : 20) << 24)) >>> 0);
+    }
     // ilk sekizli en dusuk bayttir (IPAddress -> uint32_t): SON sekizli en yuksek bayt
     const sta = ipToU32(this.staIp);
     const last = (sta >>> 24) & 255;
     return u32ToIp(((sta & 0x00FFFFFF) | ((last === 20 ? 21 : 20) << 24)) >>> 0);
+  }
+
+  /** Baglantinin panodaki yerel ucu (firmware: _server.client().localIP()): AP -> AP IP, LAN -> STA IP, Ethernet -> Ethernet IP. */
+  clientLocalIp() {
+    const cn = this.clientNet;
+    if (cn.localIp) return cn.localIp;
+    if (cn.mode === 'ap') return AP_IP;
+    if (cn.mode === 'eth') return this.ethNet.ip;
+    return this.staIp;
+  }
+
+  /** Ethernet durumu firmware NetLinkCore EthState bicimiyle (kablo + DHCP tek bayrak; surucu olaylari modellenmez). */
+  ethState() {
+    const up = this.ethNet.up;
+    return { started: up, link: up, hasIp: up, ip: up ? ipToU32(this.ethNet.ip) : 0, mask: up ? ipToU32(this.ethNet.mask) : 0 };
+  }
+
+  /** QA: Ethernet kablosu takili (DHCP adresiyle) / cekili. */
+  setEthernet({ up } = {}) {
+    if (typeof up !== 'boolean') throw new RangeError('up boolean olmali');
+    this.ethNet.up = up;
+    this.event('qa_ethernet', { up });
+    return { up: this.ethNet.up, ip: this.ethNet.ip, mask: this.ethNet.mask };
   }
 
   #syncClientNet() {
@@ -581,12 +623,19 @@ export class DeviceSimulator {
   }
 
   /** QA: istemci ag konumu (mode: 'ap' | 'lan'), istege bagli acik uzak IP ve SoftAP istasyon sayisi (ap_clients; null = moddan tureti). */
-  setClientNet({ mode, remote_ip: remoteIp, ap_clients: apClients } = {}) {
+  setClientNet({ mode, remote_ip: remoteIp, ap_clients: apClients, local_ip: localIp } = {}) {
     const cn = this.clientNet;
     if (mode !== undefined) {
-      if (!CLIENT_NET_MODES.includes(mode)) throw new RangeError('mode: ap | lan');
+      if (!CLIENT_NET_MODES.includes(mode)) throw new RangeError('mode: ap | lan | eth');
+      if (localIp !== undefined && localIp !== null && !ipToU32(localIp)) throw new RangeError('local_ip gecerli IPv4 olmali');
       cn.mode = mode;
-      cn.remoteIp = null;   // mod degisince acik IP gecersiz kilma sifirlanir
+      cn.remoteIp = null;   // mod degisince acik IP gecersiz kilmalari sifirlanir
+      cn.localIp = null;
+      if (mode === 'eth') this.ethNet.up = true;   // kablolu istemci: kablo takili
+    }
+    if (localIp !== undefined) {
+      if (localIp !== null && !ipToU32(localIp)) throw new RangeError('local_ip gecerli IPv4 olmali');
+      cn.localIp = localIp;
     }
     if (remoteIp !== undefined) {
       if (remoteIp !== null && !ipToU32(remoteIp)) throw new RangeError('remote_ip gecerli IPv4 olmali');
@@ -608,14 +657,22 @@ export class DeviceSimulator {
     const cn = this.clientNet;
     const wifi = fw ? fw.wifi : null;
     const remote = this.clientRemoteIp();
+    const eth = this.ethState();
+    const onAp = wifi ? clientOnSoftAp(wifi.isRecoveryApActive(), ipToU32(remote), ipToU32(wifi.apIp()), ipToU32(wifi.apMask()), ipToU32(wifi.getLocalIP()),
+      ipToU32(wifi.staMask()), ethUp(eth) ? eth.ip : 0, ethUp(eth) ? eth.mask : 0) : false;
     return {
       mode: cn.mode,
       remote_ip: remote,
       remote_ip_override: cn.remoteIp,
       ap_clients_override: cn.apClients,
-      on_softap: wifi ? clientOnSoftAp(wifi.isRecoveryApActive(), ipToU32(remote), ipToU32(wifi.apIp()), ipToU32(wifi.apMask()), ipToU32(wifi.getLocalIP()), ipToU32(wifi.staMask())) : false,
+      on_softap: onAp,
       ap_ip: AP_IP,
       sta_ip: this.staIp,
+      local_ip: this.clientLocalIp(),
+      local_ip_override: cn.localIp,
+      eth_up: this.ethNet.up,
+      eth_ip: this.ethNet.ip,
+      via_eth: requestViaEth(eth, ipToU32(this.clientLocalIp()), onAp),
     };
   }
 
@@ -918,6 +975,7 @@ export const CLI_OPTIONS = {
   'millis-offset': { type: 'string' },
   'client-net': { type: 'string' },
   'sta-ip': { type: 'string' },
+  eth: { type: 'boolean' },
   'tick-ms': { type: 'string' },
   'boot-ms': { type: 'string' },
   'boot-hold-ms': { type: 'string' },
@@ -939,14 +997,15 @@ export const CLI_HELP = `AHBU cihaz simulatoru (QA) - firmware DEGILDIR (kaynak 
   --state-file F            kalici "NVS" dosyasi; --reset-state onu siler
   --firmware-timing         MQTT yeniden baglanma gercek firmware degerleriyle (5 sn..5 dk, jitter); varsayilan hizli (2..10 sn)
   --millis-offset N         millis() sayacini N ms ileri baslatir (49,7 gun tasma testi)
-  --client-net ap|lan       HTTP istemcisinin ag konumu modeli (AP kaynakli Wi-Fi servis yetkisi icin): ap = cihazin SoftAP'inde, lan = ev aginda.
-                            Varsayilan: --wifi-connected ise lan, degilse ap (ayrica /__sim/client-net)
+  --client-net ap|lan|eth   HTTP istemcisinin ag konumu modeli (AP kaynakli Wi-Fi servis yetkisi icin): ap = cihazin SoftAP'inde, lan = ev aginda,
+                            eth = kablolu Ethernet (anahtarsiz yetki, v1.3.0). Varsayilan: --wifi-connected ise lan, degilse ap (ayrica /__sim/client-net)
+  --eth                     Ethernet kablosu takili (DHCP 192.168.10.57/24); ayrica /__sim/eth {up}
   --sta-ip A.B.C.D          STA adresi (varsayilan 192.168.1.30..129); 192.168.4.x = "ev modemi de 192.168.4.0/24" cakisma senaryosu
   --tick-ms N               ana dongu adimi [10]    --boot-ms N  guc kesintisi sonrasi acilis suresi [800]
   --boot-hold-ms N          acilis sonrasi komut islenmeyen pencere (firmware 500) [500]
   --log-file F              olay logu
   --strict                  interlock ihlalinde fatal isaretle
-QA kontrol ucu (yalniz 127.0.0.1): /__sim/state, /__sim/log, /__sim/di/{n}/press|down|up, /__sim/offline|online|crash|power-cycle|slow|wifi|client-net|ap|hw-fail|ext|tca|provision|unprovision|factory-reset
+QA kontrol ucu (yalniz 127.0.0.1): /__sim/state, /__sim/log, /__sim/di/{n}/press|down|up, /__sim/offline|online|crash|power-cycle|slow|wifi|client-net|eth|ap|hw-fail|ext|tca|provision|unprovision|factory-reset
 `;
 
 /** parseArgs ciktisini DeviceSimulator seceneklerine cevirir. */
@@ -979,6 +1038,7 @@ export function optionsFromCli(values) {
   if (values['millis-offset'] !== undefined) o.millisOffset = num(values['millis-offset'], 'millis-offset');
   if (values['client-net'] !== undefined) o.clientNet = values['client-net'];
   if (values['sta-ip'] !== undefined) o.staIp = values['sta-ip'];
+  if (values.eth) o.eth = true;
   if (values['tick-ms'] !== undefined) o.tickMs = num(values['tick-ms'], 'tick-ms');
   if (values['boot-ms'] !== undefined) o.bootMs = num(values['boot-ms'], 'boot-ms');
   if (values['boot-hold-ms'] !== undefined) o.bootHoldMs = num(values['boot-hold-ms'], 'boot-hold-ms');

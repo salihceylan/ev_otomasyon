@@ -310,8 +310,12 @@ export class ApPolicy {
   static STABLE_MS = 30000;              // STA bu kadar kararli olunca pencere erken kapanir
   static RESTART_DELAY_MS = 1500;        // ap_pass degisince yeniden baslatma gecikmesi
 
-  /** @returns {{allowed:boolean, connected:boolean, staConfigured:boolean, apActive:boolean, clients:number}} */
-  static makeIn() { return { allowed: false, connected: false, staConfigured: false, apActive: false, clients: 0 }; }
+  /**
+   * ethUp (v1.3.0): Ethernet bagli VE cihaz provizyonlu (net_link.js apPolicyEthUp). Provizyonsuz kartta HER ZAMAN false; false iken davranis
+   * v1.2.1 ile birebir aynidir.
+   * @returns {{allowed:boolean, connected:boolean, ethUp:boolean, staConfigured:boolean, apActive:boolean, clients:number}}
+   */
+  static makeIn() { return { allowed: false, connected: false, ethUp: false, staConfigured: false, apActive: false, clients: 0 }; }
 
   static #makeOut() {
     return { desired: false, startAp: false, stopAp: false, restartAp: false, opened: false, extended: false, ended: false, closedStable: false, serviceExpired: false };
@@ -358,11 +362,12 @@ export class ApPolicy {
     this.reopen.service(now);
     this.restart.service(now);
 
-    // 2) STA baglanti kenarlari: kesinti sayaci (3 dk) ve kararlilik sayaci (30 sn)
-    if (!this.primed || inp.connected !== this.prevConnected) {
+    // 2) Ag baglanti kenarlari: kesinti sayaci (3 dk) ve kararlilik sayaci (30 sn). "Ag" = STA bagli VEYA (Ethernet bagli ve provizyonlu).
+    const netConnected = !!inp.connected || !!inp.ethUp;
+    if (!this.primed || netConnected !== this.prevConnected) {
       this.primed = true;
-      this.prevConnected = inp.connected;
-      if (inp.connected) {
+      this.prevConnected = netConnected;
+      if (netConnected) {
         this.disc.disarm();
         this.trigger = false;
         this.stable.arm(now, ApPolicy.STABLE_MS);
@@ -377,8 +382,9 @@ export class ApPolicy {
     if (this.disc.service(now)) this.trigger = true;
     if (this.stable.service(now)) this.stableOk = true;
 
-    // 3) pencere
-    const trig = !inp.staConfigured || this.trigger;
+    // 3) pencere. Kayitli STA yoksa pencere acilir -- AMA provizyonlu kart Ethernet'le bagliyken degil (v1.3.0 duzeltmesi: aksi halde AP'yi
+    // 10 dk acik / 15 dk kapali sonsuza dek dongulerdi).
+    const trig = (!inp.staConfigured && !inp.ethUp) || this.trigger;
     if (!this.windowOpen) {
       if (inp.allowed && trig && this.reopen.elapsed(now)) {
         this.windowOpen = true;
@@ -386,8 +392,8 @@ export class ApPolicy {
         this.cap.arm(now, ApPolicy.MAX_EXTEND_MS);
         out.opened = true;
       }
-    } else if (inp.connected && inp.staConfigured && this.stableOk) {
-      this.#closeWindow();          // histerezis: STA 30 sn kararli
+    } else if (netConnected && (inp.staConfigured || inp.ethUp) && this.stableOk) {
+      this.#closeWindow();          // histerezis: ag (STA ya da provizyonlu kartta Ethernet) 30 sn kararli
       this.reopen.disarm();
       out.closedStable = true;
     } else if (this.window.service(now)) {

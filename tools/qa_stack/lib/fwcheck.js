@@ -81,14 +81,32 @@ export const SOURCES = {
   'src/sensors/ContactBus.h': 'sim/fw/contact_bus.js',
   'test/test_intrusion_fsm/test_main.cpp': 'test/fw_intrusion_fsm.test.js',
   'test/test_contact_bus/test_main.cpp': 'test/fw_contact_bus.test.js',
+  // v1.3.0 (NetUtil.h'den tasindi) ve v1.3.1 (fw-fix): yerel anahtar parmak izi (pano-5), Ethernet istek sinifi (karar 1 + pano-3)
+  'src/Utf8Util.h': 'sim/fw/netutil.js (utf8SeqLen / isCleanUtf8 / copyUtf8Truncated)',
+  'src/LocalKeyFp.h': 'sim/fw/local_key_fp.js (+ config_manager.js localKeyFp, mqtt_manager.js / local_api.js lk_fp)',
+  'test/test_lk_fp/test_main.cpp': 'test/fw_local_key_fp.test.js',
+  'src/NetLinkCore.h': 'sim/fw/net_link.js (ALT KUME: ethUp / requestViaEth / activeIf / statusIp / apPolicyEthUp) + sim/local_api.js Ethernet yolu',
+  'test/test_net_link/test_main.cpp': 'test/fw_net_link.test.js (ALT KUME)',
 };
 
 /**
  * Bilincli PORTLANMAYAN firmware kaynaklari (izlenmez; nedenleri docs/QA_STACK.md 5.1):
  *  * src/WebPortalPage.h -- gomulu tarayici arayuzu (INDEX_HTML). Simulator `GET /` icin kisa bir bilgi sayfasi doner; gercek sayfayi SERVIS ETMEZ.
  *    Sayfanin API sozlesmesi (anahtarsiz /api/status + /api/wifi/status yoklamasi) simulatorun HTTP uclariyla dogrulanir (test/sim_http.test.js).
+ *  * v1.3.0 (site/kurulum sablonu + Ethernet; 2026-10-08) simulatorde MODELLENMEYENLER: W5500 surucusu ve baglayici (EthLink / NetLink: Ethernet
+ *    simulatorde tek bayraktir, bkz. DeviceSimulator.ethNet + /__sim/eth; MQTT ve SNTP Ethernet uzerinden calismaz, DNS secimi yok), kurulum sablonu
+ *    (src/template/*: POST /api/template/apply, GET /api/template, seri TPL, NVS ahbu_tpl, durumdaki tpl / tpl_incomplete), panonun bulut kimligini
+ *    kendisinin almasi (BootstrapCore.h + MqttManager bootstrap istemcisi; durumdaki "bootstrap"), MQTT state'teki eth_connected / eth_ip / net_if.
+ *    Modellenen v1.3.0/1.3.1 davranislari: Ethernet'ten anahtarsiz/provizyonsuz yerel API (pano-3 SoftAP dislamasi dahil), kisitli/tam durum
+ *    eth_connected / net_if / eth_ip, kurtarma AP politikasinin Ethernet girdisi, Ethernet'ten guvenlik yapilandirmasi gevsetmesi (VIA_CLI).
  */
-export const NOT_PORTED = Object.freeze(['src/WebPortalPage.h']);
+export const NOT_PORTED = Object.freeze([
+  'src/WebPortalPage.h',
+  'src/EthLink.cpp', 'src/EthLink.h', 'src/NetLink.cpp', 'src/NetLink.h',
+  'src/BootstrapCore.h',
+  'src/template/TemplateApply.cpp', 'src/template/TemplateApply.h', 'src/template/TemplateParse.cpp', 'src/template/TemplateParse.h',
+  'src/template/TemplateRules.h', 'src/template/TemplateStore.cpp', 'src/template/TemplateStore.h', 'src/template/TplSerial.h',
+]);
 
 /**
  * Kaynak ozeti (SHA-256): CRLF -> LF normallestirilerek hesaplanir. Ana agac core.autocrlf=true ile calisir; ayni kaynak bir checkout'ta

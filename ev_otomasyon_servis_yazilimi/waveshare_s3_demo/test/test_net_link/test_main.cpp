@@ -64,6 +64,35 @@ void test_request_arrived_via_ethernet_only_when_local_ip_is_the_eth_ip() {
   TEST_ASSERT_FALSE(requestViaEth(s, ip(192, 168, 10, 57)));
 }
 
+// pano-3: SoftAP istemcisi (192.168.4.x) panonun Ethernet IP'sine bağlanırsa bağlantının yerel ucu Ethernet IP'si olur (lwIP yerel teslim);
+// istek yine de Ethernet'ten SAYILMAZ: anahtarsız yetki (kullanıcı kararı) yalnız kablodan gelenler içindir, Wi-Fi/AP anahtarlı kalır.
+// ApAccess::clientOnSoftAp'ın anlamı korunur (Ethernet alt ağı AP alt ağıyla çakışırsa istemci AP sayılmaz) -> gerçek Ethernet istemcileri
+// etkilenmez.
+void test_softap_client_to_ethernet_ip_is_not_ethernet() {
+  EthState s;
+  ethApply(s, EthEvent::START);
+  ethApply(s, EthEvent::LINK_UP);
+  const uint32_t ethIp = ip(192, 168, 10, 57), apIp = ip(192, 168, 4, 1);
+  ethApply(s, EthEvent::GOT_IP, ethIp, MASK24, ip(192, 168, 10, 1));
+  const bool apClient = ApAccess::clientOnSoftAp(true, ip(192, 168, 4, 2), apIp, MASK24, 0, 0, ethIp, MASK24);
+  TEST_ASSERT_TRUE(apClient);
+  TEST_ASSERT_TRUE(requestViaEth(s, ethIp));                     // eski ölçüt: yalnız yerel uç -> "kablodan" sanılırdı
+  TEST_ASSERT_FALSE(requestViaEth(s, ethIp, apClient));          // SoftAP istemcisi Ethernet sayılmaz
+  const bool lanClient = ApAccess::clientOnSoftAp(true, ip(192, 168, 10, 20), apIp, MASK24, 0, 0, ethIp, MASK24);
+  TEST_ASSERT_FALSE(lanClient);
+  TEST_ASSERT_TRUE(requestViaEth(s, ethIp, lanClient));          // gerçek Ethernet istemcisi etkilenmez
+  // LAN da 192.168.4.0/24 ise (AP alt ağıyla çakışma) istemci AP sayılmaz: Ethernet kararı eskisi gibi
+  EthState o;
+  ethApply(o, EthEvent::START);
+  ethApply(o, EthEvent::LINK_UP);
+  ethApply(o, EthEvent::GOT_IP, ip(192, 168, 4, 57), MASK24, ip(192, 168, 4, 254));
+  const bool overlapClient = ApAccess::clientOnSoftAp(true, ip(192, 168, 4, 20), apIp, MASK24, 0, 0, ip(192, 168, 4, 57), MASK24);
+  TEST_ASSERT_FALSE(overlapClient);
+  TEST_ASSERT_TRUE(requestViaEth(o, ip(192, 168, 4, 57), overlapClient));
+  TEST_ASSERT_FALSE(requestViaEth(s, ip(192, 168, 1, 20), false));   // Wi-Fi STA IP'sine gelen yine Ethernet değil
+  TEST_ASSERT_FALSE(requestViaEth(EthState(), ethIp, false));        // Ethernet yok
+}
+
 void test_cable_not_plugged_driver_started_is_not_up() {
   EthState s;
   ethApply(s, EthEvent::START);
@@ -262,6 +291,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_without_ethernet_every_decision_equals_wifi_only_behavior);
   RUN_TEST(test_request_arrived_via_ethernet_only_when_local_ip_is_the_eth_ip);
+  RUN_TEST(test_softap_client_to_ethernet_ip_is_not_ethernet);
   RUN_TEST(test_cable_not_plugged_driver_started_is_not_up);
   RUN_TEST(test_link_then_dhcp_brings_ethernet_up_and_cable_pull_takes_it_down);
   RUN_TEST(test_out_of_order_ip_before_link_and_zero_ip);

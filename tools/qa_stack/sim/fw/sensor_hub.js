@@ -236,17 +236,21 @@ export class SensorHub {
   }
 }
 
-/** DiSensor.h: kablolu kaynak; DiGate'in KARARLI seviyesi. ok: yerel 1..8 ilk okumadan sonra, ek 9..40 modul saglikliyken. */
+/** DiSensor.h: kablolu kaynak; DiGate'in KARARLI seviyesi. ok: yerel 1..8 ilk okumadan sonra, ek 9..40 modul saglikliyken VE kanal ilk taze
+ * okumayla baslatildiysa (setExtReady, pano-4: modul etkinken kanal sayisi artinca yeni kanallar ilk okumaya kadar "okunamadi"). */
 export class DiSensor {
-  constructor(gate) { this.gate_ = gate; this.localReady_ = false; this.extOk_ = false; }
+  constructor(gate) { this.gate_ = gate; this.localReady_ = false; this.extOk_ = false; this.extReady_ = MAX_DI - 8; }
   setLocalReady(v) { this.localReady_ = !!v; }
   setExtOk(v) { this.extOk_ = !!v; }
+  /** Ek modul kanallarindan ilk `channels` tanesi gercek okumayla baslatildi (varsayilan: hepsi; yalniz setExtOk karar verir). */
+  setExtReady(channels) { this.extReady_ = channels & 0xFF; }
   localReady() { return this.localReady_; }
   extOk() { return this.extOk_; }
+  extReady() { return this.extReady_; }
   sample(c /* , nowMs */) {
     if (!this.gate_ || c.src !== SensorSrc.DI || c.index < 1 || c.index > MAX_DI) return { level: false, ok: false };
     const idx = c.index - 1;
-    return { level: this.gate_.stable(idx), ok: idx < 8 ? this.localReady_ : this.extOk_ };
+    return { level: this.gate_.stable(idx), ok: idx < 8 ? this.localReady_ : (this.extOk_ && (idx - 8) < this.extReady_) };
   }
   static diMaskOf(cfgs, n) {
     let m = 0n;

@@ -20,7 +20,7 @@ SafetyManager& SafetyManager::instance() {
 SafetyManager::SafetyManager()
     : di_(nullptr), cfgMux_(nullptr), rejMux_(nullptr), viewMux_(nullptr), writeMux_(nullptr), sensorQ_(nullptr), actuatorMask_(0),
       sensorDiMask_(0), bootLevel_(0), safeMaskA_(0), safeMaskL_(0), relayGuard_(0), diHist_(0), diHistDirty_(false), bootAt_(0), bootCount_(0), bn_(0), lastSirenSave_(0), lastViewAt_(0), epoch_(0), viewSig_(0),
-      rejSeq_(0), masksGen_(0), sirenSaved_(0), active_(false), localReady_(false), extOk_(false), extActuator_(false),
+      rejSeq_(0), masksGen_(0), sirenSaved_(0), active_(false), localReady_(false), extOk_(false), extReady_(MAX_DI - 8), extActuator_(false),
       posSaveForced_(false), cfgUsable_(false), cfgStored_(false), forceCorrupt_(false), scanBlocked_(false), safeMode_(false), latchedMask_(0), pendingState_(0), pendingOk_(0), pendingVia_(0),
       pendingCfg_(nullptr), lastRej_(Rej::OK) {
   cfg_.setDefaults();
@@ -262,6 +262,7 @@ void SafetyManager::tick(uint32_t now_ms, uint32_t epoch) {
   while (sensorQ_ && xQueueReceive(sensorQ_, &r, 0) == pdTRUE) bridge_.report(r);
   di_.setLocalReady(localReady_);
   di_.setExtOk(extOk_);
+  di_.setExtReady(extReady_);
   {
     // Kilit altında ağ/bekleme YOK (MqttTask da yalnız kopyalar): sınırlı süre, öncelik kalıtımlı mutex.
     EventOutboxRtos::Guard g(outbox_, portMAX_DELAY);
@@ -623,7 +624,8 @@ bool SafetyManager::applyConfigOnLoop(const SafetyConfig& next, uint8_t via, uin
     core_.setIntrusionSiren(intr_.sirenReq(), SirenKick::NONE, now_ms);
     if (core_.safeMode()) {
       // Çıkış kullanılabilirliği yalnız kilit kaydının maskesiyle: açılış güvenli maskesindeki silinmiş vana çıkışı kilitlemez [EM-5].
-      core_.setConfigUsable(cfg_.nAct > 0 && (core_.latchRecordAssert() & ~act_.relayMask()) == 0);
+      // Eylemcisiz (yalnız sensörlü) yapılandırma da kullanılabilir: kilit kaydı röle istemiyorsa yerinde ACK FORCE çıkarır (pano-1).
+      core_.setConfigUsable(latchCovered(core_.latchRecordAssert(), act_.relayMask()));
     }
   }
   cfgUsable_ = true;                                        // validate geçmiş yapılandırma: açılış güvenli maskesi yeniden yazılabilir

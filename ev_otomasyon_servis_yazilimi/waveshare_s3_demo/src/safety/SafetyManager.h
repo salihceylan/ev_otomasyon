@@ -69,7 +69,12 @@ public:
   uint64_t sensorDiMask() const { return sensorDiMask_; }     // sensör + kontrol rolü + geri bildirim DI'leri (bit = DI-1)
   uint64_t bootLevelMask() const { return bootLevel_; }       // açılış seviyeleri (yapılandırma + kilit maskesi)
   uint32_t masksGen() const { return masksGen_; }             // maskeler (çalışırken yapılandırma değişimi) değişince artar
-  void setDiHealth(bool localReady, bool extOk) { localReady_ = localReady; extOk_ = extOk; }
+  // extReady: ek modül kanallarından ilk taze okumayla başlatılmış olanların sayısı (pano-4; DiSensor::setExtReady).
+  void setDiHealth(bool localReady, bool extOk, uint8_t extReady = MAX_DI - 8) {
+    localReady_ = localReady;
+    extOk_ = extOk;
+    extReady_ = extReady;
+  }
   void tick(uint32_t now_ms, uint32_t epoch = 0);
   void outputs(uint64_t& assertMask, uint64_t& levelMask) const { core_.outputMasks(assertMask, levelMask); }
   bool buzzer() const { return core_.buzzer(); }
@@ -185,6 +190,7 @@ private:
   bool active_;
   bool localReady_;
   bool extOk_;
+  uint8_t extReady_;
   bool extActuator_;
   bool posSaveForced_;
   volatile bool cfgUsable_;       // yapılandırma kullanılabilir (cfg_corrupt değil): açılış güvenli maskesi yalnız o zaman yazılır

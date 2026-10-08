@@ -87,6 +87,10 @@ inline bool ethUp(const EthState& s) { return s.started && s.link && s.hasIp && 
 // Ethernet'ten gelen yerel API istekleri anahtarsız ve provizyonsuz yetkilidir, güvenlik yapılandırması gevşetmesi de
 // serbesttir (seri CLI ile eşit). Wi-Fi STA ve SoftAP'ten gelenler etkilenmez (anahtarlı kalır).
 inline bool requestViaEth(const EthState& s, uint32_t localIp) { return localIp != 0 && ethUp(s) && localIp == s.ip; }
+// pano-3 (savunma): yerel uç Ethernet IP'si olsa da istemci SoftAP istemcisiyse (ApAccess::clientOnSoftAp; Ethernet alt ağı AP alt ağıyla
+// çakışırsa istemci AP sayılmaz) istek Ethernet'ten SAYILMAZ: lwIP bir AP istemcisinin panonun Ethernet IP'sine bağlantısını da yerel teslim
+// eder; anahtarsız yetki yalnız kablodan gelenler içindir (Wi-Fi/AP istekleri anahtarlı kalır). WebPortal::dispatch bu biçimi kullanır.
+inline bool requestViaEth(const EthState& s, uint32_t localIp, bool remoteOnAp) { return !remoteOnAp && requestViaEth(s, localIp); }
 
 // Etkin arayüz (Wi-Fi öncelikli; IDF varsayılan rotasıyla aynı).
 inline NetIf activeIf(bool wifiUp, bool ethIsUp) {

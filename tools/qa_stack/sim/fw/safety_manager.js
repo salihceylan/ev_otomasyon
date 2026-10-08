@@ -14,12 +14,12 @@
 //
 // QA'ya ozgu: bootNonce (bn) ve resetReason disaridan verilebilir (deterministik testler). intrusion=false hirsiz katmanini HIC kurmaz
 // (v1.2.0 davranisi; esdegerlik testi: hirsiz sensoru olmayan panoda katman varken iz bit bit ayni).
-import { DiSensor, BridgeSensor, SensorHub } from './sensor_hub.js';
+import { DiSensor, BridgeSensor, SensorHub, MAX_DI } from './sensor_hub.js';
 import { ActKind, ActuatorCore, applyLatchMask, bootLevelMask, bootSafeMasks, rawCommand, RawDecision, relayBit, isValve } from './actuator_map.js';
 import {
   SAFETY_SCHEMA_VER, defaultSafetyConfig, validate, CfgErr, cfgErrText, configCrc, decideBootMode, SafeReason, safeReasonText,
   latchClear, latchValid, latchAny, latchAssert64, latchLevel64, latchZoneMask, crashClear, crashOnBoot, crashStableTick, cloneLatch,
-  bootMaskForSystem,
+  bootMaskForSystem, latchCovered,
 } from './safety_config.js';
 import { SafetyCore, Rej, Origin, rejText, SirenKick } from './safety_fsm.js';
 import { EventOutbox, EvType, makeEvent, NVSK_LATCH, NVSK_ACT_POS, NVSK_SIREN, NVSK_CRASH, NVSK_ARM, VIA_CLI, VIA_DI } from './event_outbox.js';
@@ -154,6 +154,7 @@ export class SafetyManager {
     this.active_ = false;
     this.localReady = false;
     this.extOk = false;
+    this.extReady = MAX_DI - 8;   // pano-4: ilk taze okumayla baslatilmis ek DI kanali sayisi
     this.extActuator = false;
     this.scanBlocked_ = false;
     this.keepLocal = 0;
@@ -308,13 +309,14 @@ export class SafetyManager {
   actuatorMask() { return this.actuatorMask_; }
   sensorDiMask() { return this.sensorDiMask_; }
   bootLevelMask() { return this.bootLevel_; }
-  setDiHealth(localReady, extOk) { this.localReady = !!localReady; this.extOk = !!extOk; }
+  setDiHealth(localReady, extOk, extReady = MAX_DI - 8) { this.localReady = !!localReady; this.extOk = !!extOk; this.extReady = extReady; }
 
   tick(nowMs, epoch = 0) {
     if (!this.active_) return;
     while (this.sensorQ.length) this.bridge.report(this.sensorQ.shift());
     this.di.setLocalReady(this.localReady);
     this.di.setExtOk(this.extOk);
+    this.di.setExtReady(this.extReady);
     this.core.tick(nowMs, epoch >>> 0, this.di, this.bridge);
     if (this.intrusionOn) {
       this.intr.setUsable(this.#intrusionUsable());
@@ -505,7 +507,8 @@ export class SafetyManager {
       this.core.setIntrusionSiren(this.intr.sirenReq(), SirenKick.NONE, nowMs);
     }
     if (this.core.safeMode()) {
-      this.core.setConfigUsable(this.cfg.nAct > 0 && (this.core.latchRecordAssert() & ~this.act.relayMask()) === 0n);
+      // Eylemcisiz (yalniz sensorlu) yapilandirma da kullanilabilir: kilit kaydi role istemiyorsa yerinde ACK FORCE cikarir (pano-1).
+      this.core.setConfigUsable(latchCovered(this.core.latchRecordAssert(), this.act.relayMask()));
     }
     this.cfgUsable = true;
     this.#mergeDiHist(diUseMask(this.cfg));   // FW2-2

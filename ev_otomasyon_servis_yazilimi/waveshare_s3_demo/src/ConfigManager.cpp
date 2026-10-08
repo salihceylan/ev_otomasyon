@@ -1,4 +1,6 @@
 #include "ConfigManager.h"
+#include "LocalKeyFp.h"
+#include <mbedtls/md.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -12,7 +14,9 @@ ConfigManager& ConfigManager::instance() {
   return mgr;
 }
 
-ConfigManager::ConfigManager() : _mutex(nullptr), _prefsOk(false), _generation(0), _resetCount(0) {
+ConfigManager::ConfigManager()
+    : _mutex(nullptr), _prefsOk(false), _generation(0), _resetCount(0), _keyGen(0), _fpGen(0), _fpValid(false) {
+  memset(_fp, 0, sizeof(_fp));
   _mutex = xSemaphoreCreateRecursiveMutex();
   applyDefaults();
 }
@@ -28,6 +32,7 @@ void ConfigManager::unlock() {
 // RAM'i varsayılana çeker. NVS'e DOKUNMAZ (yapıcı da kullanır). Kimlik alanları boş kalır.
 void ConfigManager::applyDefaults() {
   memset(&config, 0, sizeof(config));
+  keyChanged();   // local_key silindi (load/resetToDefaults sonra geri yazar): lk_fp önbelleği geçersiz
 
   copyStr(config.device_name, "AHBU Akilli Ev Kontrol");
   config.wifi_sta_enabled = false;
@@ -424,6 +429,7 @@ bool ConfigManager::setLocalKey(const char* key) {
   const bool ok = _prefsOk && (prefs.putString("lk", config.local_key) == strlen(config.local_key));
   if (!ok) memcpy(config.local_key, old, sizeof(old));
   memset(old, 0, sizeof(old));
+  if (ok) keyChanged();
   return ok;
 }
 
@@ -441,6 +447,7 @@ bool ConfigManager::setApPass(const char* pass) {
 bool ConfigManager::clearLocalKey() {
   ConfigLock lk(*this);
   memset(config.local_key, 0, sizeof(config.local_key));
+  keyChanged();
   if (!_prefsOk) return false;
   if (!prefs.isKey("lk")) return true;
   return prefs.remove("lk");
@@ -507,4 +514,44 @@ bool ConfigManager::saveRelayRuntime(uint8_t relayIndex) {
   char key[16];
   snprintf(key, sizeof(key), "r_rt_%d", relayIndex);
   return prefs.putUShort(key, config.relays[relayIndex].runtime_sec) == sizeof(uint16_t);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Yerel anahtar parmak izi (lk_fp; sözleşme 1, LocalKeyFp.h)
+// ---------------------------------------------------------------------------------------------
+static bool hmacSha256(const uint8_t* key, size_t keyLen, const uint8_t* msg, size_t msgLen, uint8_t* out) {
+  const mbedtls_md_info_t* md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  return md && mbedtls_md_hmac(md, key, keyLen, msg, msgLen, out) == 0;
+}
+
+bool ConfigManager::localKeyFp(const char* uid, char* out, size_t cap) {
+  if (!out || cap < lkfp::FP_BUF) return false;
+  out[0] = '\0';
+  char key[sizeof(config.local_key)];
+  uint32_t gen;
+  {
+    ConfigLock lk(*this);
+    if (!config.hasLocalKey()) return false;
+    if (_fpValid && _fpGen == _keyGen) {
+      memcpy(out, _fp, lkfp::FP_BUF);
+      return true;
+    }
+    memcpy(key, config.local_key, sizeof(key));
+    gen = _keyGen;
+  }
+  key[sizeof(key) - 1] = '\0';
+  char fp[lkfp::FP_BUF];
+  const bool ok = lkfp::compute(key, uid, fp, hmacSha256);   // HMAC kilit dışında
+  memset(key, 0, sizeof(key));
+  if (!ok) return false;
+  {
+    ConfigLock lk(*this);
+    if (gen == _keyGen) {                                     // arada anahtar değişmediyse önbelleğe al
+      memcpy(_fp, fp, sizeof(_fp));
+      _fpGen = gen;
+      _fpValid = true;
+    }
+  }
+  memcpy(out, fp, lkfp::FP_BUF);
+  return true;
 }

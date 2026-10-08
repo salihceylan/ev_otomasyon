@@ -226,6 +226,42 @@ test('fw_sensor_hub: DiSensor yerel ok ilk okumadan sonra; ek DI modul sagligina
   assert.equal(dec.action, Action.NONE);
 });
 
+// pano-4 (Unity: test_di_sensor_new_ext_channels_unknown_until_first_read): kanal sayisi artinca yeni ek kanallar ilk taze okumaya kadar
+// "okunamadi" (NC gaz sahte alarm uretmez); mevcut kanallar etkilenmez; setExtReady cagrilmazsa eski davranis.
+test('fw_sensor_hub: DiSensor yeni ek kanal ilk okumaya kadar bilinmiyor; mevcut kanal ve varsayilan davranis degismez (pano-4)', () => {
+  const g = new DiGate();
+  const d = new DiSensor(g);
+  d.setLocalReady(true);
+  d.setExtOk(true);
+  d.setExtReady(8);
+  const cs = [mk(0, 9, SensorKind.GAS, 1, 1), mk(0, 17, SensorKind.GAS, 1, 1)];
+  g.init(8, true, 0);
+  assert.equal(d.sample(cs[0], 0).ok, true);
+  assert.equal(d.sample(cs[1], 0).ok, false);
+  const h = new SensorHub();
+  h.configure(cs, 2, 0);
+  let t = 0;
+  for (; t < 2000; t += 10) {
+    for (let i = 0; i < 2; i++) { const s = d.sample(cs[i], t); h.update(i, s.level, s.ok, t); }
+    h.finish(t);
+  }
+  assert.equal(h.zoneWet(1), 0);
+  assert.equal(h.ok(0), true);
+  g.init(16, true, t);
+  d.setExtReady(16);
+  assert.equal(d.sample(cs[1], t).ok, true);
+  assert.equal(d.sample(cs[1], t).level, true);
+  for (const e = t + 2000; t < e; t += 10) {
+    for (let i = 0; i < 2; i++) { const s = d.sample(cs[i], t); h.update(i, s.level, s.ok, t); }
+    h.finish(t);
+  }
+  assert.equal(h.zoneWet(1), 0);
+  assert.equal(h.ok(1), true);
+  const d2 = new DiSensor(g);
+  d2.setExtOk(true);
+  assert.equal(d2.sample(cs[1], 0).ok, true);
+});
+
 test('fw_sensor_hub: BridgeSensor kalp atisi', () => {
   const b = new BridgeSensor();
   const c = mk(SensorSrc.BRIDGE, 2, SensorKind.WATER, 1, 0);

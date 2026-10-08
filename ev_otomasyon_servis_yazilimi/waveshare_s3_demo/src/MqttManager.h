@@ -65,7 +65,7 @@ private:
   void scheduleRetry(bool longWait);
   void publishIfDue(uint32_t now);
   bool publishState();
-  bool publishStatus(const char* text);
+  bool publishStatus(const char* status);   // "online" | "offline" -> {"status":...,"uid":...} (v1.3.1)
   void onMessage(char* topic, byte* payload, unsigned int length);
   void handleCommand(const uint8_t* payload, unsigned int length);
   void handleSys(uint8_t* payload, unsigned int length);
@@ -137,6 +137,7 @@ private:
     uint32_t safetySig;       // guvenlik gorunumu imzasi (since_up haric)
     uint32_t rejSeq;          // last_rej sayaci
     bool timeOk;
+    uint32_t keyGen;          // yerel anahtar degisim sayaci (ConfigManager::keyGeneration): yeni lk_fp hemen yayinlanir (pano-5)
   };
   StateSignature _publishedSig;
   bool _publishedSigValid;

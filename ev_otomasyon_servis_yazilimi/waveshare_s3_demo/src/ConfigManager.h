@@ -48,6 +48,14 @@ public:
   ProvisionResult provisionIfEmpty(const char* key, const char* pass);
   // MQTT kimliğini yazar (POST /api/mqtt/config). Alan uzunlukları doğrulanır; false = reddedildi.
   bool setMqttCredentials(const char* server, uint16_t port, const char* user, const char* pass);
+
+  // Yerel anahtar parmak izi (lk_fp; sözleşme 1, LocalKeyFp.h): provizyonluyken out = 8 küçük harf hex ve true; provizyonsuzsa (ya da
+  // HMAC hatası) false ve out boş. uid: cihaz UID'si (WiFiManager::getDeviceUid). Önbellek anahtar her değiştiğinde (load, setLocalKey,
+  // clearLocalKey/RESETKEY, provisionIfEmpty, resetToDefaults) geçersizlenir ve ilk istekte yeniden hesaplanır: anahtar kilit altında
+  // kopyalanır, HMAC kilit DIŞINDA yapılır, kopya sıfırlanır. cap en az 9 bayt.
+  bool localKeyFp(const char* uid, char* out, size_t cap);
+  // Anahtar değişim sayacı (her değişimde artar). MqttManager durum imzasına girer: anahtar değişince yeni lk_fp hemen yayınlanır.
+  uint32_t keyGeneration() const { return _keyGen; }
   // Yalnız bir rölenin süresini kalıcılaştırır (SET_RUNTIME; tüm yapılandırmayı yeniden yazmaz).
   bool saveRelayRuntime(uint8_t relayIndex);
 
@@ -74,9 +82,15 @@ private:
   bool eraseAppKeys();
   bool writeAll(const SystemConfig& c);   // save()/saveCandidate() ortak gövdesi (ConfigLock altında)
   void restoreApPass(const char* old);   // provisionIfEmpty geri alma adımı
+  void keyChanged() { _keyGen = _keyGen + 1; }   // ConfigLock altında; lk_fp önbelleğini geçersizler
   Preferences prefs;
   SemaphoreHandle_t _mutex;
   bool _prefsOk;
   volatile uint32_t _generation;
   volatile uint32_t _resetCount;
+  // lk_fp önbelleği (yalnız ConfigLock altında): _fpGen == _keyGen ise _fp güncel
+  volatile uint32_t _keyGen;
+  uint32_t _fpGen;
+  bool _fpValid;
+  char _fp[9];
 };

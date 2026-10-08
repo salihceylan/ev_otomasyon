@@ -20,6 +20,7 @@ import { AP_PASS_MIN_LEN } from './sysconfig.js';
 import {
   ApPolicy, CandidateFlow, CandPhase, CandAction, StaMachine, StaState, StaAction, Wait, u32,
 } from './net_time.js';
+import { apPolicyEthUp } from './net_link.js';
 
 export const TASK_TICK_MS = 250;
 export const ATTEMPT_TIMEOUT_MS = StaMachine.ATTEMPT_TIMEOUT_MS;
@@ -36,7 +37,7 @@ export const STA_STABLE_MS = ApPolicy.STABLE_MS;
 export const MIN_BACKOFF_MS = StaMachine.MIN_BACKOFF_MS;
 export const MAX_BACKOFF_MS = StaMachine.MAX_BACKOFF_MS;
 // firmware WiFiManager.h FW_VERSION (test/sim_device.test.js "surum:" testi esitligi denetler)
-export const FW_VERSION_DEFAULT = '1.2.1';
+export const FW_VERSION_DEFAULT = '1.3.1';
 
 /** SoftAP ag bilgisi (firmware startAp: 192.168.4.1/24) */
 export const AP_IP = '192.168.4.1';
@@ -105,8 +106,10 @@ export class WifiManager {
    * @param {{connectMs?:number, scanMs?:number, sntpMs?:number}} [o.timing]
    * @param {string} [o.uidOverride]  QA: firmware UID bicimi (AHBU-S3-<MAC6>) disinda bir UID bildir
    */
-  constructor({ config, world, mac, staIp, hooks = {}, timing = {}, uidOverride = '' }) {
+  constructor({ config, world, mac, staIp, hooks = {}, timing = {}, uidOverride = '', ethUp = null }) {
     this.cm = config;
+    /** v1.3.0: Ethernet bagli mi (DeviceSimulator Ethernet modeli; yoksa hep false = v1.2.1 davranisi) */
+    this.ethUpFn = typeof ethUp === 'function' ? ethUp : () => false;
     this.uidOverride = uidOverride;
     this.world = world;
     this.mac = mac;
@@ -487,6 +490,8 @@ export class WifiManager {
     const inp = ApPolicy.makeIn();
     inp.allowed = !provisioned || passOk;
     inp.connected = this.connected;
+    // v1.3.0: provizyonlu kart Ethernet'le bagliyken kurtarma AP'si acilmaz; provizyonsuz kartta Ethernet sayilmaz (apPolicyEthUp)
+    inp.ethUp = apPolicyEthUp(this.ethUpFn(), provisioned);
     inp.staConfigured = cStrLen(this.ssid) > 0;
     inp.apActive = this.apActive;
     inp.clients = this.apStationCount();

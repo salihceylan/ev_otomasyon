@@ -7,7 +7,7 @@ import { SensorHub, SensorKind, SensorSrc, defaultFlags, defaultConfirmMs, makeS
 import { actuatorIdentityMap, remapActPos } from '../sim/fw/safety_cfg_edit.js';
 import { ActuatorCore, ActKind, CloseMode, Medium, AF_FAN_EXPROOF, RawDecision, makeActuatorConfig, bootLevelMask } from '../sim/fw/actuator_map.js';
 import { EventOutbox, EvType, VIA_CLI } from '../sim/fw/event_outbox.js';
-import { defaultSafetyConfig, latchClear, latchSeal, latchSetMasks, latchValid, latchAssert64, latchLevel64, SafeReason } from '../sim/fw/safety_config.js';
+import { defaultSafetyConfig, latchClear, latchSeal, latchSetMasks, latchValid, latchAssert64, latchLevel64, SafeReason, decideBootMode, crashClear, DRY_HOLD_DEFAULT_MS, latchCovered } from '../sim/fw/safety_config.js';
 
 const u32 = (x) => x >>> 0;
 
@@ -669,4 +669,72 @@ test('fw_safety_fsm: guvenli kipte acilis guvenli maskesi eylemcisiz dayatilir (
   n.core.imposeBootMask(1n << 4n, 1n << 4n);
   n.run(50);
   assert.equal(n.asserted(5), false);
+});
+
+// pano-1 (i) (Unity: test_sensor_only_latch_power_cycle_restores_normal_and_clears): yalniz sensorlu kurulum (NC gaz, eylemci yok) kilitliyken
+// elektrik kesildi -> acilis karari NORMAL; bolge ayni aid ile LATCHED geri yuklenir, onay + kuruluk temizler.
+test('fw_safety_fsm: eylemcisiz kilit kaydiyla soguk acilis normal kip; onay + kuruluk temizler (pano-1)', () => {
+  const b = new Bench();
+  b.setSens([sensor(3, SensorKind.GAS, 1, 1)]);
+  b.di.level[3] = true;
+  b.start();
+  b.run(100);
+  b.di.level[3] = false;
+  b.run(1100);
+  assert.equal(b.core.zoneState(1), ZoneSt.LATCHED);
+  const aid = b.core.zone(1).aid;
+  b.di.level[3] = true;
+  const rec = b.core.buildLatch();
+  assert.equal(latchAssert64(rec), 0n);
+  b.mode = decideBootMode(true, true, rec, b.cfg, crashClear());
+  assert.equal(b.mode, SafeReason.NONE);
+  b.powerCycle();
+  assert.equal(b.core.safeMode(), false);
+  assert.equal(b.core.zoneState(1), ZoneSt.LATCHED);
+  assert.equal(b.core.zone(1).aid, aid);
+  assert.equal(b.core.ack(1, null, Origin.LOCAL_DI, false, b.t), Rej.OK);
+  b.run(DRY_HOLD_DEFAULT_MS + 2000);
+  assert.equal(b.core.zoneState(1), ZoneSt.NORMAL);
+  assert.ok(b.lastEventOf(EvType.ALARM_CLEARED) >= 0);
+});
+
+// pano-1 (ii)/(iii) (Unity: test_safe_mode_exit_after_actuatorless_config_applied): cfg_corrupt guvenli kipinde eylemcisiz yapilandirma uygulanir
+// (SafetyManager.applyConfigOnLoop: reconfigured + setConfigUsable(latchCovered(...))). Role istemeyen kilitte yerinde ACK FORCE cikarir;
+// kilit tabloda olmayan roleyi istiyorsa cikis kapali kalir.
+test('fw_safety_fsm: guvenli kipte eylemcisiz yapilandirma uygulaninca yerinde ACK FORCE cikarir; kapsanmayan kilitte cikis yok (pano-1)', () => {
+  const b = new Bench();
+  b.haveLatch = true;
+  b.latch = latchClear();
+  b.latch.z[0].st = 1;
+  latchSeal(b.latch);
+  b.mode = SafeReason.CFG_CORRUPT;
+  b.start();
+  assert.equal(b.core.safeMode(), true);
+  assert.equal(b.core.ack(0, null, Origin.LOCAL_DI, true, b.t), Rej.SAFE_MODE);
+  const old = structuredClone(b.cfg);
+  b.cfg.sens = [sensor(3, SensorKind.GAS, 1, 1)];
+  b.cfg.nSens = 1;
+  b.di.level[3] = true;
+  b.reconfigure(old);
+  b.core.setConfigUsable(latchCovered(b.core.latchRecordAssert(), b.act.relayMask()));
+  assert.equal(b.core.ack(0, null, Origin.REMOTE, true, b.t), Rej.SAFE_MODE);
+  assert.equal(b.core.ack(0, null, Origin.LOCAL_DI, true, b.t), Rej.OK);
+  b.step();
+  assert.equal(b.core.safeMode(), false);
+  const o = new Bench();
+  o.haveLatch = true;
+  o.latch = latchClear();
+  o.latch.z[0].st = 1;
+  latchSetMasks(o.latch, 1n << 4n, 0n);
+  latchSeal(o.latch);
+  o.mode = SafeReason.CFG_CORRUPT;
+  o.start();
+  const old2 = structuredClone(o.cfg);
+  o.cfg.sens = [sensor(3, SensorKind.GAS, 1, 1)];
+  o.cfg.nSens = 1;
+  o.reconfigure(old2);
+  assert.equal(latchCovered(o.core.latchRecordAssert(), o.act.relayMask()), false);
+  o.core.setConfigUsable(latchCovered(o.core.latchRecordAssert(), o.act.relayMask()));
+  assert.equal(o.core.ack(0, null, Origin.LOCAL_DI, true, o.t), Rej.SAFE_MODE);
+  assert.equal(o.core.safeMode(), true);
 });

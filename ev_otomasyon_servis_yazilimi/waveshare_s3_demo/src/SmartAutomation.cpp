@@ -211,7 +211,8 @@ SmartAutomation& SmartAutomation::instance() {
 }
 
 SmartAutomation::SmartAutomation()
-    : _posDirty(false), _lastMotionMs(0), _extDiInit(false), _extEnabledPrev(false), _lastLocalPairMask(0xFF),
+    : _posDirty(false), _lastMotionMs(0), _extDiInit(false), _extEnabledPrev(false), _extChPrev(0), _extDiReadyCh(0),
+      _lastLocalPairMask(0xFF),
       _childLockEnabled(false), _seenResetCount(0), _localRetryLast(0), _localRetryGap(0), _localFails(0),
       _extRetryLast(0), _extRetryGap(0), _extWriteFails(0),
       _lastTcaVerify(0), _stateChanged(false), _lastMovePublish(0), _bootAt(0), _bootHoldActive(false), _restartPending(false),
@@ -395,6 +396,7 @@ void SmartAutomation::begin() {
 
   // Panjur çiftleri / süreler / sürücü interlock maskeleri
   _extEnabledPrev = cfg.ext_module_enabled;
+  _extChPrev = cfg.ext_module_channels;   // pano-4: acilistaki kanal sayisi "degisim" sayilmaz
   syncConfig(now);
 
   // RS485 Seri Portunu Başlat (ek modül olmasa da CLI/servis tarama için hazır)
@@ -517,7 +519,32 @@ void SmartAutomation::syncConfig(uint32_t now) {
     _extPollGap = 0;
     _extRetryGap = 0;
     _extDiInit = false;
+    _extDiReadyCh = 0;
     _extModuleResponding = false;
+    _extChPrev = cfg.ext_module_channels;   // geçişin kendisi: kanal değişimi ayrıca işlenmez
+  } else if (cfg.ext_module_enabled && cfg.ext_module_channels != _extChPrev) {
+    // pano-4: modül etkin kalırken kanal sayısı değişti (CLI EXTMOD, POST /api/config, şablon). Yeni kanalların DI kapıları hiç başlatılmadı
+    // (kararlı=false: NC gaz/duman sensörü "aktif" okunur, duvar butonunda ilk okuma sahte kenar üretirdi): bir sonraki başarılı ayrık giriş
+    // yoklamasında kenarsız başlatılır ve o zamana dek o kanalların güvenlik sensörleri "okunamadı" sayılır (DiSensor::setExtReady). Toplu
+    // ext-ok DÜŞÜRÜLMEZ: daha önce okunmuş (everOk) gaz sensörü arıza -> SF_FAULT_CLOSE ile sahte gaz alarmı ve vana kapatması olurdu.
+    // Değişen aralıktaki ek röleler "bilinmiyor"a döner: KAPALI olduğu doğrulanana dek KAPAT yeniden yazılır, eşi başlatılmaz.
+    const uint8_t oldCh = _extChPrev, newCh = cfg.ext_module_channels;
+    const uint8_t lo = (uint8_t)(8 + (oldCh < newCh ? oldCh : newCh));
+    const uint8_t hi = (uint8_t)(8 + (oldCh < newCh ? newCh : oldCh));
+    uint64_t changed = 0;
+    for (uint8_t i = lo; i < hi && i < MAX_TOTAL_RELAYS; i++) {
+      _want[i] = false;
+      _hw[i] = true;                        // "açık olabilir": KAPAT komutu gönderilecek
+      _hwKnown[i] = false;
+      _impulseActive[i] = false;
+      _adoptNextPoll[i] = false;
+      changed |= (1ULL << i);
+    }
+    _extGuard.forceHw(_extGuard.hw() | changed);
+    if (_extDiReadyCh > (uint8_t)(lo - 8)) _extDiReadyCh = (uint8_t)(lo - 8);
+    _extChPrev = newCh;
+    printf("[RS485] Ek modul kanal sayisi %u -> %u: yeni kanallar ilk okumaya kadar bilinmiyor.\r\n", (unsigned)oldCh, (unsigned)newCh);
+    markChanged();
   }
 
   uint32_t pairMaskExt = 0;
@@ -592,12 +619,17 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
   const bool isStop = (cmd.type == CmdType::SHUTTER_STOP || cmd.type == CmdType::ALL_SHUTTERS_STOP);
   if (_restartPending && !isStop) {
     printf("[KOMUT] Yeniden baslatma bekleniyor, komut reddedildi.\r\n");
+    if (cmd.id[0] != '\0') safety::SafetyManager::instance().noteReject(cmd.id, safety::Rej::BUSY);   // pano-8
     return false;
   }
 
   // Dış dünyada tüm numaralar 1 tabanlıdır; burada 0 tabanlı dizi indeksine çevrilir.
   const uint8_t idx = (cmd.index > 0) ? (uint8_t)(cmd.index - 1) : 0xFF;
   bool ok = true;
+  // pano-8: ok=false dallarının ret kodu. Kimlikli komutta sonda state.last_rej {id, code} yazılır (bulut "yanıt yok" zaman aşımına
+  // düşmez). YALNIZ mevcut kodlar: BAD_CMD (geçersiz röle/çift/süre/konum) ve BUSY (yeniden başlatma bekliyor, RS485 taraması, hareket).
+  // Eylemci rölesi (ACTUATOR_RELAY) ve güvenlik komutları kendi kodlarını zaten yazar (burada OK kalır).
+  safety::Rej rej = safety::Rej::OK;
 
   switch (cmd.type) {
     case CmdType::RELAY_SET:
@@ -605,6 +637,7 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
       if (idx >= totalR) {
         printf("[KOMUT] gecersiz role: %u\r\n", (unsigned)cmd.index);
         ok = false;
+        rej = safety::Rej::BAD_CMD;
         break;
       }
       // Güvenlik eylemcisi rölesi (spec §2.3 madde 4 [O4][B15]): yalnız GÜVENLİ yöne giden ham komut kabul edilir ve
@@ -629,6 +662,7 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
         if (!pairConfigured(p)) {
           printf("[KOMUT] Role %u panjur tipli ama cift gecerli degil (UP+DOWN eslesmesi yok) -> reddedildi.\r\n", (unsigned)cmd.index);
           ok = false;
+          rej = safety::Rej::BAD_CMD;
           break;
         }
         const bool isUp = (rtype == RELAY_TYPE_SHUTTER_UP);
@@ -638,6 +672,7 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
         if (on && p >= 4 && _scanState == ScanState::RUNNING) {   // tarama hattı tutarken ek modül panjuru başlatılmaz
           printf("[KOMUT] RS485 taramasi suruyor: ek modul panjuru komutu reddedildi.\r\n");
           ok = false;
+          rej = safety::Rej::BUSY;
           break;
         }
         if (on) { if (isUp) _fsm[p].cmdUp(now); else _fsm[p].cmdDown(now); }
@@ -667,12 +702,14 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
       if (idx >= totalPairs || !pairConfigured(idx)) {
         printf("[KOMUT] gecersiz veya panjur olmayan cift: %u\r\n", (unsigned)cmd.index);
         ok = false;
+        rej = safety::Rej::BAD_CMD;
         break;
       }
       // Tarama hattı (RS485 mutex'i) tutarken ek modüle KAPAT gönderilemez: hareket başlatılmaz (DURDURMA serbest).
       if (idx >= 4 && cmd.type != CmdType::SHUTTER_STOP && _scanState == ScanState::RUNNING) {
         printf("[KOMUT] RS485 taramasi suruyor: ek modul panjuru komutu reddedildi.\r\n");
         ok = false;
+        rej = safety::Rej::BUSY;
         break;
       }
       if (cmd.type == CmdType::SHUTTER_UP) _fsm[idx].cmdUp(now);
@@ -683,6 +720,7 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
         if (cmd.value < 0 || cmd.value > 100) {
           printf("[KOMUT] SHUTTER_POS gecersiz deger: %ld\r\n", (long)cmd.value);
           ok = false;
+          rej = safety::Rej::BAD_CMD;
           break;
         }
         _fsm[idx].cmdPosition(now, (uint8_t)cmd.value);
@@ -722,11 +760,13 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
       if (idx >= totalPairs || !pairConfigured(idx) || cmd.value < SHUTTER_RUNTIME_MIN_SEC || cmd.value > SHUTTER_RUNTIME_MAX_SEC) {
         printf("[KOMUT] SET_RUNTIME gecersiz (panjur=%u, sn=%ld)\r\n", (unsigned)cmd.index, (long)cmd.value);
         ok = false;
+        rej = safety::Rej::BAD_CMD;
         break;
       }
       if (_fsm[idx].isMoving() || _fsm[idx].isWaiting()) {
         printf("[KOMUT] SET_RUNTIME reddedildi: panjur %u hareket halinde.\r\n", (unsigned)cmd.index);
         ok = false;
+        rej = safety::Rej::BUSY;
         break;
       }
       const uint8_t rUp = idx * 2;
@@ -758,6 +798,7 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
     default:
       printf("[KOMUT] bilinmeyen komut tipi: %u\r\n", (unsigned)cmd.type);
       ok = false;
+      rej = safety::Rej::BAD_CMD;
       break;
   }
 
@@ -767,6 +808,8 @@ bool SmartAutomation::executeCommand(const DeviceCommand& cmd, uint32_t now) {
       _lastId[sizeof(_lastId) - 1] = '\0';
     }
     markChanged();
+  } else if (rej != safety::Rej::OK && cmd.id[0] != '\0') {
+    safety::SafetyManager::instance().noteReject(cmd.id, rej);   // pano-8: state.last_rej (yayin tetigi: rejSeq imzada)
   }
   return ok;
 }
@@ -1268,7 +1311,7 @@ void SmartAutomation::safetyTick(uint32_t now) {
   }
   auto& cfg = ConfigManager::instance().config;
   sm.setDiHealth(_localDiRead,
-                 cfg.ext_module_enabled && _extDiInit && _extModuleResponding && _scanState != ScanState::RUNNING);
+                 cfg.ext_module_enabled && _extDiInit && _extModuleResponding && _scanState != ScanState::RUNNING, _extDiReadyCh);
   sm.tick(now, NetUtil::isTimeSynced() ? (uint32_t)time(nullptr) : 0);   // epoch: alarm "since" (saat yoksa yalnız since_up)
   uint64_t assertMask = 0, levelMask = 0;
   sm.outputs(assertMask, levelMask);

@@ -435,14 +435,21 @@ inline const char* safeReasonText(SafeReason r) {
   }
 }
 
+// Kilit kaydının dayattığı röleler (need) eylemci tablosunun rölelerince (have) kapsanıyor mu? Röle istemeyen kilit (ör. yalnız
+// sensörlü kurulum: eylemci yok, need = 0) her tabloyla kapsanır (pano-1). Açılış kararı (LATCH_ORPHAN) ve güvenli kipte yapılandırma
+// uygulandıktan sonra çıkışın kullanılabilirliği (SafetyManager::applyConfigOnLoop -> setConfigUsable) aynı kuralı kullanır.
+inline bool latchCovered(uint64_t need, uint64_t have) { return (need & ~have) == 0; }
+
 // cfgPresent: NVS'te güvenlik yapılandırması var mı; cfgCrcOk: okunan blob'ların CRC'si doğru mu.
 // latch: geçerli (CRC'si doğru) kilit kaydı ya da nullptr. cfg: yüklenebilen yapılandırma (bozuksa varsayılan).
+// LATCH_ORPHAN yalnız kilit, tabloda OLMAYAN röleyi istiyorsa: eylemcisiz tabloyla röle istemeyen kilit normal kipte LATCHED bölge olarak
+// geri yüklenir, onay + kurulukla temizlenir (eskiden "nAct == 0" tek başına güvenli kipti ve çıkış yolu yoktu; pano-1).
 inline SafeReason decideBootMode(bool cfgPresent, bool cfgCrcOk, const LatchRecord* latch, const SafetyConfig& cfg, const CrashLog& crash) {
   if (cfgPresent && !cfgCrcOk) return SafeReason::CFG_CORRUPT;
   if (latch && latchAny(*latch)) {
     const uint64_t need = latchAssert64(*latch);
     const uint64_t have = actuatorRelayMask(cfg.act, cfg.nAct);
-    if (cfg.nAct == 0 || (need & ~have) != 0) return SafeReason::LATCH_ORPHAN;
+    if (!latchCovered(need, have)) return SafeReason::LATCH_ORPHAN;
   }
   if (crashLoop(crash)) return SafeReason::CRASH_LOOP;
   return SafeReason::NONE;

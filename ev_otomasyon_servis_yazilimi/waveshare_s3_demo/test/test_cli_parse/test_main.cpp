@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "CliParse.h"
+#include "safety/SafetyConfig.h"
 
 using namespace cliparse;
 
@@ -220,6 +221,58 @@ void test_parsed_values_satisfy_system_config_setters(void) {
   TEST_ASSERT_EQUAL_INT(FI_ERR_INVALID_AP_PASS, run(line, false, r));
 }
 
+// pano-9: seri DEFAULT_DI / SET_SHUTTER_DI varsayilan panjur DI duzeni (DI1 -> P1 STEP, DI2 bosta, DI3 -> P2 STEP, DI4 bosta) once ADAY
+// kopyaya uygulanir; main.cpp SET_DI'daki gibi guvenlik capraz denetimi (validateSystemChange) ister. Sensor DI'sini duvar butonu yapan aday
+// reddedilir (eskiden dogrudan kaydediliyordu ve sonraki acilista guvenlik yapilandirmasi cfg_corrupt guvenli kipine dusuyordu).
+void test_default_shutter_dis_layout_and_safety_cross_check(void) {
+  SystemConfig c;
+  memset(&c, 0, sizeof(c));
+  memset(c.dis[0].name, 'x', sizeof(c.dis[0].name));          // eski ad artigi kalmamali (NUL sonlu)
+  c.dis[4].target_relay = 7;                                   // DI 5..: dokunulmaz
+  c.dis[4].mode = DI_MODE_MOMENTARY;
+  applyDefaultShutterDis(c);
+  TEST_ASSERT_EQUAL_STRING("Salon Panjur Butonu", c.dis[0].name);
+  TEST_ASSERT_EQUAL_UINT8(1, c.dis[0].target_relay);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_SHUTTER_STEP, c.dis[0].mode);
+  TEST_ASSERT_EQUAL_STRING("Giris 2 (Bosta / Serbest)", c.dis[1].name);
+  TEST_ASSERT_EQUAL_UINT8(0, c.dis[1].target_relay);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_TOGGLE, c.dis[1].mode);
+  TEST_ASSERT_EQUAL_STRING("Oda Panjur Butonu", c.dis[2].name);
+  TEST_ASSERT_EQUAL_UINT8(3, c.dis[2].target_relay);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_SHUTTER_STEP, c.dis[2].mode);
+  TEST_ASSERT_EQUAL_STRING("Giris 4 (Bosta / Serbest)", c.dis[3].name);
+  TEST_ASSERT_EQUAL_UINT8(0, c.dis[3].target_relay);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_TOGGLE, c.dis[3].mode);
+  TEST_ASSERT_EQUAL_UINT8(7, c.dis[4].target_relay);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_MOMENTARY, c.dis[4].mode);
+
+  // Guvenlik capraz denetimi: NC gaz sensoru DI 1'de. Mevcut ana yapilandirma (DI 1 bosta) gecerli; varsayilan duzen DI 1'i P1 butonu
+  // yapar -> aday reddedilir (SENSOR_DI_IS_BUTTON). Sensor DI 5'teyse (duzenin dokunmadigi) aday gecer.
+  SystemConfig base;
+  memset(&base, 0, sizeof(base));
+  base.relays[0].type = RELAY_TYPE_SHUTTER_UP;
+  base.relays[1].type = RELAY_TYPE_SHUTTER_DOWN;
+  base.relays[2].type = RELAY_TYPE_SHUTTER_UP;
+  base.relays[3].type = RELAY_TYPE_SHUTTER_DOWN;
+  static safety::SafetyConfig sc;
+  sc.setDefaults();
+  memset(&sc.sens[0], 0, sizeof(sc.sens[0]));
+  sc.sens[0].src = (uint8_t)safety::SensorSrc::DI;
+  sc.sens[0].index = 1;
+  sc.sens[0].kind = (uint8_t)safety::SensorKind::GAS;
+  sc.sens[0].zone = 1;
+  sc.sens[0].active_open = 1;
+  sc.sens[0].flags = safety::defaultFlags(sc.sens[0].kind);
+  sc.sens[0].confirm_ms = safety::defaultConfirmMs(sc.sens[0].kind);
+  sc.nSens = 1;
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)safety::CfgErr::OK, (uint8_t)safety::validateSystemChange(base, sc, 0));
+  SystemConfig next = base;
+  applyDefaultShutterDis(next);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)safety::CfgErr::SENSOR_DI_IS_BUTTON, (uint8_t)safety::validateSystemChange(next, sc, 0));
+  sc.sens[0].index = 5;
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)safety::CfgErr::OK, (uint8_t)safety::validateSystemChange(next, sc, 0));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_valid_line_is_parsed);
@@ -236,5 +289,6 @@ int main(int, char**) {
   RUN_TEST(test_output_is_nul_terminated_at_exact_capacity);
   RUN_TEST(test_error_texts_match_the_serial_protocol);
   RUN_TEST(test_parsed_values_satisfy_system_config_setters);
+  RUN_TEST(test_default_shutter_dis_layout_and_safety_cross_check);
   return UNITY_END();
 }

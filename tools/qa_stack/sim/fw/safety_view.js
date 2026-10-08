@@ -82,8 +82,9 @@ const zonesArray = (mask) => {
 export function writeStateExtras(v, m) {
   let s = `,"caps":["safety","actuator","event","cfg","intrusion"],"boot":${m.boot >>> 0},"bn":"${hex8(m.bn)}","time_ok":${m.timeOk ? 'true' : 'false'},"epoch":${m.timeOk ? (m.epoch >>> 0) : 0}`;
   if (m.rej !== Rej.OK) s += `,"last_rej":{${m.rejId ? `"id":"${m.rejId}",` : ''}"code":"${rejText(m.rej)}"}`;
-  if (!v.configured) return s;
+  // cfg.safety yapilandirilmamis panoda da yazilir (guvenlik-3): bulut ilk yamayi base_rev ile gonderebilir
   s += `,"cfg":{"safety":{"rev":${v.rev >>> 0},"crc":"${hex8(v.crc)}"}}`;
+  if (!v.configured) return s;
   s += `,"sensors":[${v.sens.map((x) => `{"id":"${sensorIdText(x.code)}","src":"${x.code & 0x80 ? 'bridge' : 'di'}","kind":"${sensorKindText(x.kind)}","zone":${x.zone},"active":${x.active ? 'true' : 'false'},"ok":${x.ok ? 'true' : 'false'}}`).join(',')}]`;
   s += `,"actuators":[${v.act.map((a, i) => {
     let t = `{"id":"a${i + 1}","relay":${a.relay}`;

@@ -7,6 +7,7 @@
 #include "WS_PCF85063.h"
 #include "WS_Relay.h"
 #include "ConfigManager.h"
+#include "LocalKeyFp.h"
 #include "SmartAutomation.h"
 #include "DeviceCommand.h"
 #include "WebPortal.h"
@@ -208,6 +209,11 @@ static void cliPrintStatus() {
     tpl::TplRecord r;
     tpl::TemplateStore::get(r);
     Serial.printf("  - Bootstrap: %s\r\n", MqttManager::instance().bootstrapStatus());   // CONTRACTS §3f
+    // v1.3.1 (pano-5, sözleşme 1): yerel anahtar parmak izi (8 hex) ya da "yok" (provizyonsuz). Anahtarın kendisi ASLA yazılmaz; fabrika
+    // aracı bu satırı FACTORYINIT sonrası anahtarın panoya doğru yazıldığını doğrulamak için okur.
+    char lkFp[lkfp::FP_BUF];
+    const bool haveFp = ConfigManager::instance().localKeyFp(WiFiManager::instance().getDeviceUid().c_str(), lkFp, sizeof(lkFp));
+    Serial.printf("  - Anahtar izi: %s\r\n", haveFp ? lkFp : "yok");
     Serial.printf("  - Sablon: %s v%lu%s\r\n", r.present ? r.id : "-", (unsigned long)(r.present ? r.ver : 0),
                   tpl::TemplateStore::txnInterrupted() ? " YARIM (guvenli kip; seri TPL ile yeniden yazin)" : "");
   }
@@ -606,21 +612,16 @@ static void handleCliLine(String cmd) {
       Serial.printf("  - DI %d: '%s' -> Hedef Role: %d (Mod: %d)\r\n", i + 1, cfg.dis[i].name, cfg.dis[i].target_relay, cfg.dis[i].mode);
     }
   } else if (eq(first, "SET_SHUTTER_DI") || eq(first, "DEFAULT_DI")) {
-    strncpy(cfg.dis[0].name, "Salon Panjur Butonu", sizeof(cfg.dis[0].name) - 1);
-    cfg.dis[0].target_relay = 1;
-    cfg.dis[0].mode = DI_MODE_SHUTTER_STEP; // 2
-
-    strncpy(cfg.dis[1].name, "Giris 2 (Bosta / Serbest)", sizeof(cfg.dis[1].name) - 1);
-    cfg.dis[1].target_relay = 0;
-    cfg.dis[1].mode = DI_MODE_TOGGLE;       // 0
-
-    strncpy(cfg.dis[2].name, "Oda Panjur Butonu", sizeof(cfg.dis[2].name) - 1);
-    cfg.dis[2].target_relay = 3;
-    cfg.dis[2].mode = DI_MODE_SHUTTER_STEP; // 2
-
-    strncpy(cfg.dis[3].name, "Giris 4 (Bosta / Serbest)", sizeof(cfg.dis[3].name) - 1);
-    cfg.dis[3].target_relay = 0;
-    cfg.dis[3].mode = DI_MODE_TOGGLE;       // 0
+    // pano-9: SET_DI gibi ONCE aday kopya + guvenlik capraz denetimi (cliSafetyAllows): sensor DI'sini duvar butonu yapan varsayilan
+    // duzen kaydedilmez (eskiden dogrudan kaydediliyordu; sonraki acilista guvenlik yapilandirmasi cfg_corrupt guvenli kipine dusuyordu).
+    SystemConfig* next = (SystemConfig*)malloc(sizeof(SystemConfig));
+    if (!next) return;
+    memcpy(next, &cfg, sizeof(SystemConfig));
+    cliparse::applyDefaultShutterDis(*next);   // DI1 -> P1 STEP, DI2 bosta, DI3 -> P2 STEP, DI4 bosta
+    const bool allowed = cliSafetyAllows(*next);
+    free(next);
+    if (!allowed) return;
+    cliparse::applyDefaultShutterDis(cfg);
 
     bool ok = cfgMgr.save();
     Serial.printf("[CLI-SONUC] Panjur DI ayarlari (2 Kablolu Tek Buton: DI1->P1, DI2->Bosta) %s\r\n", ok ? "NVS'ye kaydedildi!" : "KAYDEDILEMEDI!");

@@ -932,6 +932,81 @@ void test_safe_mode_imposes_boot_safe_mask_without_actuators(void) {
   TEST_ASSERT_FALSE(n.asserted(5));
 }
 
+// pano-1 (i): yalniz sensorlu kurulum (NC gaz sensoru, eylemci yok) alarmla kilitliyken elektrik kesildi. Acilis karari (SafetyManager::begin
+// ile ayni girdiler) NORMAL kiptir: bolge ayni aid ile LATCHED geri yuklenir; onay + kuruluk (dry_hold) bolgeyi temizler. Eskiden
+// latch_orphan guvenli kipinde kalirdi ve eylemcisiz yapilandirmayla cikis yolu yoktu.
+void test_sensor_only_latch_power_cycle_restores_normal_and_clears(void) {
+  Bench b;
+  b.cfg.sens[0] = sensor(3, SensorKind::GAS, 1, 1);
+  b.cfg.nSens = 1;
+  b.di.level[3] = true;                              // NC gaz: kontak kapali = normal
+  b.start();
+  b.run(100);
+  b.di.level[3] = false;                             // kontak acildi: gaz
+  b.run(1100);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)ZoneSt::LATCHED, (uint8_t)b.core.zoneState(1));
+  char aid[EID_LEN];
+  strcpy(aid, b.core.zone(1).aid);
+  b.di.level[3] = true;                              // gaz gitti
+  static LatchRecord rec;
+  b.core.buildLatch(rec);
+  TEST_ASSERT_EQUAL_UINT64(0, latchAssert64(rec));   // kilit hicbir role istemiyor
+  CrashLog crash;
+  crashClear(crash);
+  b.mode = decideBootMode(true, true, &rec, b.cfg, crash);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)SafeReason::NONE, (uint8_t)b.mode);
+  b.powerCycle();
+  TEST_ASSERT_FALSE(b.core.safeMode());
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)ZoneSt::LATCHED, (uint8_t)b.core.zoneState(1));
+  TEST_ASSERT_EQUAL_STRING(aid, b.core.zone(1).aid);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)Rej::OK, (uint8_t)b.core.ack(1, nullptr, Origin::LOCAL_DI, false, b.t));
+  b.run(DRY_HOLD_DEFAULT_MS + 2000);
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)ZoneSt::NORMAL, (uint8_t)b.core.zoneState(1));
+  TEST_ASSERT_TRUE(b.lastEventOf(EvType::ALARM_CLEARED) >= 0);
+}
+
+// pano-1 (ii): cfg_corrupt guvenli kipinde eylemcisiz (yalniz sensorlu) gecerli yapilandirma uygulanir (SafetyManager::applyConfigOnLoop:
+// reconfigured + setConfigUsable(latchCovered(kilit kaydi, eylemci roleleri))). Kilit kaydi role istemiyorsa yerinde ACK FORCE guvenli
+// kipten cikarir; kilit kaydi tabloda olmayan roleyi istiyorsa cikis kapali kalir (iii).
+void test_safe_mode_exit_after_actuatorless_config_applied(void) {
+  Bench b;
+  b.haveLatch = true;
+  latchClear(b.latch);
+  b.latch.z[0].st = 1;                               // kilitli bolge, role maskesi bos (yalniz sensorlu kurulumun kaydi)
+  latchSeal(b.latch);
+  b.mode = SafeReason::CFG_CORRUPT;
+  b.start();
+  TEST_ASSERT_TRUE(b.core.safeMode());
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)Rej::SAFE_MODE, (uint8_t)b.core.ack(0, nullptr, Origin::LOCAL_DI, true, b.t));   // henuz kullanilamaz
+  const SafetyConfig old = b.cfg;
+  b.cfg.sens[0] = sensor(3, SensorKind::GAS, 1, 1);
+  b.cfg.nSens = 1;
+  b.di.level[3] = true;
+  b.reconfigure(old);
+  b.core.setConfigUsable(latchCovered(b.core.latchRecordAssert(), b.act.relayMask()));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)Rej::SAFE_MODE, (uint8_t)b.core.ack(0, nullptr, Origin::REMOTE, true, b.t));    // uzaktan cikis yok
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)Rej::OK, (uint8_t)b.core.ack(0, nullptr, Origin::LOCAL_DI, true, b.t));
+  b.step();
+  TEST_ASSERT_FALSE(b.core.safeMode());
+  // (iii) kilit kaydi role 5'i istiyor, eylemcisiz tablo kapsamiyor: cikis kullanilamaz
+  Bench o;
+  o.haveLatch = true;
+  latchClear(o.latch);
+  o.latch.z[0].st = 1;
+  latchSetMasks(o.latch, 1ULL << 4, 0);
+  latchSeal(o.latch);
+  o.mode = SafeReason::CFG_CORRUPT;
+  o.start();
+  const SafetyConfig old2 = o.cfg;
+  o.cfg.sens[0] = sensor(3, SensorKind::GAS, 1, 1);
+  o.cfg.nSens = 1;
+  o.reconfigure(old2);
+  TEST_ASSERT_FALSE(latchCovered(o.core.latchRecordAssert(), o.act.relayMask()));
+  o.core.setConfigUsable(latchCovered(o.core.latchRecordAssert(), o.act.relayMask()));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)Rej::SAFE_MODE, (uint8_t)o.core.ack(0, nullptr, Origin::LOCAL_DI, true, o.t));
+  TEST_ASSERT_TRUE(o.core.safeMode());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_unconfigured_core_is_idle);
@@ -972,5 +1047,7 @@ int main(int, char**) {
   RUN_TEST(test_reconfigure_keeps_gas_valve_opened_by_reset);
   RUN_TEST(test_test_restore_respects_user_close_and_permission);
   RUN_TEST(test_safe_mode_imposes_boot_safe_mask_without_actuators);
+  RUN_TEST(test_sensor_only_latch_power_cycle_restores_normal_and_clears);
+  RUN_TEST(test_safe_mode_exit_after_actuatorless_config_applied);
   return UNITY_END();
 }

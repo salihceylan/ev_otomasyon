@@ -1,5 +1,6 @@
 #include "MqttManager.h"
 #include "ConfigManager.h"
+#include "LocalKeyFp.h"
 #include "SmartAutomation.h"
 #include "DeviceCommand.h"
 #include "WiFiManager.h"
@@ -73,6 +74,13 @@ private:
   MutexGuard(const MutexGuard&);
   MutexGuard& operator=(const MutexGuard&);
 };
+
+// ev/{t}/status yükü (guvenlik-6, sözleşme 3): gerçek JSON {"status":"online|offline","uid":"<UID>"} (bağlanınca, LWT ve planlı yeniden
+// başlatma). Çok panolu evde sunucu durumu uid'e göre yalnız o panoya yazar (eskiden düz "online"/"offline" yükü panoyu tanımlamıyordu:
+// bir panonun LWT'si evdeki diğerlerini de çevrimdışı gösteriyordu). UID [A-Z0-9-] (WiFiManager::getDeviceUid): kaçış gerekmez.
+void statusPayload(char* out, size_t cap, const char* status, const char* uid) {
+  snprintf(out, cap, "{\"status\":\"%s\",\"uid\":\"%s\"}", status, uid);
+}
 
 const char* relayTypeName(uint8_t type) {
   switch (type) {
@@ -843,11 +851,14 @@ bool MqttManager::tryConnect() {
     return false;
   }
 
-  // 3) MQTT CONNECT (kimlik burada gider). LWT: elektrik/ag kesilince broker "offline" yayinlar.
+  // 3) MQTT CONNECT (kimlik burada gider). LWT: elektrik/ag kesilince broker {"status":"offline","uid":...} yayinlar (v1.3.1, guvenlik-6;
+  // tampon connect cagrisi suresince gecerli: PubSubClient LWT'yi CONNECT paketine hemen kopyalar).
+  char will[64];
+  statusPayload(will, sizeof(will), "offline", _uid);
   const bool ok = _mqttClient.connect(_clientId, _user, _pass, _topicStatus,
                                       1,       // LWT QoS 1
                                       true,    // retain
-                                      "offline",
+                                      will,
                                       true);   // clean session: bayat komutlar yeniden uygulanmaz
   if (!ok) {
     const int st = _mqttClient.state();
@@ -893,10 +904,13 @@ bool MqttManager::tryConnect() {
   return true;
 }
 
-bool MqttManager::publishStatus(const char* text) {
+// status: "online" | "offline" -> yuk {"status":...,"uid":...} (guvenlik-6). Retain ayni.
+bool MqttManager::publishStatus(const char* status) {
   if (!_mqttClient.connected()) return false;
+  char payload[64];
+  statusPayload(payload, sizeof(payload), status, _uid);
   // PubSubClient yalnizca QoS 0 yayinlar (LWT QoS 1 CONNECT'te gonderilir)
-  return _mqttClient.publish(_topicStatus, text, true);
+  return _mqttClient.publish(_topicStatus, payload, true);
 }
 
 void MqttManager::prepareForRestart() {
@@ -935,6 +949,7 @@ void makeSignature(const AutomationSnapshot& s, Sig& out) {
   out.safetySig = sm.viewSig();
   out.rejSeq = sm.rejSeq();
   out.timeOk = NetUtil::isTimeSynced();
+  out.keyGen = ConfigManager::instance().keyGeneration();   // anahtar degisti: yeni lk_fp (pano-5)
 }
 
 }  // namespace
@@ -989,6 +1004,10 @@ bool MqttManager::publishState() {
   auto& sm = safety::SafetyManager::instance();
   const uint32_t sigAtCopy = sm.viewSig();
   const uint32_t rejAtCopy = sm.rejSeq();
+  // Yerel anahtar parmak izi (pano-5): sayac izden ONCE okunur (arada anahtar degisirse gozcu yeniden yayinlar). Provizyonsuzsa alan yok.
+  const uint32_t keyGenAtCopy = ConfigManager::instance().keyGeneration();
+  char lkFp[lkfp::FP_BUF];
+  const bool haveFp = ConfigManager::instance().localKeyFp(_uid, lkFp, sizeof(lkFp));
   safety::SafetyView* sv = (safety::SafetyView*)malloc(sizeof(safety::SafetyView));
   if (!sv) return fail("bellek (guvenlik gorunumu)");
   if (!sm.copyView(*sv)) {
@@ -1042,8 +1061,8 @@ bool MqttManager::publishState() {
     if (snap.shutters[p].configured) pairs[nS++] = p;
   }
 
-  // ArduinoJson havuzu: oge sayisindan hesaplanir (adlar kopyalanmaz: gecici goruntuye isaret eder)
-  const size_t cap = JSON_OBJECT_SIZE(16) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
+  // ArduinoJson havuzu: oge sayisindan hesaplanir (adlar kopyalanmaz: gecici goruntuye isaret eder). Ust nesne 16 alan + lk_fp (v1.3.1) + pay.
+  const size_t cap = JSON_OBJECT_SIZE(18) + JSON_OBJECT_SIZE(2) + JSON_ARRAY_SIZE(nR) + (size_t)nR * JSON_OBJECT_SIZE(5) +
                      JSON_ARRAY_SIZE(nS) + (size_t)nS * JSON_OBJECT_SIZE(5) + JSON_ARRAY_SIZE(nD) +
                      (size_t)nD * JSON_OBJECT_SIZE(2) + 64;
   DynamicJsonDocument doc(cap);
@@ -1075,6 +1094,7 @@ bool MqttManager::publishState() {
   doc["eth_connected"] = ns.ethUp;
   doc["eth_ip"] = (const char*)ethIp;
   doc["net_if"] = netlink::netIfName(ns.active);
+  if (haveFp) doc["lk_fp"] = (const char*)lkFp;   // v1.3.1 (pano-5, sozlesme 1): yalniz provizyonluyken
   if (tplRec.present) {
     JsonObject t = doc.createNestedObject("tpl");
     t["id"] = (const char*)tplRec.id;
@@ -1156,6 +1176,7 @@ bool MqttManager::publishState() {
   makeSignature(snap, _publishedSig);   // "en son yayinlanan" durum: gozcu bununla karsilastirir
   _publishedSig.safetySig = sigAtCopy;  // yayinlanan gorunumun imzasi (kopyadan sonra degistiyse gozcu yeniden yayinlar)
   _publishedSig.rejSeq = rejAtCopy;
+  _publishedSig.keyGen = keyGenAtCopy;
   _publishedSigValid = true;
   if ((seq % 20) == 1) {
     printf("[MQTTS] Durum raporu yayinlandi (seq %u, %u bayt)\r\n", (unsigned)seq, (unsigned)len);
@@ -1337,9 +1358,23 @@ void MqttManager::handleSetLocalKey(JsonObject root) {
     return;
   }
 
-  if (ConfigManager::instance().setLocalKey(key)) {
+  // pano-7: provizyonsuz panoya buluttan anahtar yazilmaz (AP parolasi olmadan yarim provizyon kalir, kurulum AP politikasi bozulurdu).
+  // Ilk anahtar yalniz factory/init ya da seri FACTORYINIT ile. Denetim + yazma ayni (ozyinelemeli) kilit altinda: arada seri RESETKEY
+  // anahtari silerse yeni anahtar yazilmaz. Anahtar degeri loglanmaz.
+  bool provisioned = false, applied = false;
+  {
+    ConfigManager::ConfigLock lk(ConfigManager::instance());
+    provisioned = ConfigManager::instance().hasLocalKey();
+    if (provisioned) applied = ConfigManager::instance().setLocalKey(key);
+  }
+  if (!provisioned) {
+    printf("[MQTTS] set_local_key yok sayildi: cihaz provizyonsuz\r\n");
+    return;
+  }
+  if (applied) {
     printf("[MQTTS] Yerel anahtar guncellendi (sys/set_local_key).\r\n");
     WiFiManager::instance().applyApConfigChange();   // provizyon durumu degisti: AP ilkesi yeniden degerlendirilir
+    _pace.connected();   // pano-5: yeni lk_fp'li tam durum gecikmeden (sunucu anahtar takasini state'te yeni izi gorunce kesinlestirir)
   } else {
     printf("[MQTTS] HATA: yerel anahtar kaydedilemedi.\r\n");
   }

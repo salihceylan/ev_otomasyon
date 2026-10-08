@@ -11,8 +11,12 @@
 //    YA DA (istemci SoftAP arayuzunde + AP su an FIILEN WPA2 + gecerli ap_pass >= 8 + cihaz provizyonlu; karar sim/fw/ap_access.js). Digerleri (20 uc)
 //    yalniz anahtarla acilir (AP istemcisi 401). AP kaynakli yolda yanlis anahtar hata sayacina islenmez ve 423 yoklanmaz; hiz siniri yalniz AP kaynakli
 //    ANAHTARSIZ POST /api/wifi/connect icin: GLOBAL kayan 60 sn'de en cok 6 istek (gecersiz govdeli dahil) -> 429 {"error":"rate_limited","retry_after":N}.
-//    SIMULATORDE istemcinin ag konumu (SoftAP mi, LAN mi) gercek soket adresinden (hepsi 127.0.0.1) cikarilamaz: DeviceSimulator.clientNet modelidir
-//    (/__sim/client-net {mode: ap|lan}); karar yine gercek clientOnSoftAp(AP/STA alt aglari) fonksiyonundan gecer.
+//    SIMULATORDE istemcinin ag konumu (SoftAP mi, LAN mi, kablolu Ethernet mi) gercek soket adresinden (hepsi 127.0.0.1) cikarilamaz:
+//    DeviceSimulator.clientNet modelidir (/__sim/client-net {mode: ap|lan|eth, local_ip?}); karar yine gercek clientOnSoftAp / requestViaEth'ten gecer.
+//  * v1.3.0 kullanici karari (Ethernet): kablolu Ethernet'ten gelen istek (yerel uc Ethernet IP'si VE istemci SoftAP istemcisi degil: pano-3)
+//    anahtarsiz ve provizyonsuz yetkilidir; X-Device-Key basligi (degeri ne olursa olsun) tam durumu ister; guvenlik yapilandirmasi gevsetmesi
+//    serbesttir (VIA_CLI). Kisitli durumda eth_connected/net_if. v1.3.1: tam durumda "provisioned" GERCEK deger ve provizyonluyken "lk_fp";
+//    POST /api/auth/rekey provizyonsuz panoda 403 unprovisioned (Ethernet dahil; yarim provizyon yok).
 //  * CORS basligi YOKTUR (hatalarda ve OPTIONS'ta da); bilinmeyen yol/YONTEM (OPTIONS dahil) 404 -- 405 yoktur.
 //  * Host (IPv4 sabiti / localhost / *.local) ve Origin (http://<Host> olmali) dogrulanir: 400 bad_host / 403 bad_origin (AP kaynakli yolda da AYNEN).
 //  * JSON govdeli POST'larda Content-Type: application/json zorunlu (415), govde bos 400 empty_body, > 24576 bayt 413 too_large.
@@ -32,14 +36,15 @@ import { ConnectRequest } from './fw/wifi_manager.js';
 import { ProvisionResult } from './fw/config_manager.js';
 import { isInt } from './command_schema.js';
 import { AuthLimiter, ScanGate, ScanDriver, ScanPoll, ScanDecision } from './fw/net_time.js';
-import { ConnectLimiter, apOrigin, clientOnSoftAp, ipToU32, via, VIA_AP } from './fw/ap_access.js';
+import { ConnectLimiter, apOrigin, clientOnSoftAp, ipToU32, u32ToIp, via, VIA_AP } from './fw/ap_access.js';
+import { ethUp, requestViaEth, activeIf, netIfName, statusIp } from './fw/net_link.js';
 import { writeStateExtras, relayActText } from './fw/safety_view.js';
 import { parseCfgEdit, parseActuatorId } from './fw/safety_cfg_api.js';
 import { writeConfigJson } from './fw/safety_cfg_edit.js';
 import { CfgResult } from './fw/safety_manager.js';
 import { RawDecision } from './fw/actuator_map.js';
 import { validateSystemChange, cfgErrText, CfgErr } from './fw/safety_config.js';
-import { VIA_LAN } from './fw/event_outbox.js';
+import { VIA_LAN, VIA_CLI } from './fw/event_outbox.js';
 import { Rej } from './fw/safety_fsm.js';
 import { ACT_TO } from './command_schema.js';
 import { ARM_MODE_BY_TEXT } from './fw/intrusion_fsm.js';
@@ -335,16 +340,23 @@ function makeHandlers(sim, fw, ctx) {
   };
 
   // ---- durum
-  const restrictedStatus = (provisioned) => ({
-    status: 200,
-    body: {
-      device: wifi.getDeviceUid(),
-      name: sanitizeInto(CAP.device_name, cfg().device_name),
-      fw: sim.fw_version,
-      provisioned,
-      wifi_connected: wifi.isConnected(),
-    },
-  });
+  const restrictedStatus = (provisioned) => {
+    const staConnected = wifi.isConnected();
+    const eUp = ethUp(sim.ethState());
+    return {
+      status: 200,
+      body: {
+        device: wifi.getDeviceUid(),
+        name: sanitizeInto(CAP.device_name, cfg().device_name),
+        fw: sim.fw_version,
+        provisioned,
+        wifi_connected: staConnected,
+        // v1.3.0: ag turu gizli degil (servis sihirbazi Ethernet'li panoyu anahtarsiz tanir; eth_ip yalniz tam durumda)
+        eth_connected: eUp,
+        net_if: netIfName(activeIf(staConnected, eUp)),
+      },
+    };
+  };
 
   const fullStatus = () => {
     const snap = automation.getSnapshot();
@@ -352,7 +364,11 @@ function makeHandlers(sim, fw, ctx) {
     const staConnected = wifi.isConnected();
     const staIp = wifi.getLocalIP();
     const apIp = wifi.apIp();
-    const ipStr = staConnected ? staIp : apIp;
+    const eth = sim.ethState();
+    const eUp = ethUp(eth);
+    // "ip" = etkin arayuzun IP'si (Wi-Fi > Ethernet), ag yoksa AP IP'si (NetLinkCore::statusIp; Ethernet yokken eskisiyle ayni)
+    const ipStr = u32ToIp(statusIp(staConnected, ipToU32(staIp), eUp, eth.ip, ipToU32(apIp)));
+    const lkFp = cm.localKeyFp(wifi.getDeviceUid());   // v1.3.1 (pano-5): yalniz provizyonluyken
     const staSsidRaw = staConnected ? wifi.getSSID() : (v.staEnabled ? v.wifiSsid : '');
     const cs = wifi.getConnectStatus();
     const nR = Math.min(snap.totalRelays, MAX_TOTAL_RELAYS);
@@ -371,7 +387,8 @@ function makeHandlers(sim, fw, ctx) {
         name: v.deviceName,
         device_name: v.deviceName,
         fw: sim.fw_version,
-        provisioned: true,
+        provisioned: cm.hasLocalKey(),   // v1.3.1 (servis_kurulum-1): gercek deger (eskiden sabit true)
+        ...(lkFp ? { lk_fp: lkFp } : {}),
         ip: ipStr,
         wifi_rssi: staConnected ? wifi.getRSSI() : 0,
         uptime_sec: sim.uptimeSec(),
@@ -396,6 +413,9 @@ function makeHandlers(sim, fw, ctx) {
         total_dis: v.totalDIs,
         child_lock: snap.childLock,
         last_id: snap.lastId,
+        eth_connected: eUp,
+        eth_ip: eUp ? u32ToIp(eth.ip) : '0.0.0.0',
+        net_if: netIfName(activeIf(staConnected, eUp)),
         relays: Array.from({ length: nR }, (_, i) => {
           const r = { id: i + 1, name: v.relays[i].name, type: v.relays[i].type, state: !!snap.relays[i] };
           const act = relayActText(sv, i + 1);
@@ -465,9 +485,12 @@ function makeHandlers(sim, fw, ctx) {
   };
 
   /** (a) Istemci SoftAP arayuzunde mi? Karar clientOnSoftAp'ta (saf, testli); burada yalniz girdiler toplanir. */
-  const remoteOnSoftAp = () => clientOnSoftAp(
-    wifi.isRecoveryApActive(), ipToU32(remoteIp()), ipToU32(wifi.apIp()), ipToU32(wifi.apMask()), ipToU32(wifi.getLocalIP()), ipToU32(wifi.staMask()),
-  );
+  const remoteOnSoftAp = () => {
+    const eth = sim.ethState();
+    const eUp = ethUp(eth);
+    return clientOnSoftAp(wifi.isRecoveryApActive(), ipToU32(remoteIp()), ipToU32(wifi.apIp()), ipToU32(wifi.apMask()), ipToU32(wifi.getLocalIP()),
+      ipToU32(wifi.staMask()), eUp ? eth.ip : 0, eUp ? eth.mask : 0);
+  };
 
   /**
    * AP_OR_KEYED uclar (wifi scan/connect/status): gecerli X-Device-Key YA DA AP kaynakli yetki (CONTRACTS 3d): (a) istemci SoftAP arayuzunde,
@@ -497,6 +520,8 @@ function makeHandlers(sim, fw, ctx) {
     // arduino-esp32 WebServer::hasHeader() YALNIZ bos olmayan deger icin true doner: bos "X-Device-Key:" basligi = baslik YOK (kisitli ozet, 401 degil)
     const hv = ctx.req.headers['x-device-key'];
     const hasKeyHeader = (Array.isArray(hv) ? hv.join(', ') : (hv ?? '')).length > 0;
+    // Kablolu Ethernet'ten gelen istekte baslik (degeri ne olursa olsun) tam durumu ister; anahtar dogrulanmaz (kullanici karari 2026-10-08)
+    if (ctx.viaEthernet && hasKeyHeader) return fullStatus();
     if (provisioned && hasKeyHeader) {
       const e = authorize();
       if (e) return e;
@@ -854,6 +879,7 @@ function makeHandlers(sim, fw, ctx) {
   };
 
   h.rekey = () => {
+    if (!cm.hasLocalKey()) return err(403, 'unprovisioned');   // pano-7: govde okunmadan (Ethernet dahil); ilk anahtar factory/init ile
     const j = readJson();
     if (j.e) return j.e;
     let f = fieldString(j.doc, 'local_key');
@@ -992,7 +1018,7 @@ function makeHandlers(sim, fw, ctx) {
     if (!s) return err(503, 'busy');
     const p = parseCfgEdit(j.doc, false);
     if (p.err) return err(400, 'cfg_invalid', { detail: p.err });
-    const o = await s.submitEdit(p.edit, p.hasBase, p.baseRev, VIA_LAN, cfg(), { nowMs: now() });
+    const o = await s.submitEdit(p.edit, p.hasBase, p.baseRev, ctx.viaEthernet ? VIA_CLI : VIA_LAN, cfg(), { nowMs: now() });
     const crc = (o.crc >>> 0).toString(16).padStart(8, '0');
     switch (o.r) {
       case CfgResult.OK: mqtt.triggerPublish(now()); return { status: 200, body: { status: 'ok', rev: o.rev, crc } };
@@ -1015,7 +1041,7 @@ function makeHandlers(sim, fw, ctx) {
     return err(409, 'zone_latched');
   };
 
-  return { h, authorize, authorizeApOrKeyed };
+  return { h, authorize, authorizeApOrKeyed, remoteOnSoftAp };
 }
 
 const ROOT_HTML = (sim, wifi) => `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>AHBU cihaz simulatoru</title></head>
@@ -1134,6 +1160,10 @@ async function handleQa(sim, req, res, url, path) {
         const b = await readJsonBody();
         try { return sendJson(res, 200, { ok: true, client_net: sim.setClientNet(b) }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
       }
+      case '/__sim/eth': {
+        const b = await readJsonBody();
+        try { return sendJson(res, 200, { ok: true, eth: sim.setEthernet(b) }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
+      }
       case '/__sim/hw-fail': {
         const b = await readJsonBody();
         try { return sendJson(res, 200, { ok: true, hw_fail: sim.setHwFail(b) }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
@@ -1200,8 +1230,8 @@ async function handle(sim, req, res) {
     for (const [k, v] of new URLSearchParams(raw.toString('utf8'))) args.append(k, v);
   }
   // (ctx.viaApOrigin her istekte sifirlanir; yalniz authorizeApOrKeyed() anahtarsiz AP yolunda kurar)
-  const ctx = { req, raw, args, socketIp: req.socket.remoteAddress || '', viaApOrigin: false };
-  const { h, authorize, authorizeApOrKeyed } = makeHandlers(sim, fw, ctx);
+  const ctx = { req, raw, args, socketIp: req.socket.remoteAddress || '', viaApOrigin: false, viaEthernet: false };
+  const { h, authorize, authorizeApOrKeyed, remoteOnSoftAp } = makeHandlers(sim, fw, ctx);
 
   // ---- guardRequest: Host / Origin
   const host = String(req.headers.host || '');
@@ -1209,8 +1239,10 @@ async function handle(sim, req, res) {
   const origin = String(req.headers.origin || '');
   if (origin.length > 0 && !originMatchesHost(origin, host)) return sendJson(res, 403, { error: 'bad_origin' });
 
-  // ---- kimlik
-  if (access === 'KEYED' || access === 'AP_OR_KEYED') {
+  // ---- kimlik. Kullanici karari (2026-10-08): kablolu Ethernet'ten gelen istek anahtarsiz ve provizyonsuz yetkilidir. Olcut: yerel uc Ethernet IP'si
+  // VE istemci SoftAP istemcisi degil (NetLinkCore::requestViaEth; pano-3).
+  ctx.viaEthernet = requestViaEth(sim.ethState(), ipToU32(sim.clientLocalIp()), remoteOnSoftAp());
+  if (!ctx.viaEthernet && (access === 'KEYED' || access === 'AP_OR_KEYED')) {
     const e = access === 'KEYED' ? authorize() : authorizeApOrKeyed();
     if (e) return sendJson(res, e.status, e.body, e.headers || {});
   }

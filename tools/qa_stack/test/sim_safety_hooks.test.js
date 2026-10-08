@@ -284,3 +284,102 @@ test('sim_safety_hooks: hirsiz deseni surerken komut bipleri yutulur (RG-3)', ()
   r.run(50);
   assert.ok(r.beeps.length > before, 'desen yokken komut bipi calar');
 });
+
+// ---- pano-1: yalniz sensorlu guvenlik kurulumu (eylemci yok) ----
+function gasOnlyNvs() {
+  const nvs = new NvsImage(null);
+  const cfg = defaultSafetyConfig();
+  cfg.sens = [gasNc(3)];
+  cfg.nSens = 1;
+  SafetyStore.saveConfig(nvs, cfg);
+  return nvs;
+}
+function gasNc(di) {
+  return makeSensorConfig({ src: SensorSrc.DI, index: di, kind: SensorKind.GAS, zone: 1, active_open: 1, flags: defaultFlags(SensorKind.GAS), confirm_ms: defaultConfirmMs(SensorKind.GAS) });
+}
+
+test('sim_safety_hooks: yalniz sensorlu kurulum kilitliyken elektrik kesintisi: normal kip (latch_orphan degil), onay + kuruluk temizler (pano-1)', () => {
+  const nvs = gasOnlyNvs();
+  const r = rig(nvs);
+  r.a.setRawDi(2, true);                     // NC gaz: kontak kapali = normal
+  r.run(300);
+  r.a.setRawDi(2, false);                    // gaz
+  r.run(1500);
+  assert.equal(zone1(r), ZoneSt.LATCHED);
+  const aid = r.a.safety.core.zone(1).aid;
+  r.coldBoot();
+  r.a.setRawDi(2, true);                     // gaz gitti (kontak yeniden kapali)
+  r.run(600);
+  assert.equal(r.a.safety.mode, 'normal');
+  assert.equal(r.a.safety.core.safeMode(), false);
+  assert.equal(zone1(r), ZoneSt.LATCHED, 'kilit sag cikar');
+  assert.equal(r.a.safety.core.zone(1).aid, aid);
+  r.cmd(SafetyCmdType.ALARM_ACK, 1, 0, 'onay', CmdSource.CLI);
+  r.run(12000);
+  assert.equal(zone1(r), ZoneSt.NORMAL, 'onay + kuruluk temizler');
+});
+
+test('sim_safety_hooks: cfg_corrupt guvenli kipinde eylemcisiz yapilandirma uygulaninca yerinde ACK FORCE guvenli kipten cikarir (pano-1)', () => {
+  const nvs = gasOnlyNvs();
+  const r = rig(nvs);
+  r.a.setRawDi(2, true);
+  r.run(300);
+  const sc = nvs.get('safety');
+  nvs.put('safety', { ...sc, crc: (sc.crc ^ 1) >>> 0 });   // CRC bozuldu
+  r.coldBoot();
+  r.a.setRawDi(2, true);
+  r.run(600);
+  assert.equal(r.a.safety.mode, 'cfg_corrupt');
+  r.cmd(SafetyCmdType.ALARM_ACK, 0, 1, 'cik1', CmdSource.CLI);
+  r.run(50);
+  assert.equal(r.a.safety.core.safeMode(), true, 'yapilandirma uygulanmadan cikis yok');
+  const o = r.a.safety.submitEdit({ ...editInit(), op: EditOp.SET_SENSOR, sens: gasNc(3) }, false, 0, VIA_CLI, r.cm.config, { inLoop: true, curLevels: 0n, nowMs: r.t });
+  assert.equal(o.r, 'ok');
+  assert.equal(r.a.safety.copyConfig().nAct, 0, 'eylemcisiz yapilandirma');
+  r.cmd(SafetyCmdType.ALARM_ACK, 0, 1, 'cik2', CmdSource.MQTT);
+  r.run(50);
+  assert.equal(r.a.safety.core.safeMode(), true, 'uzaktan cikis yok (7.2b-10)');
+  r.cmd(SafetyCmdType.ALARM_ACK, 0, 1, 'cik3', CmdSource.CLI);
+  r.run(50);
+  assert.equal(r.a.safety.core.safeMode(), false, 'yerinde ACK FORCE guvenli kipten cikarir');
+});
+
+// pano-4: ek modul ETKINKEN kanal sayisi artinca yeni kanaldaki NC gaz sensoru ilk taze okumaya kadar "okunamadi" (ok=false, aktif degil)
+// sayilir: kapi baslatilmadan "kontak acik" = NC'de gaz okunuyordu. Toplu ext-ok DUSURULMEZ: mevcut kanaldaki (daha once okunmus) gaz sensoru
+// etkilenmez (dusurulseydi SF_FAULT_CLOSE ile sahte gaz alarmi + vana kapatmasi olurdu).
+test('sim_safety_hooks: ek modul kanal sayisi artinca yeni kanaldaki NC gaz sensoru ilk okumaya kadar bilinmiyor; sahte alarm yok, mevcut kanal etkilenmez (pano-4)', () => {
+  const nvs = new NvsImage(null);
+  const cfg = defaultSafetyConfig();
+  cfg.sens = [gasNc(9)];
+  cfg.nSens = 1;
+  SafetyStore.saveConfig(nvs, cfg);
+  const ext = makeExt(16);
+  ext.rawDi[0] = true;                       // DI 9: NC kapali (normal)
+  ext.rawDi[8] = true;                       // DI 17 (yeni kanal): NC kapali (normal)
+  const extBoard = (cm) => {
+    boardConfig(cm);
+    cm.config.ext_module_enabled = true;
+    cm.config.ext_module_channels = 8;
+    cm.config.dis[8].target_relay = 0;       // DI 9 ve DI 17 sensor girisi (duvar butonu degil)
+    cm.config.dis[16].target_relay = 0;
+    cm.config.validate();
+    cm.save();
+  };
+  const r = new Rig({ nvs, ext, configure: extBoard, automation: { safetyNonce: 0xabc } });
+  r.run(3000);
+  assert.equal(r.a.safety.mode, 'normal');
+  assert.equal(zone1(r), ZoneSt.NORMAL);
+  assert.equal(r.a.safety.hub.ok(0), true);
+  r.cm.config.ext_module_channels = 16;      // 8 -> 16 kanal + yeni kanalda NC gaz (sablon / CLI EXTMOD + guvenlik yamasi)
+  r.cm.save();
+  const o = r.a.safety.submitEdit({ ...editInit(), op: EditOp.SET_SENSOR, sens: gasNc(17) }, false, 0, VIA_CLI, r.cm.config, { inLoop: true, curLevels: 0n, nowMs: r.t });
+  assert.equal(o.r, 'ok');
+  r.step(10);                                // degisimden sonraki ilk tur (safetyTick ek modul yoklamasindan once)
+  assert.equal(r.a.safety.hub.ok(1), false, 'yeni kanal ilk okumaya kadar bilinmiyor');
+  assert.equal(r.a.safety.hub.rawActive(1), false, 'NC sensor aktif okunmaz');
+  assert.equal(r.a.safety.hub.ok(0), true, 'mevcut kanal etkilenmez');
+  r.run(3000);
+  assert.equal(r.a.safety.hub.ok(1), true, 'ilk taze okumadan sonra hazir');
+  assert.equal(r.a.safety.hub.rawActive(1), false);
+  assert.equal(zone1(r), ZoneSt.NORMAL, 'sahte gaz alarmi yok');
+});

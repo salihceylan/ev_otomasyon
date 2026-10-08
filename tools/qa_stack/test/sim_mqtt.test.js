@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 import assert from 'node:assert/strict';
 import { DeviceSimulator } from '../sim/device_sim.js';
 import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
+import { compute as lkFp } from '../sim/fw/local_key_fp.js';
 import { randomB64Url, randomHex } from '../lib/util.js';
 import {
   startTestBroker, connect, subscribe, collect, publish, endClients, hashPw, waitFor, sleep,
@@ -12,6 +13,11 @@ import {
 
 const KEY = 'sim-key-abcdef12';
 const UID = 'AHBU-S3-0A0010';
+/** ev/{t}/status yuku v1.3.1: gercek JSON {status, uid} (guvenlik-6). Gecersiz/eksik yuk -> null. */
+const statusOf = (m) => {
+  if (!m) return null;
+  try { return JSON.parse(m.payload).status ?? null; } catch (_) { return null; }
+};
 
 async function setup({ simOpts = {}, startSim = true, retainedCmd = null, store, windowMs = 250 } = {}) {
   const ctx = await startTestBroker(store ? { store } : {});
@@ -78,14 +84,17 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
   try {
     await h.ready();
     await h.waitState((s) => s.seq >= 1, 'ilk state');
-    assert.equal(h.statuses()[0].payload, 'online');
+    assert.deepEqual(JSON.parse(h.statuses()[0].payload), { status: 'online', uid: UID }, 'status JSON + uid (guvenlik-6)');
     assert.equal(h.states()[0].qos, 0, 'state QoS 0');
 
     const s = h.states()[0].json;
     assert.equal(s.v, 3);   // v1.2.0: v:3 = v:2'nin kati ust kumesi (spec 3.1); yapilandirilmamis panoda ek anahtarlar yalniz caps/boot/bn/time_ok/epoch
     assert.deepEqual(s.caps, ['safety', 'actuator', 'event', 'cfg', 'intrusion']);
     assert.match(s.bn, /^[0-9a-f]{8}$/);
-    for (const k of ['sensors', 'actuators', 'safety', 'cfg', 'last_rej']) assert.ok(!(k in s), `${k} yapilandirilmamis panoda yazilmaz`);
+    for (const k of ['sensors', 'actuators', 'safety', 'last_rej']) assert.ok(!(k in s), `${k} yapilandirilmamis panoda yazilmaz`);
+    assert.equal(s.cfg.safety.rev, 0, 'cfg.safety yapilandirilmamis panoda da var (guvenlik-3)');
+    assert.match(s.cfg.safety.crc, /^[0-9a-f]{8}$/);
+    assert.equal(s.lk_fp, lkFp(KEY, UID), 'provizyonlu panoda lk_fp (pano-5)');
     assert.equal(s.uid, UID);
     assert.equal(s.fw, FW_VERSION_DEFAULT);
     assert.equal(s.seq, 1);
@@ -111,7 +120,7 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
     await subscribe(a, `ev/${h.T}/status`);
     await waitFor(() => got.length >= 2, { timeoutMs: 3000, label: 'retained mesajlar gelmedi' });
     assert.ok(got.every((m) => m.retain), 'state ve status retained');
-    assert.equal(got.find((m) => m.topic.endsWith('/status')).payload, 'online');
+    assert.equal(statusOf(got.find((m) => m.topic.endsWith('/status'))), 'online');
     assert.equal(JSON.parse(got.find((m) => m.topic.endsWith('/state')).payload).v, 3);
   } finally {
     await endClients(app);
@@ -308,14 +317,57 @@ test('sys konusu: yalniz set_local_key (alan "local_key" veya "key"); anahtar HT
   }
 });
 
+// pano-5 (sozlesme 1): provizyonlu panonun state'inde lk_fp; sys set_local_key uygulaninca yeni izli state kalp atisini (30 sn) beklemeden
+// yayinlanir (sunucu anahtar takasini state'te yeni izi gorunce kesinlestirir). Anahtarin kendisi hicbir yayinda yok.
+test('sys set_local_key: uygulaninca yeni lk_fp li state gecikmeden yayinlanir; anahtar degeri yayinlarda yok (pano-5)', async () => {
+  const h = await setup();
+  try {
+    await h.ready();
+    const s0 = await h.waitState((x) => x.seq >= 1, 'ilk state');
+    assert.equal(s0.lk_fp, lkFp(KEY, UID));
+    const n = h.states().length;
+    const t0 = performance.now();
+    await publish(h.backend, `ev/${h.T}/sys`, { cmd: 'set_local_key', local_key: 'yeni-anahtar-42' });
+    await h.waitState((x) => x.lk_fp === lkFp('yeni-anahtar-42', UID), 'yeni lk_fp');
+    assert.ok(performance.now() - t0 < 2500, 'yeni iz gecikmeden yayinlandi');
+    assert.ok(h.states().length > n);
+    assert.equal(h.msgs.some((m) => String(m.payload).includes('yeni-anahtar-42')), false, 'anahtar hicbir yayinda yok');
+  } finally {
+    await h.close();
+  }
+});
+
+// pano-7: provizyonsuz panoya buluttan anahtar yazilmaz (AP parolasiz yarim provizyon kalirdi): pano provizyonsuz kalir, state'te lk_fp yok,
+// ilk anahtar yine factory/init ile yazilabilir.
+test('sys set_local_key provizyonsuz panoda yok sayilir: pano provizyonsuz kalir, factory/init calisir (pano-7)', async () => {
+  const h = await setup({ simOpts: { localKey: '' } });
+  try {
+    await h.ready();
+    const s0 = await h.waitState((x) => x.seq >= 1, 'ilk state');
+    assert.equal('lk_fp' in s0, false, 'provizyonsuz: lk_fp yok');
+    await publish(h.backend, `ev/${h.T}/sys`, { cmd: 'set_local_key', local_key: 'buluttan-anahtar-1' });
+    await waitFor(() => h.log().some((e) => e.type === 'sys_rejected' && e.reason === 'unprovisioned'), { timeoutMs: 3000, label: 'red olayi' });
+    assert.equal(h.sim.isProvisioned(), false);
+    const st = await fetch(`http://127.0.0.1:${h.sim.httpPort}/api/status`).then((r) => r.json());
+    assert.equal(st.provisioned, false);
+    const init = await fetch(`http://127.0.0.1:${h.sim.httpPort}/api/factory/init`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ local_key: 'fabrika-anahtar-1', ap_pass: 'ap-pass-1234' }),
+    });
+    assert.equal(init.status, 200, 'ilk anahtar factory/init ile yazilir');
+    assert.equal(h.sim.isProvisioned(), true);
+  } finally {
+    await h.close();
+  }
+});
+
 test('offline/online: soket anormal kesilir -> LWT offline (retained, QoS1); online ile geri gelir', async () => {
   const h = await setup();
   const late = [];
   try {
     await h.ready();
-    await waitFor(() => h.statuses().some((m) => m.payload === 'online'), { timeoutMs: 3000 });
+    await waitFor(() => h.statuses().some((m) => statusOf(m) === 'online'), { timeoutMs: 3000 });
     h.sim.forceOffline();
-    await waitFor(() => h.statuses().at(-1)?.payload === 'offline', { timeoutMs: 4000, label: 'LWT offline gelmedi' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'offline', { timeoutMs: 4000, label: 'LWT offline gelmedi' });
     assert.equal(h.sim.qaState().mqtt.connected, false);
 
     const a = await connect({ port: h.ctx.port, username: `a_${h.T}_x`, password: 'app-pw' });
@@ -323,13 +375,13 @@ test('offline/online: soket anormal kesilir -> LWT offline (retained, QoS1); onl
     const got = collect(a);
     await subscribe(a, `ev/${h.T}/status`);
     await waitFor(() => got.length >= 1, { timeoutMs: 3000 });
-    assert.equal(got[0].payload, 'offline');
+    assert.deepEqual(JSON.parse(got[0].payload), { status: 'offline', uid: UID }, 'LWT JSON + uid (guvenlik-6)');
     assert.equal(got[0].retain, true, 'LWT retained');
 
     await sleep(500);
     assert.equal(h.sim.qaState().mqtt.connected, false, 'forceOffline sirasinda yeniden baglanma YOK');
     h.sim.forceOnline();
-    await waitFor(() => h.statuses().at(-1)?.payload === 'online', { timeoutMs: 4000, label: 'online gelmedi' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'online', { timeoutMs: 4000, label: 'online gelmedi' });
     await h.ready();
   } finally {
     await endClients(late);
@@ -342,7 +394,7 @@ test('crash: temiz kopma, LWT YOK ve offline yayinlanmaz -> retained online BAYA
   const late = [];
   try {
     await h.ready();
-    await waitFor(() => h.statuses().at(-1)?.payload === 'online', { timeoutMs: 3000 });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'online', { timeoutMs: 3000 });
     const before = h.statuses().length;
     h.sim.crash();
     await waitFor(() => h.sim.qaState().mqtt.state === 'disconnected', { timeoutMs: 3000 });
@@ -354,7 +406,7 @@ test('crash: temiz kopma, LWT YOK ve offline yayinlanmaz -> retained online BAYA
     const got = collect(a);
     await subscribe(a, `ev/${h.T}/status`);
     await waitFor(() => got.length >= 1, { timeoutMs: 3000 });
-    assert.equal(got[0].payload, 'online', 'bayat retained online');
+    assert.equal(statusOf(got[0]), 'online', 'bayat retained online');
     assert.equal(h.sim.qaState().mqtt.forced_offline, true);
 
     h.sim.forceOnline();
@@ -370,7 +422,7 @@ test('Wi-Fi kaybi (ev agi kapandi): LWT offline; ag gelince STA yeniden baglanir
   try {
     await h.ready();
     h.sim.setWifiWorld({ up: false });
-    await waitFor(() => h.statuses().at(-1)?.payload === 'offline', { timeoutMs: 5000, label: 'LWT (Wi-Fi kaybi)' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'offline', { timeoutMs: 5000, label: 'LWT (Wi-Fi kaybi)' });
     assert.equal(h.sim.qaState().wifi.connected, false);
     assert.equal(h.sim.qaState().wifi.last_reason, 200, 'beacon timeout');
     assert.equal(h.sim.qaState().mqtt.connected, false);
@@ -378,7 +430,7 @@ test('Wi-Fi kaybi (ev agi kapandi): LWT offline; ag gelince STA yeniden baglanir
     assert.equal((await h.http('GET', '/api/auth/check')).status, 200);
     h.sim.setWifiWorld({ up: true });
     await waitFor(() => h.sim.qaState().wifi.connected, { timeoutMs: 20000, label: 'STA geri baglanmadi' });
-    await waitFor(() => h.statuses().at(-1)?.payload === 'online', { timeoutMs: 10000, label: 'MQTT geri gelmedi' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'online', { timeoutMs: 10000, label: 'MQTT geri gelmedi' });
   } finally {
     await h.close();
   }
@@ -394,10 +446,10 @@ test('power-cycle: LWT offline, roleler OFF, seq/uptime sifirlanir, yeniden bagl
     assert.ok(seqBefore >= 2);
 
     h.sim.powerCycle();
-    await waitFor(() => h.statuses().at(-1)?.payload === 'offline', { timeoutMs: 4000, label: 'LWT offline gelmedi' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'offline', { timeoutMs: 4000, label: 'LWT offline gelmedi' });
     await waitFor(() => h.sim.booting === false && h.sim.qaState().relays, { timeoutMs: 4000, label: 'acilis' });
     assert.equal(h.sim.qaState().relays.every((r) => !r.state), true, 'guc kesintisinde roleler OFF');
-    await waitFor(() => h.statuses().at(-1)?.payload === 'online', { timeoutMs: 10000, label: 'yeniden baglanmadi' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'online', { timeoutMs: 10000, label: 'yeniden baglanmadi' });
     const s = await h.waitState((x) => x.seq === 1, 'seq sifirlandi');
     assert.equal(s.relays[4].state, false);
     assert.ok(s.uptime <= 6);
@@ -414,11 +466,12 @@ test('planli yeniden baslatma (HTTP reboot): once status "offline" yayinlanir (L
     await h.ready();
     const before = h.statuses().length;
     assert.equal((await h.http('POST', '/api/system/reboot')).status, 200);
-    await waitFor(() => h.statuses().length > before && h.statuses().at(-1).payload === 'offline', { timeoutMs: 4000, label: 'offline yayini' });
+    await waitFor(() => h.statuses().length > before && statusOf(h.statuses().at(-1)) === 'offline', { timeoutMs: 4000, label: 'offline yayini' });
     const off = h.statuses().at(-1);
+    assert.deepEqual(JSON.parse(off.payload), { status: 'offline', uid: UID }, 'planli offline da JSON + uid (guvenlik-6)');
     assert.equal(off.qos, 0, 'planli offline: PubSubClient QoS 0 (LWT QoS 1 olurdu)');
     assert.ok(h.ctx.log.lines.some((l) => l.includes('disconnect') || l.includes('client_close') || l.includes('close')), 'broker kapanisi kaydetti');
-    await waitFor(() => h.statuses().at(-1)?.payload === 'online', { timeoutMs: 12000, label: 'yeniden online' });
+    await waitFor(() => statusOf(h.statuses().at(-1)) === 'online', { timeoutMs: 12000, label: 'yeniden online' });
     assert.ok(h.sim.events.some((e) => e.type === 'booted' && e.kind === 'soft'));
   } finally {
     await h.close();
@@ -523,7 +576,7 @@ test('Wi-Fi baglanmadan MQTT baslamaz; HTTP ile baglaninca (dogrulanir, NVS) bas
     assert.equal(h.statuses().length, 0);
     assert.equal((await h.http('POST', '/api/wifi/connect', { ssid: 'TestHome', pass: 'home-pass-123' })).status, 200);
     await h.ready();
-    assert.equal(h.statuses()[0].payload, 'online');
+    assert.equal(statusOf(h.statuses()[0]), 'online');
   } finally {
     await h.close();
   }

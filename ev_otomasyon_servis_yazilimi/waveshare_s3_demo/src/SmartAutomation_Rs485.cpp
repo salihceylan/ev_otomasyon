@@ -296,13 +296,17 @@ void SmartAutomation::pollExtModule(uint32_t now) {
       if (dIdx >= MAX_TOTAL_DIS) break;
       _diGate.init(dIdx, modbus::getBit(bits, bc, k), now);
     }
+    _extDiReadyCh = extCh;
     return;
   }
   for (uint8_t k = 0; k < extCh; k++) {
     const uint8_t dIdx = (uint8_t)(8 + k);
     if (dIdx >= MAX_TOTAL_DIS) break;
-    handleDiEdge(dIdx, modbus::getBit(bits, bc, k), now);   // yerel DI ile AYNI kapı (çocuk kilidi dahil)
+    // pano-4: kanal sayısı arttıysa yeni kanallar bu ilk taze okumayla kenar üretmeden başlatılır (syncConfig); diğerleri olağan kenar yolu.
+    if (k >= _extDiReadyCh) _diGate.init(dIdx, modbus::getBit(bits, bc, k), now);
+    else handleDiEdge(dIdx, modbus::getBit(bits, bc, k), now);   // yerel DI ile AYNI kapı (çocuk kilidi dahil)
   }
+  if (_extDiReadyCh < extCh) _extDiReadyCh = extCh;
 }
 
 // ------------------------------------------------------------------------------------------------

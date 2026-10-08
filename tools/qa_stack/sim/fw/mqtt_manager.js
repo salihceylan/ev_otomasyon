@@ -2,7 +2,10 @@
 //
 //  * Kimlik/sunucu ConfigManager'dan okunur; kimlik yoksa MQTT baslamaz (cihaz yerelde calisir).
 //  * Konular: ev/{t}/state, ev/{t}/status (yayin); ev/{t}/cmd, ev/{t}/sys (abonelik, QoS 1). {t} = kullanici adindan "d_" oneki atilmis kimlik.
-//  * LWT: status "offline" (QoS 1, retained); temiz oturum. Baglaninca: abonelikler -> 1500 ms "yok say" penceresi -> status "online" -> ilk tam durum.
+//  * LWT: status {"status":"offline","uid":...} (QoS 1, retained); temiz oturum. Baglaninca: abonelikler -> 1500 ms "yok say" penceresi ->
+//    status {"status":"online","uid":...} -> ilk tam durum. v1.3.1 (guvenlik-6): status yuku gercek JSON + uid (eskiden duz "online"/"offline").
+//  * v1.3.1 (pano-5): provizyonluyken state'te "lk_fp" (local_key_fp.js); sys set_local_key uygulaninca yeni izli state gecikmeden; provizyonsuz
+//    panoda set_local_key yok sayilir (pano-7).
 //  * Durum yayini: QoS 0 + retained; degisimde ~250 ms birlestirmeyle, en az 30 sn'de bir; hareket surerken ~1 sn'de bir (SmartAutomation tetikler).
 //  * onMessage YALNIZCA dogrular ve Automation.post() ile kuyruga yazar.
 //  * Yeniden baglanma: ustel geri cekilme (varsayilan QA hizli, `firmwareTiming` = gercek 5 sn..5 dk +-%20 jitter).
@@ -18,6 +21,9 @@ import { isPrintableAsciiNoSpace, sanitizeInto } from './netutil.js';
 import { LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN } from './sysconfig.js';
 import { validateCommand, MAX_PAYLOAD_BYTES, isValidCommandId } from '../command_schema.js';
 import { writeStateExtras, relayActText } from './safety_view.js';
+
+/** ev/{t}/status yuku (firmware statusPayload; guvenlik-6): {"status":"online|offline","uid":"<UID>"} -- bayt bayt ayni dizi. */
+export const statusPayload = (status, uid) => JSON.stringify({ status, uid });
 import { Rej } from './safety_fsm.js';
 import { parseCfgEdit } from './safety_cfg_api.js';
 import { CfgResult } from './safety_manager.js';
@@ -258,7 +264,7 @@ export class MqttManager {
       reconnectPeriod: 0,
       connectTimeout: 12000,
       resubscribe: false,
-      will: { topic: this.topicStatus, payload: 'offline', qos: 1, retain: true },
+      will: { topic: this.topicStatus, payload: statusPayload('offline', this.uid), qos: 1, retain: true },
     });
     this.client = client;
 
@@ -324,9 +330,10 @@ export class MqttManager {
     this.pace.connected();
   }
 
-  #publishStatus(text) {
+  /** status: 'online' | 'offline' -> {"status":...,"uid":...} (guvenlik-6). */
+  #publishStatus(status) {
     if (!this.client || !this.client.connected) return false;
-    this.client.publish(this.topicStatus, text, { qos: 0, retain: true });
+    this.client.publish(this.topicStatus, statusPayload(status, this.uid), { qos: 0, retain: true });
     return true;
   }
 
@@ -375,6 +382,7 @@ export class MqttManager {
       s.shutters.map((x) => x.target), s.lastId,
       // guvenlik katmani: gorunum imzasi (since_up haric), ret sayaci, saat durumu (spec 3.2 "Yayin tetigi")
       this.#safety()?.viewSig() ?? '', this.#safety()?.rejSeq ?? 0, this.wifi.isTimeSynced(),
+      this.cm.keyGeneration(),   // pano-5: anahtar degisti -> yeni lk_fp hemen yayinlanir
     ]);
   }
 
@@ -422,6 +430,8 @@ export class MqttManager {
       child_lock: snap.childLock,
     };
     if (snap.lastId !== '') doc.last_id = snap.lastId;   // bos last_id gonderilmez
+    const fp = this.cm.localKeyFp(this.uid);
+    if (fp) doc.lk_fp = fp;   // v1.3.1 (pano-5, sozlesme 1): yalniz provizyonluyken
     doc.relays = Array.from({ length: nR }, (_, i) => {
       const r = { id: i + 1, name: sanitizeInto(32, c.relays[i].name), type: relayTypeName(c.relays[i].type), state: !!snap.relays[i] };
       const act = relayActText(ex.view, i + 1);
@@ -602,10 +612,16 @@ export class MqttManager {
       this.event('sys_rejected', { reason: 'invalid_key' });
       return { kind: 'sys_rejected', reason: 'invalid_key' };
     }
+    // pano-7: provizyonsuz panoya buluttan anahtar yazilmaz (AP parolasiz yarim provizyon); ilk anahtar yalniz factory/init / seri FACTORYINIT
+    if (!this.cm.hasLocalKey()) {
+      this.event('sys_rejected', { reason: 'unprovisioned' });
+      return { kind: 'sys_rejected', reason: 'unprovisioned' };
+    }
     if (this.cm.setLocalKey(key)) {
       this.event('sys_applied', { cmd: 'set_local_key' });   // anahtar degeri LOGLANMAZ
       this.wifi.applyApConfigChange(this.clock.now());
       this.hooks.localKeyChanged?.();
+      this.pace.connected();   // pano-5: yeni lk_fp'li tam durum gecikmeden (firmware _pace.connected())
       return { kind: 'sys_applied' };
     }
     this.event('sys_failed', { reason: 'store' });

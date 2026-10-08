@@ -7,7 +7,8 @@
 //  * Sağlık (ok) [Y-2][B6]: DiGate başlangıçta stable_=false ("kontak açık") ile başlar; NC sensör bunu "aktif" okurdu.
 //      - yerel DI (1..8): ilk DI okuma turu tamamlanana kadar ok=false (setLocalReady),
 //      - ek modül DI (9..40): ok = ek modül etkin && ilk okuma yapıldı && yanıt veriyor && tarama yok (setExtOk;
-//        hesap SmartAutomation'da, burada yalnız bayrak).
+//        hesap SmartAutomation'da, burada yalnız bayrak) VE kanal ilk taze okumayla başlatıldı (setExtReady, pano-4: modül etkinken kanal
+//        sayısı artınca yeni kanalların kapısı ilk okumaya kadar başlatılmamıştır; o kanallar "okunamadı" sayılır, mevcut kanallar etkilenmez).
 //  * Sensöre çevrilen DI duvar butonu kararına (runDiDecision) hiç girmez (SmartAutomation::handleDiEdge maskesi);
 //    MOMENTARY artığı ise maskeye alınırken temizlenir [B17] (releaseMomentary).
 // ============================================================================
@@ -18,10 +19,14 @@ namespace safety {
 
 class DiSensor : public SensorSource {
 public:
-  explicit DiSensor(const digate::DiGate* gate) : gate_(gate), localReady_(false), extOk_(false) {}
+  explicit DiSensor(const digate::DiGate* gate) : gate_(gate), localReady_(false), extOk_(false), extReady_(MAX_DI - 8) {}
 
   void setLocalReady(bool v) { localReady_ = v; }
   void setExtOk(bool v) { extOk_ = v; }
+  // Ek modül kanallarından ilk `channels` tanesi (DI 9..8+channels) gerçek bir okumayla başlatıldı (pano-4). Varsayılan: hepsi (yalnız setExtOk
+  // karar verir). SmartAutomation her güvenlik turunda bildirir.
+  void setExtReady(uint8_t channels) { extReady_ = channels; }
+  uint8_t extReady() const { return extReady_; }
   bool localReady() const { return localReady_; }
   bool extOk() const { return extOk_; }
 
@@ -32,7 +37,7 @@ public:
     s.ok = false;
     if (!gate_ || c.src != (uint8_t)SensorSrc::DI || c.index < 1 || c.index > MAX_DI) return s;
     const uint8_t idx = (uint8_t)(c.index - 1);
-    s.ok = (idx < 8) ? localReady_ : extOk_;
+    s.ok = (idx < 8) ? localReady_ : (extOk_ && (uint8_t)(idx - 8) < extReady_);
     s.level = gate_->stable(idx);
     return s;
   }
@@ -60,6 +65,7 @@ private:
   const digate::DiGate* gate_;
   bool localReady_;
   bool extOk_;
+  uint8_t extReady_;
 };
 
 }  // namespace safety

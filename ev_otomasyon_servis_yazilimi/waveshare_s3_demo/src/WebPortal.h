@@ -64,6 +64,7 @@ private:
 
   // Bu istek kablolu Ethernet'ten mi geldi? (dispatch her istekte kurar). Kullanıcı kararı 2026-10-08: Ethernet'ten gelen
   // istek anahtarsız ve provizyonsuz yetkilidir; güvenlik yapılandırması gevşetmesi de serbesttir (seri CLI ile eşit).
+  // Ölçüt: yerel uç Ethernet IP'si VE istemci SoftAP istemcisi değil (NetLinkCore::requestViaEth, pano-3).
   bool _viaEthernet;
   bool requestViaEthernet();
 
