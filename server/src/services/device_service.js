@@ -461,6 +461,8 @@ class DeviceService {
    * @returns {Promise<null | {flat_id, block, number, status, site_name, template_id, version, template_body}>}
    */
   async _loadFlatSeed(tx, deviceUuid) {
+    // Migration 035 uygulanmadan yeniden baslatilan surumde claim BOZULMAZ: tablo yoksa daire baglantisi yok sayilir.
+    if (!(await this._hasSchema035(tx))) return null;
     const res = await tx.query(
       `SELECT f.id AS flat_id, f.block, f.number, f.status, s.name AS site_name,
               w.template_id, w.version, v.body AS template_body
@@ -478,6 +480,36 @@ class DeviceService {
       [deviceUuid]
     );
     return res.rows[0] || null;
+  }
+
+  /**
+   * Migration 035 nesneleri (site_flats, template_writes, install_template_versions, devices.template_*) var mi?
+   * Islem icinde 42P01/42703 hatasi islemi bozacagi icin hata yakalamak yerine katalog sorgulanir. Olumlu sonuc
+   * onbelleklenir (migration geri alinmaz); olumsuz sonuc her cagrida yeniden denenir (yeniden baslatmadan once
+   * uygulanan migration hemen etkin olur).
+   */
+  async _hasSchema035(tx) {
+    if (this._schema035 === true) return true;
+    const res = await tx.query(
+      `SELECT (to_regclass('site_flats') IS NOT NULL
+               AND to_regclass('template_writes') IS NOT NULL
+               AND to_regclass('install_template_versions') IS NOT NULL
+               AND EXISTS (SELECT column_name FROM information_schema.columns
+                            WHERE table_schema = current_schema() AND table_name = 'devices'
+                              AND column_name = 'template_version')) AS schema_035`
+    );
+    const ok = Boolean(res.rows[0] && res.rows[0].schema_035);
+    if (ok) this._schema035 = true;
+    return ok;
+  }
+
+  /** Panonun bildirdigi yuklu sablon kaydini (devices.template_*) temizler; 035 yoksa sessizce atlanir. */
+  async _clearDeviceTemplate(tx, deviceId) {
+    if (!(await this._hasSchema035(tx))) return;
+    await tx.query(
+      'UPDATE devices SET template_id = NULL, template_version = NULL, template_reported_at = NULL WHERE id = $1',
+      [deviceId]
+    );
   }
 
   /** Uc noktalari sablon govdesinden tohumlar; govde kullanilamazsa null (cagiran sabit tohuma duser). */
@@ -1332,6 +1364,7 @@ class DeviceService {
               WHERE id = $4`,
             [homeId, newOwnerRow.id, deviceKeyEnc, dev.id, pendingKeyEnc, childLockDeferred]
           );
+          await this._clearDeviceTemplate(tx, dev.id); // yuklu sablon kaydi: pano yeniden bildirene kadar bilinmez
           await this._seedEndpoints(tx, homeId, dev.id, dev.model || inv.model);
           deviceCredential = await this.credentials.issueDeviceCredential({
             homeId,
@@ -1371,6 +1404,7 @@ class DeviceService {
               WHERE id = $2`,
             [deviceKeyEnc, dev.id, pendingKeyEnc]
           );
+          await this._clearDeviceTemplate(tx, dev.id);
           // Cihaz bagli oldugu tum kanal satirlarindan arindirilir (yeni sahiplenmede yeniden uretilir).
           await tx.query('DELETE FROM endpoints WHERE device_id = $1', [dev.id]);
         }
@@ -1710,6 +1744,7 @@ class DeviceService {
           WHERE id = $1`,
         [oldDevice.id]
       );
+      await this._clearDeviceTemplate(tx, oldDevice.id);
 
       // 10) Envanter: yeni CLAIMED (PIN yakildi), eski REVOKED
       await tx.query(

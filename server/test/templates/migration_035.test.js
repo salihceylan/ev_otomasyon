@@ -28,7 +28,11 @@ test('035: idempotent ifadeler (IF NOT EXISTS / DROP IF EXISTS / OR REPLACE)', (
   assert.match(body, /CREATE OR REPLACE FUNCTION install_template_versions_immutable/);
   assert.match(body, /DROP TRIGGER IF EXISTS trg_install_template_versions_immutable ON install_template_versions;\s*CREATE TRIGGER trg_install_template_versions_immutable\s+BEFORE UPDATE OR DELETE ON install_template_versions/);
   assert.match(body, /DROP CONSTRAINT IF EXISTS devices_template_version_check;/);
-  assert.match(body, /NOT VALID;\s*ALTER TABLE devices VALIDATE CONSTRAINT devices_template_version_check;/);
+  // Yeni NULL kolonlarda NOT VALID + VALIDATE gereksiz: duz ADD CONSTRAINT.
+  assert.match(body, /ADD CONSTRAINT devices_template_version_check\s+CHECK \(template_version IS NULL OR template_version >= 1\);/);
+  assert.doesNotMatch(body, /NOT VALID/);
+  // Kilit beklemesi sinirli: ilk ifade SET LOCAL lock_timeout = '5s' (devices ALTER'i canli trafikte uzun beklemesin).
+  assert.match(body.trim(), /^SET LOCAL lock_timeout = '5s';/);
 });
 
 test('035: tablolar ve sozlesme kumeleri (CONTRACTS §3e)', () => {

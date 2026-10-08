@@ -96,6 +96,7 @@ const COMMAND_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(cmd|sys)$/;
 const INCOMING_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(state|status|event)$/;
 const UID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const FW_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$/;
+const TPL_SCHEMA_RETRY_MS = 5 * 60 * 1000; // 035 yoksa tpl yazimi bu sure denenmez (Faz 1 inceleme 7)
 const TPL_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/; // state.tpl.id (Faz 1)
 const LAST_ID_RE = /^[A-Za-z0-9_.:-]{1,24}$/;
 
@@ -331,6 +332,46 @@ function buildShutterPositionUpdate(deviceId, shutters) {
  * @param {{clearSafety?:boolean}} [opts]  clearSafety: caps'siz CANLI state geldi ama cihazda caps kayitliydi
  *                        (firmware geri alindi): devices.caps / safety_state NULL yapilir (tasarim §3.1 kural 5a).
  */
+/** Firmware surumu `fw` (ornek "1.3.0", "1.3.1-rc1") en az major.minor.patch mi? Ayrisamazsa false. */
+function fwAtLeast(fw, major, minor, patch) {
+  const m = typeof fw === 'string' ? /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(fw) : null;
+  if (!m) return false;
+  const a = [Number(m[1]), Number(m[2]), Number(m[3] || 0)];
+  const b = [major, minor, patch];
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
+}
+
+/**
+ * Yuklu kurulum sablonu (Faz 1, migration 035; CONTRACTS §3e). Ana state isleminden AYRI, COMMIT sonrasi calisir:
+ * 035 uygulanmadan yeniden baslatilan surumde (42703) cevrimici durumu bozulmasin.
+ *   - yalniz CANLI state (retained bayat olabilir)
+ *   - tpl var -> kolonlar yazilir (yalniz degisince; template_reported_at = degisim zamani)
+ *   - tpl yok + fw >= 1.3.0 -> panoda sablon yok: kolonlar NULL (doluysa)
+ *   - eski firmware (alan hic yok) -> dokunulmaz
+ * @returns {{text:string, values:any[]}|null}
+ */
+function buildTemplateUpdate(deviceId, v, live) {
+  if (!live || !v) return null;
+  if (v.tpl) {
+    return {
+      text:
+        'UPDATE devices SET template_id = $2, template_version = $3, template_reported_at = CURRENT_TIMESTAMP ' +
+        'WHERE id = $1 AND (template_id IS DISTINCT FROM $2::uuid OR template_version IS DISTINCT FROM $3::int)',
+      values: [deviceId, v.tpl.id, v.tpl.ver],
+    };
+  }
+  if (fwAtLeast(v.fw, 1, 3, 0)) {
+    return {
+      text:
+        'UPDATE devices SET template_id = NULL, template_version = NULL, template_reported_at = CURRENT_TIMESTAMP ' +
+        'WHERE id = $1 AND (template_id IS NOT NULL OR template_version IS NOT NULL)',
+      values: [deviceId],
+    };
+  }
+  return null;
+}
+
 function buildDeviceUpdate(deviceId, v, live, opts = {}) {
   const values = [deviceId];
   const sets = [];
@@ -354,12 +395,6 @@ function buildDeviceUpdate(deviceId, v, live, opts = {}) {
     add('safety_state', JSON.stringify(v.safety.summary));
   } else if (live && opts.clearSafety === true) {
     sets.push('caps = NULL, safety_state = NULL');
-  }
-  // Yuklu sablon (Faz 1, migration 035): YALNIZ canli state (retained bayat olabilir). Alan yoksa SQL degismez.
-  if (live && v.tpl) {
-    add('template_id', v.tpl.id);
-    add('template_version', v.tpl.ver);
-    sets.push('template_reported_at = CURRENT_TIMESTAMP');
   }
 
   if (live) {
@@ -1261,6 +1296,28 @@ class MqttBridge {
     }
   }
 
+  /**
+   * devices.template_* yazimi (buildTemplateUpdate). ASLA firlatmaz. 42703/42P01 (migration 035 yok): uyari + bir sure
+   * (TPL_SCHEMA_RETRY_MS) denenmez; diger hatalar dbErrors sayacina islenir.
+   */
+  async _writeTemplateState(topicId, deviceId, v, live) {
+    const q = buildTemplateUpdate(deviceId, v, live);
+    if (!q) return;
+    if (this._tplSchemaRetryAt && this.now() < this._tplSchemaRetryAt) return;
+    try {
+      await this.db.query(q.text, q.values);
+      this._tplSchemaRetryAt = 0;
+    } catch (err) {
+      if (err && (err.code === '42703' || err.code === '42P01')) {
+        this._tplSchemaRetryAt = this.now() + TPL_SCHEMA_RETRY_MS;
+        this._warnOnce('tpl-schema', 'devices.template_* kolonlari yok (migration 035 uygulanmamis); sablon bildirimi atlandi.');
+        return;
+      }
+      this.counters.dbErrors++;
+      this._warnOnce(`db-tpl:${topicId}`, `Sablon durumu yazilamadi [${topicId}]: ${err && err.message ? err.message : 'bilinmiyor'}`);
+    }
+  }
+
   async _processStatus(topicId, online, retain) {
     try {
       await this.db.query(STATUS_UPDATE_SQL, [topicId, online, retain]);
@@ -1332,6 +1389,8 @@ class MqttBridge {
           await tx.query(q.text, q.values);
         }
       });
+      // COMMIT sonrasi, hata yalitimli: yuklu sablon (Faz 1). Eksik kolon (035 oncesi) durumu bozmaz.
+      await this._writeTemplateState(topicId, device.device_id, v, !retain);
       // COMMIT sonrasi (hata yalitimli): cihaz cevrimici doneminin basinda bekleyen niyet uzlastirilir (plan §5d-3).
       // Yalnizca CANLI state kanittir; retained tekrar teslim cihazin simdi canli oldugunu gostermez.
       if (!retain && this._reconcileEnabled) {
@@ -1694,6 +1753,8 @@ module.exports.helpers = {
   buildRelayStateUpdate,
   buildShutterPositionUpdate,
   buildDeviceUpdate,
+  buildTemplateUpdate,
+  fwAtLeast,
   buildChildLockReconcile,
   buildHomeChildLockSync,
   serializeCommand,

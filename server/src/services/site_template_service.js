@@ -282,15 +282,17 @@ class SiteTemplateService {
     });
   }
 
+  /** lock: false | 'share' (FOR SHARE: silmeyi bekletir) | true (FOR UPDATE) */
   async _assertSite(q, siteId, { lock = false } = {}) {
-    const res = await q(`SELECT id, name FROM sites WHERE id = $1 AND deleted_at IS NULL${lock ? ' FOR UPDATE' : ''}`, [siteId]);
+    const clause = lock === 'share' ? ' FOR SHARE' : lock ? ' FOR UPDATE' : '';
+    const res = await q(`SELECT id, name FROM sites WHERE id = $1 AND deleted_at IS NULL${clause}`, [siteId]);
     if (res.rows.length === 0) throw httpError(404, 'Site bulunamadı.', 'NOT_FOUND');
     return res.rows[0];
   }
 
-  /** Daireye atanacak sablon: silinmemis ve (genel ya da ayni sitenin) olmali. */
+  /** Daireye atanacak sablon: silinmemis ve (genel ya da ayni sitenin) olmali. FOR SHARE: es zamanli silme bekler. */
   async _assertTemplateForSite(q, templateId, siteId) {
-    const res = await q('SELECT id, site_id FROM install_templates WHERE id = $1 AND deleted_at IS NULL', [templateId]);
+    const res = await q('SELECT id, site_id FROM install_templates WHERE id = $1 AND deleted_at IS NULL FOR SHARE', [templateId]);
     const t = res.rows[0];
     if (!t) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
     if (t.site_id && t.site_id !== siteId) throw bad('Şablon başka bir siteye ait.');
@@ -337,8 +339,12 @@ class SiteTemplateService {
     });
   }
 
+  /**
+   * Kilit sirasi (tum yollar ayni): envanter -> site (FOR SHARE) -> sablon (FOR SHARE) -> daire (FOR UPDATE).
+   * Site FOR SHARE: deleteSite (FOR UPDATE) ile yarista "silinmis site + karta bagli daire" olusmaz.
+   */
   async _lockFlat(tx, siteId, flatId) {
-    await this._assertSite((t, p) => tx.query(t, p), siteId);
+    await this._assertSite((t, p) => tx.query(t, p), siteId, { lock: 'share' });
     const res = await tx.query(
       'SELECT id, site_id, block, number, flat_type, template_id, device_uuid, status FROM site_flats WHERE id = $1 AND site_id = $2 FOR UPDATE',
       [flatId, siteId]
@@ -371,8 +377,9 @@ class SiteTemplateService {
     if (cols.length === 0) throw bad('Güncellenecek alan yok.');
 
     return this.db.withTransaction(async (tx) => {
-      await this._lockFlat(tx, sid, fid);
+      await this._assertSite((t, p) => tx.query(t, p), sid, { lock: 'share' });
       if (sets.template_id) await this._assertTemplateForSite((t, p) => tx.query(t, p), sets.template_id, sid);
+      await this._lockFlat(tx, sid, fid);
       try {
         await tx.query(
           `UPDATE site_flats SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
@@ -412,14 +419,17 @@ class SiteTemplateService {
     }
 
     return this.db.withTransaction(async (tx) => {
-      await this._lockFlat(tx, sid, fid);
+      // Kilit sirasi claim ile ayni: once envanter satiri, sonra site/daire.
       if (uuid) {
         const inv = await tx.query('SELECT device_uuid, status FROM device_inventory WHERE device_uuid = $1 FOR UPDATE', [uuid]);
         if (inv.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
         const status = inv.rows[0].status;
-        if (status === 'REVOKED' || status === 'SUSPENDED') {
-          throw httpError(409, `Cihaz kullanım dışı (durum: ${status}); daireye bağlanamaz.`, 'CONFLICT');
+        if (status !== 'IN_STOCK') {
+          throw httpError(409, `Yalnızca stoktaki (IN_STOCK) kart daireye bağlanabilir (mevcut durum: ${status}).`, 'DEVICE_NOT_IN_STOCK');
         }
+      }
+      await this._lockFlat(tx, sid, fid);
+      if (uuid) {
         const other = await tx.query('SELECT id FROM site_flats WHERE device_uuid = $1 AND id <> $2', [uuid, fid]);
         if (other.rows.length > 0) throw httpError(409, 'Bu kart başka bir daireye bağlı.', 'DEVICE_ALREADY_LINKED');
       }
@@ -500,17 +510,22 @@ class SiteTemplateService {
     const userId = (actor && actor.userId) || null;
 
     return this.db.withTransaction(async (tx) => {
+      // Yalniz sablon satiri kilitlenir; surum AYRI sorguyla okunur. (JOIN + FOR UPDATE OF t: bekleyen islem kilidi
+      // alinca t yeniden degerlendirilir ama birlesen surum satiri yenilenmez -> es zamanli kayitta yanlis 404.)
       const cur = await tx.query(
-        `SELECT t.id, t.site_id, t.current_version, v.sha256, v.body
-           FROM install_templates t
-           JOIN install_template_versions v ON v.template_id = t.id AND v.version = t.current_version
-          WHERE t.id = $1 AND t.deleted_at IS NULL
-          FOR UPDATE OF t`,
+        'SELECT id, site_id, current_version FROM install_templates WHERE id = $1 AND deleted_at IS NULL FOR UPDATE',
         [id]
       );
       const t = cur.rows[0];
       if (!t) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
       const curVersion = Number(t.current_version);
+      const verRes = await tx.query(
+        'SELECT sha256, body FROM install_template_versions WHERE template_id = $1 AND version = $2',
+        [id, curVersion]
+      );
+      if (verRes.rows.length === 0) throw httpError(404, 'Şablon sürümü bulunamadı.', 'NOT_FOUND');
+      t.sha256 = verRes.rows[0].sha256;
+      t.body = verRes.rows[0].body;
       const same = withMeta(b.body, { templateId: id, version: curVersion, siteId: t.site_id });
       if (bodySha256(same) === String(t.sha256).trim()) {
         const row = await tx.query(`SELECT ${TEMPLATE_COLUMNS} FROM install_templates t WHERE t.id = $1`, [id]);
@@ -535,14 +550,21 @@ class SiteTemplateService {
     });
   }
 
+  /** Yumusak silme; ayni islemde bu sablonu kullanan daireler ayrilir (template_id NULL; silme engellenmez). */
   async deleteTemplate(templateId) {
     const id = uuidOrThrow(templateId, 'şablon');
-    const res = await this.db.query(
-      'UPDATE install_templates SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING id',
-      [id]
-    );
-    if (res.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
-    return { id, deleted: true };
+    return this.db.withTransaction(async (tx) => {
+      const res = await tx.query(
+        'UPDATE install_templates SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING id',
+        [id]
+      );
+      if (res.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+      const unlinked = await tx.query(
+        'UPDATE site_flats SET template_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE template_id = $1',
+        [id]
+      );
+      return { id, deleted: true, flats_unlinked: unlinked.rowCount || 0 };
+    });
   }
 
   async _assertTemplateExists(id) {
@@ -612,6 +634,21 @@ class SiteTemplateService {
       if (ver.rows.length === 0) throw httpError(404, 'Şablon sürümü bulunamadı.', 'NOT_FOUND');
       const inv = await tx.query('SELECT device_uuid FROM device_inventory WHERE device_uuid = $1', [uuid]);
       if (inv.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
+      // Kilit sirasi: site (FOR SHARE) -> sablon (FOR SHARE) -> daire (FOR UPDATE); es zamanli silmeler bekler.
+      let flatSiteId = null;
+      if (flatId) {
+        const fs0 = await tx.query('SELECT site_id FROM site_flats WHERE id = $1', [flatId]);
+        if (fs0.rows.length === 0) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
+        flatSiteId = fs0.rows[0].site_id;
+        const site = await tx.query('SELECT id FROM sites WHERE id = $1 AND deleted_at IS NULL FOR SHARE', [flatSiteId]);
+        if (site.rows.length === 0) throw httpError(409, 'Dairenin sitesi silinmiş; yazım kaydedilemez.', 'SITE_DELETED');
+      }
+      const tpl = await tx.query('SELECT id, site_id, deleted_at FROM install_templates WHERE id = $1 FOR SHARE', [templateId]);
+      if (tpl.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+      if (tpl.rows[0].deleted_at) throw httpError(409, 'Şablon silinmiş; yazım kaydedilemez.', 'TEMPLATE_DELETED');
+      if (flatSiteId && tpl.rows[0].site_id && tpl.rows[0].site_id !== flatSiteId) {
+        throw httpError(422, 'Şablon başka bir siteye ait; bu daireye yazım kaydedilemez.', 'TEMPLATE_SITE_MISMATCH');
+      }
       let flat = null;
       if (flatId) {
         const f = await tx.query('SELECT id, status, device_uuid FROM site_flats WHERE id = $1 FOR UPDATE', [flatId]);
@@ -639,34 +676,49 @@ class SiteTemplateService {
   // Yerel anahtar (Ethernet yazimi, K-S4)
   // ===========================================================================
 
-  /** GET /admin/inventory/:uuid/local-key -> {local_key}. Her okuma denetim kaydina yazilir (fail-closed). */
+  /**
+   * GET /admin/inventory/:uuid/local-key -> {local_key}. YALNIZ stoktaki (IN_STOCK) ve hicbir eve bagli olmayan kart
+   * (atolye yazimi; super_user + service_user). Kurulu kartin anahtari ev kapsamli uctan alinir
+   * (GET /homes/:homeId/devices/:uuid/local-key): aksi 409 DEVICE_NOT_IN_STOCK. Her okuma denetim kaydina (envanter
+   * durumu dahil) yazilir; kayit yazilamazsa anahtar VERILMEZ (fail-closed).
+   */
   async getInventoryLocalKey(actor, deviceUuid) {
     const uuid = normalizeDeviceUuid(deviceUuid);
     if (!uuid) throw bad('Geçersiz cihaz kimliği.');
     const res = await this.db.query(
-      `SELECT di.device_uuid, COALESCE(di.local_key_enc, d.local_key_enc) AS local_key_enc
+      `SELECT di.device_uuid, di.status, di.local_key_enc, d.home_id,
+              (d.id IS NOT NULL AND (d.home_id IS NOT NULL OR d.is_claimed IS TRUE)) AS attached
          FROM device_inventory di
          LEFT JOIN devices d ON d.device_uuid = di.device_uuid
         WHERE di.device_uuid = $1`,
       [uuid]
     );
     if (res.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
-    if (!res.rows[0].local_key_enc) throw httpError(404, 'Bu cihaz için yerel anahtar tanımlı değil.', 'NOT_FOUND');
+    const row = res.rows[0];
+    if (row.status !== 'IN_STOCK' || row.attached === true) {
+      throw httpError(
+        409,
+        `Kart stokta değil (durum: ${row.status}${row.attached ? ', bir eve bağlı' : ''}). Kurulu kartın yerel anahtarı ev kapsamlı uçtan alınır: GET /homes/:homeId/devices/:uuid/local-key.`,
+        'DEVICE_NOT_IN_STOCK'
+      );
+    }
+    if (!row.local_key_enc) throw httpError(404, 'Bu cihaz için yerel anahtar tanımlı değil.', 'NOT_FOUND');
     const box = this.secretBox;
     if (!box || typeof box.isConfigured !== 'function' || !box.isConfigured()) {
       throw httpError(503, 'Yerel anahtar okunamıyor (sunucu yapılandırması eksik).', 'SERVICE_UNAVAILABLE');
     }
-    const localKey = box.decrypt(res.rows[0].local_key_enc);
+    const localKey = box.decrypt(row.local_key_enc);
     await this.db.query(
       `INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
-       VALUES ($1, $2, NULL, $3, $4, $5, $6)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         'inventory_local_key_read',
         uuid,
+        row.home_id || null,
         (actor && actor.userId) || null,
         (actor && actor.globalRole) || null,
         (actor && actor.ip) || null,
-        JSON.stringify({ purpose: 'template_write' }),
+        JSON.stringify({ purpose: 'template_write', inventory_status: row.status }),
       ]
     );
     return { local_key: localKey };

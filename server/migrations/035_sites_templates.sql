@@ -26,7 +26,12 @@
 --
 -- Rolling deploy: yeni tablolar bostur; devices'a eklenen kolonlar NULL'dur (tablo yeniden yazilmaz). Eski kod yeni
 -- kolonlari gormezden gelir. Kullanici silinince (027) referanslar NULL'a doner (ON DELETE SET NULL).
+-- Kod 035'siz veritabaninda da calisir (claim daire baglantisini, kopru tpl yazimini atlar), yine de sira:
+-- once migration, sonra sunucu yeniden baslatma.
 -- ==============================================================================
+
+-- devices ALTER'i canli trafikte (kopru UPDATE'leri) uzun kilit beklemesin: 5 sn'de vazgec, migration yeniden denenir.
+SET LOCAL lock_timeout = '5s';
 
 -- ------------------------------------------------------------------------------
 -- 1. SITES
@@ -158,9 +163,9 @@ ALTER TABLE devices ADD COLUMN IF NOT EXISTS template_version INT;
 ALTER TABLE devices ADD COLUMN IF NOT EXISTS template_reported_at TIMESTAMPTZ;
 
 ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_template_version_check;
+-- Yeni (tamami NULL) kolon: duz ADD CONSTRAINT yeterli (NOT VALID + VALIDATE gereksiz).
 ALTER TABLE devices ADD CONSTRAINT devices_template_version_check
-  CHECK (template_version IS NULL OR template_version >= 1) NOT VALID;
-ALTER TABLE devices VALIDATE CONSTRAINT devices_template_version_check;
+  CHECK (template_version IS NULL OR template_version >= 1);
 
 COMMENT ON TABLE install_template_versions IS 'K-S6: degismez sablon surumleri (UPDATE/DELETE tetikleyiciyle reddedilir)';
 COMMENT ON COLUMN template_writes.via IS 'usb (seri TPL) | eth (Ethernet, servis yazilimi) | lan (uygulama sihirbazi, Wi-Fi LAN)';

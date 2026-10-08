@@ -900,6 +900,14 @@ function createWorld({ clock = createClock() } = {}) {
   );
 
   // ------------------------------------------------------------------ Faz 1: daire baglantisi + sablon tohumu (K-S8)
+  // device_service._hasSchema035: katalog sorgusu (state.schema035 === false -> migration 035 uygulanmamis gibi).
+  db.on('AS schema_035', () => [{ schema_035: state.schema035 !== false }]);
+  // device_service._clearDeviceTemplate (acil sifirlama / pano degisimi)
+  db.on('UPDATE devices SET template_id = NULL, template_version = NULL, template_reported_at = NULL WHERE id = $1', (ctx) => {
+    const dev = state.devices.find((d) => d.id === ctx.params[0]);
+    if (dev) patch(ctx, dev, { template_id: null, template_version: null, template_reported_at: null });
+    return { rows: [], rowCount: dev ? 1 : 0 };
+  });
   // device_service._loadFlatSeed: kartin bagli oldugu (silinmemis sitedeki) daire + son BASARILI yazimin surum govdesi.
   db.on('FROM site_flats f JOIN sites s', async (ctx) => {
     const uuid = ctx.params[0];

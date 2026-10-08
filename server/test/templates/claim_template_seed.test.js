@@ -158,3 +158,14 @@ test('yanlis PIN: daire durumu ve ev adi degismez (geri alma)', async () => {
   assert.equal(ctx.world.state.homes.length, 0);
   assert.equal(ctx.world.state.endpoints.length, 0);
 });
+
+test('migration 035 yokken (yeniden baslatma once): claim BOZULMAZ, daire yok sayilir; olumsuz sonuc onbelleklenmez', async () => {
+  const ctx = setup();
+  ctx.world.state.schema035 = false;
+  linkFlat(ctx.world, { body: fixture('ok_1p1.json') });
+  const r = await claim(ctx, { homeName: 'Daire 5' });
+  assert.equal(r.home_name, 'Daire 5');
+  assert.ok(!ctx.world.db.log.some((l) => l.sql.includes('FROM site_flats')), 'tablo sorgusu yapilmadi');
+  assert.equal(ctx.world.state.endpoints.find((e) => e.channel_index === 1).name, 'Salon Panjur Yukarı');
+  assert.equal(ctx.deviceService._schema035, undefined, 'olumsuz sonuc onbelleklenmez');
+});
