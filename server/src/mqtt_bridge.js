@@ -96,6 +96,7 @@ const COMMAND_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(cmd|sys)$/;
 const INCOMING_TOPIC_RE = /^ev\/([A-Za-z0-9_-]{1,64})\/(state|status|event)$/;
 const UID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/;
 const FW_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$/;
+const TPL_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/; // state.tpl.id (Faz 1)
 const LAST_ID_RE = /^[A-Za-z0-9_.:-]{1,24}$/;
 
 const MAX_PAYLOAD_BYTES = 64 * 1024; // gelen mesaj ust siniri
@@ -196,6 +197,7 @@ function validateStatePayload(obj) {
     shutters: [],
     skipped: 0,
     safety: null, // v:3 guvenlik ekleri (caps / last_rej varsa; utils/safety_payload.parseStateSafety)
+    tpl: null, // Faz 1 (v1.3.0+): yuklu kurulum sablonu {id, ver} (CONTRACTS §3e); yoksa null
   };
 
   if (obj.uid !== undefined) {
@@ -257,6 +259,14 @@ function validateStatePayload(obj) {
       if (obj.shutters.length > MAX_ARRAY_ITEMS) skipped++;
       out.shutters = [...byPair].map(([pair, pos]) => ({ pair, pos }));
     }
+  }
+
+  // Faz 1: yuklu sablon `tpl {id: uuid, ver: 1..2^31-1}` (sablon yoksa pano alani hic gondermez).
+  if (obj.tpl !== undefined) {
+    const t = obj.tpl;
+    const id = t && typeof t === 'object' && !Array.isArray(t) && typeof t.id === 'string' ? t.id.trim().toLowerCase() : '';
+    if (TPL_ID_RE.test(id) && isIntInRange(t.ver, 1, 2147483647)) out.tpl = { id, ver: t.ver };
+    else skipped++;
   }
 
   // v:3 ekleri: yalniz caps ya da last_rej varsa ayristirilir (v:2 yuku icin cikti AYNEN).
@@ -344,6 +354,12 @@ function buildDeviceUpdate(deviceId, v, live, opts = {}) {
     add('safety_state', JSON.stringify(v.safety.summary));
   } else if (live && opts.clearSafety === true) {
     sets.push('caps = NULL, safety_state = NULL');
+  }
+  // Yuklu sablon (Faz 1, migration 035): YALNIZ canli state (retained bayat olabilir). Alan yoksa SQL degismez.
+  if (live && v.tpl) {
+    add('template_id', v.tpl.id);
+    add('template_version', v.tpl.ver);
+    sets.push('template_reported_at = CURRENT_TIMESTAMP');
   }
 
   if (live) {

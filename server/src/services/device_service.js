@@ -26,6 +26,7 @@ const { generateNumericPin, isUuid } = require('../utils/helpers');
 const { httpError } = require('../utils/http_errors');
 const { can } = require('../utils/role_matrix');
 const { validateCommand, capabilityForCommand, isSafeTarget, KINDS } = require('../utils/command_schema');
+const { endpointRowsFromTemplate } = require('../utils/template_schema');
 
 // --- Sabitler ---------------------------------------------------------------
 const PIN_MAX_ATTEMPTS = 5;
@@ -454,6 +455,49 @@ class DeviceService {
     return res.rowCount || 0;
   }
 
+  /**
+   * Claim (K-S8, migration 035): kart silinmemis bir sitedeki daireye bagliysa daire + kartin SON BASARILI sablon
+   * yaziminin surum govdesi. Daire satiri kilitlenir (ayni karti iki claim'in siralanmasi zaten envanter kilidinde).
+   * @returns {Promise<null | {flat_id, block, number, status, site_name, template_id, version, template_body}>}
+   */
+  async _loadFlatSeed(tx, deviceUuid) {
+    const res = await tx.query(
+      `SELECT f.id AS flat_id, f.block, f.number, f.status, s.name AS site_name,
+              w.template_id, w.version, v.body AS template_body
+         FROM site_flats f JOIN sites s ON s.id = f.site_id AND s.deleted_at IS NULL
+         LEFT JOIN LATERAL (
+           SELECT tw.template_id, tw.version
+             FROM template_writes tw
+            WHERE tw.device_uuid = f.device_uuid AND tw.result = 'ok'
+            ORDER BY tw.created_at DESC, tw.id DESC
+            LIMIT 1
+         ) w ON TRUE
+         LEFT JOIN install_template_versions v ON v.template_id = w.template_id AND v.version = w.version
+        WHERE f.device_uuid = $1
+        FOR UPDATE OF f`,
+      [deviceUuid]
+    );
+    return res.rows[0] || null;
+  }
+
+  /** Uc noktalari sablon govdesinden tohumlar; govde kullanilamazsa null (cagiran sabit tohuma duser). */
+  async _seedEndpointsFromTemplate(tx, homeId, deviceId, body) {
+    const rows = endpointRowsFromTemplate(body);
+    if (!rows) return null;
+    await tx.query('DELETE FROM endpoints WHERE device_id = $1 AND home_id <> $2', [deviceId, homeId]);
+    const res = await tx.query(
+      `INSERT INTO endpoints (device_id, home_id, channel_index, name, type, room, shutter_pair_index, shutter_duration_sec,
+                              actuator_type, dimmable, dimmer_source)
+       SELECT $1::uuid, $2::uuid, x.channel_index, x.name, x.type, x.room, x.shutter_pair_index, x.shutter_duration_sec,
+              x.actuator_type, COALESCE(x.dimmable, FALSE), x.dimmer_source
+         FROM jsonb_to_recordset($3::jsonb) AS x(channel_index int, name text, type text, room text, shutter_pair_index int,
+                                                shutter_duration_sec int, actuator_type text, dimmable boolean, dimmer_source text)
+       ON CONFLICT (device_id, channel_index) DO NOTHING`,
+      [deviceId, homeId, JSON.stringify(rows)]
+    );
+    return res.rowCount || 0;
+  }
+
   async _createHome(tx, name) {
     for (let attempt = 0; attempt < 5; attempt++) {
       const topicId = this.credentials.generateTopicId();
@@ -749,6 +793,11 @@ class DeviceService {
       const pinCheck = await this._checkInventoryPin(tx, inv, pinText);
       if (!pinCheck.ok) return { ok: false, error: pinCheck.error };
 
+      // 3b) Site dairesi (K-S8, migration 035): kart bir daireye bagliysa ev adi "<site> <blok>-<no>" ve uc nokta tohumu
+      //     karta son basariyla yazilan sablon surumunden. Bagli degilse davranis AYNEN.
+      const flatSeed = await this._loadFlatSeed(tx, uuid);
+      const flatHomeName = flatSeed ? `${flatSeed.site_name} ${flatSeed.block}-${flatSeed.number}`.slice(0, 100) : null;
+
       // 4) Ayni musteri icin eszamanli sahiplenmeleri sirala (bos ev secimi / hesap olusturma yarisi)
       await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
         `claim-owner:${target ? target.value : actor.userId}`,
@@ -879,8 +928,12 @@ class DeviceService {
       );
       if (emptyHome.rows.length > 0) {
         home = emptyHome.rows[0];
+        if (flatHomeName && home.name !== flatHomeName) {
+          const renamed = await tx.query('UPDATE homes SET name = $2 WHERE id = $1 RETURNING id, name, mqtt_username', [home.id, flatHomeName]);
+          home = renamed.rows[0] || home;
+        }
       } else {
-        home = await this._createHome(tx, name || DEFAULT_HOME_NAME);
+        home = await this._createHome(tx, flatHomeName || name || DEFAULT_HOME_NAME);
         await tx.query(
           `INSERT INTO home_users (home_id, user_id, role) VALUES ($1, $2, 'owner')`,
           [home.id, owner.id]
@@ -936,8 +989,19 @@ class DeviceService {
       );
       const device = devRes.rows[0];
 
-      // 9) Kanallar: tek INSERT ... SELECT generate_series (model kanal sayisi)
-      await this._seedEndpoints(tx, home.id, device.id, device.model);
+      // 9) Kanallar: daireye yazilmis sablon varsa ondan (K-S8), yoksa tek INSERT ... SELECT generate_series (model kanal sayisi)
+      const seededFromTemplate =
+        flatSeed && flatSeed.template_body
+          ? (await this._seedEndpointsFromTemplate(tx, home.id, device.id, flatSeed.template_body)) !== null
+          : false;
+      if (!seededFromTemplate) await this._seedEndpoints(tx, home.id, device.id, device.model);
+      // Daire kuruldu (teslim edilmis daire geri cekilmez)
+      if (flatSeed) {
+        await tx.query(
+          "UPDATE site_flats SET status = 'installed', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status IN ('planned', 'written')",
+          [flatSeed.flat_id]
+        );
+      }
 
       // 10) Envanter: CLAIMED + PIN YAKILDI (duz metin PIN zaten saklanmaz) + yerel anahtar
       await tx.query(
@@ -972,6 +1036,9 @@ class DeviceService {
           on_behalf_of_customer: Boolean(target),
           customer_account_created: Boolean(createdAccount),
           local_key_generated: localKey.generated,
+          ...(flatSeed
+            ? { site_flat_id: flatSeed.flat_id, template_id: seededFromTemplate ? flatSeed.template_id : null, template_version: seededFromTemplate ? flatSeed.version : null }
+            : {}),
         },
       });
 

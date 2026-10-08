@@ -134,6 +134,7 @@ function createApp(deps = {}) {
   const inventoryRoutes = require('./routes/inventory_routes');
   const invitationRoutes = require('./routes/invitation_routes');
   const transferRoutes = require('./routes/transfer_routes');
+  const siteTemplateRoutes = require('./routes/site_template_routes');
   const authService = require('./services/auth_service');
 
   // WP-B / WP-C rotalari (dosya yoksa mount atlanir).
@@ -275,6 +276,11 @@ function createApp(deps = {}) {
   // --- WP-B2: servis paneli (abone listesi + Home Admin atama); staff/super, kimlik route bazli ---
   app.use('/api/v1/service', servicePanelRoutes);
   app.use('/api/service', servicePanelRoutes);
+  // --- Faz 1 (CONTRACTS §3e): site / daire / kurulum sablonu / yazim kaydi / envanter yerel anahtari. Yollar tam
+  //     (/sites, /templates, /template-writes, /admin/inventory/:uuid/local-key); kimlik route bazli (router.use YOK).
+  //     inventoryRoutes / adminRoutes'tan ONCE baglanir (GET /admin/inventory/:uuid/local-key burada karsilanir).
+  app.use('/api/v1', siteTemplateRoutes);
+  app.use('/api', siteTemplateRoutes);
   app.use('/api/v1/admin/inventory', inventoryRoutes);
   app.use('/api/admin/inventory', inventoryRoutes);
   app.use('/api/v1/admin', adminRoutes);

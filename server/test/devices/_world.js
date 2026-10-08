@@ -175,6 +175,11 @@ function createWorld({ clock = createClock() } = {}) {
     commissioning_logs: [],
     commissioning_checks: [],
     peace_notification_logs: [],
+    // Faz 1 (migration 035): claim tohumu icin daire / site / sablon surumu / yazim kaydi
+    sites: [],
+    site_flats: [],
+    install_template_versions: [],
+    template_writes: [],
   };
   const db = new FakeDb();
   const now = () => clock.now();
@@ -893,6 +898,48 @@ function createWorld({ clock = createClock() } = {}) {
         };
       })
   );
+
+  // ------------------------------------------------------------------ Faz 1: daire baglantisi + sablon tohumu (K-S8)
+  // device_service._loadFlatSeed: kartin bagli oldugu (silinmemis sitedeki) daire + son BASARILI yazimin surum govdesi.
+  db.on('FROM site_flats f JOIN sites s', async (ctx) => {
+    const uuid = ctx.params[0];
+    const flat = state.site_flats.find((f) => f.device_uuid === uuid);
+    if (!flat) return [];
+    const site = state.sites.find((x) => x.id === flat.site_id && !x.deleted_at);
+    if (!site) return [];
+    await ctx.lock(`site_flats:${flat.id}`);
+    const w = state.template_writes
+      .filter((x) => x.device_uuid === uuid && x.result === 'ok')
+      .sort((a, b) => b.created_at - a.created_at || b.id - a.id)[0];
+    const v = w ? state.install_template_versions.find((x) => x.template_id === w.template_id && x.version === w.version) : null;
+    return [{
+      flat_id: flat.id, block: flat.block, number: flat.number, status: flat.status, site_name: site.name,
+      template_id: w ? w.template_id : null, version: w ? w.version : null, template_body: v ? JSON.parse(JSON.stringify(v.body)) : null,
+    }];
+  });
+  db.on("UPDATE site_flats SET status = 'installed'", (ctx) => {
+    const flat = state.site_flats.find((f) => f.id === ctx.params[0] && ['planned', 'written'].includes(f.status));
+    if (flat) patch(ctx, flat, { status: 'installed' });
+    return { rows: [], rowCount: flat ? 1 : 0 };
+  });
+  db.on('UPDATE homes SET name = $2 WHERE id = $1', (ctx) => {
+    const home = state.homes.find((h) => h.id === ctx.params[0]);
+    if (home) patch(ctx, home, { name: ctx.params[1] });
+    return { rows: home ? [{ id: home.id, name: home.name, mqtt_username: home.mqtt_username }] : [], rowCount: home ? 1 : 0 };
+  });
+  db.on('INSERT INTO endpoints (device_id, home_id, channel_index', (ctx) => {
+    const [deviceId, homeId, json] = ctx.params;
+    let n = 0;
+    for (const r of JSON.parse(json)) {
+      if (state.endpoints.some((e) => e.device_id === deviceId && e.channel_index === r.channel_index)) continue;
+      insert(ctx, state.endpoints, {
+        id: uid(), home_id: homeId, device_id: deviceId, current_state: false, current_position: 0, ...r,
+        dimmable: r.dimmable === true,
+      });
+      n += 1;
+    }
+    return { rows: [], rowCount: n };
+  });
 
   // ------------------------------------------------------------------ olusturucular (fixture)
   const helpers = {
