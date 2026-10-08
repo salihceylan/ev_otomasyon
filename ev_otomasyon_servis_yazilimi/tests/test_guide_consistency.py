@@ -100,6 +100,9 @@ class GuideConsistencyTests(unittest.TestCase):
         "tpl_crc",
         "tpl_b64",
         "zone_latched",
+        "Kalıcı (mandallı) duvar anahtarı DESTEKLENMEZ; tüm girişlere yaylı buton bağlayın",
+        "Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir",
+        "Basılı tut (yaylı buton; basılıyken açık)",
     )
 
     # Rehberin alıntıladığı pencere başlıkları.

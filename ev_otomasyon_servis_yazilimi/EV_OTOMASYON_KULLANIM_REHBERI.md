@@ -239,7 +239,8 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
      **çift** olarak kurulur: tek numaralı röle **Yukarı**, ardından gelen **Aşağı**, ikisinin süresi aynıdır.
    - Lamba satırındaki **💡** düğmesi **"Parlaklık ayarı yapılacak mı?"** diye sorar: evetse dimmer kaynağı (Modbus dimmer modülü /
      köprü), adres ve kanal girilir; pencere dimmerin **nereye** konacağını yazar (K4 yönergesi; şemada da yer alır).
-   - **Girişler (DI):** ad, hedef röle, kip, kablolama notu ve **güvenlik rolü** (su, gaz, duman, kapı, pencere, hareket...) +
+   - **Girişler (DI):** ad, hedef röle, kip (**Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir**,
+     **Basılı tut (yaylı buton; basılıyken açık)**, panjur kipleri de yaylı butondur — kalıcı/mandallı anahtar desteklenmez), kablolama notu ve **güvenlik rolü** (su, gaz, duman, kapı, pencere, hareket...) +
      kontak **NO/NC** + bölge. Gaz/duman dedektörü her zaman **NC** bağlanır; sensör olan girişin hedef rölesi "Boşta" olur.
    - **Güvenlik:** tepkiler açık/kapalı, kuruluk bekleme, bölge adları, güvenlik cihazları (vana / siren / fan; vanada kapanma kipi
      ve akışkan). Cihaz panjur ya da darbe rölesine bağlanamaz.
@@ -281,7 +282,10 @@ NO/NC + bölge, dimmer yerleşimi, güvenlik cihazları ve uyarılar (gaz için 
 | "kilitli (alarmdaki) bir bölge" (`zone_latched`), "Hırsız alarmı kurulu" (`armed`) | Kart güvenlik durumunda | Alarmı onaylayın/kapatın, sonra yazın |
 | "Kart meşgul" (`busy`) | Panjur hareket halinde ya da bellek yetersiz | Birkaç saniye bekleyin |
 | "kalıcı belleğinde yer yok" (`storage`) | NVS dolu; uygulanmadı | Servis ekibine bildirin |
-| "Bağlı kart ... eşleşmiyor" (`mac_mismatch`) | Yanlış kart takılı | Doğru kartı bağlayın |
+| "Bağlı kart ... eşleşmiyor" (`mac_mismatch`) | Yanlış kart takılı ya da kartın kimliği okunamadı | Doğru kartı bağlayın |
+| "Bu IP adresindeki kart ... eşleşmiyor" (`device_mismatch`) | Ethernet: IP başka bir karta ait (araç önce anahtarsız kimlik denetimi yapar; anahtar alınmaz) | IP adresini kontrol edin |
+| "Bu kart stokta değil" (`DEVICE_NOT_IN_STOCK`) | Kart müşteriye ait ya da askıda | USB kullanın veya ev üzerinden işlem yapın |
+| "provizyonu (FACTORYINIT) Ethernet'ten kabul etmiyor" (`factory_ap_only`) | Provizyon Ethernet'ten yapılamaz | Sıra: USB flash → USB FACTORYINIT → şablon USB ya da Ethernet |
 
 ---
 
@@ -499,7 +503,8 @@ Waveshare **ESP32-S3-ETH-8DI-8RO** endüstriyel pano modülü (DIN-ray):
 ### Duvar butonları (kuru kontak) bağlantısı
 
 - Röle klemenslerindeki **COM** uçları şebeke fazını röleye girmek içindir.
-- Duvardaki yaylı anahtarlar / kapı manyetikleri **DI1…DI8** klemensleri ile **DGND** (dijital toprak) arasına bağlanır.
+- Duvardaki **yaylı (kalıcı olmayan) butonlar** / kapı manyetikleri **DI1…DI8** klemensleri ile **DGND** (dijital toprak) arasına bağlanır.
+- **Kalıcı (mandallı) duvar anahtarı DESTEKLENMEZ; tüm girişlere yaylı buton bağlayın.** "Aç/Kapa" kipi her basışta değiştirir.
 - Butona basılınca DI pini DGND ile kısa devre olur ve ilgili işlem tetiklenir. İnternet/Wi-Fi kesilse bile duvar butonları çalışır.
 
 ---

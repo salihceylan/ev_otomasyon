@@ -610,7 +610,7 @@ class TemplateEditorDialog(_Modal):
             target = item["target_relay"]
             row["target"] = self._combo(frame, choices, choices[target] if target < len(choices) else choices[0], 24)
             row["target"].grid(row=ch, column=2, padx=3)
-            row["mode"] = self._combo(frame, MODE_CHOICES, tm.DI_MODE_TEXT.get(item["mode"], MODE_CHOICES[0]), 22)
+            row["mode"] = self._combo(frame, MODE_CHOICES, tm.DI_MODE_TEXT.get(item["mode"], MODE_CHOICES[0]), 44)
             row["mode"].grid(row=ch, column=3, padx=3)
             row["wiring"] = self._entry(frame, item.get("wiring", ""), 24)
             row["wiring"].grid(row=ch, column=4, padx=3)
@@ -966,6 +966,9 @@ class SiteTemplateTabsMixin:
             return
         if isinstance(err, ApiError) and err.code == "SITE_HAS_DEVICES":
             self.ui_error(title, "Bu sitenin dairelerine bağlı kartlar var; site silinemez. Önce kart bağlantılarını kaldırın.")
+            return
+        if isinstance(err, ApiError) and err.code == "DEVICE_NOT_IN_STOCK":
+            self.ui_error(title, str(err))
             return
         if isinstance(err, ApiError) and err.code == "DEVICE_ALREADY_LINKED":
             self.ui_error(title, "Bu kart başka bir daireye bağlı. Önce o dairedeki bağlantıyı kaldırın.")
@@ -1379,9 +1382,11 @@ class SiteTemplateTabsMixin:
                 return self._make_template_serial_writer().write(
                     request.port, envelope, template_id=template_id, version=version, label=request.label,
                     expected_uid=expected_uid, progress=say, cancel=cancel)
+            writer = TemplateLanWriter(request.host, transport=self._device_transport)
+            say("Kartın kimliği doğrulanıyor (GET /api/status, anahtarsız)...")
+            writer.verify_identity(request.device_uid, (flat or {}).get("device_uuid"))
             say("Kartın yerel anahtarı sunucudan alınıyor (denetim kaydı tutulur; anahtar gösterilmez)...")
             key = self.client.fetch_local_key(request.device_uid)
-            writer = TemplateLanWriter(request.host, transport=self._device_transport)
             return writer.write(key, envelope, template_id=template_id, version=version, label=request.label,
                                 device_uid=request.device_uid, progress=say)
 
@@ -1402,7 +1407,7 @@ class SiteTemplateTabsMixin:
                 err = TemplateWriteError(err.code or "no_response", message=err.message + (f"\n{err.hint}" if err.hint else ""))
             text = self._error_text(err)
             self._tpl_say("❌ " + text)
-            if isinstance(err, TemplateWriteError) and uid and err.code not in ("cancelled", "unreachable", "mac_mismatch"):
+            if isinstance(err, TemplateWriteError) and uid and err.code not in ("cancelled", "unreachable", "mac_mismatch", "device_mismatch"):
                 self._record_write(uid, meta, request.via, "error", flat, err.code)
             extra = "\n\nUSB ile yazın: '💾 Karta Yaz' penceresinde USB'yi seçin." if isinstance(err, TemplateWriteError) and err.use_usb else ""
             self.ui_error("Karta Yazılamadı", text + extra)

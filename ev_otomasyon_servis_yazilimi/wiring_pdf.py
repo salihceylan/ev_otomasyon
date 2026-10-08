@@ -43,10 +43,14 @@ SHUTTER_WARNING = (
     "kilitlemesi). Yönleri ters bağlamayın; motorun ortak (nötr) ucu panodan değil dağıtımdan gelir. Motor uç "
     "anahtarları (limit) yerinde ayarlı olmalı."
 )
+LATCHING_SWITCH_WARNING = (
+    "Kalıcı (mandallı) duvar anahtarı DESTEKLENMEZ; tüm girişlere yaylı buton bağlayın. (Aç/Kapa kipi her basışta "
+    "değiştirir; kalıcı anahtar kullanılırsa her konum değişimi bir basış sayılmaz ve lamba ters çalışır.)"
+)
 GENERAL_NOTES = (
     "Röle kontakları kuru kontaktır: faz hattını COM'a, yükü NO'ya bağlayın; yük akımı rölenin anma değerini aşmamalı "
     "(motor/ısıtıcı için kontaktör kullanın).",
-    "Girişler (DI) kuru kontak içindir: anahtar/buton/sensör kontağını DI ile GND (COM) arasına bağlayın; girişe şebeke "
+    "Girişler (DI) kuru kontak içindir: yaylı buton / sensör kontağını DI ile GND (COM) arasına bağlayın; girişe şebeke "
     "gerilimi VERMEYİN.",
     "Bu şema karta yazılan şablon sürümüne göredir. Sahada değişiklik yapılırsa pano esastır; yeni sürüm yazılıp şema "
     "yeniden basılmalıdır.",
@@ -432,6 +436,7 @@ def build_wiring_document(
         mode, sensor = di_note(template, ch)
         rows.append([f"D{ch}", item["name"], mode, item.get("wiring", ""), sensor])
     r.table(["Giriş", "Ad", "Kip / hedef", "Kablolama notu", "Sensör (tür · kontak · bölge)"], [0.6, 1.6, 2.2, 1.8, 2.4], rows)
+    r.paragraph(LATCHING_SWITCH_WARNING, r.f_bold, "#991b1b", box="#dc2626")
 
     lights = [light for light in template["safety"].get("lights", []) if light.get("dimmable")]
     if lights:

@@ -458,6 +458,11 @@ def _format_wait(seconds: Optional[int]) -> str:
     return f"{(value + 59) // 60} dakika"
 
 
+DEVICE_NOT_IN_STOCK_TEXT = (
+    "Bu kart stokta değil (müşteriye ait ya da askıda); Ethernet ile şablon yazılamaz — USB kullanın veya ev üzerinden işlem yapın."
+)
+
+
 def friendly_api_error(
     status: int,
     code: Optional[str] = None,
@@ -524,6 +529,8 @@ def friendly_api_error(
         return safe or "Gönderilen bilgiler geçersiz. Alanları kontrol edin."
     if status == 404:
         return safe or "Kayıt bulunamadı."
+    if status == 409 and code == "DEVICE_NOT_IN_STOCK":
+        return DEVICE_NOT_IN_STOCK_TEXT
     if status == 409:
         return safe or "Kayıt zaten mevcut veya mevcut durumla çakışıyor."
     if status == 410:
@@ -1487,6 +1494,15 @@ class DeviceClient:
         if status == 200:
             return
         err = self._error_id(payload)
+        if status == 403 and err == "factory_ap_only":
+            raise ProvisionError(
+                "factory_ap_only",
+                "Kart provizyonu bu ağ arayüzünden kabul etmiyor (factory_ap_only): yalnız kurulum Wi-Fi'si ya da USB.",
+                hint=(
+                    "Atölye sırası: USB ile firmware yükleyin -> USB (seri) FACTORYINIT (araç otomatik yapar) -> şablonu USB ya da "
+                    "Ethernet ile yazın. 'Seri (USB) ile Provizyonla'yı kullanın."
+                ),
+            )
         if status == 403 and err == "already_provisioned":
             raise ProvisionError(
                 "already_provisioned",
@@ -2484,7 +2500,7 @@ class SerialProvisioner:
 # ---------------------------------------------------------------------------
 SERIAL_TPL_STEP_TIMEOUT_S = 5.0
 SERIAL_TPL_COMMIT_TIMEOUT_S = 20.0
-_TPL_REPLY = re.compile(r"(?:^|\s)(OK tpl_[a-z_]{1,20}(?: [^\r\n]{0,80})?|ERR [a-z_]{1,40}(?: [A-Za-z0-9_.\[\]]{1,64})?)\s*$")
+_TPL_REPLY = re.compile(r"(?:^|\s)(OK tpl_[a-z_]{1,20}(?: [^\r\n]{0,80})?|ERR [a-z][a-z0-9_]{0,39}(?: [A-Za-z0-9_.\[\]]{1,64})?)\s*$")
 _TPL_STATUS = re.compile(r"^TPL (\S{1,40}) (\d{1,10})(?: (.{0,40}))?$")
 _UNKNOWN_TPL = re.compile(r"Bilinmeyen komut: 'TPL'", re.IGNORECASE)
 
@@ -2603,6 +2619,12 @@ class TemplateSerialWriter(SerialProvisioner):
         begun = False
         found_uid = uid_from_mac(status.mac or "")
         try:
+            if expected_uid and not found_uid:
+                raise TemplateWriteError(
+                    "mac_mismatch",
+                    message="Bağlı kartın kimliği (MAC) okunamadı; kartın seçilen kart "
+                    f"({expected_uid.strip().upper()}) olduğu doğrulanamadı. Hiçbir şey yazılmadı; kartı yeniden bağlayıp tekrar deneyin.",
+                )
             if expected_uid and found_uid and found_uid != expected_uid.strip().upper():
                 raise TemplateWriteError(
                     "mac_mismatch",
@@ -2627,7 +2649,17 @@ class TemplateSerialWriter(SerialProvisioner):
                     say(f"  ... {index + 1}/{len(chunks)} parça gönderildi")
             say("Tüm parçalar gönderildi; kart şablonu doğrulayıp uyguluyor (TPL COMMIT)...")
             session.send(b"TPL COMMIT\r\n")
-            rest = self._expect(session, "applied", SERIAL_TPL_COMMIT_TIMEOUT_S, cancel)
+            try:
+                rest = self._expect(session, "applied", SERIAL_TPL_COMMIT_TIMEOUT_S, cancel)
+            except TemplateWriteError as exc:
+                if exc.code != "no_response":
+                    raise
+                # COMMIT yanıtı kayboldu: kart uygulamış olabilir -> TPL STATUS ile karar ver (uygulanmışsa başarı).
+                say("COMMIT yanıtı gelmedi; kartın şablon durumu TPL STATUS ile denetleniyor...")
+                back = self._read_status(session, cancel)
+                if back is None or back[0] != template_id or back[1] != int(version):
+                    raise
+                rest = f"{template_id} {int(version)}"
             begun = False
             parts = rest.split()
             if len(parts) < 2 or parts[0] != template_id or not parts[1].isdigit() or int(parts[1]) != int(version):
@@ -2665,10 +2697,15 @@ def base64_decoded_length(chunk: str) -> bytes:
 class TemplateLanWriter:
     """Ethernet/LAN üzerinden şablon yazımı (yerel anahtarla; yalnız özel/yerel IP)."""
 
-    def __init__(self, host: str, *, transport: Optional[Transport] = None, timeout: float = 15.0) -> None:
+    PENDING_POLL_S = 1.0
+    PENDING_MAX_S = 20.0
+
+    def __init__(self, host: str, *, transport: Optional[Transport] = None, timeout: float = 15.0,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
         if not (host or "").strip():
             raise ValueError("Kartın IP adresini girin.")
         self._device = DeviceClient(host, transport=transport, env={}, timeout=timeout)
+        self._sleep = sleep
 
     @property
     def host(self) -> str:
@@ -2713,6 +2750,8 @@ class TemplateLanWriter:
         status, payload, _headers = self._send("POST", "/api/template/apply", local_key, envelope)
         if status == 200 and payload is not None and payload.get("ok") is True:
             return payload
+        if status == 202 and payload is not None and payload.get("pending") is True:
+            return payload  # kart hâlâ yazıyor: çağıran GET /api/template ile bekler
         raise self._error(status, payload)
 
     def read(self, local_key: str) -> dict[str, Any]:
@@ -2722,11 +2761,63 @@ class TemplateLanWriter:
             return payload
         raise self._error(status, payload)
 
+    def verify_identity(self, *expected_uids: Optional[str]) -> str:
+        """Anahtarsız ``GET /api/status`` ile bu IP'deki kartın UID'sini okur; beklenen UID(ler)le eşleşmezse yerel anahtar
+        ALINMADAN/GÖNDERİLMEDEN ``TemplateWriteError("device_mismatch")``."""
+        try:
+            found = str(self._device.status().get("device") or "").strip().upper()
+        except ProvisionError as exc:
+            if exc.code == "unreachable":
+                raise TemplateWriteError("unreachable") from None
+            raise TemplateWriteError(
+                "device_mismatch",
+                message="Bu IP adresindeki cihaz bir AHBU kartı gibi yanıt vermedi; yerel anahtar alınmadı, hiçbir şey yazılmadı.",
+            ) from None
+        for expected in expected_uids:
+            if expected and found != expected.strip().upper():
+                raise TemplateWriteError(
+                    "device_mismatch",
+                    message=f"Bu IP adresindeki kart ({found or '?'}) seçilen kartla ({expected.strip().upper()}) eşleşmiyor; "
+                    "yerel anahtar alınmadı, hiçbir şey yazılmadı. IP adresini kontrol edin.",
+                )
+        return found
+
     def write(self, local_key: str, envelope: bytes, *, template_id: str, version: int, label: str = "",
               device_uid: Optional[str] = None, progress: Optional[ProgressCallback] = None) -> TemplateWriteOutcome:
         say = progress or (lambda _message: None)
         say(f"Şablon Ethernet ile gönderiliyor (http://{self.host}/api/template/apply, yerel anahtar gizli)...")
-        reply = self.apply(local_key, envelope)
+        try:
+            reply = self.apply(local_key, envelope)
+        except TemplateWriteError as exc:
+            if exc.code != "unreachable":
+                raise
+            # Gönderimden sonra bağlantı koptu: kart uygulamış olabilir -> GET /api/template ile karar ver.
+            say("Karttan yanıt alınamadı; şablon durumu GET /api/template ile denetleniyor...")
+            try:
+                back = self.read(local_key)
+            except TemplateWriteError:
+                raise exc from None
+            if back.get("template_id") != template_id or back.get("version") != int(version):
+                raise exc from None
+            reply = {"ok": True, "template_id": template_id, "version": int(version)}
+        if reply.get("pending") is True:  # 202: kart NVS'e yazıyor -> GET /api/template ile 1 sn arayla en çok 20 sn bekle
+            say("Kart şablonu yazıyor (202 pending); GET /api/template ile bekleniyor...")
+            waited = 0.0
+            while True:
+                try:
+                    back = self.read(local_key)
+                except TemplateWriteError as exc:
+                    if exc.code not in ("unreachable", "busy"):
+                        raise
+                    back = {}
+                if back.get("template_id") == template_id and back.get("version") == int(version):
+                    reply = {"ok": True, "template_id": template_id, "version": int(version)}
+                    break
+                if waited >= self.PENDING_MAX_S:
+                    raise TemplateWriteError("tpl_timeout", message="Kart şablonu 20 sn içinde uygulamadı (202 pending). "
+                                             "Kartın durumunu kontrol edip yeniden deneyin ya da USB ile yazın.")
+                self._sleep(self.PENDING_POLL_S)
+                waited += self.PENDING_POLL_S
         if reply.get("template_id") not in (None, template_id) or reply.get("version") not in (None, int(version)):
             raise TemplateWriteError("readback_mismatch")
         say("Kart şablonu uyguladı; GET /api/template ile geri okunuyor...")

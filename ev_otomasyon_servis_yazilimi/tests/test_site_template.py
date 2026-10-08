@@ -213,6 +213,13 @@ class ModelHelperTests(unittest.TestCase):
         tm.set_light_dimmer(body, 2, False)
         self.assertIsNone(tm.light_option(body, 2))
 
+    def test_di_modes_describe_spring_buttons_not_latching_switches(self):
+        self.assertIn("yaylı (kalıcı olmayan) buton; her basışta değiştirir", tm.DI_MODE_TEXT["toggle"])
+        self.assertIn("basılıyken açık", tm.DI_MODE_TEXT["momentary"])
+        for mode in ("shutter_step", "shutter_up", "shutter_down"):
+            self.assertIn("yaylı buton", tm.DI_MODE_TEXT[mode])
+        self.assertNotIn("anahtar", " ".join(tm.DI_MODE_TEXT.values()).lower())
+
     def test_duplicate_resets_identity(self):
         dup = tm.duplicate_template(ok_template(), "Kopya")
         self.assertEqual(dup["meta"]["template_id"], tm.PLACEHOLDER_ID)
@@ -441,6 +448,33 @@ class SerialTemplateWriterTests(unittest.TestCase):
             self.writer().write("COM7", b"x" * (tm.MAX_ENVELOPE_BYTES + 1), template_id=TID, version=4)
         self.assertEqual(ctx.exception.code, "tpl_size")
 
+    def test_error_codes_with_digits_are_parsed(self):
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            self.writer(tpl_error="tpl_b64").write("COM7", self.envelope(), template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "tpl_b64")
+        self.assertIn("base64", str(ctx.exception))
+
+    def test_unknown_board_identity_stops_before_begin_when_a_board_is_expected(self):
+        writer = self.writer()
+        self.firmware.mac = "??"  # STATUS'ta MAC okunamaz
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            writer.write("COM7", self.envelope(), template_id=TID, version=4, expected_uid=base.UID)
+        self.assertEqual(ctx.exception.code, "mac_mismatch")
+        self.assertIn("doğrulanamadı", str(ctx.exception))
+        self.assertFalse(any(c.startswith("TPL") for c in self.firmware.received))
+
+    def test_lost_commit_reply_is_resolved_with_tpl_status(self):
+        outcome = self.writer(tpl_mute_commit=True).write("COM7", self.envelope("A-12"), template_id=TID, version=4)
+        self.assertEqual((outcome.template_id, outcome.version), (TID, 4))
+        self.assertNotIn("TPL ABORT", self.firmware.received)
+
+    def test_lost_commit_reply_without_apply_aborts_with_error(self):
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            self.writer(tpl_mute_commit=True, tpl_error="storage").write("COM7", self.envelope(), template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "no_response")
+        self.assertIn("TPL ABORT", self.firmware.received)
+        self.assertEqual(ctx.exception.device_uid, base.UID)  # yazım kaydı için kart biliniyor
+
     def test_read_status(self):
         writer = self.writer()
         writer.write("COM7", self.envelope("A-12"), template_id=TID, version=4)
@@ -520,6 +554,79 @@ class LanTemplateWriterTests(unittest.TestCase):
                 if code == "cfg_invalid":
                     self.assertIn("panjur rölesine", str(ctx.exception))
 
+    def test_pending_apply_is_polled_until_the_template_appears(self):
+        state = {"polls": 0}
+
+        def device(method, url, headers, body, timeout):
+            if url.endswith("/api/template/apply"):
+                return fc.TransportResponse(202, {}, json.dumps({"pending": True}).encode())
+            if url.endswith("/api/template"):
+                state["polls"] += 1
+                done = state["polls"] >= 3
+                return fc.TransportResponse(200, {}, json.dumps(
+                    {"template_id": TID if done else None, "version": 4 if done else 0, "label": "A-12"}).encode())
+            return fc.TransportResponse(404, {}, b"{}")
+
+        sleeps = []
+        writer = fc.TemplateLanWriter("192.168.1.60", transport=device, sleep=sleeps.append)
+        outcome = writer.write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual((outcome.template_id, outcome.version), (TID, 4))
+        self.assertEqual(sleeps, [1.0, 1.0])
+
+    def test_pending_that_never_finishes_times_out_after_20s(self):
+        def device(method, url, headers, body, timeout):
+            if url.endswith("/api/template/apply"):
+                return fc.TransportResponse(202, {}, json.dumps({"pending": True}).encode())
+            return fc.TransportResponse(200, {}, json.dumps({"template_id": None, "version": 0}).encode())
+
+        sleeps = []
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=device, sleep=sleeps.append).write(
+                base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "tpl_timeout")
+        self.assertEqual(sum(sleeps), 20.0)
+
+    def test_network_error_after_post_is_resolved_by_reading_back(self):
+        def applied(method, url, headers, body, timeout):
+            if url.endswith("/api/template/apply"):
+                raise fc.NetworkError("koptu")
+            return fc.TransportResponse(200, {}, json.dumps({"template_id": TID, "version": 4, "label": "A-12"}).encode())
+
+        outcome = fc.TemplateLanWriter("192.168.1.60", transport=applied).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(outcome.version, 4)
+
+        def not_applied(method, url, headers, body, timeout):
+            if url.endswith("/api/template/apply"):
+                raise fc.NetworkError("koptu")
+            return fc.TransportResponse(200, {}, json.dumps({"template_id": None, "version": 0}).encode())
+
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=not_applied).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "unreachable")
+
+    def test_verify_identity(self):
+        def status(uid):
+            return lambda method, url, headers, body, timeout: fc.TransportResponse(
+                200, {}, json.dumps({"device": uid, "provisioned": True}).encode())
+
+        self.assertEqual(fc.TemplateLanWriter("192.168.1.60", transport=status(base.UID)).verify_identity(base.UID, None), base.UID)
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=status("AHBU-S3-000001")).verify_identity(base.UID)
+        self.assertEqual(ctx.exception.code, "device_mismatch")
+        not_ahbu = lambda method, url, headers, body, timeout: fc.TransportResponse(404, {}, b"{}")  # noqa: E731
+        with self.assertRaises(fc.TemplateWriteError):
+            fc.TemplateLanWriter("192.168.1.60", transport=not_ahbu).verify_identity(base.UID)
+
+    def test_factory_init_over_ethernet_is_refused_with_turkish_hint(self):
+        device = base.FakeDevice()
+        device.init_error = (403, {"error": "factory_ap_only"})
+        client = fc.DeviceClient("192.168.1.60", transport=device, env={})
+        with self.assertRaises(fc.ProvisionError) as ctx:
+            client.factory_init(base.FAKE_LOCAL_KEY, "Abcdefgh23")
+        self.assertEqual(ctx.exception.code, "factory_ap_only")
+        self.assertIn("USB", fc.provision_error_text(ctx.exception))
+        self.assertIn("factory_ap_only", tm.ERROR_TEXTS)
+
     def test_wrong_key_and_unreachable(self):
         with base.LoopbackHttpServer(self.handler_for({})) as server:
             with self.assertRaises(fc.TemplateWriteError) as ctx:
@@ -560,7 +667,8 @@ class WiringPdfTests(unittest.TestCase):
         for needle in ("Güneş Sitesi", "A Blok / Daire 12", "B Tipi 3+1", "3+1", "v4", "Bu şema şablon sürümü v4 içindir",
                        "R1 COM|NO", "D8 DI|GND", "Salon panjur motoru (yukarı)", "Panjur YUKARI yön ucu", "kilit",
                        "Su baskını · NO (normalde açık) · bölge 1", "Modbus dimmer modülü", "Enerji verince kapanır",
-                       "Evye altı"):
+                       "Evye altı", "Kalıcı (mandallı) duvar anahtarı DESTEKLENMEZ; tüm girişlere yaylı buton bağlayın",
+                       "Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir"):
             with self.subTest(metin=needle):
                 self.assertIn(needle.lower(), texts.lower())
         self.assertEqual(decode_qr_image(doc.pages[0], doc.qr_box), f"AHBU-TPL:{TID}:v4")
@@ -806,6 +914,8 @@ class SiteTemplateAppTests(base.AppSmokeTests):
 
         def device(method, url, headers, body, timeout):
             device_calls.append((method, url, dict(headers)))
+            if url.endswith("/api/status"):
+                return fc.TransportResponse(200, {}, json.dumps({"device": base.UID, "provisioned": True}).encode())
             if url.endswith("/api/template/apply"):
                 return fc.TransportResponse(403, {}, json.dumps({"error": "local_loosen_forbidden"}).encode())
             return fc.TransportResponse(404, {}, b"{}")
@@ -815,13 +925,60 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         request = ui.TemplateWriteRequest("eth", label="A-12", host="192.168.1.60", device_uid=base.UID)
         self.app.start_template_write(ok_template(), request)
         self.assertIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
-        self.assertEqual(device_calls[0][2]["X-Device-Key"], base.FAKE_LOCAL_KEY)
-        self.assertEqual(device_calls[0][1], "http://192.168.1.60/api/template/apply")
+        self.assertEqual(device_calls[0][1], "http://192.168.1.60/api/status")   # önce anahtarsız kimlik denetimi
+        self.assertNotIn("X-Device-Key", device_calls[0][2])
+        self.assertEqual(device_calls[1][2]["X-Device-Key"], base.FAKE_LOCAL_KEY)
+        self.assertEqual(device_calls[1][1], "http://192.168.1.60/api/template/apply")
         shown = self.dialogs.all_text() + self.app.tpl_log.get("1.0", "end")
         self.assertNotIn(base.FAKE_LOCAL_KEY, shown)
         self.assertIn("USB ile yazın", self.dialogs.of("error")[-1][2])
         record = [c for c in self.api.calls if c.path == "/api/v1/template-writes"][-1]
         self.assertEqual((record.body["via"], record.body["error_code"]), ("eth", "local_loosen_forbidden"))
+
+    def _eth_request(self, uid=base.UID):
+        ui = __import__("site_template_ui")
+        return ui.TemplateWriteRequest("eth", label="A-12", host="192.168.1.60", device_uid=uid)
+
+    def test_ethernet_wrong_board_aborts_before_fetching_the_key(self):
+        self.login_as("service_user")
+        calls = []
+
+        def device(method, url, headers, body, timeout):
+            calls.append(url)
+            return fc.TransportResponse(200, {}, json.dumps({"device": "AHBU-S3-000001", "provisioned": True}).encode())
+
+        self.app._device_transport = device
+        self.app.start_template_write(ok_template(), self._eth_request())
+        self.assertNotIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
+        self.assertEqual(calls, ["http://192.168.1.60/api/status"])
+        self.assertIn("AHBU-S3-000001", self.dialogs.of("error")[-1][2])
+        self.assertIn("yerel anahtar alınmadı", self.dialogs.of("error")[-1][2])
+        self.assertFalse([c for c in self.api.calls if c.path == "/api/v1/template-writes"])
+
+    def test_ethernet_flat_linked_device_must_match_too(self):
+        self._select_site_and_flat()
+        flat = dict(self.app._flats[0], device_uuid="AHBU-S3-000001")
+
+        def device(method, url, headers, body, timeout):
+            return fc.TransportResponse(200, {}, json.dumps({"device": base.UID, "provisioned": True}).encode())
+
+        self.app._device_transport = device
+        self.app.start_template_write(ok_template(), self._eth_request(), site=self.app._sites[0], flat=flat)
+        self.assertNotIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
+        self.assertIn("eşleşmiyor", self.dialogs.of("error")[-1][2])
+
+    def test_board_not_in_stock_is_explained(self):
+        self.login_as("service_user")
+        self.api.routes[f"GET /api/v1/admin/inventory/{base.UID}/local-key"] = lambda call: (
+            409, {"success": False, "code": "DEVICE_NOT_IN_STOCK", "message": "x"}, {})
+
+        def device(method, url, headers, body, timeout):
+            return fc.TransportResponse(200, {}, json.dumps({"device": base.UID, "provisioned": True}).encode())
+
+        self.app._device_transport = device
+        self.app.start_template_write(ok_template(), self._eth_request())
+        self.assertIn("Bu kart stokta değil", self.dialogs.of("error")[-1][2])
+        self.assertIn("USB kullanın", self.dialogs.of("error")[-1][2])
 
     def test_template_tab_pdf_button_writes_a_pdf(self):
         self.login_as("service_user")

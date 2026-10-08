@@ -42,6 +42,7 @@ class FakeFirmwareCli:
         tpl_supported=True,
         tpl_error=None,
         tpl_drop_data=0,
+        tpl_mute_commit=False,
     ):
         self.mac = mac.upper()
         self.provisioned = provisioned
@@ -63,6 +64,7 @@ class FakeFirmwareCli:
         self.tpl_supported = tpl_supported
         self.tpl_error = tpl_error
         self.tpl_drop_data = tpl_drop_data
+        self.tpl_mute_commit = tpl_mute_commit    # COMMIT yanıtı kaybolur (kart yine uygular/uygulamaz)
         self.tpl_id = None
         self.tpl_ver = 0
         self.tpl_label = ""
@@ -239,12 +241,14 @@ class FakeFirmwareCli:
                 self._say("ERR bad_json")
                 return
             if self.tpl_error:
-                self._say("ERR " + self.tpl_error)
+                if not self.tpl_mute_commit:
+                    self._say("ERR " + self.tpl_error)
                 return
             self.tpl_applied.append(envelope)
             self.tpl_id, self.tpl_ver = meta["template_id"], int(meta["version"])
             self.tpl_label = envelope.get("label") or meta.get("name", "")[:31]
-            self._say("OK tpl_applied %s %d" % (self.tpl_id, self.tpl_ver))
+            if not self.tpl_mute_commit:
+                self._say("OK tpl_applied %s %d" % (self.tpl_id, self.tpl_ver))
         else:
             self._say("ERR bad_cmd")
 

@@ -531,7 +531,7 @@ ERROR_TEXTS: dict[str, str] = {
     "pulse_time": "İki röleli vana darbe süresi en çok 120 sn.",
     "siren_run_limit": "Siren çalma süresi 10-1800 sn arasında olmalı.",
     "fb_di_range": "Vana geri bildirim girişi kanal sayısının dışında.",
-    "fb_di_conflict": "Vana geri bildirim girişi başka bir işte (sensör/anahtar) kullanılıyor.",
+    "fb_di_conflict": "Vana geri bildirim girişi başka bir işte (sensör/buton) kullanılıyor.",
     "fb_timeout_range": "Vana geri bildirim zaman aşımı 2-300 sn arasında olmalı.",
     # Kart (seri TPL / LAN) kodları
     "tpl_no_begin": "Kart aktarımı başlatılmadan veri aldı (TPL BEGIN yok). Yeniden deneyin.",
@@ -553,6 +553,9 @@ ERROR_TEXTS: dict[str, str] = {
     "readback_mismatch": "Yazım sonrası karttan okunan şablon kimliği/sürümü beklenenle eşleşmiyor.",
     "cfg_invalid": "Kart şablonu geçersiz buldu (güvenlik ayarları ana yapılandırmayla uyuşmuyor).",
     "mac_mismatch": "Bağlı kart seçilen daireye bağlı kartla eşleşmiyor.",
+    "factory_ap_only": "Kart provizyonu (FACTORYINIT) Ethernet'ten kabul etmiyor: önce USB ile provizyon yapın, sonra şablonu "
+    "USB ya da Ethernet ile yazın.",
+    "device_mismatch": "Bu IP adresindeki kart seçilen kartla eşleşmiyor; yerel anahtar alınmadı, hiçbir şey yazılmadı.",
     "unexpected": "Karttan beklenmeyen bir yanıt alındı.",
     "cancelled": "İşlem iptal edildi.",
 }
@@ -572,11 +575,12 @@ def describe_error(code: str, path: str = "") -> str:
 RELAY_KIND_LABELS = {"light": "Lamba/Priz", "shutter": "Panjur (çift)", "impulse": "Darbe"}
 RELAY_TYPE_TEXT = {"light": "Lamba/Priz", "shutter_up": "Panjur Yukarı", "shutter_down": "Panjur Aşağı", "impulse": "Darbe"}
 DI_MODE_TEXT = {
-    "toggle": "Aç/Kapa (anahtar)",
-    "momentary": "Basılı tut (buton)",
-    "shutter_step": "Panjur adım (tek buton)",
-    "shutter_up": "Panjur yukarı",
-    "shutter_down": "Panjur aşağı",
+    # Firmware (DiGate.h) tüm kiplerde YAYLI (kalıcı olmayan) buton bekler: toggle yalnız basma kenarında değiştirir.
+    "toggle": "Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir",
+    "momentary": "Basılı tut (yaylı buton; basılıyken açık)",
+    "shutter_step": "Panjur adım (yaylı buton; her basışta yukarı/dur/aşağı)",
+    "shutter_up": "Panjur yukarı (yaylı buton)",
+    "shutter_down": "Panjur aşağı (yaylı buton)",
 }
 SENSOR_KIND_TEXT = {
     "water": "Su baskını",
