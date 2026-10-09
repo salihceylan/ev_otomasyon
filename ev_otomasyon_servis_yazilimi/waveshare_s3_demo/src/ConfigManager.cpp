@@ -50,71 +50,11 @@ void ConfigManager::applyDefaults() {
 
   // local_key / ap_pass boş = provizyonsuz cihaz (memset ile sıfırlandı)
 
-  // Varsayılan Röle Tanımları:
-  // 1-2: Salon Panjuru (Yukarı & Aşağı)
-  // 3-4: Yatak Odası Panjuru (Yukarı & Aşağı)
-  // 5-8: Aydınlatmalar (Salon, Mutfak, Koridor, Balkon)
-  const char* defaultRelayNames[8] = {
-    "Salon Panjur (Yukari)",
-    "Salon Panjur (Asagi)",
-    "Oda Panjur (Yukari)",
-    "Oda Panjur (Asagi)",
-    "Salon Aydinlatma",
-    "Mutfak Aydinlatma",
-    "Koridor Aydinlatma",
-    "Balkon Aydinlatma"
-  };
-
-  for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
-    if (i < 8) {
-      copyStr(config.relays[i].name, defaultRelayNames[i]);
-      if (i == 0 || i == 2) {
-        config.relays[i].type = RELAY_TYPE_SHUTTER_UP;
-        config.relays[i].runtime_sec = SHUTTER_RUNTIME_DEFAULT_SEC;
-      } else if (i == 1 || i == 3) {
-        config.relays[i].type = RELAY_TYPE_SHUTTER_DOWN;
-        config.relays[i].runtime_sec = SHUTTER_RUNTIME_DEFAULT_SEC;
-      } else {
-        config.relays[i].type = RELAY_TYPE_LIGHT;
-        config.relays[i].runtime_sec = 0;
-      }
-    } else {
-      snprintf(config.relays[i].name, sizeof(config.relays[i].name), "Ek Modül Röle %d", i - 7);
-      config.relays[i].type = RELAY_TYPE_LIGHT;
-      config.relays[i].runtime_sec = 0;
-    }
-  }
-
-  // Varsayılan Dijital Giriş (DI) Tanımları:
-  // 1-2: Salon Panjuru (DI 1: Tek Buton Panjur Kontrolü, DI 2: Boşta/Serbest)
-  // 3-4: Oda Panjuru (DI 3: Tek Buton Panjur Kontrolü, DI 4: Boşta/Serbest)
-  // 5-8: Aydınlatmalar (Normal Toggle)
-  for (int i = 0; i < MAX_TOTAL_DIS; i++) {
-    if (i < 8) {
-      snprintf(config.dis[i].name, sizeof(config.dis[i].name), "Anahtar / Buton %d", i + 1);
-    } else {
-      snprintf(config.dis[i].name, sizeof(config.dis[i].name), "Ek Giriş / Buton %d", i - 7);
-    }
-    config.dis[i].target_relay = i + 1;
-    config.dis[i].mode = DI_MODE_TOGGLE;
-  }
-
-  // Panjur çiftleri için akıllı varsayılanlar:
-  copyStr(config.dis[0].name, "Salon Panjur Butonu");
-  config.dis[0].target_relay = 1;
-  config.dis[0].mode = DI_MODE_SHUTTER_STEP; // Tek buton 2-kablolu panjur
-
-  copyStr(config.dis[1].name, "Giriş 2 (Boşta / Serbest)");
-  config.dis[1].target_relay = 0;             // Boşta / serbest
-  config.dis[1].mode = DI_MODE_TOGGLE;
-
-  copyStr(config.dis[2].name, "Oda Panjur Butonu");
-  config.dis[2].target_relay = 3;
-  config.dis[2].mode = DI_MODE_SHUTTER_STEP; // Tek buton 2-kablolu panjur
-
-  copyStr(config.dis[3].name, "Giriş 4 (Boşta / Serbest)");
-  config.dis[3].target_relay = 0;             // Boşta / serbest
-  config.dis[3].mode = DI_MODE_TOGGLE;
+  // Varsayılan röle / DI tablosu (sahip kararı 2026-10-09): HİÇBİR rölenin sabit rolü yok. Yerel röleler "Röle N" genel aç-kapa
+  // (süre 0), ek modül röleleri "Ek Modül Röle N"; DI n -> röle n TOGGLE. Panjur eşleşmesi/kilidi yalnız servisin yazdığı
+  // şablon/yapılandırmadan gelir (eskiden röle 1-4 "Salon/Oda Panjur" ve DI 1/3 panjur butonu olarak gelirdi).
+  applyFactoryRelayDefaults(config);
+  applyFactoryDiDefaults(config);
 }
 
 void ConfigManager::begin() {

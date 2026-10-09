@@ -13,6 +13,7 @@
 // ZAMAN KURALI (CONTRACTS §3c): bekleme "başlangıç + süre" çiftidir (NetUtil::Wait) ve sahip görev her tur service() ile yoklar.
 // ============================================================================
 #include <ArduinoJson.h>
+#include "MqttHostPolicy.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -134,17 +135,8 @@ inline bool printableAscii(const char* s, size_t minLen, size_t maxLen, char lo)
   return true;
 }
 
-// Ana makine adı: harf/rakam/'.'/'-', 1..63, '.' ya da '-' ile başlamaz/bitmez (WebPortal validMqttHost ile aynı kural).
-inline bool hostOk(const char* s) {
-  if (!s) return false;
-  const size_t n = strlen(s);
-  if (n < 1 || n > 63 || s[0] == '.' || s[0] == '-' || s[n - 1] == '.' || s[n - 1] == '-') return false;
-  for (size_t i = 0; i < n; i++) {
-    const char c = s[i];
-    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-')) return false;
-  }
-  return true;
-}
+// Ana makine adı: harf/rakam/'.'/'-', 1..63, '.' ya da '-' ile başlamaz/bitmez (MqttHostPolicy ile aynı kural).
+inline bool hostOk(const char* s) { return mqtthost::validSyntax(s); }
 
 // httpCode < 0: ağ/TLS hatası. 200 gövdesi {"status":"ok","mqtt":{"host","port","username","password"}} -> c doldurulur.
 inline Result parseResponse(int httpCode, const char* body, Creds& c) {
@@ -164,7 +156,8 @@ inline Result parseResponse(int httpCode, const char* body, Creds& c) {
   const char* pass = m["password"].is<const char*>() ? m["password"].as<const char*>() : nullptr;
   if (!m["port"].is<int32_t>()) return Result::BAD_RESPONSE;
   const int32_t port = m["port"].as<int32_t>();
-  if (!hostOk(host) || port < 1 || port > 65535 || !printableAscii(user, 1, sizeof(c.user) - 1, 0x21) ||
+  // Sahip kararı (2026-10-09): yanıttaki host da derleme izin listesinde olmalı (MqttHostPolicy.h); yabancı broker = BAD_RESPONSE.
+  if (!hostOk(host) || !mqtthost::allowed(host) || port < 1 || port > 65535 || !printableAscii(user, 1, sizeof(c.user) - 1, 0x21) ||
       !printableAscii(pass, 1, sizeof(c.pass) - 1, 0x20)) {
     return Result::BAD_RESPONSE;
   }

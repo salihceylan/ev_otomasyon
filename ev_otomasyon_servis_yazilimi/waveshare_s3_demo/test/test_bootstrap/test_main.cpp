@@ -142,6 +142,23 @@ void test_response_parsing() {
   TEST_ASSERT_TRUE(parseResponse(200, body, c) == Result::BAD_RESPONSE);
 }
 
+// Sahip karari (2026-10-09): bootstrap yaniti da panoyu yabanci bir sunucuya YONLENDIREMEZ. Sozdizimi gecerli ama derleme izin listesinde
+// (DEFAULT_MQTT_SERVER + AHBU_MQTT_HOST_ALLOW) olmayan host BAD_RESPONSE; varsayilan sunucu (buyuk/kucuk harf duyarsiz) kabul edilir.
+void test_response_host_must_be_allowlisted(void) {
+  Creds c;
+  const char* foreign[] = {
+      "{\"status\":\"ok\",\"mqtt\":{\"host\":\"evil.example\",\"port\":8884,\"username\":\"u\",\"password\":\"p\"}}",
+      "{\"status\":\"ok\",\"mqtt\":{\"host\":\"evotomasyon.gudeteknoloji.com.tr.evil.example\",\"port\":8884,\"username\":\"u\","
+      "\"password\":\"p\"}}",
+  };
+  for (const char* b : foreign) {
+    TEST_ASSERT_TRUE_MESSAGE(parseResponse(200, b, c) == Result::BAD_RESPONSE, b);
+    TEST_ASSERT_EQUAL_UINT8(0, (uint8_t)c.host[0]);   // kimlik doldurulmaz
+  }
+  const char* upper = "{\"status\":\"ok\",\"mqtt\":{\"host\":\"EVOTOMASYON.gudeteknoloji.com.tr\",\"port\":8884,\"username\":\"u\",\"password\":\"p\"}}";
+  TEST_ASSERT_TRUE(parseResponse(200, upper, c) == Result::OK);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_sign_string_and_body_format);
@@ -149,5 +166,6 @@ int main(int, char**) {
   RUN_TEST(test_backoff_per_result_and_status_text);
   RUN_TEST(test_idle_fsm_polled_for_49_days_never_stalls);
   RUN_TEST(test_response_parsing);
+  RUN_TEST(test_response_host_must_be_allowlisted);
   return UNITY_END();
 }

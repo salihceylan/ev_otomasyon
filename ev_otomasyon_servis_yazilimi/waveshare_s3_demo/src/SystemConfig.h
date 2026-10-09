@@ -290,3 +290,47 @@ struct SystemConfig {
     return ok;
   }
 };
+
+// ---------------------------------------------------------------------------------------------
+// Fabrika varsayılan röle / DI tablosu. Sahip kararı (2026-10-09): HİÇBİR rölenin sabit rolü YOKTUR.
+//   * Yerel röleler 1..8: genel aç-kapa (RELAY_TYPE_LIGHT), ad "Röle N", süre 0.
+//   * Ek modül röleleri: genel aç-kapa, ad "Ek Modül Röle N", süre 0.
+//   * DI n -> röle n, TOGGLE; ad "Anahtar / Buton N" (yerel) / "Ek Giriş / Buton N" (ek modül).
+// Panjur davranışı (komşu röleyle YUKARI/AŞAĞI eşleşmesi, kilit) YALNIZCA servisin yazdığı şablon/yapılandırmadan gelir.
+// ConfigManager::setDefaults() ve seri DEFAULT_DI (DI 1..4) bunu kullanır; test/test_system_config doğrular.
+// ---------------------------------------------------------------------------------------------
+namespace sysconfig_detail {
+template <size_t N>
+inline void numberedName(char (&dst)[N], const char* prefix, unsigned n) {
+  memset(dst, 0, N);
+  size_t k = 0;
+  while (prefix[k] && k < N - 1) { dst[k] = prefix[k]; k++; }
+  char digits[6];
+  int d = 0;
+  do { digits[d++] = (char)('0' + n % 10); n /= 10; } while (n && d < 6);
+  while (d > 0 && k < N - 1) dst[k++] = digits[--d];
+}
+}  // namespace sysconfig_detail
+
+inline void applyFactoryRelayDefaults(SystemConfig& c) {
+  for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
+    RelayConfig& r = c.relays[i];
+    if (i < 8) sysconfig_detail::numberedName(r.name, "Röle ", (unsigned)(i + 1));                       // "Röle N"
+    else sysconfig_detail::numberedName(r.name, "Ek Modül Röle ", (unsigned)(i - 7));            // "Ek Modül Röle N"
+    r.type = RELAY_TYPE_LIGHT;
+    r.runtime_sec = 0;
+  }
+}
+
+// DI'lar [first, last) aralığında fabrika varsayılanına döner (aralık dışındakilere dokunulmaz).
+inline void applyFactoryDiDefaults(SystemConfig& c, int first = 0, int last = MAX_TOTAL_DIS) {
+  if (first < 0) first = 0;
+  if (last > MAX_TOTAL_DIS) last = MAX_TOTAL_DIS;
+  for (int i = first; i < last; i++) {
+    DIConfig& d = c.dis[i];
+    if (i < 8) sysconfig_detail::numberedName(d.name, "Anahtar / Buton ", (unsigned)(i + 1));
+    else sysconfig_detail::numberedName(d.name, "Ek Giriş / Buton ", (unsigned)(i - 7));                 // "Ek Giriş / Buton N"
+    d.target_relay = (uint8_t)(i + 1);
+    d.mode = DI_MODE_TOGGLE;
+  }
+}

@@ -622,19 +622,29 @@ static void handleCliLine(String cmd) {
       Serial.printf("  - DI %d: '%s' -> Hedef Role: %d (Mod: %d)\r\n", i + 1, cfg.dis[i].name, cfg.dis[i].target_relay, cfg.dis[i].mode);
     }
   } else if (eq(first, "SET_SHUTTER_DI") || eq(first, "DEFAULT_DI")) {
-    // pano-9: SET_DI gibi ONCE aday kopya + guvenlik capraz denetimi (cliSafetyAllows): sensor DI'sini duvar butonu yapan varsayilan
+    // pano-9: SET_DI gibi ONCE aday kopya + guvenlik capraz denetimi (cliSafetyAllows): sensor DI'sini duvar butonu yapan
     // duzen kaydedilmez (eskiden dogrudan kaydediliyordu; sonraki acilista guvenlik yapilandirmasi cfg_corrupt guvenli kipine dusuyordu).
+    // Sahip karari (2026-10-09): HICBIR rolenin sabit rolu yok. DEFAULT_DI artik DI 1..4'u FABRIKA varsayilanina dondurur (DI n -> role n
+    // TOGGLE); panjur DI duzeni (DI1 -> P1 STEP, DI3 -> P2 STEP) yalniz acik SET_SHUTTER_DI komutuyla ve roleler panjur olarak
+    // yapilandirilmissa anlamlidir.
+    const bool shutterLayout = eq(first, "SET_SHUTTER_DI");
     SystemConfig* next = (SystemConfig*)malloc(sizeof(SystemConfig));
     if (!next) return;
     memcpy(next, &cfg, sizeof(SystemConfig));
-    cliparse::applyDefaultShutterDis(*next);   // DI1 -> P1 STEP, DI2 bosta, DI3 -> P2 STEP, DI4 bosta
+    if (shutterLayout) cliparse::applyDefaultShutterDis(*next);   // DI1 -> P1 STEP, DI2 bosta, DI3 -> P2 STEP, DI4 bosta
+    else applyFactoryDiDefaults(*next, 0, 4);                      // DI1..4 -> role 1..4 TOGGLE
     const bool allowed = cliSafetyAllows(*next);
     free(next);
     if (!allowed) return;
-    cliparse::applyDefaultShutterDis(cfg);
+    if (shutterLayout) cliparse::applyDefaultShutterDis(cfg);
+    else applyFactoryDiDefaults(cfg, 0, 4);
 
     bool ok = cfgMgr.save();
-    Serial.printf("[CLI-SONUC] Panjur DI ayarlari (2 Kablolu Tek Buton: DI1->P1, DI2->Bosta) %s\r\n", ok ? "NVS'ye kaydedildi!" : "KAYDEDILEMEDI!");
+    if (shutterLayout) {
+      Serial.printf("[CLI-SONUC] Panjur DI ayarlari (2 Kablolu Tek Buton: DI1->P1, DI2->Bosta) %s\r\n", ok ? "NVS'ye kaydedildi!" : "KAYDEDILEMEDI!");
+    } else {
+      Serial.printf("[CLI-SONUC] DI 1..4 fabrika varsayilanina dondu (DI n -> Role n, TOGGLE) %s\r\n", ok ? "NVS'ye kaydedildi!" : "KAYDEDILEMEDI!");
+    }
   } else if (eq(first, "SET_DI")) {
     int di = cliWord(cmd, 1).toInt(), target = cliWord(cmd, 2).toInt(), mode = cliWord(cmd, 3).toInt();
     if (di >= 1 && di <= cfg.totalDIs() && target >= 0 && target <= totalR && mode >= 0 && mode <= DI_MODE_SHUTTER_DOWN &&

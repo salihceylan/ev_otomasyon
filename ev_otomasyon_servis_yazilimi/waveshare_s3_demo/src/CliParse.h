@@ -88,7 +88,8 @@ inline FactoryInitStatus parseFactoryInit(const char* line, bool provisioned, ch
   return FI_OK;
 }
 
-// Seri DEFAULT_DI / SET_SHUTTER_DI: varsayılan panjur DI düzeni (2 kablolu tek buton): DI1 -> P1 (röle 1) STEP, DI2 boşta, DI3 -> P2 (röle 3)
+// Seri SET_SHUTTER_DI (açık komut; 2026-10-09'dan beri DEFAULT_DI DEĞİL: o, DI 1..4'ü fabrika varsayılanına döndürür -> SystemConfig.h
+// applyFactoryDiDefaults): panjur DI düzeni (2 kablolu tek buton), yalnız röle 1-2 / 3-4 panjur olarak yapılandırılmışsa anlamlıdır: DI1 -> P1 (röle 1) STEP, DI2 boşta, DI3 -> P2 (röle 3)
 // STEP, DI4 boşta; DI 5.. dokunulmaz. main.cpp bunu ÖNCE aday kopyaya uygular ve güvenlik çapraz denetiminden (validateSystemChange) geçerse
 // kaydeder (pano-9): sensör DI'sini duvar butonu yapan değişiklik kaydedilmez (aksi halde sonraki açılışta cfg_corrupt güvenli kipi).
 inline void applyDefaultShutterDis(SystemConfig& c) {

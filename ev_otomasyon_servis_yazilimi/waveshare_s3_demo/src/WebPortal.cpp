@@ -8,6 +8,7 @@
 #include "WiFiManager.h"
 #include "NetUtil.h"
 #include "ApAccess.h"
+#include "MqttHostPolicy.h"
 #include "safety/SafetyManager.h"
 #include "safety/SafetyCfgApi.h"
 #include "safety/SafetyCfgJson.h"
@@ -348,20 +349,6 @@ bool shutterRelevantChange(const SystemConfig& a, const SystemConfig& b) {
     if (a.relays[i].type != b.relays[i].type || a.relays[i].runtime_sec != b.relays[i].runtime_sec) return true;
   }
   return false;
-}
-
-// Host adi: harf/rakam/'.'/'-', 1..63, '.' veya '-' ile baslamaz/bitmez
-bool validMqttHost(const char* s) {
-  if (!s) return false;
-  const size_t n = strlen(s);
-  if (n < 1 || n > 63) return false;
-  if (s[0] == '.' || s[0] == '-' || s[n - 1] == '.' || s[n - 1] == '-') return false;
-  for (size_t i = 0; i < n; i++) {
-    const char c = s[i];
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-';
-    if (!ok) return false;
-  }
-  return true;
 }
 
 const char* connectStateName(WiFiManager::ConnectState s) {
@@ -1909,7 +1896,9 @@ void WebPortal::handleApiRekey() {
   sendOk();
 }
 
-// Bulut (MQTT) kimligi: sunucu, kullanici ve parola cihaza yazilir; MQTT yeni kimlikle yeniden baglanir
+// Bulut (MQTT) kimligi: sunucu, kullanici ve parola cihaza yazilir; MQTT yeni kimlikle yeniden baglanir.
+// Sahip karari (2026-10-09) sunucu kilidi (MqttHostPolicy.h): "server" yalniz derleme izin listesinden (DEFAULT_MQTT_SERVER +
+// AHBU_MQTT_HOST_ALLOW) olabilir, aksi 400 host_not_allowed. Bos/verilmemis "server" mevcut sunucuyu korur; port/kullanici/parola serbest.
 void WebPortal::handleApiMqttConfig() {
   String body;
   if (!readJsonBody(body)) return;
@@ -1921,10 +1910,27 @@ void WebPortal::handleApiMqttConfig() {
   const char* user = nullptr;
   const char* pass = nullptr;
   int port = 0;
-  if (fieldString(root, "server", server) != FIELD_OK || !validMqttHost(server)) { sendError(400, "invalid_value"); return; }
+  const FieldState fsServer = fieldString(root, "server", server);
+  if (fsServer == FIELD_BAD) { sendError(400, "invalid_value"); return; }
+  const mqtthost::Check hostCheck = mqtthost::checkRequested(fsServer == FIELD_OK ? server : nullptr);
+  if (hostCheck == mqtthost::Check::INVALID) { sendError(400, "invalid_value"); return; }
   if (fieldInt(root, "port", port) != FIELD_OK || port < 1 || port > 65535) { sendError(400, "invalid_value"); return; }
   if (fieldString(root, "user", user) != FIELD_OK || strlen(user) < 1) { sendError(400, "invalid_value"); return; }
   if (fieldString(root, "pass", pass) != FIELD_OK || strlen(pass) < 1) { sendError(400, "invalid_value"); return; }
+  if (hostCheck == mqtthost::Check::NOT_ALLOWED) {
+    printf("[WEB] MQTT sunucusu reddedildi (izin listesinde degil): %s\r\n", server);
+    sendError(400, "host_not_allowed");
+    return;
+  }
+  char keepServer[sizeof(SystemConfig::mqtt_server)];
+  if (hostCheck == mqtthost::Check::KEEP) {
+    {
+      ConfigManager::ConfigLock lk(ConfigManager::instance());
+      memcpy(keepServer, ConfigManager::instance().config.mqtt_server, sizeof(keepServer));
+    }
+    keepServer[sizeof(keepServer) - 1] = '\0';
+    server = keepServer;
+  }
 
   // Alan uzunluklari ConfigManager'da doğrulanir (kullanici <= 47, parola <= 63); kirpma yok, reddedilir
   if (!ConfigManager::instance().setMqttCredentials(server, (uint16_t)port, user, pass)) {

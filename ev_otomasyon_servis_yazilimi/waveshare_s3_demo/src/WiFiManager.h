@@ -27,7 +27,9 @@
 // retlerinde last_rej, latch_orphan kurtarma, ek modul DI baslatma, DEFAULT_DI guvenlik denetimi, cfg{rev,crc} her zaman.
 // 1.3.2 (2026-10-09 gece duzeltmeleri): kopru (kablosuz) sensoru yazim yollarinda sensor_bridge_unsupported (kayitli yapilandirma acilista
 // gecerli), uzun confirm_ms'de onay penceresi buyur, kilit/kip/vana konumu NVS yazimi yeniden denenir, ek modul kanal sayisi azalinca kapsam
-// disi roleler KAPAT, seri EXTMOD panjur hareketindeyken reddedilir, state cfg.safety.id (bulut cfg_patch kimligi).
+// disi roleler KAPAT, seri EXTMOD panjur hareketindeyken reddedilir, state cfg.safety.id (bulut cfg_patch kimligi); bulut sunucu kilidi
+// (POST /api/mqtt/config + bootstrap yalniz DEFAULT_MQTT_SERVER + -DAHBU_MQTT_HOST_ALLOW, aksi 400 host_not_allowed; bos server = mevcut),
+// fabrika varsayilaninda sabit rol yok (roleler "Röle N" ac-kapa, DI n -> role n TOGGLE; panjur yalniz sablondan; seri DEFAULT_DI ayni).
 #ifndef FW_VERSION
 #define FW_VERSION "1.3.2"
 #endif

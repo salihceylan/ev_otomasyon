@@ -5,6 +5,7 @@
 #include <unity.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include "SystemConfig.h"
 
 void setUp(void) {}
@@ -315,6 +316,42 @@ void test_unterminated_strings_are_terminated(void) {
   TEST_ASSERT_EQUAL_UINT8(0, g_cfg.dis[3].name[sizeof(g_cfg.dis[3].name) - 1]);
 }
 
+// Sahip karari (2026-10-09): HICBIR rolenin sabit rolu yok. Fabrika varsayilani: yerel roleler genel ac-kapa "Röle N" (sure 0), ek modul
+// roleleri "Ek Modül Röle N"; DI n -> role n TOGGLE. Panjur (komsu role ile eslesme, kilit) YALNIZ servisin yazdigi sablon/yapilandirmadan gelir.
+void test_factory_io_defaults_have_no_fixed_role(void) {
+  SystemConfig c;
+  memset(&c, 0x5A, sizeof(c));
+  applyFactoryRelayDefaults(c);
+  applyFactoryDiDefaults(c);
+  char want[40];
+  // Kaynak kodlamasindan bagimsiz bayt denetimi: "Röle 1" = 'R' C3 B6 'l' 'e' ' ' '1' (UTF-8, 7 bayt)
+  TEST_ASSERT_EQUAL_INT(7, (int)strlen(c.relays[0].name));
+  TEST_ASSERT_EQUAL_HEX8(0xC3, (uint8_t)c.relays[0].name[1]);
+  TEST_ASSERT_EQUAL_HEX8(0xB6, (uint8_t)c.relays[0].name[2]);
+  for (int i = 0; i < MAX_TOTAL_RELAYS; i++) {
+    if (i < 8) snprintf(want, sizeof(want), "Röle %d", i + 1);
+    else snprintf(want, sizeof(want), "Ek Modül Röle %d", i - 7);
+    TEST_ASSERT_EQUAL_STRING(want, c.relays[i].name);
+    TEST_ASSERT_EQUAL_UINT8(RELAY_TYPE_LIGHT, c.relays[i].type);
+    TEST_ASSERT_EQUAL_UINT16(0, c.relays[i].runtime_sec);
+  }
+  for (int i = 0; i < MAX_TOTAL_DIS; i++) {
+    if (i < 8) snprintf(want, sizeof(want), "Anahtar / Buton %d", i + 1);
+    else snprintf(want, sizeof(want), "Ek Giriş / Buton %d", i - 7);
+    TEST_ASSERT_EQUAL_STRING(want, c.dis[i].name);
+    TEST_ASSERT_EQUAL_UINT8(i + 1, c.dis[i].target_relay);
+    TEST_ASSERT_EQUAL_UINT8(DI_MODE_TOGGLE, c.dis[i].mode);
+  }
+  // Kismi aralik (seri DEFAULT_DI: DI 1..4): aralik disi DI'lara dokunulmaz
+  c.dis[0].mode = DI_MODE_SHUTTER_STEP; c.dis[0].target_relay = 0;
+  c.dis[4].mode = DI_MODE_MOMENTARY;    c.dis[4].target_relay = 9;
+  applyFactoryDiDefaults(c, 0, 4);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_TOGGLE, c.dis[0].mode);
+  TEST_ASSERT_EQUAL_UINT8(1, c.dis[0].target_relay);
+  TEST_ASSERT_EQUAL_UINT8(DI_MODE_MOMENTARY, c.dis[4].mode);
+  TEST_ASSERT_EQUAL_UINT8(9, c.dis[4].target_relay);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_total_relays_basic_and_no_uint8_overflow);
@@ -336,5 +373,6 @@ int main(int, char**) {
   RUN_TEST(test_ap_pass_rules);
   RUN_TEST(test_validate_clears_corrupt_secrets);
   RUN_TEST(test_unterminated_strings_are_terminated);
+  RUN_TEST(test_factory_io_defaults_have_no_fixed_role);
   return UNITY_END();
 }
