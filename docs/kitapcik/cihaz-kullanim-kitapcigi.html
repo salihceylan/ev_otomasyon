@@ -180,7 +180,7 @@ yükleyeceğinizi bilmiyorsanız satıcınıza ya da Güde Teknoloji destek hatt
 <h3>2.2 Hesap açma</h3>
 <ol>
   <li>Giriş ekranında <q>Hesabınız yok mu?</q> yazısının yanındaki <q class="b">Kayıt Olun</q> bağlantısına dokunun. <q>Kayıt Ol</q> sayfası açılır (<q>Yeni Hesap Oluşturun</q>).</li>
-  <li><q>Ad Soyad</q>, <q>E-Posta Adresi</q>, <q>Şifre</q> ve <q>Şifre Tekrar</q> alanlarını doldurun. <q>Telefon</q> alanı isteğe bağlıdır (örnek: <var>0555 123 45 67</var>).</li>
+  <li><q>Ad Soyad</q>, <q>E-Posta Adresi</q>, <q>E-posta (tekrar)</q>, <q>Şifre</q> ve <q>Şifre Tekrar</q> alanlarını doldurun. E-posta iki kez yazılır; farklıysa <q>E-posta adresleri eşleşmiyor</q> görünür. <q>Telefon</q> alanı isteğe bağlıdır: <var>+90</var> hazır gelir, numarayı 5 ile başlayarak yazın (örnek: <var>532 123 45 67</var>).</li>
   <li><q>Kullanıcı Sözleşmesi'ni okudum ve kabul ediyorum.</q> kutusunu işaretleyin. Metni okumak için bu cümledeki <q>Kullanıcı Sözleşmesi</q>
   yazısına dokunun. Kutu işaretlenmeden kayıt yapılamaz (Bölüm 18).</li>
   <li><q class="b">Kayıt Ol ve Giriş Yap</q>a dokunun. Hesabınız hemen açılır ve oturumunuz başlar.</li>
@@ -344,19 +344,19 @@ derse yetkili servisle görüşün.</p>
 Telefonunuz kurulum ağına bağlıyken bu süre uzar (en çok 30 dakika). Pano ev ağına bağlanınca kurulum ağını kapatır.</p>
 
 <h3>4.5 Fabrika yerleşimi</h3>
-<p>Servis tarafından ayar (şablon) yazılmamış bir pano aşağıdaki yerleşimle gelir. Kablolamayı yapan elektrikçi bu tabloyu kullanabilir;
-yerleşim servis kurulumunda değiştirilebilir. Panjurların çalışma süresi başlangıçta 20 saniyedir (ev sahibi değiştirebilir, Bölüm 14.4).</p>
+<p>Servis tarafından ayar (şablon) yazılmamış bir pano aşağıdaki yerleşimle gelir (firmware v1.3.2 ve sonrası). <b>Hiçbir röleye sabit görev tanımlı değildir:</b> her röle genel aç/kapa çıkışıdır ve her duvar butonu aynı numaralı röleyi açıp kapatır. Panjur, vana gibi görevleri servis kurulumda şablonla verir; panjur seçilen röle yanındaki röleyle (yukarı/aşağı) çift olur.</p>
 <table class="keep">
   <thead><tr><th style="width:8%">No</th><th style="width:38%">Çıkış (röle)</th><th>Giriş (duvar butonu)</th></tr></thead>
-  <tr><td>1</td><td>Salon panjuru – yukarı</td><td>Salon panjur butonu (tek buton: yukarı / dur / aşağı)</td></tr>
-  <tr><td>2</td><td>Salon panjuru – aşağı</td><td>Boşta</td></tr>
-  <tr><td>3</td><td>Oda panjuru – yukarı</td><td>Oda panjur butonu (tek buton)</td></tr>
-  <tr><td>4</td><td>Oda panjuru – aşağı</td><td>Boşta</td></tr>
-  <tr><td>5</td><td>Salon aydınlatma</td><td>Buton 5 → salon aydınlatma (her basışta aç/kapa)</td></tr>
-  <tr><td>6</td><td>Mutfak aydınlatma</td><td>Buton 6 → mutfak aydınlatma</td></tr>
-  <tr><td>7</td><td>Koridor aydınlatma</td><td>Buton 7 → koridor aydınlatma</td></tr>
-  <tr><td>8</td><td>Balkon aydınlatma</td><td>Buton 8 → balkon aydınlatma</td></tr>
+  <tr><td>1</td><td>Röle 1 – genel aç/kapa (lamba)</td><td>Buton 1 → Röle 1 (her basışta aç/kapa)</td></tr>
+  <tr><td>2</td><td>Röle 2 – genel aç/kapa (lamba)</td><td>Buton 2 → Röle 2 (her basışta aç/kapa)</td></tr>
+  <tr><td>3</td><td>Röle 3 – genel aç/kapa (lamba)</td><td>Buton 3 → Röle 3 (her basışta aç/kapa)</td></tr>
+  <tr><td>4</td><td>Röle 4 – genel aç/kapa (lamba)</td><td>Buton 4 → Röle 4 (her basışta aç/kapa)</td></tr>
+  <tr><td>5</td><td>Röle 5 – genel aç/kapa (lamba)</td><td>Buton 5 → Röle 5 (her basışta aç/kapa)</td></tr>
+  <tr><td>6</td><td>Röle 6 – genel aç/kapa (lamba)</td><td>Buton 6 → Röle 6 (her basışta aç/kapa)</td></tr>
+  <tr><td>7</td><td>Röle 7 – genel aç/kapa (lamba)</td><td>Buton 7 → Röle 7 (her basışta aç/kapa)</td></tr>
+  <tr><td>8</td><td>Röle 8 – genel aç/kapa (lamba)</td><td>Buton 8 → Röle 8 (her basışta aç/kapa)</td></tr>
 </table>
+<p class="note">Eski panolar (v1.3.1 ve öncesi) fabrikadan 1-2 ve 3-4 panjur, 5-8 aydınlatma olarak gelirdi; servis panoyu v1.3.2'ye güncelleyince kayıtlı ayarlar değişmez, yalnız fabrika sıfırlamasından sonra yukarıdaki yerleşim geçerli olur.</p>
 <div class="box warn">Duvar girişlerine yalnız <b>yaylı</b> (bırakınca geri dönen) buton bağlanır; kalıcı (mandallı) anahtar desteklenmez (Bölüm 6).</div>
 
 <!-- ================================================================== 5 -->
@@ -709,7 +709,7 @@ yazar ve ev listenize gelir.</p>
 <q class="b">İptal Et</q> ile iptal edebilirsiniz (<q>Davet iptal edilsin mi?</q>).</p>
 <p><b>Evden çıkarma:</b> kişinin kartındaki çöp kutusu simgesine (<q>Yetkiyi İptal Et</q>) dokunun. Onay penceresinin başlığı aile üyesinde <q>Üyeyi Evden Çıkar</q>,
 misafirde <q>Misafir Yetkisini İptal Et</q>tir; <q class="b">Yetkiyi İptal Et</q> ile onaylayın. Çıkarılan kişinin açık bağlantıları kesilir. Ev sahibi
-kendini ya da başka bir ev sahibini çıkaramaz. Bir evden ayrılmak isteyen aile üyesi ya da misafir, ev sahibinden yetkisini iptal etmesini ister.</p>
+kendini ya da başka bir ev sahibini çıkaramaz. Aile üyesi ya da misafir evden kendisi ayrılabilir: profil penceresinde <q class="b">Evden Ayrıl</q> ve onay. Yeniden katılmak için ev sahibinden yeni davet gerekir. Ev sahibi ayrılamaz; önce evi devreder (Bölüm 11.7).</p>
 
 <h3>11.6 Misafirin süresi dolunca <span class="tag">Misafir</span></h3>
 <p>Misafirin ekranında <q>Erişim süreniz doldu</q> sayfası çıkar: <q><var>Evim</var> için misafir erişiminiz (<var>…</var>) sona erdi. Cihazları göremez ve kontrol edemezsiniz. Yeniden erişim için ev sahibinden yeni bir davet isteyin.</q>

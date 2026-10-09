@@ -22,7 +22,7 @@
    yönetir (kararınız; Bölüm 5.5).
 7. **Erişimi biten kişinin pano bağlantısı kesilir:** üye çıkarılınca ya da ayrılınca, devir kabul edilince ve her servis oturumu
    bitince panonun bulut kimliği yenilenir; erişimi biten kişi eski kimlikle buluta bağlanamaz (Bölüm 8.3).
-8. **Firmware v1.3.2 (karta yazılınca geçerli):** pano yalnız kendi bulut sunucusuna bağlanır; fabrika ayarında rölelere sabit görev
+8. **Firmware v1.3.2 (servis panoyu güncelleyince):** pano yalnız kendi bulut sunucusuna bağlanır; fabrika ayarında rölelere sabit görev
    yoktur (8 rölenin hepsi "Röle N" adlı lamba, 1-8. girişler aynı numaralı röleyi açıp kapatır). Yeni açılan evin varsayılan kanal
    listesi de böyledir; panjur yalnız servis şablonunda seçilirse yanındaki röleyle çift olur.
 
@@ -309,6 +309,6 @@ atarsa) aynı anda istenen PIN ve davet kodu üretilmez: "Bu işlem için yetkin
      bağlantıları telefon kamerasıyla/e-postadan açılınca uygulama doğrudan açılır (uygulama kurulu değilse tarayıcıda yönlendirme
      sayfası). iPhone'da Apple Team ID gelene kadar tarayıcıda açılır.
    - **E-posta doğrulaması** sonraya bırakıldı (kararınız); kayıtta e-posta iki kez yazılır.
-   - **Firmware v1.3.2 karta yazılmadı ve kartta denenmedi;** bulut sunucu kilidi ve sabit görevsiz fabrika ayarı karta yazılınca
+   - **Firmware v1.3.2 yalnız deneme panosunda çalışıyor;** bulut sunucu kilidi ve sabit görevsiz fabrika ayarı servis panoyu güncelleyince
      geçerli olur.
    - **Çok panolu evde** erişim bitince bulut kimliği yenilenmez (yalnız tek panolu ev).

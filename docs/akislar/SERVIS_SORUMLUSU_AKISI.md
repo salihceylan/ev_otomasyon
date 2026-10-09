@@ -1,7 +1,7 @@
 # Servis Sorumlusu Akışı
 
 > Kimin için: servis sorumlusu ve süper kullanıcı (ofis, atölye, saha, teslim). Kaynak: kodun kendisi, 2026-10-09
-> (commit `8912b20` ve 2026-10-09 gece düzeltmeleri sonrası; firmware v1.3.2 paketlendi, kartta denenmedi). Ekrandaki düğme ve
+> (2026-10-09 akşam: sahip kararları, karekodun uygulamayı açması, firmware v1.3.2 kartta denendi). Ekrandaki düğme ve
 > mesajlar tırnak içinde, koddaki gibi. Kullanıcı tarafı ayrı belgede: `DAIRE_KULLANICISI_AKISI.md`. Açık kalan konular en sonda
 > (Bölüm 9).
 
@@ -30,7 +30,7 @@
    numaralı röleyi açıp kapatır; yeni açılan evin buluttaki varsayılan kanal listesi de aynıdır. Panjur yalnız şablonda seçilirse
    yanındaki röleyle çift olur; röle görevlerini yalnız şablon belirler. Eski (v1.3.1) panolu mevcut evlerde adlar değişmez.
 10. **Bulut sunucu kilidi (v1.3.2):** pano yalnız firmware'e gömülü sunucuya (`evotomasyon.gudeteknoloji.com.tr`) bağlanır; başka
-    adres `400 host_not_allowed`. v1.3.2 karta yazılmadı.
+    adres `400 host_not_allowed`. v1.3.2 kartta denendi ve servis yazılımında seçili sürüm.
 11. **Değişmeyenler (kararlarınız):** kablosuz sensör "yakında" olarak kapalı kalır; e-postasız müşteri panosunu kendi karekoduyla
     sahiplenir (e-posta/SMS sistemi gelene kadar); personel süper kullanıcının dondurduğu hesabı açabilir.
 
@@ -131,8 +131,8 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 
 ### 3.2 Firmware (1. sekme)
 1. Port seçin → "⚡ FİRMWARE'İ KARTA YÜKLE (FLASH)". **Ethernet, şablon ve kendi kendine bulut bağlantısı için v1.3.0+
-   gerekir**; servis yazılımında seçili sürüm v1.3.1'dir (kartta denendi). v1.3.2 paketlendi (`firmware_releases/v1.3.2`) ama kartta
-   denenmedi ve seçili değil.
+   gerekir**; servis yazılımında seçili sürüm v1.3.2'dir (kartta denendi: 12 açılışta çökme yok). v1.3.1'li kartları "Güncelle
+   (ayarlar korunur)" ile v1.3.2'ye yükseltin: v1.3.1'de açılışta ara sıra çökme vardı.
 2. Yükleme bitince kayıt bekliyorsa provizyon **aynı USB'den otomatik** başlar.
 
 ### 3.3 Provizyon (3. sekme)
@@ -314,8 +314,8 @@ bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
    Yazmadan önce IP'nin doğru dairenin kartı olduğunu kontrol edin.
 4. **Telefon alarm bildirimi** yalnız Android'de ve cihazda henüz denenmedi; iOS'ta yok.
 5. **Ethernet kablosu ve panonun kendi bulut kimliği (bootstrap)** gerçek kablo ve sunucuyla henüz denenmedi.
-6. **Firmware v1.3.2 karta yazılmadı ve kartta denenmedi;** servis yazılımında seçili sürüm v1.3.1 kalıyor (`version_info.json`
-   değişmedi). Bulut sunucu kilidi ve sabit görevsiz fabrika ayarı ancak v1.3.2 yazılınca geçerli olur.
+6. **Firmware v1.3.2'nin Ethernet kablosu, panonun bulut kimliğini kendisi alması, sunucu kilidinin reddi ve fabrika sıfırlaması
+   kartta henüz denenmedi;** açılış, Wi-Fi ve bulut bağlantısı denendi (12/12 çökmesiz).
 7. **v1.3.1 ve önceki panolarda uzun onay süresi hiç onaylanmaz** (gaz/duman 875 ms'den, su 2625 ms'den uzun): bu panolarda
    şablona bu değerlerden uzun onay süresi yazmayın. v1.3.2 pencereyi büyüterek düzeltir.
 8. **Pano değişiminde güvenlik ayarları aktarılmıyor;** güvenlik ayarlı evde değişimi yalnız servis yapar (Bölüm 6.1). Buluttaki
