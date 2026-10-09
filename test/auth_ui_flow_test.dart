@@ -327,6 +327,7 @@ void main() {
     Future<void> fillValid(WidgetTester tester, {String phone = '', String password = kStrongPassword}) async {
       await typeInto(tester, 'field_full_name', 'Ayşe Yılmaz');
       await typeInto(tester, 'field_email', 'yeni+kayit@ornek.com.tr');
+      await typeInto(tester, 'field_email_confirm', 'yeni+kayit@ornek.com.tr');
       if (phone.isNotEmpty) await typeInto(tester, 'field_phone', phone);
       await typeInto(tester, 'field_password', password);
       await typeInto(tester, 'field_password_confirm', password);
@@ -354,25 +355,44 @@ void main() {
       expect(env.cloud.registerArgs, isEmpty);
     });
 
-    testWidgets('geçersiz telefon reddedilir; geçerli telefon ayırıcılardan arındırılarak gönderilir', (tester) async {
+    testWidgets('geçersiz telefon reddedilir; geçerli telefon kanonik +905XXXXXXXXX gönderilir (karar 11)', (tester) async {
       final env = e2Env(authenticated: false);
       await pumpApp(tester, state: env.state, child: const RegisterPage());
 
-      await fillValid(tester, phone: '123');
+      await fillValid(tester, phone: '555 12');
       await tapKey(tester, 'btn_register_submit');
-      expect(find.textContaining('Geçerli bir telefon numarası girin'), findsOneWidget);
+      expect(find.textContaining('10 hane'), findsOneWidget);
       expect(env.cloud.registerArgs, isEmpty);
 
-      await typeInto(tester, 'field_phone', '0555 123-45 67');
+      await typeInto(tester, 'field_phone', '0555 123-45 67'); // yapıştırılan 0'lı biçim
+      expect(tester.widget<TextFormField>(find.byKey(const Key('field_phone'))).controller!.text, '555 123 45 67');
       await tapKey(tester, 'btn_register_submit');
-      expect(env.cloud.registerArgs.single['phone'], '05551234567');
+      expect(env.cloud.registerArgs.single['phone'], '+905551234567');
     });
 
-    testWidgets('telefon alanı yalnızca telefon karakterlerine izin verir', (tester) async {
+    testWidgets('telefon alanı sabit +90 önekli; yalnız rakam, 3-3-2-2 gruplanır', (tester) async {
       final env = e2Env(authenticated: false);
       await pumpApp(tester, state: env.state, child: const RegisterPage());
       await typeInto(tester, 'field_phone', 'abc0555 xyz');
-      expect(tester.widget<TextFormField>(find.byKey(const Key('field_phone'))).controller!.text, '0555 ');
+      expect(tester.widget<TextFormField>(find.byKey(const Key('field_phone'))).controller!.text, '555');
+      await typeInto(tester, 'field_phone', '+90 555 1234567');
+      expect(tester.widget<TextFormField>(find.byKey(const Key('field_phone'))).controller!.text, '555 123 45 67');
+      expect(find.text('+90 '), findsOneWidget);
+    });
+
+    testWidgets('e-posta tekrarı eşleşmezse gönderilmez; büyük/küçük harf ve boşluk farkı sorun değil (karar 9)', (tester) async {
+      final env = e2Env(authenticated: false);
+      await pumpApp(tester, state: env.state, child: const RegisterPage());
+      await fillValid(tester);
+      await typeInto(tester, 'field_email_confirm', 'yeni+kayit@ornek.com');
+      await tapKey(tester, 'btn_register_submit');
+      expect(find.text('E-posta adresleri eşleşmiyor'), findsOneWidget);
+      expect(env.cloud.registerArgs, isEmpty);
+
+      await typeInto(tester, 'field_email_confirm', '  YENI+kayit@Ornek.com.tr ');
+      await tapKey(tester, 'btn_register_submit');
+      expect(find.text('E-posta adresleri eşleşmiyor'), findsNothing);
+      expect(env.cloud.registerArgs.single['email'], 'yeni+kayit@ornek.com.tr');
     });
 
     testWidgets('başarılı kayıt: e-posta kırpılır, şifre kırpılmaz, oturum açılır ve sayfa kapanır', (tester) async {

@@ -179,11 +179,11 @@ void main() {
       await tapKey(tester, 'btn_initiate_transfer');
       await confirmTyped(tester, 'devret');
 
-      expect(env.cloud.initiatedTargets, <String>['05559876543']);
+      expect(env.cloud.initiatedTargets, <String>['+905559876543']);
       expect(find.byKey(const Key('transfer_active')), findsOneWidget);
       expect(textOf(tester, 'transfer_code'), 'AHBU-TR-QWERTY123456');
       expect(find.byKey(const ValueKey<String>('qr_payload:AHBU-TRANSFER:AHBU-TR-QWERTY123456')), findsOneWidget);
-      expect(textOf(tester, 'transfer_target_text'), 'Yalnızca 05559876543 kullanıcısı devralabilir.');
+      expect(textOf(tester, 'transfer_target_text'), 'Yalnızca +905559876543 kullanıcısı devralabilir.');
       expect(textOf(tester, 'transfer_expiry_text'), 'Son geçerlilik: ${formatLocalDateTime(DateTime.utc(2026, 10, 3, 22, 45))}');
     });
 

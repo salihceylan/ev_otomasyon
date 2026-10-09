@@ -1751,6 +1751,12 @@ class EvCloudApiService {
     return true;
   }
 
+  /// Karar 13: oturumdaki kullanıcı (sakin / misafir) evden ayrılır: `DELETE /v1/homes/:id/members/me` ->
+  /// `{left:true, home_id}`. Ev sahibi -> `409 OWNER_CANNOT_LEAVE` ([ApiException], sunucunun Türkçe iletisiyle).
+  Future<void> leaveHome(String homeId) async {
+    await _call('DELETE', '/v1/homes/${_seg(homeId)}/members/me', homeId: homeId);
+  }
+
   /// Daire devrini başlatır (48 saat geçerli kod). Hedef kimlik (e-posta/telefon) **zorunludur**.
   Future<TransferInfo> initiateTransfer(String homeId, {required String targetIdentifier}) async {
     final target = targetIdentifier.trim();

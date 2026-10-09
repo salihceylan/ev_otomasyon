@@ -20,6 +20,7 @@ import '../../widgets/settings/accent_button.dart';
 import '../../widgets/settings/status_badge.dart';
 import '../../widgets/surface_card.dart';
 import 'invite_family_dialog.dart';
+import 'leave_home_flow.dart';
 import 'transfer_ownership_dialog.dart';
 
 /// Sayfanın durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skalerler; ilgisiz bildirim
@@ -30,6 +31,7 @@ typedef _MembersView = ({
   bool canInvite,
   bool canTransfer,
   bool canManageMembers,
+  bool canLeave,
   String? currentUserId,
 });
 
@@ -324,6 +326,7 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
       canInvite: caps.canInvite,
       canTransfer: caps.canTransferOwnership,
       canManageMembers: caps.canManageMembers,
+      canLeave: canLeaveActiveHome(state),
       currentUserId: state.currentUser?.id,
     );
   }
@@ -529,6 +532,23 @@ class _FamilyMembersPageState extends State<FamilyMembersPage> {
                   AppFeature.ownershipTransfer.accentFamily,
                   minimumSize: const Size.fromHeight(52),
                 ),
+              ),
+            ),
+          ],
+          if (view.canLeave) ...[
+            const SizedBox(height: 10),
+            // Karar 13: sakin / misafir evden kendisi ayrılır; başarıda bu evin sayfası kapanır.
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                key: const Key('btn_leave_home'),
+                onPressed: () async {
+                  final left = await confirmAndLeaveHome(context);
+                  if (left && context.mounted) Navigator.of(context).maybePop();
+                },
+                icon: Icon(Icons.exit_to_app_rounded, size: accentIconSize(context)),
+                label: const Text('Evden Ayrıl', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.bold)),
+                style: accentOutlinedButtonStyle(context, AppFamilies.rose, minimumSize: const Size.fromHeight(52)),
               ),
             ),
           ],

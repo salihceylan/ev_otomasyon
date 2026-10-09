@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../models/legal_models.dart';
@@ -46,6 +45,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _formKey = GlobalKey<FormState>();
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _emailConfirmController = TextEditingController();
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
@@ -83,6 +83,7 @@ class _RegisterPageState extends State<RegisterPage> {
     _cooldown.dispose();
     _fullNameController.dispose();
     _emailController.dispose();
+    _emailConfirmController.dispose();
     _phoneController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -153,7 +154,8 @@ class _RegisterPageState extends State<RegisterPage> {
     });
     try {
       final state = context.read<AutomationState>();
-      final phone = AuthValidators.normalizePhone(_phoneController.text);
+      // Karar 11: sabit "+90" önekli alan -> kanonik `+905XXXXXXXXX` (boşsa gönderilmez).
+      final phone = AuthValidators.canonicalTrPhone(_phoneController.text);
       final success = await state.register(
         fullName: _fullNameController.text.trim(),
         email: _emailController.text.trim(),
@@ -276,6 +278,28 @@ class _RegisterPageState extends State<RegisterPage> {
                                 validator: AuthValidators.emailError,
                               ),
                               const SizedBox(height: 16),
+                              // Karar 9: e-posta doğrulaması isteğe bağlı kaldığı için adres yazım hatasına karşı tekrar
+                              // istenir (kırpılmış, büyük/küçük harf duyarsız eşleşme).
+                              TextFormField(
+                                key: const Key('field_email_confirm'),
+                                controller: _emailConfirmController,
+                                enabled: !_isLoading,
+                                keyboardType: TextInputType.emailAddress,
+                                textInputAction: TextInputAction.next,
+                                autocorrect: false,
+                                enableSuggestions: false,
+                                style: TextStyle(color: primary),
+                                decoration: authInputDecoration(context, label: 'E-posta (tekrar)', prefixIcon: Icons.mark_email_read_outlined),
+                                validator: (v) {
+                                  final again = v?.trim() ?? '';
+                                  if (again.isEmpty) return 'Lütfen e-posta adresinizi tekrar girin';
+                                  if (again.toLowerCase() != _emailController.text.trim().toLowerCase()) {
+                                    return 'E-posta adresleri eşleşmiyor';
+                                  }
+                                  return null;
+                                },
+                              ),
+                              const SizedBox(height: 16),
                               TextFormField(
                                 key: const Key('field_phone'),
                                 controller: _phoneController,
@@ -283,10 +307,7 @@ class _RegisterPageState extends State<RegisterPage> {
                                 keyboardType: TextInputType.phone,
                                 textInputAction: TextInputAction.next,
                                 autofillHints: const [AutofillHints.telephoneNumber],
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.allow(RegExp(r'[0-9+\-\s().]')),
-                                  LengthLimitingTextInputFormatter(20),
-                                ],
+                                inputFormatters: const [TrPhoneInputFormatter()],
                                 style: TextStyle(color: primary),
                                 // Etiket kısa; "isteğe bağlı" bilgisi yardımcı metinde (etiket kesilmez).
                                 decoration: authInputDecoration(
@@ -294,9 +315,10 @@ class _RegisterPageState extends State<RegisterPage> {
                                   label: 'Telefon',
                                   helper: 'İsteğe bağlı',
                                   prefixIcon: Icons.phone_outlined,
-                                  hint: '0555 123 45 67',
+                                  prefixText: kTrPhonePrefix,
+                                  hint: kTrPhoneHint,
                                 ),
-                                validator: (v) => AuthValidators.phoneError(v),
+                                validator: (v) => AuthValidators.trMobileError(v),
                               ),
                               const SizedBox(height: 16),
                               TextFormField(

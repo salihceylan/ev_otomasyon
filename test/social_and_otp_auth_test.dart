@@ -48,19 +48,19 @@ void main() {
 
       await typeInto(tester, 'field_phone', '12345');
       await tapKey(tester, 'btn_otp_send');
-      expect(find.textContaining('Geçerli bir telefon numarası girin'), findsOneWidget);
+      expect(find.textContaining('5 ile başlamalıdır'), findsOneWidget);
       expect(env.cloud.otpPhones, isEmpty);
     });
 
-    testWidgets('telefon alanı yalnızca telefon karakterlerine izin verir; numara ayırıcılardan arındırılarak gönderilir', (tester) async {
+    testWidgets('telefon alanı +90 önekli, yalnız 10 hane; numara kanonik +905XXXXXXXXX gönderilir (karar 11)', (tester) async {
       final env = e2Env(authenticated: false);
       await open(tester, env);
 
       await typeInto(tester, 'field_phone', 'tel: 0555-123 (45) 67');
-      expect(tester.widget<TextField>(find.byKey(const Key('field_phone'))).controller!.text, ' 0555-123 (45) 67');
+      expect(tester.widget<TextField>(find.byKey(const Key('field_phone'))).controller!.text, '555 123 45 67');
       await tapKey(tester, 'btn_otp_send');
 
-      expect(env.cloud.otpPhones, <String>['05551234567']);
+      expect(env.cloud.otpPhones, <String>['+905551234567']);
     });
 
     testWidgets('kod gönderilince telefon kilitlenir, kod alanı gelir ve sunucunun iletisi gösterilir', (tester) async {
@@ -72,7 +72,7 @@ void main() {
       expect(find.byKey(const Key('field_code')), findsOneWidget);
       expect(tester.widget<TextField>(find.byKey(const Key('field_phone'))).enabled, isFalse);
       expect(textOf(tester, 'otp_info'), contains('Doğrulama kodu gönderildi.'));
-      expect(textOf(tester, 'otp_info'), contains('05551234567'));
+      expect(textOf(tester, 'otp_info'), contains('+905551234567'));
     });
 
     testWidgets('çift dokunuşta yalnızca BİR SMS isteği gider', (tester) async {

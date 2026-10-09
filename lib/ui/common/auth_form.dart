@@ -51,6 +51,7 @@ InputDecoration authInputDecoration(
   BuildContext context, {
   String? label,
   IconData? prefixIcon,
+  String? prefixText,
   Widget? suffixIcon,
   String? hint,
   String? helper,
@@ -92,6 +93,7 @@ InputDecoration authInputDecoration(
     floatingLabelBehavior: alwaysFloatLabel ? FloatingLabelBehavior.always : null,
     floatingLabelAlignment: alwaysFloatLabel ? FloatingLabelAlignment.center : null,
     prefixIcon: prefixIcon == null ? null : Icon(prefixIcon, size: 22),
+    prefixText: prefixText,
     prefixIconColor: WidgetStateColor.resolveWith((states) {
       if (hasError || states.contains(WidgetState.error)) return danger;
       if (states.contains(WidgetState.focused)) return focus;

@@ -162,6 +162,16 @@ class AutomationApiService {
   /// `X-Device-Key` değeri (8–32 karakter). Anahtarsız yalnızca kısıtlı `status` özeti çalışır.
   String? localKey;
 
+  /// Başlıksız `GET /api/auth/check` 200 döndü: pano anahtarsız isteği kabul ediyor (kablolu Ethernet, karar 3).
+  /// Yalnız kabulün görüldüğü [baseUrl] için geçerlidir: adres değişince kendiliğinden düşer.
+  bool get keyless => _keylessBase != null && _keylessBase == baseUrl;
+  set keyless(bool value) => _keylessBase = value ? baseUrl : null;
+  String? _keylessBase;
+
+  /// Anahtarsız modda gönderilen yer tutucu: Ethernet'te firmware başlığın VARLIĞINA bakar (tam durum), değeri
+  /// doğrulamaz. Başka arayüzde 401 alınır ve anahtarsız mod düşer.
+  static const String keylessHeaderValue = 'keyless';
+
   final http.Client _client;
   final bool _ownsClient;
   final Clock _clock;
@@ -370,7 +380,9 @@ class AutomationApiService {
       path: path,
       queryParameters: (query == null || query.isEmpty) ? null : query,
     );
-    final key = sendKey ? localKey : null;
+    final key = !sendKey
+        ? null
+        : ((localKey?.isNotEmpty ?? false) ? localKey : (keyless ? keylessHeaderValue : null));
     final headers = <String, String>{
       'Accept': 'application/json',
       if (method != 'GET') 'Content-Type': 'application/json',
@@ -1004,9 +1016,9 @@ class AutomationApiService {
   /// Elimizdeki [localKey] cihaz tarafından kabul ediliyor mu (`GET /api/auth/check`)?
   /// `true`: kabul; `false`: anahtar yanlış (401). Kilit (423), kurulmamış cihaz (403) ve ağ hataları
   /// [LocalApiException] olarak fırlatılır.
-  Future<bool> checkKey() async {
+  Future<bool> checkKey({bool withoutKey = false}) async {
     try {
-      await _send('GET', '/api/auth/check', timeout: const Duration(seconds: 4));
+      await _send('GET', '/api/auth/check', timeout: const Duration(seconds: 4), sendKey: !withoutKey);
       return true;
     } on LocalApiException catch (e) {
       if (e.isUnauthorized) return false;

@@ -60,9 +60,10 @@ void main() {
 
   group('telefon', () {
     test('ayırıcılar atılır; 10-15 rakam (+ ile başlayabilir) geçerlidir', () {
-      expect(AuthValidators.normalizePhone('0555 123 45 67'), '05551234567');
+      // Karar 11: TR cep biçimleri kanonik +905XXXXXXXXX olur.
+      expect(AuthValidators.normalizePhone('0555 123 45 67'), '+905551234567');
       expect(AuthValidators.normalizePhone('+90 (555) 123-45-67'), '+905551234567');
-      expect(AuthValidators.normalizePhone('555.123.4567'), '5551234567');
+      expect(AuthValidators.normalizePhone('555.123.4567'), '+905551234567');
       expect(AuthValidators.normalizePhone('12345'), isNull);
       expect(AuthValidators.normalizePhone('0555abc4567'), isNull);
       expect(AuthValidators.normalizePhone(null), isNull);
@@ -81,7 +82,7 @@ void main() {
       expect(mail.value, 'ayse@ornek.com');
       final phone = AuthValidators.parseIdentifier('0555 123 45 67')!;
       expect(phone.isPhone, isTrue);
-      expect(phone.value, '05551234567');
+      expect(phone.value, '+905551234567');
       expect(AuthValidators.parseIdentifier('ne-biri-ne-diger'), isNull);
       expect(AuthValidators.identifierError(''), 'Lütfen e-posta veya telefon numaranızı girin');
       expect(AuthValidators.identifierError('x@'), contains('Geçerli bir e-posta adresi veya telefon'));

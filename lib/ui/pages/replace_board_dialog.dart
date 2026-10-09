@@ -80,6 +80,10 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
   String? _pinError;
   String? _oldError;
   String? _error;
+
+  /// Karar 18: güvenlik modüllü evde sahibin isteği `403 REPLACE_REQUIRES_SERVICE` ile reddedildi (sunucu iletisi).
+  /// Form yerine servis yolu anlatılır; aynı istek yinelenmez.
+  String? _requiresService;
   ReplaceBoardResult? _result;
 
   /// Yanıt gelmedi (zaman aşımı / ağ kesintisi) ama sunucu değişimi tamamlamış olabilir: işlem körlemesine
@@ -259,6 +263,16 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
           _uncertainNewUid = newUid;
           _uncertainOldUid = old.deviceUuid;
           _checkResult = null;
+        });
+        return;
+      }
+      if (e is ApiException && e.code == 'REPLACE_REQUIRES_SERVICE') {
+        setState(() {
+          _submitting = false;
+          _error = null;
+          _requiresService = e.message.trim().isNotEmpty
+              ? e.message.trim()
+              : 'Bu evde pano değişimini yetkili servis personeli yapmalıdır.';
         });
         return;
       }
@@ -642,6 +656,34 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
             child: SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.info, bold: true, text: _checkResult!),
           ),
         const SizedBox(height: 16),
+        if (_requiresService != null) ...[
+          ServiceCard(
+            key: const Key('replace_requires_service'),
+            accent: SetupColors.info,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SetupInfoRow(icon: Icons.verified_user_rounded, color: SetupColors.info, bold: true, text: _requiresService!),
+                const SizedBox(height: 8),
+                SetupInfoRow(
+                  icon: Icons.support_agent_rounded,
+                  color: SetupColors.info,
+                  text: 'Ne yapmalısınız: servisinizi arayın ve Cihaz Ayarları > Servis PIN\'i bölümünden 6 haneli '
+                      'Servis PIN\'i üretip servis personeline verin. Personel pano değişimini kendi uygulamasından '
+                      'tamamlar; güvenlik ayarları yeni panoya onunla aktarılır.',
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          SetupPrimaryButton(
+            key: const Key('btn_replace_close'),
+            label: 'Anladım',
+            icon: Icons.check_rounded,
+            color: SetupColors.purple,
+            onPressed: () => Navigator.of(context).maybePop(),
+          ),
+        ] else
         SetupPrimaryButton(
           key: const Key('btn_replace_submit'),
           label: 'Eski Panonun Ayarlarını Yeni Panoya Aktar',

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/services.dart';
+
 /// Kimlik doğrulama formları için **ortak (tek)** doğrulayıcılar (WP-E2).
 ///
 /// Sunucu kuralları (`server/src/services/auth_service.js`) istemciye birebir yansıtılır:
@@ -55,12 +57,34 @@ class AuthValidators {
     return null;
   }
 
-  /// Ayırıcıları (`boşluk`, `-`, `(`, `)`, `.`) atar; `^\+?\d{10,15}$` değilse `null`.
-  /// Ülke kodu eklenmez/çevrilmez: sunucu da yalnızca ayırıcıları atar.
+  /// Ayırıcıları (`boşluk`, `-`, `(`, `)`, `.`) atar. TR cep numarası görünümündeyse (karar 11) kanonik
+  /// `+905XXXXXXXXX` döner ([canonicalTrPhone]); değilse `^\+?\d{10,15}$` (başka ülke) ya da `null`.
   static String? normalizePhone(String? raw) {
     if (raw == null) return null;
+    final tr = canonicalTrPhone(raw);
+    if (tr != null) return tr;
     final s = raw.trim().replaceAll(RegExp(r'[\s\-().]'), '');
     return _phone.hasMatch(s) ? s : null;
+  }
+
+  static final RegExp _trMobile = RegExp(r'^(?:(?:00|\+)?90|0)?(5\d{9})$');
+
+  /// TR cep numarası (`5XX XXX XX XX`, önünde isteğe bağlı `0` / `90` / `+90` / `0090`, ayırıcılı olabilir) ->
+  /// kanonik `+905XXXXXXXXX`; TR cep biçiminde değilse `null`.
+  static String? canonicalTrPhone(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim().replaceAll(RegExp(r'[\s\-().]'), '');
+    final m = _trMobile.firstMatch(s);
+    return m == null ? null : '+90${m.group(1)}';
+  }
+
+  /// Sabit "+90" önekli telefon alanı ([TrPhoneInputFormatter]): 10 hane, 5 ile başlar. [required] false ise boş geçerli.
+  static String? trMobileError(String? value, {bool required = false}) {
+    final digits = (value ?? '').replaceAll(RegExp(r'\D'), '');
+    if (digits.isEmpty) return required ? 'Lütfen telefon numaranızı girin' : null;
+    if (canonicalTrPhone(value) != null) return null;
+    if (!digits.startsWith('5')) return 'Cep numarası 5 ile başlamalıdır (5XX XXX XX XX)';
+    return 'Numarayı +90 sonrası 10 hane olarak girin (5XX XXX XX XX)';
   }
 
   /// Telefon alanı: [required] false ise boş değer geçerlidir.
@@ -98,6 +122,63 @@ class AuthValidators {
     if (v.isEmpty) return emptyMessage;
     if (!RegExp(r'^\d{6}$').hasMatch(v)) return 'Kod tam 6 rakam olmalıdır';
     return null;
+  }
+}
+
+/// Sabit "+90" önekli telefon alanları için ortak görünüm değerleri (karar 11).
+const String kTrPhonePrefix = '+90 ';
+const String kTrPhoneHint = '5XX XXX XX XX';
+
+/// Sabit "+90" önekli telefon alanı biçimleyicisi (karar 11): yalnız 10 ulusal hane (5XX XXX XX XX) tutar ve yazarken
+/// 3-3-2-2 gruplar. Yapıştırılan `0555…`, `90555…`, `+90555…`, `0090555…` öneki ayıklanır; harf/ayırıcı atılır.
+/// Gönderimde [AuthValidators.canonicalTrPhone] `+905XXXXXXXXX` verir.
+class TrPhoneInputFormatter extends TextInputFormatter {
+  const TrPhoneInputFormatter();
+
+  static const List<int> _gaps = <int>[3, 6, 8];
+
+  /// `raw` içindeki rakamlardan ulusal 10 haneyi çıkarır; `stripped`: baştan atılan önek rakamı sayısı.
+  static ({String digits, int stripped}) _national(String raw) {
+    final all = raw.replaceAll(RegExp(r'\D'), '');
+    var d = all;
+    if (d.startsWith('0090')) {
+      d = d.substring(4);
+    } else if (d.length > 10 && d.startsWith('90')) {
+      d = d.substring(2);
+    }
+    while (d.startsWith('0')) {
+      d = d.substring(1);
+    }
+    final stripped = all.length - d.length;
+    return (digits: d.length > 10 ? d.substring(0, 10) : d, stripped: stripped);
+  }
+
+  /// 10 haneyi `5XX XXX XX XX` biçiminde gruplar (eksik hanelerle de çalışır).
+  static String group(String digits) {
+    final b = StringBuffer();
+    for (var i = 0; i < digits.length; i++) {
+      if (_gaps.contains(i)) b.write(' ');
+      b.write(digits[i]);
+    }
+    return b.toString();
+  }
+
+  /// Kayıtlı bir numarayı (ör. `+905551234567`, `05551234567`) alanın gösterimine çevirir; TR değilse olduğu gibi.
+  static String display(String? stored) {
+    final canonical = AuthValidators.canonicalTrPhone(stored);
+    if (canonical == null) return stored ?? '';
+    return group(canonical.substring(3));
+  }
+
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final n = _national(newValue.text);
+    final text = group(n.digits);
+    final end = newValue.selection.isValid ? newValue.selection.end.clamp(0, newValue.text.length) : newValue.text.length;
+    final rawBefore = newValue.text.substring(0, end).replaceAll(RegExp(r'\D'), '').length;
+    final digitsBefore = (rawBefore - n.stripped).clamp(0, n.digits.length);
+    final offset = digitsBefore + _gaps.where((g) => g < digitsBefore).length;
+    return TextEditingValue(text: text, selection: TextSelection.collapsed(offset: offset.clamp(0, text.length)));
   }
 }
 

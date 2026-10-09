@@ -107,7 +107,7 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
 
     final nameError = name.length < 2 ? 'Ad soyad en az 2 karakter olmalıdır.' : null;
     final emailError = AuthValidators.emailError(email);
-    final phoneError = AuthValidators.phoneError(phone);
+    final phoneError = AuthValidators.trMobileError(phone); // karar 11: +90 sonrası 10 hane
     final passwordError = password.isEmpty ? null : AuthValidators.passwordPolicyError(password);
     if (nameError != null || emailError != null || phoneError != null || passwordError != null) {
       setState(() {
@@ -135,7 +135,7 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
             fullName: name,
             email: email,
             password: password.isEmpty ? null : password,
-            phone: phone.isEmpty ? null : AuthValidators.normalizePhone(phone),
+            phone: phone.isEmpty ? null : AuthValidators.canonicalTrPhone(phone),
             role: _role.wire,
             adminNotes: _notes.text.trim().isEmpty ? null : _notes.text.trim(),
           )
@@ -237,6 +237,9 @@ class _CreateAccountDialogState extends State<CreateAccountDialog> {
                   helperText: 'İsteğe bağlı',
                   errorText: _phoneError,
                   keyboardType: TextInputType.phone,
+                  inputFormatters: const [TrPhoneInputFormatter()],
+                  prefixText: kTrPhonePrefix,
+                  hint: kTrPhoneHint,
                   prefixIcon: Icons.phone_rounded,
                   enabled: !_busy,
                 ),
@@ -329,7 +332,9 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
   static const Duration _timeout = Duration(seconds: 30);
 
   late final TextEditingController _name = TextEditingController(text: widget.account.fullName);
-  late final TextEditingController _phone = TextEditingController(text: widget.account.phone);
+  /// Kayıtlı numara alanın gösteriminde ("+90" önekinden sonraki 10 hane); TR değilse olduğu gibi (karar 11).
+  late final String _initialPhone = TrPhoneInputFormatter.display(widget.account.phone);
+  late final TextEditingController _phone = TextEditingController(text: _initialPhone);
   late final TextEditingController _notes = TextEditingController(text: widget.account.notes);
   final TextEditingController _password = TextEditingController();
   final TextEditingController _current = TextEditingController();
@@ -365,7 +370,8 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
     final current = _current.text;
 
     final nameError = name.length < 2 ? 'Ad soyad en az 2 karakter olmalıdır.' : null;
-    final phoneError = AuthValidators.phoneError(phone);
+    // Dokunulmamış (ör. eski / yabancı) numara kaydı engellemez; değiştirilen numara +90 sonrası 10 hane olmalı.
+    final phoneError = phone == _initialPhone.trim() ? null : AuthValidators.trMobileError(phone);
     final passwordError = password.isEmpty ? null : AuthValidators.passwordPolicyError(password);
     final currentError = (_needsCurrent && current.isEmpty)
         ? 'Başka bir süper yöneticinin parolasını değiştirmek için kendi mevcut parolanızı girin.'
@@ -395,7 +401,7 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
           .updateAdminUser(
             widget.account.id,
             fullName: name,
-            phone: phone.isEmpty ? '' : AuthValidators.normalizePhone(phone),
+            phone: phone.isEmpty ? '' : (AuthValidators.canonicalTrPhone(phone) ?? widget.account.phone),
             adminNotes: _notes.text.trim(),
             password: password.isEmpty ? null : password,
             currentPassword: (password.isNotEmpty && widget.account.isSuper) ? current : null,
@@ -457,6 +463,9 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
                   label: 'Telefon',
                   errorText: _phoneError,
                   keyboardType: TextInputType.phone,
+                  inputFormatters: const [TrPhoneInputFormatter()],
+                  prefixText: kTrPhonePrefix,
+                  hint: kTrPhoneHint,
                   prefixIcon: Icons.phone_rounded,
                   enabled: !_busy,
                 ),

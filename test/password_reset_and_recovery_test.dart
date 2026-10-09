@@ -51,7 +51,7 @@ void main() {
       await tester.pump();
       await typeInto(tester, 'field_identifier', '0555 123 45 67');
       await tapKey(tester, 'btn_send_code');
-      expect(env.cloud.forgotIdentifiers.last, '05551234567');
+      expect(env.cloud.forgotIdentifiers.last, '+905551234567');
     });
 
     testWidgets('kod gönderilince 2. adım açılır: sunucunun GENEL iletisi gösterilir (hesap varlığı sızmaz)', (tester) async {

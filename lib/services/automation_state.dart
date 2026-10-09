@@ -639,7 +639,7 @@ class AutomationState extends ChangeNotifier {
   bool get _anonymousLocalKey =>
       _currentUser == null &&
       _mode == AppMode.direct &&
-      (directApi.localKey?.isNotEmpty ?? false);
+      ((directApi.localKey?.isNotEmpty ?? false) || directApi.keyless);
 
   /// Küresel rol kısayolları (yetki için [capabilities] kullanın).
   bool get isSuperUser => _currentUser?.isSuperUser ?? false;
@@ -761,6 +761,10 @@ class AutomationState extends ChangeNotifier {
   /// kullanıcı anahtarı girene / "Yeniden dene"ye basana ya da ön plana dönene kadar cihaza istek atılmaz
   /// (bayat anahtarla yoklamak cihazın hatalı-deneme kilidini (423) tetikler). Bağlantı `connected` kalır.
   bool get directNeedsKey => _pollHalted;
+
+  /// Karar 3: pano anahtarsız isteği kabul ediyor (kablolu Ethernet; başlıksız `auth/check` 200) ve anahtar yok:
+  /// LAN modu anahtarsız çalışır. Adres değişince ya da pano `401` dönünce düşer.
+  bool get directKeylessAccess => _mode == AppMode.direct && !hasLocalKey && directApi.keyless;
 
   /// Cihaz çok sayıda hatalı denemeyle KİLİTLENDİ (`423`): yoklama bu ana kadar bekler (`Retry-After` + 1 sn);
   /// kilit yoksa `null`. Bağlantı `connected` kalır, `status` yoktur ([directError] mesajı gösterir).
@@ -3309,6 +3313,16 @@ class AutomationState extends ChangeNotifier {
   /// susturmasın.
   static const Duration _maxLockWait = Duration(minutes: 5);
 
+  /// Anahtarsız (başlıksız) `GET /api/auth/check`: 200 ise pano anahtarsız isteği kabul ediyor (kablolu Ethernet).
+  /// 401 / kilit / ağ hatası -> `false` (eski davranış: anahtar istenir).
+  Future<bool> _probeKeyless() async {
+    try {
+      return await directApi.checkKey(withoutKey: true);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// LAN yoklamasının kalıcı durdurmasını ve 423 beklemesini kaldırır (kullanıcı eylemi, ön plana dönüş,
   /// yeni adres/anahtar). Yalnızca yoklama kapısını açar; isteği çağıran atar.
   void _resumeDirectPolling() {
@@ -3369,8 +3383,16 @@ class AutomationState extends ChangeNotifier {
         _connState = ConnectionStateEnum.connected;
         _directError = _lanBoardMismatch;
         _pollHalted = true;
+      } else if (st.restricted && !hasLocalKey && !directApi.keyless && await _probeKeyless()) {
+        // Karar 3 (kablolu Ethernet): anahtar yok ama pano başlıksız `auth/check`i kabul etti -> anahtarsız çalışılır.
+        // Yer tutucu başlıkla tam durum hemen yeniden istenir (Ethernet'te firmware başlığın yalnız varlığına bakar).
+        if (epoch != _homeEpoch || _mode != AppMode.direct || stale()) return;
+        directApi.keyless = true;
+        await _directRefreshImpl(silent, base, key);
+        return;
       } else if (st.restricted) {
         // Anahtarsız kısıtlı özet: cihaza ulaşıldı ama kontrol edilemez ("boş cihaz" sanılmaz).
+        directApi.keyless = false; // anahtarsız kabul artık geçerli değil (ör. pano Wi-Fi'den yanıtlıyor)
         changed = previous != null;
         _directFailures = 0;
         _status = null;
@@ -3420,6 +3442,7 @@ class AutomationState extends ChangeNotifier {
       if (epoch != _homeEpoch || stale()) return;
       if (e.isUnauthorized || e.isUnprovisioned) {
         // Cihaza ulaşıldı ama anahtar geçersiz/yok: bir kez sunucudan yeniden al.
+        directApi.keyless = false; // anahtarsız kabul (Ethernet) artık geçerli değil: anahtar istenir
         _directError = e.message;
         _directFailures = 0;
         final keyBefore = directApi.localKey;
@@ -4915,6 +4938,21 @@ class AutomationState extends ChangeNotifier {
   }
 
   /// Üyeyi/misafiri evden çıkarır ([targetUserId] UUID String). Yalnızca ev sahibi.
+  /// Karar 13: sakin / misafir evden ayrılır. Başarıda ev yerel listeden HEMEN düşer (aktif evse başka eve ya da
+  /// evsiz duruma geçilir), sonra liste sunucuyla eşitlenir. Hata (ör. `409 OWNER_CANNOT_LEAVE`) fırlatılır; liste
+  /// değişmez.
+  Future<void> leaveHome(String homeId) async {
+    final epoch = _sessionEpoch;
+    await cloudApi.leaveHome(homeId);
+    if (_isDisposed || epoch != _sessionEpoch) return;
+    _homes = <HomeModel>[for (final h in _homes) if (h.id != homeId) h];
+    _persistHomesCache(_homes);
+    await _reconcileHomes(autoSelect: true, epoch: epoch);
+    if (_isDisposed || epoch != _sessionEpoch) return;
+    notifyListeners();
+    unawaited(fetchHomes()); // en iyi çaba eşitleme (başarısızlık yerel sonucu bozmaz)
+  }
+
   Future<bool> removeHomeMember(String targetUserId, [String? homeId]) async {
     if (!capabilities.canManageMembers) throw ApiException.forbidden();
     final ok = await cloudApi.removeHomeMember(_homeIdOrActive(homeId), targetUserId);

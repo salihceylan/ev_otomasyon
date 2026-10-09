@@ -21,6 +21,7 @@ class SetupTextField extends StatelessWidget {
     this.enabled = true,
     this.textCapitalization = TextCapitalization.none,
     this.prefixIcon,
+    this.prefixText,
     this.suffixIcon,
     this.obscureText = false,
     this.autofillHints,
@@ -42,6 +43,9 @@ class SetupTextField extends StatelessWidget {
   final bool enabled;
   final TextCapitalization textCapitalization;
   final IconData? prefixIcon;
+
+  /// Sabit önek metni (ör. telefon alanında "+90 ", karar 11).
+  final String? prefixText;
   final Widget? suffixIcon;
   final bool obscureText;
   final Iterable<String>? autofillHints;
@@ -96,6 +100,7 @@ class SetupTextField extends StatelessWidget {
           // kaydırıp aynı formdaki tek satırlı alanlardan farklı hizaya sokuyordu).
           alignLabelWithHint: false,
           hintText: hint,
+          prefixText: prefixText,
           // İpucu tek satır: Flutter ipucunu görünmezken (alan DOLUYKEN) de yerleşime kattığından iki satırlık ipucu 1.5 ölçekte
           // dolu alanı bile 88 px'e şişiriyordu (değer üst satırda, altında ölü bant). Çok satırlı alan zaten çok satırlıdır.
           hintMaxLines: multiline ? 2 : 1,

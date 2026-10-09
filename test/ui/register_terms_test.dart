@@ -28,6 +28,7 @@ void main() {
   Future<void> fillValid(WidgetTester tester) async {
     await typeInto(tester, 'field_full_name', 'Ayşe Yılmaz');
     await typeInto(tester, 'field_email', 'yeni@ornek.com.tr');
+    await typeInto(tester, 'field_email_confirm', 'yeni@ornek.com.tr');
     await typeInto(tester, 'field_password', kStrongPassword);
     await typeInto(tester, 'field_password_confirm', kStrongPassword);
   }

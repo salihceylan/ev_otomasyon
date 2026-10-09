@@ -1,5 +1,6 @@
 import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/services/api_exception.dart';
 import 'package:ev_otomasyon/ui/pages/claim/claim_manual_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/replace_board_dialog.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_wizard_page.dart';
@@ -125,5 +126,30 @@ void main() {
     await tapKey(tester, 'btn_replace_open_wizard');
     await settle(tester);
     expect(find.byType(ServiceSetupWizardPage), findsOneWidget);
+  });
+
+  testWidgets('karar 18: güvenlik modüllü evde sahip -> 403 REPLACE_REQUIRES_SERVICE: sunucu iletisi + servis yolu (çıkmaz yok)', (tester) async {
+    final e = await env(tester, harnessRole: 'staff', userRole: 'user', homeRole: 'owner');
+    addTearDown(e.dispose);
+    e.cloud.replaceError = const ApiException(
+      statusCode: 403,
+      code: 'REPLACE_REQUIRES_SERVICE',
+      message: 'Bu evde güvenlik modülü kurulu; pano değişimini servis personeli yapmalıdır.',
+    );
+    await pumpLauncher(tester, e, (ctx) => ReplaceBoardDialog.show(ctx, scanner: fakeScanner(newLabel)));
+    await tester.tap(find.byKey(const Key('launcher')));
+    await settle(tester);
+    await tapKey(tester, 'btn_scan_new_board');
+    await settle(tester);
+    await tapKey(tester, 'btn_replace_submit');
+    await settle(tester);
+    await tapKey(tester, 'btn_replace_confirm');
+    await settle(tester);
+
+    expect(find.byKey(const Key('replace_requires_service')), findsOneWidget);
+    expect(find.textContaining('Bu evde güvenlik modülü kurulu; pano değişimini servis personeli yapmalıdır.'), findsOneWidget);
+    expect(find.textContaining('Servis PIN'), findsWidgets);
+    expect(exists('replace_error'), isFalse);
+    expect(exists('btn_replace_submit'), isFalse, reason: 'aynı istek yinelenmez: yol servis personelidir');
   });
 }

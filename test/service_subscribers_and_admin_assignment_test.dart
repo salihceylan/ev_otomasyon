@@ -335,7 +335,7 @@ void main() {
       await typeKey(tester, 'field_admin_email', '');
       await typeKey(tester, 'field_admin_phone', '123');
       await tapKey(tester, 'btn_assign_next');
-      expect(find.textContaining('Telefon numarası geçersiz'), findsOneWidget);
+      expect(find.textContaining('5 ile başlamalıdır'), findsOneWidget);
       expect(find.text('Yönetici değişikliğini onaylıyor musunuz?'), findsNothing);
       expect(env.cloud.assignments, isEmpty);
     });
@@ -353,7 +353,7 @@ void main() {
       await settle(tester);
       await tapKey(tester, 'btn_assign_confirm');
       await settle(tester);
-      expect(env.cloud.assignments.single['phone'], '05551234567');
+      expect(env.cloud.assignments.single['phone'], '+905551234567');
       expect(env.cloud.assignments.single['email'], isNull);
     });
 

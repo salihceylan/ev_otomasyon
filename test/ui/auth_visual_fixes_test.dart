@@ -468,6 +468,7 @@ void main() {
       env.cloud.registerGate = Completer<void>();
       await typeInto(tester, 'field_full_name', 'Ayşe Yılmaz');
       await typeInto(tester, 'field_email', 'ayse@ornek.test');
+      await typeInto(tester, 'field_email_confirm', 'ayse@ornek.test');
       await typeInto(tester, 'field_password', 'dogru-parola-1234');
       await typeInto(tester, 'field_password_confirm', 'dogru-parola-1234');
       await tapKey(tester, 'chk_accept_terms'); // zorunlu Kullanıcı Sözleşmesi onayı

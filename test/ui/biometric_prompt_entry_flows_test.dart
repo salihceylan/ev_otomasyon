@@ -563,6 +563,7 @@ Future<void> _openRegisterAndSubmit(WidgetTester tester) async {
   expect(find.byType(RegisterPage), findsOneWidget, reason: 'hazırlık: kayıt sayfası açıldı');
   await typeInto(tester, 'field_full_name', 'Ayşe Yılmaz');
   await typeInto(tester, 'field_email', kUserEmail);
+  await typeInto(tester, 'field_email_confirm', kUserEmail);
   await typeInto(tester, 'field_password', kStrongPassword);
   await typeInto(tester, 'field_password_confirm', kStrongPassword);
   await tapKey(tester, 'chk_accept_terms'); // zorunlu Kullanıcı Sözleşmesi onayı

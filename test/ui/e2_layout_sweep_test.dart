@@ -327,6 +327,7 @@ void main() {
       await settle(tester);
       await typeInto(tester, 'field_full_name', longName);
       await typeInto(tester, 'field_email', longEmail);
+      await typeInto(tester, 'field_email_confirm', longEmail);
       await typeInto(tester, 'field_phone', '05551112233');
       await typeInto(tester, 'field_password', 'ornek-parola-1234');
       await typeInto(tester, 'field_password_confirm', 'ornek-parola-1234');

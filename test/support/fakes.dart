@@ -1001,6 +1001,19 @@ class FakeCloudApi extends EvCloudApiService {
     pendingInvitations = pendingInvitations.where((i) => i.id != invitationId).toList();
   }
 
+  /// `DELETE /homes/:id/members/me` (karar 13) çağrıları ve isteğe bağlı hata (ör. 409 OWNER_CANNOT_LEAVE).
+  final List<String> leftHomes = <String>[];
+  ApiException? leaveHomeError;
+
+  @override
+  Future<void> leaveHome(String homeId) async {
+    calls.add('leaveHome:$homeId');
+    final error = leaveHomeError;
+    if (error != null) throw error;
+    leftHomes.add(homeId);
+    homes = homes.where((h) => h.id != homeId).toList();
+  }
+
   @override
   Future<bool> removeHomeMember(String homeId, String targetUserId) async {
     calls.add('removeHomeMember:$targetUserId');

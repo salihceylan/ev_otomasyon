@@ -9,6 +9,7 @@ import '../../../../utils/friendly_error.dart';
 import '../../../common/app_dialogs.dart';
 import '../../../common/arc_spinner.dart';
 import '../../../common/confirm_dialogs.dart';
+import '../../../common/validators.dart';
 import '../logic/customer_logic.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
@@ -205,9 +206,12 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
         }
       }
       if (contactError == null && phoneText.isNotEmpty) {
-        phone = parseCustomerIdentifier(phoneText);
-        if (phone == null || phone.kind != CustomerKind.phone) {
-          contactError = 'Telefon numarası geçersiz (7-15 rakam; ör. 05551234567).';
+        // Karar 11: sabit "+90" önekli alan -> 10 hane (5XX XXX XX XX), kanonik +905XXXXXXXXX gönderilir.
+        final canonical = AuthValidators.canonicalTrPhone(phoneText);
+        if (canonical == null) {
+          contactError = AuthValidators.trMobileError(phoneText) ?? 'Telefon numarası geçersiz.';
+        } else {
+          phone = CustomerIdentifier(CustomerKind.phone, canonical);
         }
       }
     }
@@ -511,7 +515,9 @@ class _AssignAdminDialogState extends State<AssignAdminDialog> {
                     key: const Key('field_admin_phone'),
                     controller: _phone,
                     label: 'Telefon numarası',
-                    hint: '05XXXXXXXXX',
+                    hint: kTrPhoneHint,
+                    prefixText: kTrPhonePrefix,
+                    inputFormatters: const [TrPhoneInputFormatter()],
                     prefixIcon: Icons.phone_rounded,
                     keyboardType: TextInputType.phone,
                     errorText: _contactError,

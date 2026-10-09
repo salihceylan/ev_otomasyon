@@ -80,12 +80,12 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
 
   Future<void> _handleSendCode() async {
     if (_isLoading || _resend.isActive) return;
-    final phoneError = AuthValidators.phoneError(_phoneController.text, required: true);
+    final phoneError = AuthValidators.trMobileError(_phoneController.text, required: true);
     if (phoneError != null) {
       setState(() => _phoneError = phoneError);
       return;
     }
-    final phone = AuthValidators.normalizePhone(_phoneController.text)!;
+    final phone = AuthValidators.canonicalTrPhone(_phoneController.text)!; // karar 11: +905XXXXXXXXX
 
     setState(() {
       _isLoading = true;
@@ -203,7 +203,7 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
               enabled: !_isCodeSent && !_isLoading,
               keyboardType: TextInputType.phone,
               autofillHints: const [AutofillHints.telephoneNumber],
-              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+\-\s().]')), LengthLimitingTextInputFormatter(20)],
+              inputFormatters: const [TrPhoneInputFormatter()],
               onChanged: (_) {
                 if (_phoneError != null) setState(() => _phoneError = null);
               },
@@ -212,7 +212,8 @@ class _PhoneOtpDialogState extends State<PhoneOtpDialog> {
               decoration: authInputDecoration(
                 context,
                 label: 'Telefon Numarası',
-                hint: '0555 123 45 67',
+                prefixText: kTrPhonePrefix,
+                hint: kTrPhoneHint,
                 prefixIcon: Icons.phone_outlined,
                 errorText: _phoneError,
               ),

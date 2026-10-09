@@ -648,7 +648,7 @@ void main() {
       await settle(tester);
       await typeKey(tester, 'field_edit_phone', '12');
       await tapKey(tester, 'btn_account_save');
-      expect(find.textContaining('Geçerli bir telefon numarası girin'), findsOneWidget);
+      expect(find.textContaining('5 ile başlamalıdır'), findsOneWidget);
       expect(env.cloud.adminUpdates, isEmpty);
 
       env.cloud.adminWriteError = const ApiException(statusCode: 500, code: 'INTERNAL', message: 'Sunucu şu anda yanıt veremiyor.');
@@ -664,7 +664,7 @@ void main() {
       await settle(tester);
       expect(exists('dialog_edit_account'), isFalse);
       expect(env.cloud.adminUpdates.single['full_name'], 'Zeynep Yeni');
-      expect(env.cloud.adminUpdates.single['phone'], '05551112233');
+      expect(env.cloud.adminUpdates.single['phone'], '+905551112233');
     });
   });
 

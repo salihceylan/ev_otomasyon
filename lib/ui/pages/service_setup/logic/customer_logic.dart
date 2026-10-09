@@ -5,6 +5,7 @@ import '../setup_context.dart';
 import '../setup_problem.dart';
 import '../setup_steps.dart';
 import 'identify_logic.dart';
+import '../../../common/validators.dart';
 
 enum CustomerKind { email, phone }
 
@@ -46,6 +47,9 @@ CustomerIdentifier? parseCustomerIdentifier(String raw) {
     return _emailPattern.hasMatch(email) ? CustomerIdentifier(CustomerKind.email, email) : null;
   }
   final phone = text.replaceAll(RegExp(r'[\s().\-]'), '');
+  // Karar 11: TR cep görünümlüyse (0555…, 90555…, +90555…) kanonik +905XXXXXXXXX; değilse eski kural.
+  final tr = AuthValidators.canonicalTrPhone(phone);
+  if (tr != null) return CustomerIdentifier(CustomerKind.phone, tr);
   return _phonePattern.hasMatch(phone) ? CustomerIdentifier(CustomerKind.phone, phone) : null;
 }
 

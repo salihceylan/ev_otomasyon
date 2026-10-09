@@ -14,6 +14,7 @@ import '../pages/auth/social_sign_in.dart';
 import '../pages/family/family_members_page.dart';
 import '../pages/family/invite_family_dialog.dart';
 import '../pages/family/join_home_dialog.dart';
+import '../pages/family/leave_home_flow.dart';
 import '../pages/legal/legal_texts_page.dart';
 import '../pages/service_management_page.dart';
 import '../motion/motion.dart';
@@ -48,6 +49,7 @@ typedef _ProfileView = ({
   String? sessionRemaining,
   bool canOpenServiceManagement,
   bool canInvite,
+  bool canLeaveHome,
   ThemeMode themeMode,
 });
 
@@ -126,6 +128,7 @@ class UserProfileDialog extends StatelessWidget {
       sessionRemaining: (isSession && remaining != null) ? formatRemaining(remaining) : null,
       canOpenServiceManagement: caps.canOpenServiceManagement,
       canInvite: caps.canInvite,
+      canLeaveHome: canLeaveActiveHome(state),
       themeMode: state.themeMode,
     );
   }
@@ -276,6 +279,21 @@ class UserProfileDialog extends StatelessWidget {
                     onPressed: () {
                       Navigator.of(context).pop();
                       JoinHomeDialog.show(context);
+                    },
+                  ),
+                ],
+                if (v.canLeaveHome) ...[
+                  const SizedBox(height: 10),
+                  // Karar 13: sakin / misafir evden kendisi ayrılır (onaylı; sahip ve personel görmez).
+                  _outlineButton(
+                    context,
+                    key: const Key('btn_leave_home'),
+                    icon: Icons.exit_to_app_rounded,
+                    iconColor: AppTheme.accentRed,
+                    label: 'Evden Ayrıl',
+                    onPressed: () async {
+                      final left = await confirmAndLeaveHome(context);
+                      if (left && context.mounted) Navigator.of(context).pop();
                     },
                   ),
                 ],

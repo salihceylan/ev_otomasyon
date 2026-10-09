@@ -417,6 +417,7 @@ void main() {
             await _pushPage(tester, const RegisterPage());
             await tester.enterText(find.byKey(const Key('field_full_name')), 'Ayşe Yılmaz');
             await tester.enterText(find.byKey(const Key('field_email')), 'ayse@ornek.test');
+            await tester.enterText(find.byKey(const Key('field_email_confirm')), 'ayse@ornek.test');
             await tester.enterText(find.byKey(const Key('field_phone')), '0555 123 45 67');
             await tester.enterText(find.byKey(const Key('field_password')), 'dogru-parola-1234');
             await tester.enterText(find.byKey(const Key('field_password_confirm')), 'dogru-parola-1234');

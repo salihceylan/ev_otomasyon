@@ -95,7 +95,7 @@ void main() {
 
       await typeInto(tester, 'field_identifier', '0555 123 45 67');
       await tapKey(tester, 'btn_send_code');
-      expect(env.cloud.forgotIdentifiers, <String>['05551234567']);
+      expect(env.cloud.forgotIdentifiers, <String>['+905551234567']);
       expect(find.byKey(const Key('field_code')), findsOneWidget, reason: 'hazırlık: ikinci adım');
       expect(textOf(tester, 'forgot_phone_hint'), phoneHint);
 
