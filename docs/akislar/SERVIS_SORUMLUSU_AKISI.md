@@ -325,5 +325,5 @@ bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
     değişimi tamamlanana kadar panonun yerine kimlik isteyebilir (teknik bilgi gerekir; pano çevrimiçiyse kısa sürer). İzleniyor.
 11. **Sonraya bırakılanlar (kararlarınız):** servis PIN'i ve giriş uçlarına toplu saldırıya karşı CAPTCHA; sözleşme onayı ve zorunlu
     şifre değişiminin sunucuda da zorlanması (şimdilik izleniyor); e-posta sistemi kurulunca e-postasız müşteri sahiplenmesi; etiket
-    karekodunun uygulamayı doğrudan açması için imza sertifikası parmak izi, uygulama kimliği, Apple Team ID; yasal metinlerdeki
+    karekodunun iPhone'da uygulamayı doğrudan açması için Apple Team ID (Android'de 2026-10-09'dan beri açıyor); yasal metinlerdeki
     şirket bilgileri ve hukuk kararları (proje sonunda).

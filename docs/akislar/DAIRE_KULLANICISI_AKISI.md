@@ -305,8 +305,9 @@ atarsa) aynı anda istenen PIN ve davet kodu üretilmez: "Bu işlem için yetkin
    ancak metin kesinleşince çıkar. Bugünkü metin taslak sürüm 2'dir (personelin yerel anahtar erişimi ve Ethernet gerçeği
    yazıldı); şirket bilgileri ve hukuk kararları proje sonunda girilecek.
 6. **Kararlar verildi (2026-10-09);** ne yapıldığı `docs/denetim/2026-10-09-kararlar.md`'de. Sonraya kalanlar:
-   - **Karekodun uygulamayı doğrudan açması** (bireysel-9-yayin): imza sertifikası parmak izi, uygulama kimliği ve Apple Team ID
-     gelince eklenir; o zamana kadar etiket karekodu tarayıcıda açılır.
+   - **Karekodun uygulamayı doğrudan açması:** Android'de yapıldı (2026-10-09): etiket karekodu, şifre sıfırlama ve sihirli giriş
+     bağlantıları telefon kamerasıyla/e-postadan açılınca uygulama doğrudan açılır (uygulama kurulu değilse tarayıcıda yönlendirme
+     sayfası). iPhone'da Apple Team ID gelene kadar tarayıcıda açılır.
    - **E-posta doğrulaması** sonraya bırakıldı (kararınız); kayıtta e-posta iki kez yazılır.
    - **Firmware v1.3.2 karta yazılmadı ve kartta denenmedi;** bulut sunucu kilidi ve sabit görevsiz fabrika ayarı karta yazılınca
      geçerli olur.
