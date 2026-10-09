@@ -1,0 +1,2506 @@
+{
+  "rol": "daire",
+  "baslik": "Daire Kullanicisi Deneme Listesi",
+  "aciklama": "AHBU Ev Otomasyonu uygulamasında ev sahibi, aile üyesi, misafir ve panoyu kendisi kuran bireysel kullanıcının yapabildiği her şeyi telefonda tek tek denemek için hazırlanmış liste. Her maddeyi deneyip çalışıyor / çalışmıyor olarak işaretleyin; tırnak içindeki yazılar uygulamada birebir böyle görünür.",
+  "bolumler": [
+    {
+      "id": "D1",
+      "baslik": "Hesap: kayıt ve giriş",
+      "maddeler": [
+        {
+          "id": "D1.01",
+          "baslik": "Kayıt ekranı açılır",
+          "adimlar": [
+            "Uygulamayı açın, giriş ekranında \"Hesabınız yok mu?\" yazısının yanındaki \"Kayıt Olun\"a dokunun."
+          ],
+          "beklenen": "\"Kayıt Ol\" sayfası açılır, başlıkta \"Yeni Hesap Oluşturun\" yazar; \"Ad Soyad\", \"E-Posta Adresi\", \"E-posta (tekrar)\", \"Telefon\", \"Şifre\", \"Şifre Tekrar\" alanları görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:75"
+        },
+        {
+          "id": "D1.02",
+          "baslik": "İki e-posta farklı yazılınca kayıt yapılmaz",
+          "adimlar": [
+            "Kayıt sayfasında \"E-Posta Adresi\" alanına bir adres yazın.",
+            "\"E-posta (tekrar)\" alanına bir harfi farklı olan adresi yazın.",
+            "Diğer alanları doldurup \"Kayıt Ol ve Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "\"E-posta (tekrar)\" alanının altında \"E-posta adresleri eşleşmiyor\" yazar; hesap açılmaz.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:16"
+        },
+        {
+          "id": "D1.03",
+          "baslik": "Telefon alanında +90 hazır gelir",
+          "adimlar": [
+            "Kayıt sayfasında \"Telefon\" alanına dokunun.",
+            "Numarayı 5 ile başlayarak yazın (ör. 555 123 45 67)."
+          ],
+          "beklenen": "Alanın başında \"+90\" hazır durur; yazdığınız numara 3-3-2-2 gruplanarak görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "lib/ui/pages/auth/register_page.dart:318"
+        },
+        {
+          "id": "D1.04",
+          "baslik": "5 ile başlamayan telefon numarası kabul edilmez",
+          "adimlar": [
+            "Kayıt sayfasında \"Telefon\" alanına 4 ile başlayan bir numara yazın.",
+            "\"Kayıt Ol ve Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "Alanın altında \"Cep numarası 5 ile başlamalıdır (5XX XXX XX XX)\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "lib/ui/common/validators.dart:86"
+        },
+        {
+          "id": "D1.05",
+          "baslik": "Başında 0 olan numara yapıştırılınca düzeltilir",
+          "adimlar": [
+            "Telefonun notlarına 0555 123 45 67 yazıp kopyalayın.",
+            "Kayıt sayfasında \"Telefon\" alanına yapıştırın."
+          ],
+          "beklenen": "Baştaki 0 atılır; alanda +90 sonrasında 555 123 45 67 görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:15"
+        },
+        {
+          "id": "D1.06",
+          "baslik": "İki şifre farklıysa kayıt yapılmaz",
+          "adimlar": [
+            "Kayıt sayfasında \"Şifre\" ve \"Şifre Tekrar\" alanlarına farklı şifreler yazın.",
+            "\"Kayıt Ol ve Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "\"Şifreler eşleşmiyor\" yazar; hesap açılmaz.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/auth/register_page.dart:371"
+        },
+        {
+          "id": "D1.07",
+          "baslik": "Kısa şifre kabul edilmez",
+          "adimlar": [
+            "Kayıt sayfasında \"Şifre\" alanına 9 karakterlik bir şifre yazın.",
+            "\"Kayıt Ol ve Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "Şifrenin en az 10 karakter olması gerektiğini söyleyen uyarı çıkar; hesap açılmaz.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:77"
+        },
+        {
+          "id": "D1.08",
+          "baslik": "Sözleşme kutusu işaretlenmeden kayıt düğmesi çalışmaz",
+          "adimlar": [
+            "Kayıt sayfasında tüm alanları doğru doldurun.",
+            "\"Kullanıcı Sözleşmesi'ni okudum ve kabul ediyorum\" kutusunu boş bırakın."
+          ],
+          "beklenen": "\"Kayıt Ol ve Giriş Yap\" düğmesi soluk (pasif) kalır; kutuyu işaretleyince etkinleşir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:78"
+        },
+        {
+          "id": "D1.09",
+          "baslik": "Kayıttaki sözleşme bağlantısı metni açar",
+          "adimlar": [
+            "Kayıt sayfasında onay kutusunun yanındaki cümlede \"Kullanıcı Sözleşmesi\" yazısına dokunun."
+          ],
+          "beklenen": "Sözleşme metni açılır; geri dönünce kayıt sayfasındaki bilgiler yerinde durur.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:78"
+        },
+        {
+          "id": "D1.10",
+          "baslik": "Kayıt olunca hesap hemen açılır",
+          "adimlar": [
+            "Kayıt sayfasını eksiksiz doldurup sözleşme kutusunu işaretleyin.",
+            "\"Kayıt Ol ve Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "E-posta doğrulaması istenmeden oturum açılır; evi olmayan yeni hesapta \"Hoş Geldiniz,\" ve adınızla başlayan karşılama ekranı ve \"Henüz kayıtlı bir daireniz yok\" yazısı görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Daha önce kullanılmamış bir e-posta adresi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:81"
+        },
+        {
+          "id": "D1.11",
+          "baslik": "E-posta ve şifreyle giriş",
+          "adimlar": [
+            "Giriş ekranında \"E-Posta Adresi\" ve \"Şifre\" alanlarını doldurun.",
+            "\"Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "Oturum açılır ve ana ekran gelir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:86"
+        },
+        {
+          "id": "D1.12",
+          "baslik": "Google ile giriş",
+          "adimlar": [
+            "Giriş ekranında \"Google ile Devam Et\"e dokunun.",
+            "Google hesabınızı seçin."
+          ],
+          "beklenen": "Oturum açılır ve ana ekran gelir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Telefonda Google hesabı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:86"
+        },
+        {
+          "id": "D1.13",
+          "baslik": "Apple ile giriş (yalnız iPhone)",
+          "adimlar": [
+            "iPhone'da giriş ekranında \"Apple ile Giriş Yap\"a dokunun.",
+            "Apple onayını verin."
+          ],
+          "beklenen": "Oturum açılır ve ana ekran gelir. Android telefonda bu düğme görünmez.",
+          "rol_notu": "hepsi",
+          "on_kosul": "iPhone",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:86"
+        },
+        {
+          "id": "D1.14",
+          "baslik": "SMS koduyla şifresiz giriş",
+          "adimlar": [
+            "Giriş ekranında \"Telefon Numarası ile Şifresiz Giriş (SMS)\"e dokunun.",
+            "\"Şifresiz SMS Girişi\" penceresinde \"Telefon Numarası\" alanına numaranızı yazıp \"Kod Gönder\"e dokunun.",
+            "SMS ile gelen kodu \"Doğrulama Kodu\" alanına yazıp \"Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "Oturum açılır ve ana ekran gelir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "SMS ile giriş hizmeti açık olmalı (kapalıysa düğme görünmez); numara daha önce SMS koduyla doğrulanmış olmalı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:86"
+        },
+        {
+          "id": "D1.15",
+          "baslik": "Doğrulanmamış telefona SMS girişi açılmaz",
+          "adimlar": [
+            "Kayıtta telefonunu yazdığınız (SMS ile hiç giriş yapılmamış) hesabın numarasıyla \"Telefon Numarası ile Şifresiz Giriş (SMS)\"i deneyin.",
+            "\"Kod Gönder\"e dokunun, gelen kodu \"Doğrulama Kodu\" alanına yazıp \"Giriş Yap\"a dokunun."
+          ],
+          "beklenen": "Bu numaranın doğrulanmamış bir hesapta kayıtlı olduğunu ve e-posta ile şifreyle giriş yapmanızı söyleyen ileti görünür; SMS ile oturum açılmaz.",
+          "rol_notu": "hepsi",
+          "on_kosul": "SMS ile giriş hizmeti açık; kayıtta telefonu yazılmış bir hesap",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:88"
+        },
+        {
+          "id": "D1.16",
+          "baslik": "Çok sayıda yanlış şifrede giriş geçici kilitlenir",
+          "adimlar": [
+            "Giriş ekranında doğru e-postayla art arda 10 kez yanlış şifre deneyin."
+          ],
+          "beklenen": "Giriş düğmesinde \"Tekrar dene\" yazısı ve geri sayan süre görünür; süre bitene kadar giriş yapılamaz.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:90"
+        },
+        {
+          "id": "D1.17",
+          "baslik": "İlk girişten sonra parmak izi / yüz tanıma sorulur",
+          "adimlar": [
+            "Biyometrik özelliği olan telefonda ilk kez giriş yapın."
+          ],
+          "beklenen": "Parmak izi ya da yüz tanımanın adıyla başlayan \"Kullanılsın mı?\" penceresi açılır; \"Evet, Etkinleştir\" ve \"Daha Sonra\" seçenekleri vardır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Parmak izi ya da yüz tanıması kayıtlı telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:91"
+        },
+        {
+          "id": "D1.18",
+          "baslik": "Biyometrik kilit açılışta ve arka plandan dönüşte çalışır",
+          "adimlar": [
+            "Biyometrik girişi açın.",
+            "Uygulamayı arka plana alıp 30 saniyeden uzun bekleyin, sonra uygulamaya dönün."
+          ],
+          "beklenen": "Uygulama kilitlenir ve parmak izi / yüz ister; doğrulayınca ana ekran açılır. Kilit ekranında \"Şifre ile Giriş Yap\" seçeneği de bulunur.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Biyometrik giriş açık",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:91"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "baslik": "Hesap: şifre, profil ve oturum",
+      "maddeler": [
+        {
+          "id": "D2.01",
+          "baslik": "Şifremi unuttum ile şifre yenileme",
+          "adimlar": [
+            "Giriş ekranında \"Şifremi Unuttum\"a dokunun.",
+            "\"Şifre Yenileme\" penceresinde \"E-posta veya Telefon\" alanına e-postanızı yazıp \"Kod Gönder\"e dokunun.",
+            "E-postadaki 6 haneli kodu \"6 Haneli Kurtarma Kodu\" alanına, yeni şifreyi \"Yeni Şifre\" ve \"Yeni Şifre Tekrar\" alanlarına yazın.",
+            "\"Şifreyi Yenile\"ye dokunun."
+          ],
+          "beklenen": "\"Şifreniz yenilendi ve oturumunuz açıldı.\" yazar; ana ekran açılır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:99"
+        },
+        {
+          "id": "D2.02",
+          "baslik": "Şifre yenilenince diğer telefondaki oturum kapanır",
+          "adimlar": [
+            "Aynı hesapla iki telefonda oturum açın.",
+            "Birinci telefonda \"Şifremi Unuttum\" ile şifreyi yenileyin."
+          ],
+          "beklenen": "İkinci telefondaki oturum kapanır; yeniden giriş istenir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "İkinci bir telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:99"
+        },
+        {
+          "id": "D2.03",
+          "baslik": "Şifre yenilemede telefon numarası 0 ile de yazılabilir",
+          "adimlar": [
+            "Kayıtta telefonu +90 ile girilmiş bir hesap için \"Şifremi Unuttum\"a dokunun.",
+            "\"E-posta veya Telefon\" alanına numarayı başında 0 ile yazın (ör. 0555 123 45 67) ve \"Kod Gönder\"e dokunun."
+          ],
+          "beklenen": "\"Kod, bu numaraya bağlı hesabın e-posta adresine gönderildi (hesap varsa).\" yazar; kod o hesabın e-postasına gelir (0555…, +90555… ve 555… aynı numara sayılır).",
+          "rol_notu": "hepsi",
+          "on_kosul": "Kayıtta telefon numarası yazılmış hesap",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:15"
+        },
+        {
+          "id": "D2.04",
+          "baslik": "E-postadaki şifre bağlantısı uygulamayı açar (Android)",
+          "adimlar": [
+            "\"Şifremi Unuttum\" ile kod isteyin.",
+            "Android telefonda gelen e-postadaki bağlantıya dokunun."
+          ],
+          "beklenen": "Uygulama doğrudan açılır ve \"Yeni Şifre Belirle\" sayfası gelir (uygulama kurulu değilse tarayıcıda yönlendirme sayfası açılır).",
+          "rol_notu": "hepsi",
+          "on_kosul": "Android telefon, uygulama kurulu",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:308"
+        },
+        {
+          "id": "D2.05",
+          "baslik": "Profil penceresi açılır ve rolü gösterir",
+          "adimlar": [
+            "Ana ekranda üst çubuğun en sağındaki, adınızın baş harfini gösteren simgeye dokunun."
+          ],
+          "beklenen": "\"Kullanıcı Profili\" penceresi açılır; bu evdeki rolünüz \"Ev Sahibi\", \"Aile Bireyi\" ya da \"Süreli Misafir\" olarak yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/user_profile_dialog.dart:194"
+        },
+        {
+          "id": "D2.06",
+          "baslik": "Şifre değiştirme",
+          "adimlar": [
+            "Profil penceresinde \"Şifreyi Değiştir\"e dokunun.",
+            "\"Mevcut Şifre\", \"Yeni Şifre\", \"Yeni Şifre Tekrar\" alanlarını doldurun.",
+            "\"Şifreyi Değiştir\"e dokunun."
+          ],
+          "beklenen": "\"Şifreniz değiştirildi. Diğer cihazlardaki oturumlar kapatıldı.\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:100"
+        },
+        {
+          "id": "D2.07",
+          "baslik": "Yeni şifre eskisiyle aynı olamaz",
+          "adimlar": [
+            "\"Şifre Değiştir\" sayfasında \"Yeni Şifre\" alanına mevcut şifrenizi yazın.",
+            "\"Şifreyi Değiştir\"e dokunun."
+          ],
+          "beklenen": "\"Yeni şifre mevcut şifreyle aynı olamaz\" uyarısı çıkar; şifre değişmez.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/auth/change_password_page.dart:220"
+        },
+        {
+          "id": "D2.08",
+          "baslik": "Oturumu kapatma",
+          "adimlar": [
+            "Profil penceresinin altındaki \"Oturumu Kapat\"a dokunun.",
+            "\"Çıkış Yapılsın mı?\" penceresinde \"Evet, Çıkış Yap\"a dokunun."
+          ],
+          "beklenen": "Giriş ekranına dönülür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:100"
+        },
+        {
+          "id": "D2.09",
+          "baslik": "Tüm cihazlardan çıkış",
+          "adimlar": [
+            "Aynı hesapla iki telefonda oturum açın.",
+            "Birinci telefonda profil penceresinden \"Tüm Cihazlardan Çıkış Yap\"a dokunun.",
+            "\"Tüm Cihazlardan Çıkış\" penceresinde \"Tümünden Çık\"a dokunun."
+          ],
+          "beklenen": "İki telefonda da oturum kapanır; giriş ekranı gelir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "İkinci bir telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:100"
+        },
+        {
+          "id": "D2.10",
+          "baslik": "Hesabı silme",
+          "adimlar": [
+            "Profil penceresinde \"Hesabımı Sil\"e dokunun.",
+            "\"Hesabı Sil\" penceresinde \"Şifreniz\" alanına şifrenizi yazın (Google, Apple ya da SMS ile açılan hesapta boş bırakın) ve onay kutusuna \"SİL\" yazın.",
+            "\"Hesabı Kalıcı Olarak Sil\"e dokunun."
+          ],
+          "beklenen": "\"Hesabınız silindi.\" ile başlayan ileti görünür ve giriş ekranına dönülür; aynı bilgilerle artık giriş yapılamaz.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Silinmesi sorun olmayan bir deneme hesabı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:100"
+        },
+        {
+          "id": "D2.11",
+          "baslik": "Başka üyesi olan evin tek sahibi hesabını silemez",
+          "adimlar": [
+            "Evinde başka üye bulunan ev sahibi hesabıyla profil penceresinde \"Hesabımı Sil\"e dokunun.",
+            "Şifreyi ve \"SİL\" yazıp \"Hesabı Kalıcı Olarak Sil\"e dokunun."
+          ],
+          "beklenen": "\"Hesabınızı silmeden önce aşağıdaki dairelerin sahipliğini devretmelisiniz\" uyarısı, evlerin listesi ve \"Devret\" düğmesi görünür; \"Hiçbir şey silinmedi.\" yazar.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Evde en az bir aile üyesi ya da misafir",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:101"
+        },
+        {
+          "id": "D2.12",
+          "baslik": "Profil penceresinden tema değişimi",
+          "adimlar": [
+            "Profil penceresinde \"Tema\" altında \"Aydınlık\"ı seçin.",
+            "Sonra \"Karanlık\"ı, ardından \"Sistem\"i seçin."
+          ],
+          "beklenen": "Uygulamanın renkleri hemen açık / koyu olur; \"Sistem\" seçilince telefonun ayarını izler.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/user_profile_dialog.dart:301"
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "baslik": "Pano kurulumu: servis kurduysa",
+      "maddeler": [
+        {
+          "id": "D3.01",
+          "baslik": "Kurulum onay kodu e-postayla gelir",
+          "adimlar": [
+            "Servis sorumlusu panoyu sizin e-posta adresinize bağlarken e-postanızı açın.",
+            "Gelen e-postadaki 6 haneli kodu yalnız servis sorumlusuna söyleyin."
+          ],
+          "beklenen": "Kodu söyledikten sonra servis kurulumu sürdürür; kod 15 dakika geçerlidir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Yetkili servisin kurulum yapması",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:106"
+        },
+        {
+          "id": "D3.02",
+          "baslik": "Servisin açtığı hesabı etkinleştirme",
+          "adimlar": [
+            "Servisin gönderdiği hesap etkinleştirme e-postasındaki bağlantıyı kopyalayın.",
+            "Giriş ekranında \"E-postadaki Bağlantım Var\"a dokunun, \"E-postadaki Bağlantı\" penceresine bağlantıyı yapıştırıp \"Devam\"a dokunun.",
+            "\"Yeni Şifre Belirle\" sayfasında yeni şifreyi iki kez yazıp \"Şifreyi Yenile\"ye dokunun."
+          ],
+          "beklenen": "Hesap etkinleşir ve oturum açılır.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Servisin sizin için açtığı, şifresi belirlenmemiş hesap (bağlantı 72 saat geçerli)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:109"
+        },
+        {
+          "id": "D3.03",
+          "baslik": "Şifresi belirlenmemiş hesapla giriş denenince yönlendirme yapılır",
+          "adimlar": [
+            "Servisin açtığı ve henüz şifre belirlenmemiş hesabın e-postasıyla giriş ekranında \"Giriş Yap\"ı deneyin."
+          ],
+          "beklenen": "\"Hesabınızı servis açtıysa ve hiç şifre belirlemediyseniz e-postadaki etkinleştirme bağlantısını kullanın ya da Şifremi unuttum ile şifre belirleyin.\" yazar; yanında \"Şifremi Unuttum ile Şifre Belirle\" düğmesi görünür.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Servisin açtığı, şifresi belirlenmemiş hesap",
+          "yeni": false,
+          "kaynak": "lib/ui/common/auth_form.dart:11"
+        },
+        {
+          "id": "D3.04",
+          "baslik": "Teslimden sonra ev hazır gelir",
+          "adimlar": [
+            "Servis kurulumu bitirip teslim ettikten sonra uygulamaya giriş yapın."
+          ],
+          "beklenen": "Eviniz cihazlarıyla birlikte ana ekranda görünür; site dairesiyse evin adı site adı, blok ve daire numarasından oluşur.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Servis kurulumu tamamlanmış ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:110"
+        },
+        {
+          "id": "D3.05",
+          "baslik": "Kurulumu yapan servis personeli üye listesinde görünür",
+          "adimlar": [
+            "Üst çubuktan \"Aile & Misafir Yönetimi\"ni açın.",
+            "\"Kayıtlı Kişiler & Yetkiler\" listesine bakın."
+          ],
+          "beklenen": "Kurulumu yapan kişi \"SERVİS PERSONELİ\" etiketiyle görünür; kartındaki \"Yetkiyi İptal Et\" ile erişimi hemen kaldırılabilir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Son 72 saat içinde servis kurulumu yapılmış ev",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/family_members_page.dart:583"
+        },
+        {
+          "id": "D3.06",
+          "baslik": "Yalnız SMS ile açılmış hesaba kurulum kodu gönderilemez",
+          "adimlar": [
+            "Yalnız telefonla (SMS) giriş yaptığınız hesabı servis sorumlusuna verin.",
+            "Servis kurulum kodunu göndermeyi denesin."
+          ],
+          "beklenen": "Hesapta e-posta olmadığı için kod gönderilemez (servis bunu kendi ekranında görür); panoyu kendi uygulamanızdan etiketteki karekodla sahiplenip servise geçici servis PIN'i vermeniz gerekir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Yalnız SMS ile açılmış hesap ve servis personeli",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:107"
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "baslik": "Pano kurulumu: kendiniz kuruyorsanız (bireysel)",
+      "maddeler": [
+        {
+          "id": "D4.01",
+          "baslik": "Evi olmayan kullanıcının karşılama ekranı",
+          "adimlar": [
+            "Hiç evi olmayan bir hesapla giriş yapın."
+          ],
+          "beklenen": "\"Hoş Geldiniz,\" ile başlayan ekranda \"Henüz kayıtlı bir daireniz yok\" yazar; \"Kod ile Bir Eve Katıl\", \"Karekod Tara (Katıl / Cihaz Eşle)\", \"Cihaz Kodunu Elle Gir\" ve \"Pano Wi-Fi Kurulumu\" düğmeleri görünür.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Evi olmayan hesap",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:129"
+        },
+        {
+          "id": "D4.02",
+          "baslik": "Panoyu karekodla sahiplenme",
+          "adimlar": [
+            "Karşılama ekranında \"Karekod Tara (Katıl / Cihaz Eşle)\"ye dokunun.",
+            "\"Karekod Tara\" ekranında etiketteki 1. karekodu (Daireye bağla) çerçeveye hizalayın.",
+            "Açılan \"Cihaz Eşleştirme\" penceresinde bilgileri etiketle karşılaştırıp \"Eşle & Sahiplen\"e dokunun."
+          ],
+          "beklenen": "Ekranın altında \"Cihaz başarıyla evinize eşleştirildi.\" yazar ve yanında \"Wi-Fi Kurulumu\" kısayolu görünür; yeni ev ev listenize eklenir.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Hiçbir eve bağlı olmayan pano ve etiketi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:130"
+        },
+        {
+          "id": "D4.03",
+          "baslik": "Panoyu elle sahiplenme",
+          "adimlar": [
+            "Karşılama ekranında \"Cihaz Kodunu Elle Gir\"e dokunun.",
+            "\"Cihaz UID / Seri No\" alanına etiketteki seri numarasını (AHBU-S3-…), \"Kurulum PIN Kodu (6 Hane)\" alanına etiketteki PIN'i yazın.",
+            "\"Ev / Daire Adı\" alanında hazır \"Evim\" yazısını isterseniz değiştirin ve \"Eşle & Sahiplen\"e dokunun."
+          ],
+          "beklenen": "\"Cihaz başarıyla evinize eşleştirildi.\" yazar; ev verdiğiniz adla listede görünür.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Hiçbir eve bağlı olmayan pano ve etiketi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:130"
+        },
+        {
+          "id": "D4.04",
+          "baslik": "Kamera çalışmazsa elle girişe geçilir",
+          "adimlar": [
+            "\"Karekod Tara (Katıl / Cihaz Eşle)\"ye dokunun.",
+            "\"Karekod Tara\" ekranında \"Kameram Çalışmıyor / Kodu Elle Gir\"e dokunun."
+          ],
+          "beklenen": "\"Cihaz Eşleştirme\" penceresi boş alanlarla açılır; bilgiler elle yazılabilir.",
+          "rol_notu": "bireysel",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/claim/qr_scanner_page.dart:295"
+        },
+        {
+          "id": "D4.05",
+          "baslik": "Panosu olmayan evin sahibine eşleme kartı çıkar",
+          "adimlar": [
+            "Panosu olmayan bir evin sahibi olarak o evi açın."
+          ],
+          "beklenen": "\"Evinize Hoş Geldiniz!\" kartında \"Karekod ile Cihaz Eşle\" ve \"Kodu Elle Gir (Manuel Eşleme)\" düğmeleri görünür; ikisi de eşleştirme penceresini açar.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Panosu olmayan ev",
+          "yeni": false,
+          "kaynak": "lib/ui/dashboard/welcome_cards.dart:275"
+        },
+        {
+          "id": "D4.06",
+          "baslik": "Yanlış kurulum PIN'inde kalan hak gösterilir",
+          "adimlar": [
+            "\"Cihaz Kodunu Elle Gir\" penceresinde doğru seri numarası ile yanlış bir 6 haneli PIN yazın.",
+            "\"Eşle & Sahiplen\"e dokunun."
+          ],
+          "beklenen": "PIN'in geçersiz olduğunu ve kalan deneme hakkını (ör. 4) söyleyen ileti görünür; pano eşlenmez.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Hiçbir eve bağlı olmayan pano",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:135"
+        },
+        {
+          "id": "D4.07",
+          "baslik": "5 yanlış PIN'de pano 15 dakika kilitlenir",
+          "adimlar": [
+            "Aynı pano için art arda 5 kez yanlış PIN deneyin."
+          ],
+          "beklenen": "\"Çok fazla hatalı PIN denemesi yapıldı; bu cihaz geçici olarak kilitlendi.\" ve bekleme süresi yazar; 15 dakika boyunca doğru PIN de kabul edilmez.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Hiçbir eve bağlı olmayan pano",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:135"
+        },
+        {
+          "id": "D4.08",
+          "baslik": "Başka eve bağlı pano sahiplenilemez",
+          "adimlar": [
+            "Başka bir eve bağlı panonun seri numarası ve PIN'iyle \"Eşle & Sahiplen\"i deneyin."
+          ],
+          "beklenen": "\"Bu cihaz zaten bir daireye bağlı veya işlem çakıştı.\" ile başlayan ileti görünür.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Başka bir eve bağlı pano",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:136"
+        },
+        {
+          "id": "D4.09",
+          "baslik": "Sahiplenilen pano buluta kendiliğinden bağlanır",
+          "adimlar": [
+            "Panoyu sahiplenin; pano internete bağlı (kablolu ya da Wi-Fi) olsun.",
+            "Birkaç dakika bekleyip ana ekranı aşağı çekerek yenileyin."
+          ],
+          "beklenen": "Pano çevrimiçi görünür; cihaz listesi panonun gerçek düzenine (adlar, panjurlar) göre kendiliğinden güncellenir.",
+          "rol_notu": "bireysel",
+          "on_kosul": "İnternete bağlı pano",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:134"
+        },
+        {
+          "id": "D4.10",
+          "baslik": "Etiket karekodu telefon kamerasıyla uygulamayı açar (Android)",
+          "adimlar": [
+            "Uygulamada oturumunuz açıkken, Android telefonun kendi kamera uygulamasıyla etiketteki 1. karekodu okutun.",
+            "Çıkan bağlantıya dokunun."
+          ],
+          "beklenen": "Uygulama doğrudan açılır, \"Eşleştirme penceresi açılıyor...\" yazar ve \"Cihaz Eşleştirme\" penceresi bilgiler dolu olarak gelir.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Android telefon, uygulama kurulu",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:308"
+        },
+        {
+          "id": "D4.11",
+          "baslik": "Etiket karekodu iPhone'da tarayıcıda açılır",
+          "adimlar": [
+            "iPhone'un kamera uygulamasıyla etiketteki 1. karekodu okutup bağlantıya dokunun."
+          ],
+          "beklenen": "Bu sürümde uygulama değil tarayıcı açılır; eşleştirmeyi uygulama içindeki \"Karekod Tara (Katıl / Cihaz Eşle)\" ile yapın.",
+          "rol_notu": "bireysel",
+          "on_kosul": "iPhone",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:310"
+        },
+        {
+          "id": "D4.12",
+          "baslik": "Oturum kapalıyken etiket karekodu giriş ister",
+          "adimlar": [
+            "Uygulamadan çıkış yapın.",
+            "Telefon kamerasıyla etiketteki 1. karekodu okutup bağlantıya dokunun."
+          ],
+          "beklenen": "\"Cihazı eşleştirmek için önce hesabınızla giriş yapın, sonra etiketteki karekodu yeniden okutun.\" yazar.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Android telefon",
+          "yeni": false,
+          "kaynak": "lib/ui/common/deep_links.dart:239"
+        },
+        {
+          "id": "D4.13",
+          "baslik": "Zorunlu ekran açıkken etiket karekodu bekletilir",
+          "adimlar": [
+            "Zorunlu şifre değiştirme ekranı açık olan (geçici şifreyle açılmış) bir hesapla, telefon kamerasıyla etiketteki 1. karekodu okutun."
+          ],
+          "beklenen": "Eşleştirme penceresi hemen açılmaz; \"Önce ana ekrandaki zorunlu adımı (parola değişimi ya da sözleşme onayı) tamamlayın\" ile başlayan ileti görünür. Şifreyi değiştirince eşleştirme penceresi açılır (açılmazsa karekodu yeniden okutun).",
+          "rol_notu": "bireysel",
+          "on_kosul": "Android telefon; geçici şifreyle açılmış hesap",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:138"
+        },
+        {
+          "id": "D4.14",
+          "baslik": "Kanal adını ve odasını değiştirme",
+          "adimlar": [
+            "Üst çubuktaki \"Cihaz Ayarları\" simgesiyle \"Cihaz & Sistem Ayarları\"nı açın.",
+            "\"Kanallar ve Panjurlar\" kartında \"Kanalları Düzenle\"ye dokunun.",
+            "Bir lambanın yanındaki \"Düzenle\" simgesine dokunun, adını ve \"Oda\" alanını değiştirip \"Kaydet\"e dokunun."
+          ],
+          "beklenen": "\"Kanal kaydedildi.\" yazar; ana ekranda lamba yeni adıyla ve yeni odasında görünür.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:141"
+        },
+        {
+          "id": "D4.15",
+          "baslik": "Kanalın lamba / priz tipini değiştirme",
+          "adimlar": [
+            "\"Kanalları Düzenle\" listesinde bir çıkışın \"Düzenle\" simgesine dokunun.",
+            "Tip olarak \"Priz\"i seçip \"Kaydet\"e dokunun."
+          ],
+          "beklenen": "\"Kanal kaydedildi.\" yazar; listede çıkış priz olarak görünür. Aynı yoldan \"Lamba\"ya geri alınabilir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:141"
+        },
+        {
+          "id": "D4.16",
+          "baslik": "Panjur süresini ve adını değiştirme",
+          "adimlar": [
+            "\"Kanalları Düzenle\" listesinde bir panjurun \"Düzenle\" simgesine dokunun.",
+            "Adını değiştirin ve \"Panjur süresi (sn, 1-300)\" alanına yeni süreyi yazıp \"Kaydet\"e dokunun."
+          ],
+          "beklenen": "\"Kanal kaydedildi.\" yazar; panjur yeni adıyla tek kart olarak görünür (ad iki yönün ikisine birlikte yazılır) ve tam açma / kapama yeni süreyle yapılır.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Panjuru olan ev, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:142"
+        },
+        {
+          "id": "D4.17",
+          "baslik": "Panjur hareket ederken süresi değiştirilemez",
+          "adimlar": [
+            "Bir panjuru ana ekrandan hareket ettirin.",
+            "Hareket sürerken \"Kanalları Düzenle\"den o panjurun süresini değiştirip \"Kaydet\"e dokunun."
+          ],
+          "beklenen": "\"Panjur hareket halinde; durdurup yeniden deneyin.\" yazar.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Panjuru olan ev, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/channels_page.dart:164"
+        },
+        {
+          "id": "D4.18",
+          "baslik": "Yeni panoda (v1.3.2) 8 röle de lamba olarak gelir",
+          "adimlar": [
+            "Servis şablonu yazılmamış, v1.3.2 yazılımlı panoyu sahiplenin ve buluta bağlanmasını bekleyin.",
+            "Ana ekrandaki \"Aydınlatma & Çıkışlar\" bölümüne bakın.",
+            "Duvardaki 1 numaralı girişe bağlı butona basın."
+          ],
+          "beklenen": "8 çıkışın hepsi Röle 1 … Röle 8 adıyla lamba olarak görünür, panjur yoktur; 1 numaralı buton Röle 1'i açıp kapatır (her giriş kendi numaralı rölesini yönetir).",
+          "rol_notu": "bireysel",
+          "on_kosul": "Firmware v1.3.2 yazılmış pano (henüz karta yazılmadı)",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:25"
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "baslik": "Günlük kullanım",
+      "maddeler": [
+        {
+          "id": "D5.01",
+          "baslik": "Ana ekranın düzeni",
+          "adimlar": [
+            "Panosu çevrimiçi olan evde ana ekranı açın ve aşağı kaydırın."
+          ],
+          "beklenen": "Üstte ev kartında \"Açık lamba\", \"Hareketli panjur\" ve \"Kontrol noktası\" sayıları; altında \"Hızlı Senaryolar\", oda seçimi ve \"Panjurlar\", \"Aydınlatma & Çıkışlar\", \"Güvenlik ve Eylemciler\" bölümleri görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:151"
+        },
+        {
+          "id": "D5.02",
+          "baslik": "Lambayı açıp kapatma",
+          "adimlar": [
+            "\"Aydınlatma & Çıkışlar\" bölümünde bir lamba kartına dokunun.",
+            "Lambanın yandığını kontrol edin, karta yeniden dokunun."
+          ],
+          "beklenen": "Kart kısa süre \"Uygulanıyor…\" gösterir, sonra \"AÇIK\" olur ve lamba yanar; ikinci dokunuşta \"KAPALI\" olur ve lamba söner.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:154"
+        },
+        {
+          "id": "D5.03",
+          "baslik": "Darbe çıkışını tetikleme",
+          "adimlar": [
+            "Darbe çıkışı kartındaki \"Tetikle\"ye dokunun."
+          ],
+          "beklenen": "Bağlı cihaz (ör. kapı otomatiği) kısa süre çalışıp bırakılır; kartta \"Darbe çıkışı\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Darbe çıkışı tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:154"
+        },
+        {
+          "id": "D5.04",
+          "baslik": "Panjuru açma, durdurma, kapatma",
+          "adimlar": [
+            "\"Panjurlar\" bölümünde bir panjur kartında \"Aç\"a dokunun.",
+            "Panjur hareket ederken \"Durdur\"a, sonra \"Kapat\"a dokunun."
+          ],
+          "beklenen": "Kartta sırayla \"Açılıyor…\", \"Durdu\", \"Kapanıyor…\" yazar ve panjur buna uygun hareket eder.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Panjuru olan ev, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:154"
+        },
+        {
+          "id": "D5.05",
+          "baslik": "Panjuru kaydırıcıyla ara konuma getirme",
+          "adimlar": [
+            "Panjur kartındaki kaydırıcıyı yaklaşık ortaya çekip bırakın."
+          ],
+          "beklenen": "Kartta \"Hedef %\" ve seçilen yüzde görünür; panjur o konuma gidip durur.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Panjuru olan ev, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:154"
+        },
+        {
+          "id": "D5.06",
+          "baslik": "Panodan onay gelmezse komut geri alınır",
+          "adimlar": [
+            "Bir lamba kartına dokunduktan hemen sonra panonun ağ kablosunu çıkarın ya da modemin elektriğini kesin."
+          ],
+          "beklenen": "En çok 10 saniye içinde kart eski durumuna döner ve \"Cihazdan onay alınamadı. İşlem geri alındı; durum yeniden kontrol ediliyor.\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Pano çevrimiçiyken bağlantısını kesebilmek",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:155"
+        },
+        {
+          "id": "D5.07",
+          "baslik": "Pano çevrimdışıyken uyarı ve son bilinen durum",
+          "adimlar": [
+            "Panonun elektriğini kesin ve birkaç dakika bekleyin.",
+            "Uygulamada ana ekranı yenileyin."
+          ],
+          "beklenen": "Üstte \"Pano çevrimdışı\" uyarısı çıkar; lamba ve panjur kartlarında \"Çevrimdışı • son bilinen\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Panonun elektriğini kesebilmek",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:151"
+        },
+        {
+          "id": "D5.08",
+          "baslik": "Gaz alarmı sürerken anahtarlama onay ister",
+          "adimlar": [
+            "Gaz alarmı sürerken bir lamba kartına dokunun."
+          ],
+          "beklenen": "\"Gaz alarmı sürüyor.\" başlıklı pencerede \"Elektrik anahtarlamak kıvılcım oluşturabilir. Yine de uygulansın mı?\" yazar; komut yalnız \"Yine de Uygula\" ile gider.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Gaz sensörü tanımlı ev ve süren gaz alarmı (servisle birlikte güvenli biçimde oluşturulmalı)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:156"
+        },
+        {
+          "id": "D5.09",
+          "baslik": "İnternet dönünce cihaz listesi kendiliğinden yüklenir",
+          "adimlar": [
+            "Telefonu uçak kipine alın ve uygulamayı açın ya da ana ekranı yenileyin.",
+            "Cihazların yüklenemediği uyarısını gördükten sonra uçak kipini kapatın; hiçbir düğmeye dokunmayın."
+          ],
+          "beklenen": "İnternet gelince cihaz listesi \"Yeniden dene\"ye basmadan kendiliğinden yüklenir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:157"
+        },
+        {
+          "id": "D5.10",
+          "baslik": "İnternet yokken de açık alarm kartı görünür",
+          "adimlar": [
+            "Evde süren bir su alarmı varken telefonu uçak kipine alın ve uygulamayı yeniden açın."
+          ],
+          "beklenen": "Cihaz listesi yüklenemese de alarm kartı ve \"Vanayı Kapat\" düğmesi görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Su sensörü ve vanası tanımlı ev, süren alarm",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:158"
+        },
+        {
+          "id": "D5.11",
+          "baslik": "Odaya göre süzme",
+          "adimlar": [
+            "Ana ekranda cihaz listesinin üstündeki oda düğmelerinden birine dokunun.",
+            "Sonra \"Tümü\"ne dokunun."
+          ],
+          "beklenen": "Önce yalnız o odadaki cihazlar görünür; \"Tümü\" ile bütün cihazlar geri gelir.",
+          "rol_notu": "hepsi",
+          "on_kosul": "En az iki odası tanımlı ev, bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:151"
+        },
+        {
+          "id": "D5.12",
+          "baslik": "Açık lamba bandından hepsini kapatma",
+          "adimlar": [
+            "Evde birkaç lamba açıkken ana ekrana bakın.",
+            "\"Huzur Modu / Gece Kontrolü\" bandındaki \"Hepsini Kapat\"a dokunun."
+          ],
+          "beklenen": "Bant kaç lambanın açık kaldığını yazar (ör. \"lamba açık kaldı.\"); düğmeye basınca açık lambalar kapanır, panjurlar hareket etmez.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano çevrimiçi, en az bir lamba açık",
+          "yeni": false,
+          "kaynak": "lib/ui/dashboard/peace_banner.dart:35"
+        },
+        {
+          "id": "D5.13",
+          "baslik": "Hızlı senaryo: Evden Çıkıyorum",
+          "adimlar": [
+            "\"Hızlı Senaryolar\" bölümünde \"Evden Çıkıyorum\"a dokunun."
+          ],
+          "beklenen": "Lambalar kapanır, panjurlar iner; \"Evden çıkış: ışıklar ve panjurlar için komut iletildi.\" yazar. Evde hırsız alarmı varsa \"Alarmı dışarıda kip ile kurayım mı?\" sorusu \"Alarmı Kur\" ve \"Hayır\" seçenekleriyle çıkar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:161"
+        },
+        {
+          "id": "D5.14",
+          "baslik": "Hızlı senaryo: Günaydın",
+          "adimlar": [
+            "\"Hızlı Senaryolar\"da \"Günaydın\"a dokunun."
+          ],
+          "beklenen": "Panjurlar açılır; \"Günaydın: panjurları açma komutu iletildi.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Panjuru olan ev, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:161"
+        },
+        {
+          "id": "D5.15",
+          "baslik": "Hızlı senaryo: İyi Geceler",
+          "adimlar": [
+            "\"Hızlı Senaryolar\"da \"İyi Geceler\"e dokunun."
+          ],
+          "beklenen": "Lambalar söner, panjurlar kapanır; \"İyi geceler: ışıklar ve panjurlar için komut iletildi.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:162"
+        },
+        {
+          "id": "D5.16",
+          "baslik": "Hızlı senaryo: Tüm Lambalar",
+          "adimlar": [
+            "Birkaç lamba açıkken \"Hızlı Senaryolar\"da \"Tüm Lambalar\"a dokunun."
+          ],
+          "beklenen": "Açık lambaların hepsi söner; \"Tüm lambaları kapatma komutu iletildi.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:162"
+        },
+        {
+          "id": "D5.17",
+          "baslik": "Hızlı senaryo: Panjurları Durdur",
+          "adimlar": [
+            "Panjurlar hareket ederken \"Hızlı Senaryolar\"da \"Panjurları Durdur\"a dokunun."
+          ],
+          "beklenen": "Hareket eden panjurlar hemen durur; \"Panjurları durdurma komutu iletildi.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Panjuru olan ev, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:162"
+        },
+        {
+          "id": "D5.18",
+          "baslik": "Zamanlı kural ekleme",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" → \"Otomasyon\" bölümünde \"Zamanlı Otomasyon Kuralları\" kartına dokunun.",
+            "\"Zamanlı Kurallar\" sayfasında \"Yeni Kural Ekle\"ye (hiç kural yoksa \"İlk Kuralı Ekle\") dokunun.",
+            "\"Kanal\", \"Eylem\", \"Saat\" ve \"Günler\"i seçip \"Ekle\"ye dokunun."
+          ],
+          "beklenen": "\"Kural eklendi\" yazar ve kural listede görünür; belirlenen saatte lamba / panjur kendiliğinden çalışır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Bulut modu, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:165"
+        },
+        {
+          "id": "D5.19",
+          "baslik": "Çakışan kuralda uyarı çıkar",
+          "adimlar": [
+            "Var olan bir kuralla aynı kanal ve saat için ters eylemli (ör. biri Aç, biri Kapat) yeni kural ekleyin."
+          ],
+          "beklenen": "\"Aynı kanal için aynı saatte ters eylemli bir kural var\" uyarısı çıkar; kaydetmek için düğme \"Yine de Kaydet\" olur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Bulut modu, en az bir kural",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:165"
+        },
+        {
+          "id": "D5.20",
+          "baslik": "Vana, siren ve fan kurala bağlanamaz",
+          "adimlar": [
+            "\"Yeni Kural Ekle\" penceresinde \"Kanal\" listesini açın."
+          ],
+          "beklenen": "Listede yalnız lamba, priz, panjur ve darbe çıkışları vardır; vana, siren ve fan görünmez.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Vana / siren / fan tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:166"
+        },
+        {
+          "id": "D5.21",
+          "baslik": "Kuralı silme",
+          "adimlar": [
+            "\"Zamanlı Kurallar\" sayfasında bir kuralın yanındaki üç nokta menüsünden \"Sil\"i seçin.",
+            "\"Kural silinsin mi?\" penceresinde \"Sil\"e dokunun."
+          ],
+          "beklenen": "\"Kural silindi\" yazar; kural listeden kalkar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Bulut modu, en az bir kural",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/scheduled_rules_page.dart:126"
+        },
+        {
+          "id": "D5.22",
+          "baslik": "Yerel modda zamanlı kurallar yönetilemez",
+          "adimlar": [
+            "Yerel ağ moduna geçin.",
+            "\"Zamanlı Kurallar\" sayfasını açın."
+          ],
+          "beklenen": "\"Bulut modu gerekir\" başlığı ve \"Zamanlı kurallar sunucuda çalışır. Kuralları yönetmek için bulut moduna geçin.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/scheduled_rules_page.dart:169"
+        },
+        {
+          "id": "D5.23",
+          "baslik": "Çocuk kilidini açma",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" → \"Güvenlik\" bölümünde \"Çocuk Kilidi\" kartındaki anahtara bir kez dokunun.",
+            "Duvardaki bir lamba butonuna basın."
+          ],
+          "beklenen": "Kartta \"Kilitli: duvar anahtarları devre dışı\", ana ekranın durum şeridinde \"Çocuk Kilidi Aktif\" yazar; duvar butonu lambayı yakmaz (pano kısa bip sesi verir).",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano çevrimiçi, duvar butonu bağlı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:169"
+        },
+        {
+          "id": "D5.24",
+          "baslik": "Çocuk kilidi açıkken hareket eden panjur duvardan durdurulabilir",
+          "adimlar": [
+            "Çocuk kilidi açıkken bir panjuru uygulamadan hareket ettirin.",
+            "Hareket sürerken o panjurun duvar butonuna basın."
+          ],
+          "beklenen": "Panjur durur; ama duran panjur duvar butonuyla yeniden harekete geçmez.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Panjur ve duvar butonu bağlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:169"
+        },
+        {
+          "id": "D5.25",
+          "baslik": "Çocuk kilidini kaldırma doğrulama ister",
+          "adimlar": [
+            "\"Çocuk Kilidi\" kartındaki anahtarı kapatın.",
+            "\"Çocuk kilidi kaldırılsın mı?\" penceresinde parmak izi / yüz ile doğrulayın (telefonda yoksa \"Kilidi kaldırmak için basılı tutun\" düğmesine basılı tutun)."
+          ],
+          "beklenen": "Kilit kalkar, duvar butonları yeniden çalışır. \"Vazgeç (kilitli kalsın)\" seçilirse kilit sürer.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Çocuk kilidi açık",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:170"
+        },
+        {
+          "id": "D5.26",
+          "baslik": "Gece huzur bildirimi saatini ayarlama",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" → \"Otomasyon\" bölümünde \"Gece Huzur Bildirimi\" kartını bulun.",
+            "Anahtar açıkken \"Bildirim saati\" satırındaki saate (başlangıçta 23:30) dokunup birkaç dakika sonrasını seçin."
+          ],
+          "beklenen": "Kartta yeni saat görünür.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:180"
+        },
+        {
+          "id": "D5.27",
+          "baslik": "Gece hatırlatması bandı açık lambaları kapatır",
+          "adimlar": [
+            "Gece huzur saatinde evde bir lamba açık bırakın.",
+            "O saatten sonra uygulamayı açın.",
+            "\"Gece hatırlatması\" bandında \"Hepsini kapat\"a dokunun."
+          ],
+          "beklenen": "Bant görünür; \"Hepsini kapat\" açık lambaları ve panjurları kapatır. \"Gizle\" ile bant kapanır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Gece huzur bildirimi açık, pano çevrimiçi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:181"
+        },
+        {
+          "id": "D5.28",
+          "baslik": "Gece hatırlatması telefona bildirim olarak gelmez",
+          "adimlar": [
+            "Gece huzur saatinde lamba açık bırakın, uygulamayı kapalı tutun."
+          ],
+          "beklenen": "Telefona bildirim gelmez; hatırlatma yalnız uygulama açılınca bant olarak görünür. Ayarlardaki kartta \"Gece hatırlatması telefona gönderilmez; uygulamayı açtığınızda görünür.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:236"
+        }
+      ]
+    },
+    {
+      "id": "D6",
+      "baslik": "Bulut modu ve yerel mod",
+      "maddeler": [
+        {
+          "id": "D6.01",
+          "baslik": "Bulut modundan yerel moda geçiş",
+          "adimlar": [
+            "Ana ekranda üst çubuğun sağındaki üç nokta (\"Diğer işlemler\") menüsünü açın.",
+            "\"Bulut Modu (yerel moda geç)\"e dokunun."
+          ],
+          "beklenen": "\"Yerel ağ moduna geçildi\" yazar; telefon panoya ev ağından doğrudan bağlanır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Telefon panoyla aynı ev Wi-Fi'sinde",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:173"
+        },
+        {
+          "id": "D6.02",
+          "baslik": "Yerel moddan buluta dönüş elle yapılır",
+          "adimlar": [
+            "Yerel moddayken internet bağlantısını açık tutun ve bir süre bekleyin.",
+            "Üç nokta menüsünden \"Yerel Ağ Modu (buluta geç)\"e dokunun."
+          ],
+          "beklenen": "Uygulama kendiliğinden buluta geçmez; dokununca \"Bulut moduna geçildi\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:173"
+        },
+        {
+          "id": "D6.03",
+          "baslik": "Yerel modda pano adresini girme",
+          "adimlar": [
+            "Yerel moddayken \"Cihaz & Sistem Ayarları\"ndaki \"Cihaz Yerel Adresi (IP)\" kartını açın.",
+            "\"Cihaz adresi\" alanına panonun ev ağındaki adresini (ör. 192.168.1.20) yazıp \"Kaydet ve Bağlan\"a dokunun."
+          ],
+          "beklenen": "\"Cihaza bağlanıldı\" yazar; ana ekranda cihazlar görünür ve kontrol edilebilir.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Panonun ev ağındaki adresi (Sistem Doktoru'nda görünür)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:174"
+        },
+        {
+          "id": "D6.04",
+          "baslik": "Yanlış adreste yerel mod uyarı verir",
+          "adimlar": [
+            "\"Cihaz adresi\" alanına ağda olmayan bir adres yazıp \"Kaydet ve Bağlan\"a dokunun.",
+            "Ana ekrana dönün."
+          ],
+          "beklenen": "\"Cihaza ulaşılamıyor\" uyarısı ve \"Adresi düzenle\" düğmesi görünür.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/dashboard/apartment_dashboard.dart:424"
+        },
+        {
+          "id": "D6.05",
+          "baslik": "Yerel modda pano bilgileri kartı görünür",
+          "adimlar": [
+            "Yerel moddayken \"Cihaz & Sistem Ayarları\"nı açın."
+          ],
+          "beklenen": "\"Cihaz Telemetrisi\" kartında \"Cihaz IP adresi\", \"Ev Wi-Fi ağı\" ve \"Yazılım sürümü\" gibi bilgiler görünür.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:118"
+        },
+        {
+          "id": "D6.06",
+          "baslik": "Yerel modda duvar butonları bölümü görünür",
+          "adimlar": [
+            "Yerel moddayken ana ekranı aşağı kaydırın.",
+            "Duvardaki bir butona basılı tutun."
+          ],
+          "beklenen": "\"Duvar Butonları & Girişler\" bölümünde (\"Kuru kontak\") girişler görünür; basılan girişin durumu değişir.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Duvar butonu bağlı pano",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:151"
+        },
+        {
+          "id": "D6.07",
+          "baslik": "Kablolu panoda yerel mod anahtar sormaz",
+          "adimlar": [
+            "Oturum açmadan giriş ekranında \"Yerel Ağ Modu (ESP32 Doğrudan Erişim)\"e dokunun.",
+            "Panonun kablolu ağdaki adresini girip bağlanın.",
+            "Bir lambayı açıp kapatın."
+          ],
+          "beklenen": "Cihaz anahtarı sorulmadan cihazlar görünür ve lamba kontrol edilir.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano modeme kabloyla (Ethernet) bağlı, v1.3.0+; telefon aynı ev ağında",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:176"
+        },
+        {
+          "id": "D6.08",
+          "baslik": "Wi-Fi'li panoda girişsiz yerel mod anahtar ister",
+          "adimlar": [
+            "Oturum açmadan giriş ekranında \"Yerel Ağ Modu (ESP32 Doğrudan Erişim)\"e dokunun.",
+            "Wi-Fi ile bağlı panonun adresini girin."
+          ],
+          "beklenen": "\"Cihaz kontrol edilemiyor\" uyarısı ve \"Cihaz anahtarı gerekli\" ile başlayan ileti görünür; cihazlar kontrol edilemez.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Pano Wi-Fi ile bağlı; telefon aynı ev ağında",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:177"
+        }
+      ]
+    },
+    {
+      "id": "D7",
+      "baslik": "Wi-Fi değişince",
+      "maddeler": [
+        {
+          "id": "D7.01",
+          "baslik": "Ayarlardan Wi-Fi kurtarma sihirbazını açma",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" → \"Cihaz\" bölümünde \"Wi-Fi Şifre Değişimi & Kurtarma\" kartını bulun.",
+            "\"Kurtarma Modu Sihirbazını Aç\"a dokunun."
+          ],
+          "beklenen": "\"Wi-Fi Kurulum & Kurtarma Sihirbazı\" açılır, ilk adım \"Adım 1: Telefonu panonun kurulum ağına bağlayın\" olur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:186"
+        },
+        {
+          "id": "D7.02",
+          "baslik": "Girişsiz Wi-Fi kurulumu",
+          "adimlar": [
+            "Oturum açmadan giriş ekranında \"Pano Wi-Fi Kurulumu (İnternet Gerekmez)\"e dokunun."
+          ],
+          "beklenen": "Aynı sihirbaz açılır; hesap girişi ve internet istenmez.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:118"
+        },
+        {
+          "id": "D7.03",
+          "baslik": "Modem kapanınca pano kurulum ağını açar",
+          "adimlar": [
+            "Modemin elektriğini kesin (ya da Wi-Fi adını değiştirin).",
+            "Yaklaşık 3 dakika bekleyip telefonun Wi-Fi listesine bakın."
+          ],
+          "beklenen": "AHBU- ile başlayan kurulum ağı listede görünür ve yaklaşık 10 dakika açık kalır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Wi-Fi ile bağlı pano, modemi kapatabilmek",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:186"
+        },
+        {
+          "id": "D7.04",
+          "baslik": "Telefonu kurulum ağına bağlayıp test etme",
+          "adimlar": [
+            "Telefonun kamerasıyla etiketteki 2. karekodu okutup panonun kurulum ağına bağlanın (ya da Wi-Fi ayarlarından ağa etiketteki \"AĞ PAROLASI (AP)\" ile bağlanın). Telefon internet yok derse bağlantıyı koruyun.",
+            "Uygulamada sihirbaza dönüp \"Bağlantıyı Test Et\"e dokunun."
+          ],
+          "beklenen": "\"Pano ile bağlantı kuruldu\" yazar; panonun seri numarası ve yazılım sürümü görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Panonun kurulum ağı açık",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:121"
+        },
+        {
+          "id": "D7.05",
+          "baslik": "Kurulum ağına bağlı değilken test başarısız olur",
+          "adimlar": [
+            "Telefon ev Wi-Fi'sindeyken sihirbazda \"Bağlantıyı Test Et\"e dokunun."
+          ],
+          "beklenen": "\"Pano bulunamadı.\" ile başlayan ve telefonun kurulum ağına bağlanmasını isteyen ileti görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/common/wifi_provision_panel.dart:441"
+        },
+        {
+          "id": "D7.06",
+          "baslik": "Ev ağlarını tarayıp seçme",
+          "adimlar": [
+            "Test başarılı olduktan sonra \"Ağları Tara\"ya dokunun.",
+            "Listeden ev ağınızı seçin."
+          ],
+          "beklenen": "Çevredeki ağlar listelenir (yalnız 2,4 GHz; \"Pano yalnızca 2,4 GHz Wi-Fi ağlarına bağlanabilir.\" notu görünür); seçilen ağın adı \"Wi-Fi Ağ Adı (SSID)\" alanına yazılır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Telefon panonun kurulum ağında",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:122"
+        },
+        {
+          "id": "D7.07",
+          "baslik": "Modem karekoduyla ağ bilgisi doldurma",
+          "adimlar": [
+            "Sihirbazda \"Modem Wi-Fi Karekodu Tara (Kamera)\"ya dokunun.",
+            "Modemin etiketindeki (ya da başka telefonda gösterilen) Wi-Fi karekodunu okutun."
+          ],
+          "beklenen": "\"Wi-Fi Ağ Adı (SSID)\" ve \"Wi-Fi Şifresi\" alanları kendiliğinden dolar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Modem Wi-Fi karekodu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:122"
+        },
+        {
+          "id": "D7.08",
+          "baslik": "Panonun kendi karekodu ev ağı olarak kabul edilmez",
+          "adimlar": [
+            "\"Modem Wi-Fi Karekodu Tara (Kamera)\" ile etiketteki 2. karekodu (panonun kurulum ağı) okutun."
+          ],
+          "beklenen": "Alanlar dolmaz; \"Bu karekod panonun KENDİ kurulum ağına aittir (AHBU-...).\" ile başlayan ileti görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/common/wifi_provision_panel.dart:348"
+        },
+        {
+          "id": "D7.09",
+          "baslik": "Kısa Wi-Fi şifresi kabul edilmez",
+          "adimlar": [
+            "\"Wi-Fi Şifresi\" alanına 7 karakterlik bir şifre yazın.",
+            "\"Yeni Wi-Fi Şifresini Panoya Yükle\"ye dokunun."
+          ],
+          "beklenen": "\"Wi-Fi şifresi 8 ile 63 karakter arasında olmalıdır.\" yazar; bilgi gönderilmez.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/common/validators.dart:229"
+        },
+        {
+          "id": "D7.10",
+          "baslik": "Yeni Wi-Fi bilgisini panoya yükleme",
+          "adimlar": [
+            "Ağ adı ve şifre doluyken \"Yeni Wi-Fi Şifresini Panoya Yükle\"ye dokunun.",
+            "Bekleyin."
+          ],
+          "beklenen": "\"Pano ev Wi-Fi ağına bağlandı!\" ve \"Telefonunuzu ev Wi-Fi ağınıza (veya mobil veriye) geri alın.\" yazar; telefon ev ağına dönünce pano uygulamada çevrimiçi görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Telefon panonun kurulum ağında",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:124"
+        },
+        {
+          "id": "D7.11",
+          "baslik": "Hazırlanmamış panoda Wi-Fi yüklenemez",
+          "adimlar": [
+            "Hiç hazırlanmamış (atölyede ilk kurulumu yapılmamış) bir panonun kurulum ağına bağlanıp sihirbazı kullanın."
+          ],
+          "beklenen": "\"Pano henüz hazırlanmamış (ilk kurulum yapılmamış).\" ile başlayan ve servis kurulum sihirbazını öneren ileti görünür.",
+          "rol_notu": "bireysel",
+          "on_kosul": "Hazırlanmamış pano",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:126"
+        },
+        {
+          "id": "D7.12",
+          "baslik": "Çevrimdışı uyarısından Wi-Fi kurtarmaya geçiş",
+          "adimlar": [
+            "Pano çevrimdışıyken ana ekrandaki \"Pano çevrimdışı\" kartına bakın.",
+            "Karttaki \"Wi-Fi Kurtarma Modu\" düğmesine dokunun."
+          ],
+          "beklenen": "\"Wi-Fi Kurulum & Kurtarma Sihirbazı\" açılır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Daha önce bağlanmış, şu an çevrimdışı pano",
+          "yeni": false,
+          "kaynak": "lib/ui/dashboard/dashboard_states.dart:567"
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "baslik": "Güvenlik: su, gaz ve duman alarmı, vanalar",
+      "maddeler": [
+        {
+          "id": "D8.01",
+          "baslik": "Su baskınında alarm kartı çıkar ve vana kapanır",
+          "adimlar": [
+            "Su sensörünü ıslatın.",
+            "Uygulamada ana ekrana bakın."
+          ],
+          "beklenen": "Üstte \"Su baskını\" ve sensörün adıyla alarm kartı, \"ALARM\" etiketi görünür; su vanası kapanır, siren ve pano zili çalar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Su sensörü ve su vanası tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:194"
+        },
+        {
+          "id": "D8.02",
+          "baslik": "Alarmı susturma",
+          "adimlar": [
+            "Sensör hâlâ ıslakken alarm kartındaki \"Sesi Sustur\"a dokunun.",
+            "\"Alarm susturulsun mu?\" penceresinde \"Sesi Sustur\"a dokunun."
+          ],
+          "beklenen": "Siren ve pano zili susar; kartın etiketi \"SUSTURULDU\" olur ve \"Alarm susturuldu. Vana kapalı kalır; sensör kuruyunca alarmı onaylayın.\" yazar. Vana kapalı kalır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Süren su alarmı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:195"
+        },
+        {
+          "id": "D8.03",
+          "baslik": "Kuruyunca alarmı onaylama",
+          "adimlar": [
+            "Sensörü kurulayın; kartın düğmesi \"Alarmı Onayla\" olur.",
+            "\"Alarmı Onayla\"ya, sonra \"Alarm onaylansın mı?\" penceresinde \"Alarmı Onayla\"ya dokunun."
+          ],
+          "beklenen": "Alarm kartı kalkar; vana güvenlik için kapalı kalır.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Susturulmuş ya da süren su alarmı, sensör kurumuş",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:195"
+        },
+        {
+          "id": "D8.04",
+          "baslik": "Pano çevrimdışıyken verilen onay sıraya alınır",
+          "adimlar": [
+            "Alarm sürerken panonun internetini kesin, sensörü kurulayın.",
+            "Uygulamada \"Alarmı Onayla\"ya dokunup onaylayın."
+          ],
+          "beklenen": "\"Pano çevrimdışı. Onay, pano bağlanınca (aynı alarm sürüyorsa) iletilecek.\" yazar; pano yeniden bağlanınca alarm kalkar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Su alarmı, panonun internetini kesebilmek",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:198"
+        },
+        {
+          "id": "D8.05",
+          "baslik": "Alarm sonrası su vanasını açma",
+          "adimlar": [
+            "Alarm kalktıktan sonra ana ekrandaki \"Su kesik\" kartında \"Vanayı Aç\"a dokunun.",
+            "\"Vana açılsın mı?\" penceresinde \"Vanayı Aç\"a dokunun."
+          ],
+          "beklenen": "Vana açılır, kart kalkar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Kapalı su vanası, alarm yok, sensörler kuru",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:203"
+        },
+        {
+          "id": "D8.06",
+          "baslik": "Sensör ıslakken vana açılamaz",
+          "adimlar": [
+            "Sensör ıslakken \"Su kesik\" kartına bakın ya da \"Vanayı Aç\"ı deneyin."
+          ],
+          "beklenen": "Açma engellenir; \"Sensör hâlâ ıslak; vana açılamaz.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Islak su sensörü, kapalı vana",
+          "yeni": false,
+          "kaynak": "lib/models/safety_models.dart:304"
+        },
+        {
+          "id": "D8.07",
+          "baslik": "Vanayı her zaman kapatabilme",
+          "adimlar": [
+            "\"Güvenlik ve Eylemciler\" bölümündeki vana kartında \"Vanayı Kapat\"a dokunun.",
+            "\"Vana kapatılsın mı?\" penceresinde \"Vanayı Kapat\"a dokunun."
+          ],
+          "beklenen": "Vana kapanır; pencerede kapatmanın her zaman güvenli olduğu yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Su vanası tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:202"
+        },
+        {
+          "id": "D8.08",
+          "baslik": "Gaz alarmında yönerge görünür",
+          "adimlar": [
+            "Gaz alarmı sürerken alarm kartına bakın."
+          ],
+          "beklenen": "Kartta \"Gaz kaçağı\" başlığı ve \"Ortamı havalandırın. Elektrik anahtarlarına ve prizlere dokunmayın, ateş yakmayın.\" ile başlayan, 187'yi aramayı söyleyen yönerge görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Gaz sensörü tanımlı ev ve gaz alarmı (servisle birlikte güvenli biçimde oluşturulmalı)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:197"
+        },
+        {
+          "id": "D8.09",
+          "baslik": "Gaz vanası uygulamadan açılamaz",
+          "adimlar": [
+            "Gaz vanası kapalıyken vana kartına bakın."
+          ],
+          "beklenen": "\"Vanayı Aç\" düğmesi yoktur; yerine \"Gaz vanası güvenlik gereği yalnız yerinde açılır: vananın yanındaki düğme ya da vananın kurma kolu.\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Gaz vanası tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:204"
+        },
+        {
+          "id": "D8.10",
+          "baslik": "Duman alarmında yönerge görünür",
+          "adimlar": [
+            "Duman alarmı sürerken alarm kartına bakın."
+          ],
+          "beklenen": "Kartta \"Duman algılandı\" başlığı ve \"Evde biri varsa hemen dışarı çıkın ve 112'yi arayın.\" ile başlayan yönerge görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Duman sensörü tanımlı ev ve duman alarmı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:197"
+        },
+        {
+          "id": "D8.11",
+          "baslik": "Gaz alarmında havalandırma fanını durdurma onay ister",
+          "adimlar": [
+            "Gaz alarmı sürerken çalışan havalandırma fanının anahtarını kapatın."
+          ],
+          "beklenen": "\"Gaz alarmı sürüyor; havalandırma durdurulsun mu?\" penceresi çıkar; fan yalnız \"Fanı Durdur\" ile durur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Gaz alarmında çalışan havalandırma fanı tanımlı ev",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/actuator_card.dart:225"
+        },
+        {
+          "id": "D8.12",
+          "baslik": "Vana kapanmazsa arıza uyarısı çıkar",
+          "adimlar": [
+            "Su alarmında geri bildirimli vananın kapanmasını engelleyin (servisle birlikte)."
+          ],
+          "beklenen": "Kartın etiketi \"VANA ARIZASI\" olur ve \"Vana kapanmadı! Ana vanayı elle kapatın.\" yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Kapandığını bildiren (geri bildirimli) vana; servis desteği",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:194"
+        },
+        {
+          "id": "D8.13",
+          "baslik": "Yanıt vermeyen sensörde alarm kalkmaz",
+          "adimlar": [
+            "Alarm sürerken sensörün bağlantısını kesin."
+          ],
+          "beklenen": "Kartta \"Sensör yanıt vermiyor; alarm kalkamaz\" yazar; sensör yeniden yanıt verene kadar alarm sürer.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Süren alarm, sensör bağlantısını kesebilmek (servisle)",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/critical_alarm_card.dart:552"
+        },
+        {
+          "id": "D8.14",
+          "baslik": "İnternet yokken de pano alarmı yönetir",
+          "adimlar": [
+            "Modemin internet bağlantısını kesin (pano ev ağında kalsın).",
+            "Su sensörünü ıslatın."
+          ],
+          "beklenen": "İnternet olmadan da vana kapanır, siren ve pano zili çalar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Su sensörü ve vanası tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:214"
+        }
+      ]
+    },
+    {
+      "id": "D9",
+      "baslik": "Güvenlik: hırsız alarmı",
+      "maddeler": [
+        {
+          "id": "D9.01",
+          "baslik": "Alarmı Dışarıda kipinde kurma",
+          "adimlar": [
+            "\"Güvenlik ve Eylemciler\" bölümündeki alarm kartında \"Dışarıda\"yı seçin.",
+            "Açılan soruda \"Alarmı Kur\"a dokunun."
+          ],
+          "beklenen": "Kartta \"Çıkış için\" ve geri sayan saniye (45 sn) görünür; süre bitince başlık \"Alarm: Dışarıda kurulu\" olur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Kapı / pencere sensörü tanımlı ev, tüm kapı ve pencereler kapalı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:208"
+        },
+        {
+          "id": "D9.02",
+          "baslik": "Evde kipi yalnız kapı ve pencereyi izler",
+          "adimlar": [
+            "Alarm kartında \"Evde\"yi seçin."
+          ],
+          "beklenen": "Onay penceresinde \"Evde kipinde yalnız çevre (kapı ve pencere) izlenir; hareket sensörleri sayılmaz.\" yazar; \"Alarmı Kur\" ile kurulur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Hırsız alarmı tanımlı ev",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/alarm_mode_tile.dart:68"
+        },
+        {
+          "id": "D9.03",
+          "baslik": "Açık pencere varken alarm kurulamaz",
+          "adimlar": [
+            "Bir pencereyi (giriş kapısı dışında) açık bırakın.",
+            "Alarm kartında \"Dışarıda\"yı seçip kurmayı deneyin."
+          ],
+          "beklenen": "\"Kurulamaz:\" ile başlayan ve açık sensörün adını veren ileti (ör. Kurulamaz: Salon penceresi açık.) görünür; alarm kurulmaz.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Kapı / pencere sensörü tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:209"
+        },
+        {
+          "id": "D9.04",
+          "baslik": "Giriş gecikmesi ve alarmı çözme",
+          "adimlar": [
+            "Alarm kuruluyken giriş kapısını açın.",
+            "Uygulamada \"Alarmı Çöz\"e dokunun."
+          ],
+          "beklenen": "\"Giriş gecikmesi:\" ve geri sayan saniye (30 sn) ile \"sn içinde alarmı çözün.\" yazar; süre bitmeden çözülünce siren çalmaz, başlık \"Alarm kapalı\" olur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Kurulu hırsız alarmı, giriş yolu kapısı tanımlı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:210"
+        },
+        {
+          "id": "D9.05",
+          "baslik": "Alarmı çözme",
+          "adimlar": [
+            "Alarm kuruluyken kartta \"Kapalı\"yı seçin.",
+            "\"Alarm çözülsün mü?\" penceresinde \"Alarmı Çöz\"e dokunun."
+          ],
+          "beklenen": "Kartın başlığı \"Alarm kapalı\" olur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Kurulu hırsız alarmı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:208"
+        },
+        {
+          "id": "D9.06",
+          "baslik": "Alarm tetiklenince kart tetikleyen sensörü gösterir",
+          "adimlar": [
+            "Alarm kuruluyken giriş yolu dışındaki bir pencereyi açın."
+          ],
+          "beklenen": "\"Hırsız alarmı\" kartı çıkar; \"Tetikleyen:\" satırında açılan sensörün adı yazar; \"Alarmı Çöz\" ile susturulur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Kurulu hırsız alarmı",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/critical_alarm_card.dart:708"
+        }
+      ]
+    },
+    {
+      "id": "D10",
+      "baslik": "Telefona alarm bildirimi ve alarm geçmişi",
+      "maddeler": [
+        {
+          "id": "D10.01",
+          "baslik": "Arka planda alarm bildirimini açma (Android)",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" → \"Güvenlik\" bölümünde \"Arka planda alarm bildirimi\" anahtarını açın.",
+            "Telefon bildirim izni sorarsa izin verin; pil kısıtlamasını kaldırma istenirse onaylayın."
+          ],
+          "beklenen": "Kartın durumu \"Açık\" olur; durum çubuğunda \"Alarm takibi açık\" ile başlayan kalıcı bildirim durur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon, bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:220"
+        },
+        {
+          "id": "D10.02",
+          "baslik": "Bildirim izni verilmezse özellik açılmaz",
+          "adimlar": [
+            "\"Arka planda alarm bildirimi\" anahtarını açın ve bildirim iznini reddedin."
+          ],
+          "beklenen": "\"Bildirim izni verilmedi. Telefon ayarlarından bu uygulamanın bildirimlerini açın.\" yazar; takip açılmaz.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon",
+          "yeni": false,
+          "kaynak": "lib/services/alarm_watch/alarm_watch_controller.dart:148"
+        },
+        {
+          "id": "D10.03",
+          "baslik": "Pil kısıtlaması uyarısı",
+          "adimlar": [
+            "Telefonun pil ayarlarında uygulamayı kısıtlı bırakıp \"Arka planda alarm bildirimi\"ni açın."
+          ],
+          "beklenen": "Kartta \"Pil kısıtlaması açık: telefon servisi kapatabilir.\" uyarısı ve \"Pil kısıtlamasını kaldır\" düğmesi görünür.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:222"
+        },
+        {
+          "id": "D10.04",
+          "baslik": "Uygulama kapalıyken alarm bildirimi gelir",
+          "adimlar": [
+            "Arka planda alarm bildirimi açıkken uygulamayı son uygulamalar listesinden kaydırıp kapatın.",
+            "Su sensörünü ıslatın."
+          ],
+          "beklenen": "Telefona sesli ve titreşimli bildirim gelir; başlıkta \"Su baskını\", sensör adı ve ev adı yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon, bildirim açık, su sensörü tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:225"
+        },
+        {
+          "id": "D10.05",
+          "baslik": "Bildirime dokununca uygulama o evde açılır",
+          "adimlar": [
+            "Gelen alarm bildirimine dokunun."
+          ],
+          "beklenen": "Uygulama o evde açılır ve alarm kartı görünür; alarm bu arada kapandıysa \"Alarm Geçmişi\" açılır ve \"Bu alarm kapanmış.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon, gelen alarm bildirimi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:228"
+        },
+        {
+          "id": "D10.06",
+          "baslik": "Alarm kalkınca bildirim silinir, tekrar çalmaz",
+          "adimlar": [
+            "Bildirim geldikten sonra uygulamadan alarmı onaylayıp kaldırın."
+          ],
+          "beklenen": "Telefondaki alarm bildirimi kendiliğinden silinir; aynı alarm için ikinci bildirim gelmez.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon, gelen alarm bildirimi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:229"
+        },
+        {
+          "id": "D10.07",
+          "baslik": "Telefon yeniden başlayınca alarm takibi sürer",
+          "adimlar": [
+            "Arka planda alarm bildirimi açıkken telefonu kapatıp açın; uygulamayı açmayın."
+          ],
+          "beklenen": "Durum çubuğunda alarm takibi bildirimi yeniden görünür; ayar kapanmaz ve alarm bildirimleri gelmeye devam eder.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon, bildirim açık",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:43"
+        },
+        {
+          "id": "D10.08",
+          "baslik": "Oturum kapanınca takip durdu bildirimi gelir",
+          "adimlar": [
+            "Arka planda alarm bildirimi açık telefonda oturumu, başka bir telefondan \"Tüm Cihazlardan Çıkış Yap\" ile kapatın."
+          ],
+          "beklenen": "Telefona \"Alarm takibi durdu\" bildirimi gelir: \"Oturumunuz kapandı; arka plan alarm bildirimi durdu. Uygulamaya yeniden giriş yapın.\"",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon, bildirim açık, ikinci telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:230"
+        },
+        {
+          "id": "D10.09",
+          "baslik": "Vana arızası ve güvenli kip de bildirilir",
+          "adimlar": [
+            "Arka planda alarm bildirimi açıkken vana arızası oluşsun (servisle birlikte)."
+          ],
+          "beklenen": "\"Vana kapanmadı (arıza)\" ve ev adıyla bildirim gelir. Pano güvenli kipe girerse \"Pano güvenli kipe girdi\" ve ev adıyla bildirim gelir.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Android telefon; geri bildirimli vana; servis desteği",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:227"
+        },
+        {
+          "id": "D10.10",
+          "baslik": "iPhone'da arka plan bildirimi yoktur",
+          "adimlar": [
+            "iPhone'da \"Cihaz & Sistem Ayarları\" → \"Güvenlik\" bölümüne bakın."
+          ],
+          "beklenen": "Kartta \"Bu özellik yalnız Android'de. Alarm, uygulamayı açtığınızda uygulama içinde görünür.\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "iPhone",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:234"
+        },
+        {
+          "id": "D10.11",
+          "baslik": "Alarm geçmişini görme",
+          "adimlar": [
+            "\"Güvenlik ve Eylemciler\" bölümünde \"Alarm Geçmişi\"ne dokunun."
+          ],
+          "beklenen": "Geçmiş alarmlar durumlarıyla (\"Sürüyor\", \"Susturuldu\", \"Kapandı\" gibi) listelenir; hiç alarm yoksa \"Kayıtlı alarm yok\" yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Güvenlik sensörü tanımlı ev, bulut modu",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/alarm_history_page.dart:125"
+        },
+        {
+          "id": "D10.12",
+          "baslik": "Yerel modda alarm geçmişi panodan gelir",
+          "adimlar": [
+            "Yerel moddayken \"Alarm Geçmişi\"ni açın."
+          ],
+          "beklenen": "Üstte \"Yerel bağlantı: panonun son olayları gösteriliyor (internet gerekmez).\" yazar ve panonun son olayları listelenir.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Güvenlik sensörü tanımlı ev, yerel mod",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/alarm_history_page.dart:113"
+        }
+      ]
+    },
+    {
+      "id": "D11",
+      "baslik": "Aile ve paylaşım",
+      "maddeler": [
+        {
+          "id": "D11.01",
+          "baslik": "Aile üyesi davet kodu üretme",
+          "adimlar": [
+            "Üst çubukta \"Aile & Misafir Yönetimi\"ni açın (dar ekranda üç nokta menüsünde).",
+            "\"Yeni Birey / Misafir Davet Et (QR Üret)\"e dokunun; \"Erişim Paylaş & Davet Et\" penceresinde \"Aile Bireyi\" sekmesini seçin.",
+            "\"Aile Katılım Kodu Üret\"e dokunun."
+          ],
+          "beklenen": "\"AİLE KATILIM KODU\" başlığıyla AHBU- ile başlayan kod ve karekod görünür; \"24 saat geçerli\" yazar.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:243"
+        },
+        {
+          "id": "D11.02",
+          "baslik": "Davet kodunu kopyalama",
+          "adimlar": [
+            "Davet kodu görünürken \"Kodu Kopyala & Paylaş\"a dokunun."
+          ],
+          "beklenen": "Kodun \"panoya kopyalandı!\" olduğunu söyleyen ileti görünür; kod bir mesaja yapıştırılabilir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/invite_family_dialog.dart:393"
+        },
+        {
+          "id": "D11.03",
+          "baslik": "Profil penceresinden hızlı davet",
+          "adimlar": [
+            "Profil penceresinde \"Hızlı Davet Kodu / QR Üret\"e dokunun."
+          ],
+          "beklenen": "Aynı \"Erişim Paylaş & Davet Et\" penceresi açılır.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/user_profile_dialog.dart:264"
+        },
+        {
+          "id": "D11.04",
+          "baslik": "Süreli misafir kodu üretme",
+          "adimlar": [
+            "\"Erişim Paylaş & Davet Et\" penceresinde \"Süreli Misafir\" sekmesini seçin.",
+            "\"Erişim Süresi Seçin:\" altında bir süre seçin (2 saatten \"72 Saat (3 Gün)\"e kadar; \"8 Saat (Mesai)\" hazır seçili).",
+            "İsterseniz \"Misafir / Görevli Adı\" yazıp \"Geçici Misafir QR'ı Üret\"e dokunun."
+          ],
+          "beklenen": "\"GEÇİCİ MİSAFİR KODU\" ve karekod görünür; altında \"Son erişim:\" ile bitiş zamanı yazar.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:243"
+        },
+        {
+          "id": "D11.05",
+          "baslik": "Kod ile eve katılma",
+          "adimlar": [
+            "Davet edilen kişi kendi telefonunda \"Kod ile Bir Eve Katıl\"a dokunsun (başka evi varsa profil penceresinden \"Başka Bir Eve Katıl (Kod İle)\").",
+            "\"Bir Eve Katıl\" penceresinde \"Davet / Devir Kodu\" alanına kodu yazıp \"Devam\"a dokunsun.",
+            "\"Katılımı Onayla\" ekranında \"Rolünüz\" ve \"Kod geçerliliği\" satırlarını kontrol edip \"Eve Katıl\"a dokunsun."
+          ],
+          "beklenen": "\"Eve başarıyla katıldınız!\" yazar; ev listede görünür ve cihazlar kontrol edilebilir.",
+          "rol_notu": "aile üyesi, misafir",
+          "on_kosul": "İkinci bir telefon/hesap, geçerli davet kodu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:247"
+        },
+        {
+          "id": "D11.06",
+          "baslik": "Karekodla eve katılma",
+          "adimlar": [
+            "Davet edilen kişi ana ekranın üst çubuğundaki \"Karekod Tara (Cihaz / Eve Katıl)\" simgesine dokunsun.",
+            "Ev sahibinin ekranındaki davet karekodunu okutsun."
+          ],
+          "beklenen": "Katılım penceresi kod dolu olarak açılır; \"Eve Katıl\" ile katılım tamamlanır.",
+          "rol_notu": "aile üyesi, misafir",
+          "on_kosul": "İkinci bir telefon/hesap",
+          "yeni": false,
+          "kaynak": "lib/ui/dashboard/dashboard_app_bar.dart:190"
+        },
+        {
+          "id": "D11.07",
+          "baslik": "Kullanılmış ya da süresi dolmuş kod kabul edilmez",
+          "adimlar": [
+            "Başka biri tarafından kullanılmış bir davet kodunu \"Bir Eve Katıl\" penceresine yazıp \"Devam\"a dokunun."
+          ],
+          "beklenen": "\"Bu kodun süresi dolmuş veya daha önce kullanılmış. Yeni bir kod isteyin.\" yazar.",
+          "rol_notu": "aile üyesi, misafir",
+          "on_kosul": "Kullanılmış davet kodu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:249"
+        },
+        {
+          "id": "D11.08",
+          "baslik": "Aynı davet kodunu yeniden girmek güvenlidir",
+          "adimlar": [
+            "Bir davet koduyla eve katılın.",
+            "Aynı kodu \"Bir Eve Katıl\" penceresine yeniden yazıp devam edin."
+          ],
+          "beklenen": "Kodu zaten kullandığınızı ve dairenin üyesi olduğunuzu söyleyen ileti görünür; hata çıkmaz, ev seçilir ve ev listenize gelir.",
+          "rol_notu": "aile üyesi, misafir",
+          "on_kosul": "Kendi kullandığınız davet kodu",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:39"
+        },
+        {
+          "id": "D11.09",
+          "baslik": "Bekleyen daveti iptal etme",
+          "adimlar": [
+            "\"Aile & Misafir Yönetimi\" sayfasında \"Bekleyen davetler\" bölümündeki bir davetin \"İptal Et\" düğmesine dokunun.",
+            "\"Davet iptal edilsin mi?\" penceresinde \"İptal Et\"e dokunun."
+          ],
+          "beklenen": "\"Davet iptal edildi.\" yazar; o kod artık kullanılamaz.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Kullanılmamış bir davet kodu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:253"
+        },
+        {
+          "id": "D11.10",
+          "baslik": "Davet penceresinden kodu hemen iptal etme",
+          "adimlar": [
+            "Kod üretildikten sonra aynı pencerede \"Bu daveti iptal et\"e dokunup onaylayın."
+          ],
+          "beklenen": "\"Davet iptal edildi.\" yazar; kod geçersiz olur.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/invite_family_dialog.dart:604"
+        },
+        {
+          "id": "D11.11",
+          "baslik": "Bir evde en çok 20 açık davet olur",
+          "adimlar": [
+            "Hiçbiri kullanılmamışken art arda 21. davet kodunu üretmeyi deneyin."
+          ],
+          "beklenen": "21. kod üretilmez; evde çok fazla aktif davet olduğunu ve kullanılmayanların süresinin dolmasını beklemenizi söyleyen ileti görünür.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:244"
+        },
+        {
+          "id": "D11.12",
+          "baslik": "Üye listesi ve misafirin kalan süresi",
+          "adimlar": [
+            "\"Aile & Misafir Yönetimi\" sayfasında \"Kayıtlı Kişiler & Yetkiler\" listesine bakın."
+          ],
+          "beklenen": "Kişiler \"EV SAHİBİ\", \"AİLE ÜYESİ\", \"SÜRELİ MİSAFİR\" etiketleriyle görünür; misafir kartında kalan süre (\"kaldı\") ve \"Erişim bitişi:\" yazar.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Evde aile üyesi ve misafir",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/family_members_page.dart:367"
+        },
+        {
+          "id": "D11.13",
+          "baslik": "Aile üyesini evden çıkarma",
+          "adimlar": [
+            "Aile üyesinin kartındaki \"Yetkiyi İptal Et\" (çöp kutusu) simgesine dokunun.",
+            "\"Üyeyi Evden Çıkar\" penceresinde \"Yetkiyi İptal Et\"e dokunun."
+          ],
+          "beklenen": "Kişinin \"kullanıcısının yetkisi iptal edildi.\" olduğunu söyleyen ileti görünür; çıkarılan kişinin uygulamasında ev artık görünmez.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Evde aile üyesi, ikinci telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:252"
+        },
+        {
+          "id": "D11.14",
+          "baslik": "Misafir yetkisini iptal etme",
+          "adimlar": [
+            "Misafirin kartındaki \"Yetkiyi İptal Et\" simgesine dokunun.",
+            "\"Misafir Yetkisini İptal Et\" penceresinde \"Yetkiyi İptal Et\"e dokunun."
+          ],
+          "beklenen": "Misafirin erişimi hemen biter; listeden kalkar.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Evde misafir",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/family_members_page.dart:265"
+        },
+        {
+          "id": "D11.15",
+          "baslik": "Ev sahibi kaldırılamaz",
+          "adimlar": [
+            "\"Kayıtlı Kişiler & Yetkiler\" listesinde kendi kartınıza (\"Sen\") bakın."
+          ],
+          "beklenen": "Ev sahibi kartında \"Yetkiyi İptal Et\" simgesi yoktur.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:252"
+        },
+        {
+          "id": "D11.16",
+          "baslik": "Üye çıkarılınca yerel moddaki ev sahibi telefonu çalışmaya devam eder",
+          "adimlar": [
+            "Ev sahibinin telefonunu yerel moda alın ve bir lambayı kontrol edin.",
+            "Başka bir telefondan (ya da bulut moduna dönüp) bir aile üyesini evden çıkarın; birkaç saniye bekleyin.",
+            "Yerel modda lambayı yeniden açıp kapatın."
+          ],
+          "beklenen": "Ev sahibinin telefonu yeni anahtarı kendiliğinden alır, lamba anahtar sorulmadan kontrol edilir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Tek panolu ev, Wi-Fi ile bağlı ve çevrimiçi pano, evde aile üyesi",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:255"
+        },
+        {
+          "id": "D11.17",
+          "baslik": "Erişim bitince pano yeni bulut kimliğiyle bağlı kalır",
+          "adimlar": [
+            "Bir aile üyesini evden çıkarın.",
+            "Bir dakika sonra bulut modunda bir lambayı açıp kapatın."
+          ],
+          "beklenen": "Pano çevrimiçi kalır (yenilenen kimliği kendisi alır) ve lamba kontrol edilir; çıkarılan kişi eve erişemez.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Tek panolu ev, pano v1.3.0+ ve çevrimiçi",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:259"
+        },
+        {
+          "id": "D11.18",
+          "baslik": "Aile üyesi evden kendisi ayrılır",
+          "adimlar": [
+            "Aile üyesi hesabıyla profil penceresini açın, \"Evden Ayrıl\"a dokunun.",
+            "\"evinden ayrılacaksınız\" diye uyaran onay penceresinde \"Evden Ayrıl\"a dokunun."
+          ],
+          "beklenen": "\"evinden ayrıldınız.\" ile biten ileti görünür; ev listeden kalkar, cihazlara erişim biter.",
+          "rol_notu": "aile üyesi",
+          "on_kosul": "Bir evde aile üyesi olan hesap",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:262"
+        },
+        {
+          "id": "D11.19",
+          "baslik": "Misafir evden kendisi ayrılır",
+          "adimlar": [
+            "Misafir hesabıyla profil penceresinde \"Evden Ayrıl\"a dokunup onaylayın."
+          ],
+          "beklenen": "\"evinden ayrıldınız.\" ile biten ileti görünür; ev listeden kalkar.",
+          "rol_notu": "misafir",
+          "on_kosul": "Süresi dolmamış misafir hesabı",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:13"
+        },
+        {
+          "id": "D11.20",
+          "baslik": "Ayrılan kişi eski koduyla geri dönemez",
+          "adimlar": [
+            "Evden ayrıldıktan sonra daha önce kullandığınız davet kodunu yeniden girin."
+          ],
+          "beklenen": "Kod kabul edilmez; yeniden katılmak için ev sahibinden yeni davet gerekir.",
+          "rol_notu": "aile üyesi, misafir",
+          "on_kosul": "Evden yeni ayrılmış hesap",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:263"
+        },
+        {
+          "id": "D11.21",
+          "baslik": "Ev sahibinde Evden Ayrıl düğmesi yoktur",
+          "adimlar": [
+            "Ev sahibi hesabıyla profil penceresini açın."
+          ],
+          "beklenen": "\"Evden Ayrıl\" düğmesi görünmez; ev sahibi ayrılmak için önce evi devretmelidir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "lib/ui/pages/family/leave_home_flow.dart:10"
+        }
+      ]
+    },
+    {
+      "id": "D12",
+      "baslik": "Ev devri ve servise geçici erişim",
+      "maddeler": [
+        {
+          "id": "D12.01",
+          "baslik": "Devir kodu üretme",
+          "adimlar": [
+            "\"Aile & Misafir Yönetimi\" sayfasında \"Daireyi Devret (Mülkiyet Transferi)\"e dokunun.",
+            "\"Yeni Sahip\" alanına yeni sahibin hesabındaki e-posta ya da telefonu yazıp \"48 Saatlik Devir Kodu & QR Üret\"e dokunun.",
+            "\"Daire Devri Onayı\" penceresinde \"DEVRET\" yazıp \"Devri Başlat\"a dokunun."
+          ],
+          "beklenen": "\"DEVİR KODU (48 saat geçerli)\" ve karekod bir kez gösterilir; \"Kodu Kopyala\" ile kopyalanabilir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Yeni sahip için ikinci bir hesap",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:267"
+        },
+        {
+          "id": "D12.02",
+          "baslik": "Yeni sahip daireyi devralır",
+          "adimlar": [
+            "Yeni sahip \"Bir Eve Katıl\" penceresine devir kodunu yazıp \"Devam\"a dokunsun.",
+            "\"Daire Devrini Onayla\" ekranında uyarıyı okuyup \"DEVRAL\" yazsın.",
+            "\"Daireyi Devral\"a dokunsun."
+          ],
+          "beklenen": "\"Daire mülkiyeti başarıyla devralındı!\" yazar; yeni sahip evi ev sahibi olarak görür, eski sahip ve tüm üyeler evi artık göremez.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Devir kodu, yeni sahibin hesabı (ikinci telefon)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:267"
+        },
+        {
+          "id": "D12.03",
+          "baslik": "Devri iptal etme",
+          "adimlar": [
+            "Devir kodu üretildikten sonra devir ekranında \"Devir İşlemini İptal Et\"e dokunun."
+          ],
+          "beklenen": "\"Daire devir işlemi iptal edildi.\" yazar; kod artık kullanılamaz.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bekleyen devir",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:268"
+        },
+        {
+          "id": "D12.04",
+          "baslik": "Devir kodunu yalnız yazılan hesap kabul edebilir",
+          "adimlar": [
+            "Devir kodunu, \"Yeni Sahip\" alanına yazılmayan başka bir hesapla girmeyi deneyin."
+          ],
+          "beklenen": "Devir kabul edilmez; kod ekranında \"Devri yalnızca bu hesap kabul edebilir.\" notu bulunur.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bekleyen devir, üçüncü bir hesap",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/transfer_ownership_dialog.dart:901"
+        },
+        {
+          "id": "D12.05",
+          "baslik": "Devir kodunu yeniden girmek güvenlidir",
+          "adimlar": [
+            "Devri tamamlayan yeni sahip aynı devir kodunu \"Bir Eve Katıl\" penceresine yeniden yazıp \"Devam\"a dokunsun."
+          ],
+          "beklenen": "Önizlemede \"Bu daireyi zaten devraldınız.\" yazar; onaylanırsa dairenin sahipliğinin zaten size devredildiğini söyleyen ileti görünür ve ev seçilir.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Tamamlanmış devir",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:269"
+        },
+        {
+          "id": "D12.06",
+          "baslik": "Devirden sonra eski alarmlar görünmez",
+          "adimlar": [
+            "Daha önce alarm kaydı olan bir evi devralın.",
+            "Yeni sahip olarak \"Alarm Geçmişi\"ni açın."
+          ],
+          "beklenen": "Yalnız devirden sonraki alarmlar ve hâlâ süren alarmlar görünür; önceki ailenin alarm geçmişi görünmez.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Alarm kaydı olan ev ve tamamlanmış devir",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:271"
+        },
+        {
+          "id": "D12.07",
+          "baslik": "Servis için geçici PIN üretme",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" → \"Güvenlik\" bölümünde \"Yetkili Servis İçin Geçici PIN\" kartını bulun.",
+            "\"6 Haneli Servis PIN'i Üret\"e dokunun."
+          ],
+          "beklenen": "6 haneli PIN, \"Kalan süre\" ve \"PIN'i gizle\" görünür; \"Bu PIN yalnızca şimdi gösterilir.\" uyarısı yazar (2 saat, tek kullanım).",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:275"
+        },
+        {
+          "id": "D12.08",
+          "baslik": "Yeni PIN eskisini geçersiz kılar",
+          "adimlar": [
+            "PIN üretildikten sonra \"Yeni PIN Üret\"e dokunun.",
+            "\"Yeni PIN üretilsin mi?\" penceresinde \"Yeni PIN Üret\"e dokunun."
+          ],
+          "beklenen": "Yeni PIN gösterilir; kullanılmamış eski PIN artık çalışmaz.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/settings/service_pin_card.dart:111"
+        },
+        {
+          "id": "D12.09",
+          "baslik": "Servis erişimini kapatma",
+          "adimlar": [
+            "Servis PIN'iyle giriş yaptıktan sonra kartta \"Açık servis oturumları\" listesine bakın.",
+            "\"Servis erişimini kapat\"a, sonra \"Servis erişimi kapatılsın mı?\" penceresinde \"Erişimi Kapat\"a dokunun."
+          ],
+          "beklenen": "\"Servis erişimi kapatıldı\" ile başlayan ileti görünür; servis personelinin oturumu sonlanır, kullanılmamış PIN'ler iptal olur.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Servis PIN'iyle açılmış bir oturum (servis personeli ya da ikinci telefon)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:276"
+        }
+      ]
+    },
+    {
+      "id": "D13",
+      "baslik": "Ayarlar",
+      "maddeler": [
+        {
+          "id": "D13.01",
+          "baslik": "Ayarlar sayfasının bölümleri",
+          "adimlar": [
+            "Üst çubuktaki \"Cihaz Ayarları\" simgesine dokunun."
+          ],
+          "beklenen": "\"Cihaz & Sistem Ayarları\" sayfasında \"Güvenlik\", \"Görünüm\", \"Cihaz\", \"Otomasyon\", \"Aile\" ve \"Hakkında\" bölümleri görünür.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:283"
+        },
+        {
+          "id": "D13.02",
+          "baslik": "Ayarlarda rolünüz görünür",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" sayfasında \"Kullanıcı Hesabı\" kartına bakın."
+          ],
+          "beklenen": "\"Bu dairedeki rolünüz\" satırında rolünüz yazar.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:169"
+        },
+        {
+          "id": "D13.03",
+          "baslik": "Ayarlardan tema değiştirme",
+          "adimlar": [
+            "\"Görünüm\" bölümündeki \"Görünüm & Tema Modu\" kartında \"Açık\"ı seçin.",
+            "Sonra \"Koyu\"yu, ardından \"Sistem\"i seçin."
+          ],
+          "beklenen": "Uygulama renkleri hemen açık / koyu olur; \"Sistem\" seçilince telefonun ayarını izler.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:283"
+        },
+        {
+          "id": "D13.04",
+          "baslik": "Sistem Doktoru'nu çalıştırma",
+          "adimlar": [
+            "\"Cihaz\" bölümündeki \"Sistem Doktoru (Teşhis & Analiz)\" kartında \"Sistem Doktorunu Çalıştır\"a dokunun."
+          ],
+          "beklenen": "\"1. Bulut sunucu ve güvenli bağlantı\", \"2. Ev modemi ve internet\", \"3. Pano gücü ve donanım\" katmanları \"Sağlıklı\", \"Uyarı\" ya da \"Sorun var\" olarak işaretlenir; altta \"Ne yapmalıyım?\" önerileri ve \"Testi Yeniden Çalıştır\" düğmesi bulunur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Bulut modu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:287"
+        },
+        {
+          "id": "D13.05",
+          "baslik": "Pano kapalıyken Sistem Doktoru sorunu gösterir",
+          "adimlar": [
+            "Panonun elektriğini kesip birkaç dakika bekleyin.",
+            "\"Sistem Doktorunu Çalıştır\"a dokunun."
+          ],
+          "beklenen": "\"3. Pano gücü ve donanım\" katmanı \"Sağlıklı\" dışında (\"Sorun var\" ya da \"Uyarı\") işaretlenir; \"Ne yapmalıyım?\" bölümünde yapılacaklar yazar.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Panonun elektriğini kesebilmek",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:287"
+        },
+        {
+          "id": "D13.06",
+          "baslik": "Sunucu-pano kesintisinde Wi-Fi önerilmez",
+          "adimlar": [
+            "Sunucu ile panolar arasında geçici bir kesinti varken Sistem Doktoru'nu çalıştırın."
+          ],
+          "beklenen": "Bulut bağlantısında geçici sorun olduğu yazar; Wi-Fi ayarı ya da sigorta önerilmez, birkaç dakika sonra yeniden denemeniz istenir.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Sunucu tarafında geçici kesinti (bilerek oluşturulamaz; denk gelirse kontrol edin)",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:288"
+        },
+        {
+          "id": "D13.07",
+          "baslik": "Pano değişimi (güvenlik ayarı olmayan evde)",
+          "adimlar": [
+            "\"Cihaz\" bölümündeki \"Felaket Kurtarma & Pano Değişimi\" kartında \"Pano Değişimi Sihirbazını Aç\"a dokunun.",
+            "\"1. Değiştirilecek (eski) pano\"yu seçin; \"Yeni pano kimliği\" ve \"Kurulum PIN'i\" alanlarını yeni panonun etiketinden doldurun (ya da \"Etiketi kamerayla oku\").",
+            "\"Eski Panonun Ayarlarını Yeni Panoya Aktar\"a, sonra \"Pano değişimi onayı\" penceresinde \"Panoyu Değiştir\"e dokunun."
+          ],
+          "beklenen": "\"Pano değişimi tamamlandı\" yazar ve kaç kanalın aktarıldığı (\"kanal yeni panoya aktarıldı.\") görünür; kanal adları, kurallar ve panjur süreleri yeni panoya geçer.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Yeni bir pano ve etiketi; su/gaz sensörü ve vanası olmayan ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:289"
+        },
+        {
+          "id": "D13.08",
+          "baslik": "Güvenlik ayarlı evde pano değişimini servis yapar",
+          "adimlar": [
+            "Su/gaz sensörü ya da vanası olan evde \"Pano Değişimi Sihirbazını Aç\" ile değişimi deneyin."
+          ],
+          "beklenen": "\"Bu evde pano değişimini yetkili servis personeli yapmalıdır.\" yazar; değişim yapılmaz. Altında servis PIN'i üretip servise vermenizi söyleyen yönerge ve \"Anladım\" düğmesi bulunur.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Su/gaz sensörü ya da vanası tanımlı ev, yeni pano etiketi",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:19"
+        }
+      ]
+    },
+    {
+      "id": "D14",
+      "baslik": "Yasal metinler",
+      "maddeler": [
+        {
+          "id": "D14.01",
+          "baslik": "Ayarlardan yasal metinlere ulaşma",
+          "adimlar": [
+            "\"Cihaz & Sistem Ayarları\" sayfasının en altındaki \"Hakkında\" bölümünde \"Yasal Metinler\" kartına dokunun."
+          ],
+          "beklenen": "\"Yasal Metinler\" sayfasında \"Kullanıcı Sözleşmesi ve Son Kullanıcı Lisans Koşulları\", \"Gizlilik Politikası ve KVKK Aydınlatma Metni\" ve \"Açık Kaynak Lisansları\" bulunur; her biri dokununca açılır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:285"
+        },
+        {
+          "id": "D14.02",
+          "baslik": "Profil penceresinden yasal metinler",
+          "adimlar": [
+            "Profil penceresinde \"Hakkında\" altındaki \"Yasal Metinler\"e dokunun."
+          ],
+          "beklenen": "Aynı \"Yasal Metinler\" sayfası açılır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:101"
+        },
+        {
+          "id": "D14.03",
+          "baslik": "Giriş yapmadan yasal metinleri okuma",
+          "adimlar": [
+            "Oturum kapalıyken giriş ekranının en altındaki \"Kullanıcı Sözleşmesi\" bağlantısına dokunun.",
+            "Geri dönüp \"Gizlilik ve KVKK\" bağlantısına dokunun."
+          ],
+          "beklenen": "İki metin de giriş yapmadan açılır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:87"
+        },
+        {
+          "id": "D14.04",
+          "baslik": "Taslak metinde uyarı bandı görünür",
+          "adimlar": [
+            "\"Yasal Metinler\"den \"Kullanıcı Sözleşmesi ve Son Kullanıcı Lisans Koşulları\"nı açın."
+          ],
+          "beklenen": "Metnin başında sürüm bilgisi ve \"TASLAK: Bu metin henüz kesinleşmedi; yürürlüğe girmeden önce değişebilir.\" uyarısı görünür.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:305"
+        },
+        {
+          "id": "D14.05",
+          "baslik": "Taslak sözleşmede onay ekranı çıkmaz",
+          "adimlar": [
+            "Uygulamaya bulut modunda giriş yapın."
+          ],
+          "beklenen": "Sözleşme bugün taslak olduğu için tam ekran \"Kullanıcı Sözleşmesi\" onay sayfası çıkmaz; doğrudan ana ekran açılır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:93"
+        },
+        {
+          "id": "D14.06",
+          "baslik": "Kesinleşen sözleşmede onay ekranı çıkar",
+          "adimlar": [
+            "Sözleşme kesinleştikten sonra, güncel sürümü onaylamamış hesapla bulut modunda giriş yapın.",
+            "Telefonun geri tuşuna basın."
+          ],
+          "beklenen": "Tam ekran \"Kullanıcı Sözleşmesi\" sayfası açılır; geri tuşu kapatmaz. \"Kabul Ediyorum\" ile ana ekrana geçilir, \"Çıkış Yap\" ile oturum kapanır.",
+          "rol_notu": "hepsi",
+          "on_kosul": "Sözleşmenin kesinleşmiş olması (bugün taslak; şimdilik denenemez)",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:93"
+        }
+      ]
+    },
+    {
+      "id": "D15",
+      "baslik": "Misafir ve aile üyesi sınırları",
+      "maddeler": [
+        {
+          "id": "D15.01",
+          "baslik": "Misafire hızlı senaryolar görünmez",
+          "adimlar": [
+            "Misafir hesabıyla evin ana ekranını açın."
+          ],
+          "beklenen": "\"Hızlı Senaryolar\" bölümü ve açık lamba bandı görünmez; lamba ve panjurlar kullanılabilir.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:160"
+        },
+        {
+          "id": "D15.02",
+          "baslik": "Misafir alarmı onaylayamaz",
+          "adimlar": [
+            "Su alarmı sürerken misafir hesabıyla alarm kartına bakın."
+          ],
+          "beklenen": "\"Sesi Sustur\" ve \"Alarmı Onayla\" düğmeleri yoktur; kartta \"Alarmı ev sahibi ya da ev üyeleri onaylayabilir.\" yazar.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı, süren su alarmı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:217"
+        },
+        {
+          "id": "D15.03",
+          "baslik": "Misafir vanayı kapatabilir ama açamaz",
+          "adimlar": [
+            "Misafir hesabıyla vana kartında \"Vanayı Kapat\"ı deneyin.",
+            "Vana kapandıktan sonra kartı yeniden inceleyin."
+          ],
+          "beklenen": "Vana kapanır; açma düğmesi yoktur, kartta \"Vanayı ev sahibi ya da ev üyeleri açabilir.\" yazar.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı, su vanası tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:57"
+        },
+        {
+          "id": "D15.04",
+          "baslik": "Misafir hırsız alarmını kuramaz",
+          "adimlar": [
+            "Misafir hesabıyla \"Güvenlik ve Eylemciler\" bölümündeki alarm kartına bakın."
+          ],
+          "beklenen": "\"Kapalı\", \"Evde\", \"Dışarıda\" seçenekleri görünmez; alarm tetiklenmişse kartta \"Alarmı ev sahibi ya da ev üyeleri çözebilir.\" yazar.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı, hırsız alarmı tanımlı ev",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:60"
+        },
+        {
+          "id": "D15.05",
+          "baslik": "Misafir mod değiştiremez",
+          "adimlar": [
+            "Misafir hesabıyla üst çubuktaki üç nokta menüsünü açın."
+          ],
+          "beklenen": "\"Bulut Modu (yerel moda geç)\" seçeneği yoktur.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:175"
+        },
+        {
+          "id": "D15.06",
+          "baslik": "Misafir için ayarlar salt okunurdur",
+          "adimlar": [
+            "Misafir hesabıyla \"Cihaz & Sistem Ayarları\"nı açın."
+          ],
+          "beklenen": "Üstte \"Misafir erişimi: ayarlar salt-okunurdur. Cihaz ayarlarını yalnızca ev sahibi ve aile üyeleri değiştirebilir.\" yazar.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:73"
+        },
+        {
+          "id": "D15.07",
+          "baslik": "Misafir çocuk kilidini değiştiremez",
+          "adimlar": [
+            "Misafir hesabıyla \"Çocuk Kilidi\" kartına bakın."
+          ],
+          "beklenen": "Kilidin durumu görünür ama anahtar değiştirilemez; kartta \"Bu ayarı değiştirme yetkiniz yok\" yazar.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:62"
+        },
+        {
+          "id": "D15.08",
+          "baslik": "Misafir alarm bildirimini açamaz",
+          "adimlar": [
+            "Misafir hesabıyla Android'de \"Cihaz & Sistem Ayarları\" → \"Güvenlik\" bölümüne bakın."
+          ],
+          "beklenen": "\"Arka planda alarm bildirimi\" kartı yoktur; misafire alarm bildirimi gelmez.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı, Android telefon",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:65"
+        },
+        {
+          "id": "D15.09",
+          "baslik": "Misafire Sistem Doktoru açık değildir",
+          "adimlar": [
+            "Misafir hesabıyla ayarlarda ve üst çubuk menüsünde Sistem Doktoru'nu arayın."
+          ],
+          "beklenen": "Sistem Doktoru misafire sunulmaz.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:287"
+        },
+        {
+          "id": "D15.10",
+          "baslik": "Misafirin süresi bitince erişim kapanır",
+          "adimlar": [
+            "2 saatlik misafir koduyla katılın ve süre bitene kadar bekleyin (uygulama açık kalsın)."
+          ],
+          "beklenen": "\"Erişiminiz sona erdi\" penceresi çıkar; ana ekranda \"Erişim süreniz doldu\" sayfası, \"Daire listesini yenile\" ve (başka eviniz varsa) \"Başka daireye geç\" düğmeleri görünür.",
+          "rol_notu": "misafir",
+          "on_kosul": "2 saatlik misafir kodu",
+          "yeni": false,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:67"
+        },
+        {
+          "id": "D15.11",
+          "baslik": "Telefonun saati misafir süresini değiştirmez",
+          "adimlar": [
+            "2 saatlik misafir koduyla katılın.",
+            "Telefonun saatini elle 3 saat ileri alın ve uygulamayı açın."
+          ],
+          "beklenen": "Erişim bitmez; cihazlar görünmeye ve kontrol edilmeye devam eder. Erişim sunucunun saatine göre, kodun üretildiği andan 2 saat sonra biter.",
+          "rol_notu": "misafir",
+          "on_kosul": "Misafir hesabı; telefon saatini elle değiştirebilmek",
+          "yeni": true,
+          "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:37"
+        },
+        {
+          "id": "D15.12",
+          "baslik": "Aile üyesi ev sahibi ayarlarını göremez",
+          "adimlar": [
+            "Aile üyesi hesabıyla \"Cihaz & Sistem Ayarları\"nı açın."
+          ],
+          "beklenen": "Üstte \"Aile üyesi hesabı: panjur kalibrasyonu, davet ve servis PIN'i gibi bazı ayarları yalnızca ev sahibi değiştirebilir.\" yazar; \"Kanallar ve Panjurlar\", \"Yetkili Servis İçin Geçici PIN\" ve pano değişimi kartları görünmez.",
+          "rol_notu": "aile üyesi",
+          "on_kosul": "Aile üyesi hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:76"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,933 @@
+{
+  "rol": "super",
+  "baslik": "Süper Kullanıcı Deneme Listesi",
+  "aciklama": "Bu liste yalnız süper kullanıcının yapabildiği işleri kapsar. Süper kullanıcı servis sorumlusunun yapabildiği her işi de yapabilir; o işler Servis Sorumlusu deneme listesindedir ve burada tekrar edilmez.",
+  "bolumler": [
+    {
+      "id": "U1",
+      "baslik": "Servis yazılımı: giriş, kart kaydı ve etiket",
+      "maddeler": [
+        {
+          "id": "U1.01",
+          "baslik": "Süper kullanıcı olarak servis yazılımına giriş",
+          "adimlar": [
+            "Servis yazılımını açın (ev_otomasyon_sistemi.bat).",
+            "Üstteki \"Sunucuya Giriş\" düğmesine basın.",
+            "Süper kullanıcı e-posta ve parolanızı yazıp \"Giriş Yap\"a basın.",
+            "\"2. Karekod Üret & Etiket Bas (Envanter)\" sekmesine geçin."
+          ],
+          "beklenen": "Oturum şeridinde e-postanızın yanında \"süper kullanıcı\" yazar, \"Sunucuya Giriş\" düğmesi \"Hesap Değiştir\" olur. 2. sekmede \"SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\", \"Askıya Al (Kilit)\", \"Aktif Et (Stok)\", \"Envanterden Sil\" ve \"Etiketi Yeniden Bas (USB)\" düğmeleri basılabilir; \"Servis sorumlusu olarak giriş yaptınız\" uyarı notu görünmez.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Süper kullanıcı hesabı (e-posta + parola), internet bağlantısı",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1136; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:118"
+        },
+        {
+          "id": "U1.02",
+          "baslik": "Karttan MAC okuma",
+          "adimlar": [
+            "Kartı USB-C veri kablosuyla bilgisayara takın.",
+            "1. sekmede \"COM Port\" kutusundan kartı seçin (liste boşsa \"Portları Yenile\").",
+            "2. sekmede \"Karttan MAC Oku\" düğmesine basın."
+          ],
+          "beklenen": "\"MAC Okundu\" penceresi çıkar; \"1. Donanım MAC\" ve \"2. Cihaz Seri No (UID)\" kutuları kendiliğinden dolar. UID, AHBU-S3- ve MAC adresinin son 6 hanesinden oluşur (ör. AHBU-S3-DD8754).",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "USB'ye takılı boş (yeni) kart, USB-C veri kablosu",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:122; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2383"
+        },
+        {
+          "id": "U1.03",
+          "baslik": "Kartı sunucu envanterine kaydetme",
+          "adimlar": [
+            "2. sekmede PIN kutusunun dolu olduğunu görün (isterseniz \"Rastgele PIN Üret\").",
+            "\"SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\" düğmesine basın.",
+            "\"3. Cihaz Provizyonu (USB / Wi-Fi)\" sekmesine bakın."
+          ],
+          "beklenen": "\"Cihaz Envantere Eklendi!\" penceresinde Sıra No, Cihaz UID ve MAC yazar; sağda etiket önizlemesi belirir; envanter tablosunda kart IN_STOCK durumunda görünür; 3. sekmede kartın adı ve \"Provizyon bekliyor\" yazar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "MAC'i okunmuş, daha önce kaydedilmemiş kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:131; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2479"
+        },
+        {
+          "id": "U1.04",
+          "baslik": "Aynı kart ikinci kez kaydedilemez",
+          "adimlar": [
+            "Envanterde zaten kayıtlı kartı USB'ye takıp \"Karttan MAC Oku\"ya basın.",
+            "\"SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\" düğmesine basın."
+          ],
+          "beklenen": "\"Mükerrer Cihaz Uyarısı\" penceresi çıkar; yeni kayıt açılmaz, yeni PIN ya da etiket üretilmez.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Envanterde zaten kayıtlı bir kart; bellekte provizyonu bitmemiş başka kayıt yok",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:473; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2443"
+        },
+        {
+          "id": "U1.05",
+          "baslik": "Önceki kart bitmeden yeni kayıt uyarısı",
+          "adimlar": [
+            "Bir kartı kaydedin, firmware yüklemeyin.",
+            "İkinci kartı takıp \"Karttan MAC Oku\" ve \"SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\" düğmelerine basın.",
+            "Çıkan soruya \"Hayır\" deyin."
+          ],
+          "beklenen": "\"Önceki Cihaz Tamamlanmadı\" sorusu ilk kartın PIN'inin ve anahtarının bir daha gösterilemeyeceğini söyler; \"Hayır\" deyince yeni kayıt yapılmaz, ilk kartın kaydı ve etiketi ekranda kalır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "İki yeni kart; ilki kaydedilmiş ama provizyonu bitmemiş",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:477; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2419"
+        },
+        {
+          "id": "U1.06",
+          "baslik": "Etiketin içeriği",
+          "adimlar": [
+            "Kayıttan sonra 2. sekmede sağdaki etiket önizlemesine bakın."
+          ],
+          "beklenen": "Etikette iki karekod vardır: solda \"1) Daireye bağla\" (altında \"Karekodu uygulamayla okutun\"), sağda \"2) Kurulum Wi-Fi'sine bağlan\" (altında \"Telefon kamerasıyla okutun, ağa bağlanın\"). Ortada UID, \"KURULUM PIN\", kurulum ağı adı (AHBU-XXXXXX), ağ parolası ve \"MAC ADRESİ\" yazar; altta kırmızı bantta \"GİZLİ: Bu etiket yalnızca cihaz üzerinde/elde saklanır\" uyarısı vardır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kaydı yeni yapılmış kart (etiket önizlemesi ekranda)",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:148; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:465"
+        },
+        {
+          "id": "U1.07",
+          "baslik": "Etiketi PNG olarak kaydetme",
+          "adimlar": [
+            "Önizlemenin altındaki \"Etiketi Kaydet (PNG)\" düğmesine basın.",
+            "Bir klasör seçip kaydedin.",
+            "Dosyayı açıp bakın; işiniz bitince silin."
+          ],
+          "beklenen": "\"Kaydedildi\" penceresi dosyanın yerini gösterir; PNG dosyası önizlemedeki etiketin aynısıdır. Siz kaydetmedikçe araç diske etiket yazmaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Etiket önizlemesi ekranda",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:143; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2529"
+        },
+        {
+          "id": "U1.08",
+          "baslik": "Etiketi yazdırma",
+          "adimlar": [
+            "Önizlemenin altındaki \"Yazdır (Barkod / Termal)\" düğmesine basın (etiket kaydedilmemişse önce kaydetme penceresi açılır).",
+            "Yazıcı ayarında kâğıt boyutunu etiketle aynı seçin, sayfaya sığdırma/büyütme seçeneğini kapatın.",
+            "Basılan etiketteki iki karekodu telefonla okutun."
+          ],
+          "beklenen": "\"Yazıcıya Gönderildi\" penceresi çıkar; etiket 100 x 50 mm basılır ve iki karekod da telefonla okunur.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Etiket yazıcısı (100 x 50 mm etiket kâğıdı) varsayılan yazıcı olarak kurulu",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:145; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2549"
+        },
+        {
+          "id": "U1.09",
+          "baslik": "Etiketteki 1. karekod Android'de uygulamayı açar",
+          "adimlar": [
+            "Android telefonun kendi kamerasını açın.",
+            "Kamerayı etiketin solundaki \"1) Daireye bağla\" karekoduna tutun.",
+            "Çıkan bağlantıya dokunun."
+          ],
+          "beklenen": "Tarayıcı yerine AHBU uygulaması açılır ve etiketteki kartla cihaz ekleme (sahiplenme) penceresi gelir. Karekodun içindeki adres, sunucu ayarı ne olursa olsun her zaman evotomasyon.gudeteknoloji.com.tr ile başlar. (iPhone'da bu henüz çalışmaz.)",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "AHBU uygulamasının sürüm derlemesi kurulu Android telefon; 2026-10-09 sonrası basılmış etiket",
+          "yeni": true,
+          "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:62; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:772"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "baslik": "Servis yazılımı: firmware yükleme (v1.3.2)",
+      "maddeler": [
+        {
+          "id": "U2.01",
+          "baslik": "Seçili firmware sürümü v1.3.2",
+          "adimlar": [
+            "Servis yazılımını açıp \"1. Firmware Yükleyici (Flasher)\" sekmesine geçin.",
+            "\"Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)\" seçeneğinin işaretli olduğunu görün."
+          ],
+          "beklenen": "Seçeneğin yanındaki sürüm yazısında v1.3.2, \"Dosya\" kutusunda ...\\firmware_releases\\v1.3.2\\firmware_combined_0x0.bin yolu görünür.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "",
+          "yeni": true,
+          "kaynak": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/version_info.json:2; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:7"
+        },
+        {
+          "id": "U2.02",
+          "baslik": "Yeni karta firmware yükleme ve otomatik provizyon",
+          "adimlar": [
+            "1. sekmede \"COM Port\"un doğru kart olduğunu kontrol edin.",
+            "\"FİRMWARE'İ KARTA YÜKLE (FLASH)\" düğmesine basın.",
+            "\"İşlem Log Çıktısı\" alanında satırların akmasını bekleyin (30-60 sn); USB kablosunu çıkarmayın."
+          ],
+          "beklenen": "\"Başarılı\" penceresinde \"Firmware yüklendi.\" ve \"Provizyon USB (seri) üzerinden OTOMATİK başlatıldı\" yazar; araç kendiliğinden 3. sekmeye geçip provizyonu başlatır. Boş kartta \"Kart Ayarları Silinecek\" sorusu çıkmaz. Karta v1.3.2 yazılmıştır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "USB'ye takılı boş kart; 2. sekmede bu kartın kaydı yapılmış",
+          "yeni": true,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:174; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3314"
+        },
+        {
+          "id": "U2.03",
+          "baslik": "Kurulu kartta birleşik imaj seçilince ayarlar korunur",
+          "adimlar": [
+            "1. sekmede \"Bizim Geliştirdiğimiz Yazılım (Otomatik Seçili)\" seçiliyken \"FİRMWARE'İ KARTA YÜKLE (FLASH)\" düğmesine basın.",
+            "\"Kart Ayarları Silinecek\" sorusuna \"Hayır\" deyin."
+          ],
+          "beklenen": "Karta hiçbir şey yazılmaz; \"Güncelle Kipi Seçildi\" penceresi çıkar, \"Güncelle (ayarlar korunur)\" seçeneği işaretlenir ve \"Dosya\" kutusuna aynı klasördeki uygulama imajı (app_0x10000_v1.3.2.bin) gelir.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "USB'de provizyonlu ya da şablonlu (kurulu) kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:169; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3213"
+        },
+        {
+          "id": "U2.04",
+          "baslik": "Kurulu kartı ayarları koruyarak v1.3.2'ye güncelleme",
+          "adimlar": [
+            "1. sekmede \"Güncelle (ayarlar korunur)\" seçeneğini işaretleyin.",
+            "\"Dosya\" kutusunda v1.3.2 uygulama imajının (app_0x10000_v1.3.2.bin) seçili olduğunu görün.",
+            "\"FİRMWARE'İ KARTA YÜKLE (FLASH)\" düğmesine basıp bitmesini bekleyin."
+          ],
+          "beklenen": "\"Başarılı\" penceresinde \"Uygulama imajı yazıldı (0x10000).\" ve kartın ayarlarının korunduğu, provizyon gerekmediği yazar. Kart yeniden başladıktan sonra uygulamada aynı ev ve kanal adlarıyla çevrimiçi görünür; etiket geçerli kalır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "USB'de eski sürümlü (ör. v1.3.1), provizyonlu ve buluta bağlı kurulu kart",
+          "yeni": true,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:167; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3199"
+        },
+        {
+          "id": "U2.05",
+          "baslik": "Eski sürüme düşürme engellenir",
+          "adimlar": [
+            "1. sekmede \"Güncelle (ayarlar korunur)\" seçeneğini işaretleyin.",
+            "\"Gözat...\" ile firmware_releases\\v1.2.1\\app_0x10000_v1.2.1.bin dosyasını seçin.",
+            "\"FİRMWARE'İ KARTA YÜKLE (FLASH)\" düğmesine basın.",
+            "\"Firmware Uyarısı\" çıkarsa \"Evet\" deyin (asıl denetim bundan sonra yapılır)."
+          ],
+          "beklenen": "\"Sürüm Düşürme Engellendi\" penceresi çıkar ve karta hiçbir şey yazılmaz; kart eskisi gibi çalışır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "USB'de v1.3.0 ya da daha yeni firmware'li kurulu kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:494; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3194"
+        },
+        {
+          "id": "U2.06",
+          "baslik": "v1.3.2 fabrika ayarında her giriş kendi rölesini açıp kapatır",
+          "adimlar": [
+            "Kartın DI1 klemensini kısa bir kabloyla DGND'ye bir an değdirin (ya da DI1'e bağlı yaylı butona basın).",
+            "Aynısını DI2'den DI8'e kadar tekrarlayın.",
+            "Her girişi bir kez daha tetikleyin."
+          ],
+          "beklenen": "Her girişte aynı numaralı röle çeker (DI1 → Röle 1 ... DI8 → Röle 8), ikinci tetiklemede bırakır. Hiçbir röle çifti panjur gibi çalışmaz. Kart uygulamaya bağlanınca kanallar Röle 1 ... Röle 8 adlı lamba olarak görünür.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Birleşik v1.3.2 imajı yeni yazılmış, şablon yazılmamış, beslemesi olan kart",
+          "yeni": true,
+          "kaynak": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.3.2/SURUM_NOTLARI.md:63; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:29"
+        },
+        {
+          "id": "U2.07",
+          "baslik": "v1.3.2 açılışta çökmez",
+          "adimlar": [
+            "Panonun elektriğini kesip 10 saniye sonra yeniden verin.",
+            "Pano uygulamada çevrimiçi görünene kadar bekleyin.",
+            "Bunu 10 kez tekrarlayın."
+          ],
+          "beklenen": "Her açılışta pano 1-2 dakika içinde yeniden çevrimiçi olur; açılış sırasında röleler art arda kapanıp açılmaz (eski sürümde açılışta çökme ve röle tıkırtısı olabiliyordu).",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "v1.3.2 yazılmış (birleşik ya da Güncelle), Wi-Fi'ye bağlı ve uygulamada görünen pano",
+          "yeni": true,
+          "kaynak": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.3.2/SURUM_NOTLARI.md:69; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:9"
+        }
+      ]
+    },
+    {
+      "id": "U3",
+      "baslik": "Servis yazılımı: provizyon (kartın gizli anahtarını yazma)",
+      "maddeler": [
+        {
+          "id": "U3.01",
+          "baslik": "USB ile provizyon tamamlanır ve doğrulanır",
+          "adimlar": [
+            "3. sekmede \"Sonuç\" alanındaki satırları izleyin.",
+            "Provizyon kendiliğinden başlamadıysa \"Seri (USB) ile Provizyonla (Önerilen)\" düğmesine basın."
+          ],
+          "beklenen": "\"Sonuç\" alanında \"USB (seri) provizyon tamamlandı ve doğrulandı\" satırı ve \"Provizyon Tamamlandı\" penceresi çıkar; üstteki durum \"Provizyon doğrulandı\" (USB seri) olur. v1.3.1 ve sonrası kartta ayrıca \"Karttaki anahtar izi bu kayıttaki anahtarla eşleşti.\" yazar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Firmware'i yeni yüklenmiş, kaydı bellekte duran kart USB'de (kablo çıkarılmadan)",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:178; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1693"
+        },
+        {
+          "id": "U3.02",
+          "baslik": "Etiketteki 2. karekodla kartın ağına bağlanma",
+          "adimlar": [
+            "Telefonun kendi kamerasını etiketteki \"2) Kurulum Wi-Fi'sine bağlan\" karekoduna tutun.",
+            "Çıkan ağa bağlanma önerisine dokunun.",
+            "İşiniz bitince telefonu kendi ağınıza geri alın."
+          ],
+          "beklenen": "Telefon parola sormadan kartın AHBU-XXXXXX ağına bağlanır (internet yok uyarısı normaldir). Bağlanıyorsa etiket ve parola doğrudur.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Provizyonu yeni bitmiş kart (kurulum ağı yaklaşık 10 dk açık); telefon",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:199; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:468"
+        },
+        {
+          "id": "U3.03",
+          "baslik": "Yerel anahtarı kopyalama (45 saniye)",
+          "adimlar": [
+            "3. sekmede \"Gizli Bilgiler\" kutusundaki \"Anahtarı kopyala\" düğmesine basın.",
+            "Hemen bir not defterine yapıştırıp bakın, sonra notu silin.",
+            "45 saniye bekleyip yeniden yapıştırmayı deneyin."
+          ],
+          "beklenen": "\"Sonuç\" alanında \"panoya kopyalandı (45 sn sonra panodan silinecek)\" yazar; ilk yapıştırmada anahtar gelir, 45 saniye sonra pano boştur. \"Değerleri göster\" işaretlenmedikçe anahtar ekranda noktalı görünür.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kaydı bellekte duran kart (kayıt silinmeden)",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:194; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2141"
+        },
+        {
+          "id": "U3.04",
+          "baslik": "Kaydı bellekten silip yeni karta geçme",
+          "adimlar": [
+            "Provizyon doğrulandıktan sonra 3. sekmede \"Kaydı Bellekten Sil / Yeni Cihaz\" düğmesine basın."
+          ],
+          "beklenen": "Soru sorulmadan PIN, anahtar ve etiket önizlemesi bellekten silinir; \"Etiketi Kaydet (PNG)\" ve \"Yazdır (Barkod / Termal)\" düğmeleri pasifleşir, 3. sekme yeni kayıt bekler.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Provizyonu doğrulanmış kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:216; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2158"
+        },
+        {
+          "id": "U3.05",
+          "baslik": "Provizyon bitmeden kaydı silme uyarısı",
+          "adimlar": [
+            "3. sekmede \"Kaydı Bellekten Sil / Yeni Cihaz\" düğmesine basın.",
+            "Çıkan soruya \"Hayır\" deyin."
+          ],
+          "beklenen": "\"Kaydı Sil\" sorusu anahtarın ve PIN'in bir daha gösterilemeyeceğini söyler; \"Hayır\" deyince kayıt ve etiket yerinde kalır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kaydı yapılmış ama provizyonu bitmemiş kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:551; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2164"
+        },
+        {
+          "id": "U3.06",
+          "baslik": "Ethernet ile provizyon",
+          "adimlar": [
+            "3. sekmede \"Ethernet ile Provizyonla\" düğmesine basın.",
+            "Kartın Ethernet IP adresini yazıp onaylayın."
+          ],
+          "beklenen": "Araç anahtarı yazar ve doğrular; durum \"Provizyon doğrulandı\" (Ethernet) olur. Yeniden bağlanmanız gerekmez.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kaydı bellekte, provizyonsuz, v1.3.0+ firmware'li kart; kart Ethernet kablosuyla bilgisayarla aynı yerel ağda; kartın Ethernet IP adresi biliniyor",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:395; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1899"
+        },
+        {
+          "id": "U3.07",
+          "baslik": "Wi-Fi yedek yolla provizyon",
+          "adimlar": [
+            "3. sekmede \"Wi-Fi ile Provizyonla (güvensiz yedek yol)\" düğmesine basın ve \"Güvensiz Yedek Yol\" uyarısını onaylayın.",
+            "Bilgisayarı kartın parolasız AHBU-XXXXXX ağına bağlayın; araç anahtarı yazınca bağlantı kopar.",
+            "Bilgisayarı aynı ağa etiketteki parolayla yeniden bağlayıp \"Wi-Fi ile Doğrula\" düğmesine basın.",
+            "Bilgisayarı internetli ağınıza geri alın."
+          ],
+          "beklenen": "Durum \"Provizyon doğrulandı\" (Wi-Fi) olur; kartın ağı artık yalnız etiketteki parolayla açılır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kaydı bellekte, provizyonsuz kart; Wi-Fi'li bilgisayar; yabancı olmayan kontrollü ortam",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:379; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1886"
+        },
+        {
+          "id": "U3.08",
+          "baslik": "Eski anahtarlı kartı sıfırlayıp yeniden provizyon",
+          "adimlar": [
+            "3. sekmede \"Seri (USB) ile Provizyonla (Önerilen)\" düğmesine basın.",
+            "\"Kartta Eski Anahtar Var\" sorusuna \"Evet\" deyin."
+          ],
+          "beklenen": "Araç karttaki eski anahtarı siler (RESETKEY) ve bu kayıttaki anahtarı yazar; \"Provizyon Tamamlandı\" penceresi çıkar. \"Hayır\" derseniz karta dokunulmaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Daha önce başka bir anahtarla provizyonlanmış, envanterden silinip yeniden kaydedilmiş deneme kartı USB'de",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:512; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1704"
+        }
+      ]
+    },
+    {
+      "id": "U4",
+      "baslik": "Servis yazılımı: envanter yönetimi",
+      "maddeler": [
+        {
+          "id": "U4.01",
+          "baslik": "Kartı askıya alma",
+          "adimlar": [
+            "2. sekmede \"Listeyi Yenile\" düğmesine basın.",
+            "Tablodan kartı seçip \"Askıya Al (Kilit)\" düğmesine basın.",
+            "\"Onay\" sorusuna \"Evet\" deyin."
+          ],
+          "beklenen": "\"Başarılı\" penceresi çıkar; tabloda kartın Durum'u SUSPENDED olur. Askıdaki kart sahada daireye tanımlanamaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Envanterde Durum'u IN_STOCK olan bir deneme kartı",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:99; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2797"
+        },
+        {
+          "id": "U4.02",
+          "baslik": "Askıdaki kartı yeniden stoğa alma",
+          "adimlar": [
+            "Tablodan Durum'u SUSPENDED olan kartı seçin.",
+            "\"Aktif Et (Stok)\" düğmesine basın."
+          ],
+          "beklenen": "\"Başarılı\" penceresi çıkar; kartın Durum'u IN_STOCK olur.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Askıya alınmış bir kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:99; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2801"
+        },
+        {
+          "id": "U4.03",
+          "baslik": "Kartı envanterden silme",
+          "adimlar": [
+            "Tablodan kartı seçip \"Envanterden Sil\" düğmesine basın.",
+            "\"Kritik Onay\" sorusuna \"Evet\" deyin.",
+            "\"Silme Onayı\" kutusuna kartın UID'sini aynen yazın."
+          ],
+          "beklenen": "\"Silindi\" penceresi çıkar ve kart tablodan kalkar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Envanterde IN_STOCK, hiçbir daireye bağlı olmayan, artık kullanılmayacak deneme kartı",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:99; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2827"
+        },
+        {
+          "id": "U4.04",
+          "baslik": "Yanlış UID yazılınca kart silinmez",
+          "adimlar": [
+            "Bir kart seçip \"Envanterden Sil\" düğmesine basın ve onaylayın.",
+            "\"Silme Onayı\" kutusuna farklı bir UID yazın."
+          ],
+          "beklenen": "\"UID eşleşmedi; silme işlemi yapılmadı.\" iletisi çıkar; kart tabloda kalır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Envanterde bir kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:476; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2829"
+        },
+        {
+          "id": "U4.05",
+          "baslik": "Daireye bağlı kart silinemez",
+          "adimlar": [
+            "2. sekmede bir daireye bağlı kartı seçip \"Envanterden Sil\" düğmesine basın.",
+            "Onaylayıp UID'yi doğru yazın."
+          ],
+          "beklenen": "Silme reddedilir: \"Kart bir daireye bağlı; önce daireden ayırın.\" iletisi çıkar, kart tabloda kalır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "4. sekmede bir daireye bağlanmış (stoktaki) kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:99; ev_otomasyon_servis_yazilimi/factory_client.py:511"
+        },
+        {
+          "id": "U4.06",
+          "baslik": "Etiketi USB ile yeniden basma",
+          "adimlar": [
+            "1. sekmede \"COM Port\" kutusundan kartı seçin.",
+            "2. sekmede \"Etiketi Yeniden Bas (USB)\" düğmesine basın.",
+            "\"Etiketi Yeniden Bas\" sorusuna \"Evet\" deyin.",
+            "Yeni etiketi kaydedip eski ve yeni etiketin 2. karekodunu telefonla deneyin."
+          ],
+          "beklenen": "\"Etiket Yenilendi\" penceresi çıkar ve önizlemede yeni PIN'li, yeni ağ parolalı etiket belirir. Eski etiketin 2. karekoduyla kartın ağına artık bağlanılmaz, yenisiyle bağlanılır; eski PIN geçersizdir. Kartın yerel anahtarı değişmez.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "USB'ye takılı, stokta (IN_STOCK), hiçbir daireye bağlı olmayan, provizyonlu kart; eski etiketi elinizde",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:101; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2680"
+        }
+      ]
+    },
+    {
+      "id": "U5",
+      "baslik": "Servis yazılımı: sitelerde yalnız süper kullanıcının yapabildikleri",
+      "maddeler": [
+        {
+          "id": "U5.01",
+          "baslik": "Kurulmuş dairenin kartını ayırma",
+          "adimlar": [
+            "\"4. Siteler\" sekmesinde siteyi, sonra daireyi seçin.",
+            "\"Kart Bağla\" düğmesine basın.",
+            "Kutudaki UID'yi silip boş bırakın ve onaylayın."
+          ],
+          "beklenen": "Sunucu reddetmez: dairenin kartı kaldırılır ve durumu \"Planlandı\" olur. (Servis sorumlusu bunu yapamaz; onun için yalnız Pano Değişimi yolu vardır.)",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Durumu \"Kuruldu\" ya da \"Teslim edildi\" olan, kartı bağlı bir deneme dairesi",
+          "yeni": false,
+          "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:73; server/src/services/site_template_service.js:460"
+        },
+        {
+          "id": "U5.02",
+          "baslik": "Kurulmuş dairenin kartını başka kartla değiştirme",
+          "adimlar": [
+            "\"4. Siteler\" sekmesinde daireyi seçip \"Kart Bağla\" düğmesine basın.",
+            "Kutuya yeni kartın UID'sini (AHBU-S3-XXXXXX) yazıp onaylayın."
+          ],
+          "beklenen": "Kart değişir; araç \"Şablon Yeniden Yazılmalı\" uyarısını gösterir ve dairenin durumu \"Planlandı\" olur (yeni karta şablon yazılınca \"Yazıldı\" olur).",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Durumu \"Kuruldu\" ya da \"Teslim edildi\" olan deneme dairesi; stokta yeni bir kart",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1278; server/src/services/site_template_service.js:460"
+        },
+        {
+          "id": "U5.03",
+          "baslik": "Stokta olmayan kartı daireye bağlama",
+          "adimlar": [
+            "\"4. Siteler\" sekmesinde kartsız bir daireyi seçip \"Kart Bağla\" düğmesine basın.",
+            "Askıdaki kartın UID'sini yazıp onaylayın."
+          ],
+          "beklenen": "Kart daireye bağlanır; servis sorumlusunun gördüğü \"Bu kart stokta değil\" iletisi çıkmaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Envanterde askıda (SUSPENDED) bir deneme kartı ve kartsız bir deneme dairesi",
+          "yeni": false,
+          "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:249; server/src/services/site_template_service.js:456"
+        }
+      ]
+    },
+    {
+      "id": "U6",
+      "baslik": "Uygulama: yönetici konsolu ve hesap yönetimi",
+      "maddeler": [
+        {
+          "id": "U6.01",
+          "baslik": "Süper yönetici konsolu ve menüsü",
+          "adimlar": [
+            "Uygulamaya süper kullanıcı hesabıyla giriş yapın.",
+            "Ana ekrana bakın.",
+            "Sol üstteki menüyü açın."
+          ],
+          "beklenen": "Ana ekranda \"Hızlı Yönetici İşlemleri\" altında \"Cihaz Envanteri & Ekleme\", \"Servis Sorumluları Yönetimi\" ve \"Tüm Aboneler & Atamalar\" kartları görünür. Menünün başında \"SÜPER YÖNETİCİ KONSOLU\" yazar; menüde \"Cihaz Envanteri\", \"Servis Sorumluları\", \"Tüm Aboneler & Atamalar\", \"Sistem Doktoru\" ve \"Acil Sıfırlama\" vardır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Süper kullanıcı hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/widgets/super_user_drawer.dart:59; lib/ui/dashboard/console_dashboards.dart:208"
+        },
+        {
+          "id": "U6.02",
+          "baslik": "Servis Yönetimi sistem özeti",
+          "adimlar": [
+            "Ana ekranda \"Tüm Paneli Aç\" düğmesine basın."
+          ],
+          "beklenen": "\"Servis Yönetimi\" sayfası açılır; \"Hesaplar\" sekmesinin başındaki \"Sistem özeti\" kartında \"Süper\", \"Servis\", \"Müşteri\" ve \"Pano\" sayıları görünür; sağ altta \"Hesap Ekle\" düğmesi vardır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_management_page.dart:374; lib/ui/pages/service_management_page.dart:521"
+        },
+        {
+          "id": "U6.03",
+          "baslik": "Hesapları role göre süzme ve arama",
+          "adimlar": [
+            "\"Servis Yönetimi\" › \"Hesaplar\" sekmesinde \"Süper\" çipine dokunun.",
+            "Sonra \"Servis\", \"Müşteri\" ve \"Tümü\" çiplerini deneyin.",
+            "\"Hesap ara\" kutusuna bir ad ya da e-posta yazın."
+          ],
+          "beklenen": "Liste seçilen role göre süzülür (kartlarda \"SÜPER YÖNETİCİ\", \"SERVİS SORUMLUSU\" ya da \"MÜŞTERİ\" rozeti); aramada yalnız eşleşen hesaplar kalır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_management_page.dart:616; lib/ui/pages/service_setup/panel/admin_account.dart:98"
+        },
+        {
+          "id": "U6.04",
+          "baslik": "Geçici parolayla servis sorumlusu hesabı ekleme",
+          "adimlar": [
+            "\"Servis Yönetimi\"nde \"Hesap Ekle\" düğmesine basın.",
+            "\"Hesap türü\"nde \"Servis sorumlusu\"nu seçin; \"Ad soyad\" ve \"E-posta\"yı yazın.",
+            "\"Geçici parola\" alanına en az 10 karakterlik bir parola yazın.",
+            "\"Kaydet\" düğmesine basın."
+          ],
+          "beklenen": "Pencere başlığı \"Yeni Servis Sorumlusu / Yönetici\"dir. Kayıttan sonra \"hesabı oluşturuldu. İlk girişte parolasını değiştirmesi istenecek.\" bildirimi çıkar; yeni hesap listede \"SERVİS SORUMLUSU\" ve \"Aktif\" rozetleriyle görünür.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Sistemde kayıtlı olmayan bir e-posta adresi",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:164; lib/ui/pages/service_management_page.dart:240"
+        },
+        {
+          "id": "U6.05",
+          "baslik": "Geçici parolalı hesapta ilk girişte parola değişimi zorunlu",
+          "adimlar": [
+            "Çıkış yapın.",
+            "Yeni hesabın e-postası ve geçici parolasıyla giriş yapın."
+          ],
+          "beklenen": "Uygulama doğrudan \"Şifrenizi Değiştirin\" ekranını açar; yeni parola belirlenmeden başka ekrana geçilemez.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Geçici parolayla yeni açılmış hesap",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/auth/auth_gate.dart:56; lib/ui/pages/auth/change_password_page.dart:116"
+        },
+        {
+          "id": "U6.06",
+          "baslik": "Süper yönetici hesabı ekleme",
+          "adimlar": [
+            "\"Hesap Ekle\" düğmesine basın.",
+            "\"Hesap türü\"nde \"Süper yönetici\"yi seçin; ad, e-posta ve \"Geçici parola\"yı yazın.",
+            "\"Kaydet\" düğmesine basın."
+          ],
+          "beklenen": "Yeni hesap listede \"SÜPER YÖNETİCİ\" rozetiyle görünür ve \"Sistem özeti\"ndeki \"Süper\" sayısı bir artar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Sistemde kayıtlı olmayan bir e-posta adresi",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:196; lib/ui/pages/service_management_page.dart:530"
+        },
+        {
+          "id": "U6.07",
+          "baslik": "Parolasız hesap: etkinleştirme e-postası",
+          "adimlar": [
+            "\"Hesap Ekle\"de \"Servis sorumlusu\"nu seçip ad ve e-postayı yazın, \"Geçici parola\"yı boş bırakın.",
+            "\"Kaydet\" düğmesine basın.",
+            "Hesabın e-posta kutusunu açın."
+          ],
+          "beklenen": "\"hesabı oluşturuldu; etkinleştirme bağlantısı\" bildirimi çıkar; hesap listede \"Davet bekliyor\" görünür ve e-postaya hesap etkinleştirme bağlantısı gelir. E-posta gönderilemezse \"Hesap oluşturuldu ama etkinleştirme e-postası gönderilemedi.\" kırmızı bildirimi çıkar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Sunucuda e-posta gönderimi (SMTP) çalışıyor; erişebildiğiniz bir e-posta adresi",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_management_page.dart:241; lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:251"
+        },
+        {
+          "id": "U6.08",
+          "baslik": "Telefon numarası tek biçimde kaydedilir",
+          "adimlar": [
+            "\"Hesap Ekle\" penceresinde \"Telefon\" alanına bakın.",
+            "Alana kullanılmayan bir cep numarasını başında 0 ile yazın (ör. 0555 123 45 67).",
+            "Diğer bilgileri doldurup \"Kaydet\" düğmesine basın."
+          ],
+          "beklenen": "Alanın başında \"+90\" ön eki hazır durur; baştaki 0 atılır ve numara 5XX XXX XX XX biçiminde görünür. Kayıttan sonra hesap kartında numara +905XXXXXXXXX biçiminde görünür (0555..., +90555... ve 555... aynı numara sayılır).",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kullanılmayan bir deneme telefon numarası",
+          "yeni": true,
+          "kaynak": "lib/ui/common/validators.dart:129; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:23"
+        },
+        {
+          "id": "U6.09",
+          "baslik": "Başka bir hesabın parolasını değiştirme",
+          "adimlar": [
+            "Servis sorumlusu hesabının kartında \"Düzenle\" düğmesine basın.",
+            "\"Yeni parola\" alanına en az 10 karakterlik parola yazın.",
+            "\"Güncelle\" düğmesine basın.",
+            "O hesapla yeni parolayla giriş yapın."
+          ],
+          "beklenen": "\"hesabı güncellendi.\" bildirimi çıkar; o kişi yeni parolayla girince \"Şifrenizi Değiştirin\" ekranı açılır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Aktif bir deneme servis sorumlusu hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:484; lib/ui/pages/service_management_page.dart:262"
+        },
+        {
+          "id": "U6.10",
+          "baslik": "Başka süper yöneticinin parolası için kendi parolanız istenir",
+          "adimlar": [
+            "Diğer süper yöneticinin kartında \"Düzenle\" düğmesine basın.",
+            "\"Yeni parola\" alanını doldurun; beliren \"Kendi mevcut parolanız\" alanını boş bırakıp \"Güncelle\"ye basın.",
+            "Kendi doğru parolanızı yazıp yeniden \"Güncelle\"ye basın."
+          ],
+          "beklenen": "Boş bıraktığınızda \"Başka bir süper yöneticinin parolasını değiştirmek için kendi mevcut parolanızı girin.\" uyarısı çıkar ve kayıt yapılmaz; doğru parolanızla güncelleme tamamlanır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Sizden başka bir süper yönetici hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:377; lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:495"
+        },
+        {
+          "id": "U6.11",
+          "baslik": "Servis sorumlusu hesabını dondurma",
+          "adimlar": [
+            "Hesap kartında \"Dondur\" düğmesine basın.",
+            "\"Hesap dondurulsun mu?\" sorusunu \"Dondur\" ile onaylayın.",
+            "Bu hesapla servis yazılımına giriş yapmayı deneyin."
+          ],
+          "beklenen": "\"hesabı donduruldu.\" bildirimi çıkar, kartta \"Donduruldu\" rozeti görünür. Dondurulan hesapla servis yazılımında \"Hesap dondurulmuş. Sistem yöneticisine başvurun.\" iletisi çıkar, giriş olmaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Aktif bir deneme servis sorumlusu hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_management_page.dart:288; ev_otomasyon_servis_yazilimi/factory_client.py:561"
+        },
+        {
+          "id": "U6.12",
+          "baslik": "Dondurulan hesabı yeniden açma",
+          "adimlar": [
+            "Dondurulmuş hesabın kartında \"Aktifleştir\" düğmesine basın.",
+            "O hesapla yeniden giriş yapın."
+          ],
+          "beklenen": "\"hesabı aktifleştirildi.\" bildirimi çıkar, rozet \"Aktif\" olur ve hesap yeniden giriş yapabilir.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Dondurulmuş bir deneme hesabı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_management_page.dart:322; lib/ui/pages/service_management_page.dart:898"
+        },
+        {
+          "id": "U6.13",
+          "baslik": "Davet bekleyen hesap dondurulup açılınca davet bekler",
+          "adimlar": [
+            "\"Davet bekliyor\" durumundaki hesabın kartında \"Dondur\"a basıp onaylayın.",
+            "Ardından \"Aktifleştir\" düğmesine basın.",
+            "Listeyi aşağı çekerek yenileyin."
+          ],
+          "beklenen": "Yenilemeden sonra hesabın rozeti \"Davet bekliyor\" olur (\"Aktif\" değil); kişi yine e-postadaki bağlantıyla parolasını belirlemelidir.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "\"Davet bekliyor\" durumunda bir deneme servis sorumlusu hesabı",
+          "yeni": true,
+          "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:258; lib/ui/pages/service_setup/panel/admin_account.dart:113"
+        },
+        {
+          "id": "U6.14",
+          "baslik": "Kendi hesabınızı donduramazsınız",
+          "adimlar": [
+            "\"Hesaplar\" listesinde kendi kartınızı bulun (adınızın yanında \"(siz)\" yazar)."
+          ],
+          "beklenen": "Kartınızdaki \"Dondur\" düğmesi basılamaz ve altında \"Kendi hesabınızı donduramazsınız.\" yazar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/admin_account.dart:149; lib/ui/pages/service_management_page.dart:888"
+        },
+        {
+          "id": "U6.15",
+          "baslik": "Parola sıfırlama bağlantısı gönderme",
+          "adimlar": [
+            "Servis sorumlusu hesabının kartında \"Bağlantı gönder\" düğmesine basın.",
+            "Hesabın e-posta kutusuna bakın."
+          ],
+          "beklenen": "\"Parola sıfırlama bağlantısı\" ... \"adresine gönderildi\" bildirimi çıkar ve e-postaya sıfırlama bağlantısı gelir. E-posta gönderilemezse \"Bağlantı gönderilemedi.\" ile başlayan kırmızı bildirim çıkar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Aktif bir deneme servis sorumlusu hesabı; sunucuda e-posta gönderimi çalışıyor",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_management_page.dart:346; lib/ui/pages/service_management_page.dart:880"
+        }
+      ]
+    },
+    {
+      "id": "U7",
+      "baslik": "Uygulama: cihaz envanteri",
+      "maddeler": [
+        {
+          "id": "U7.01",
+          "baslik": "Cihaz envanteri sayfası",
+          "adimlar": [
+            "Menüden \"Cihaz Envanteri\"ni açın.",
+            "Üstteki \"Stokta Hazır\", \"Devrede / Aktif\" ve \"Askıya Alınan\" süzgeçlerini deneyin.",
+            "\"Cihaz ara\" kutusuna bir UID yazın."
+          ],
+          "beklenen": "Üstte \"Toplam\", \"Stokta\", \"Devrede\" ve \"Askıda\" sayıları görünür; süzgeç ve arama listeyi daraltır. Stoktaki kartlarda \"Askıya Al\", \"Etiketi Yeniden Üret\" ve \"Envanterden Sil\" düğmeleri vardır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:237; lib/ui/pages/device_inventory_page.dart:361"
+        },
+        {
+          "id": "U7.02",
+          "baslik": "Uygulamadan kartı askıya alma",
+          "adimlar": [
+            "Stoktaki kartın satırında \"Askıya Al\" düğmesine basın.",
+            "\"Cihaz askıya alınsın mı?\" sorusunda \"Askıya Al\"ı seçin."
+          ],
+          "beklenen": "\"durumu güncellendi\" bildirimi çıkar; kartın durumu \"Askıda\" olur ve \"Stoğa Al\" düğmesi belirir.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Stokta bir deneme kartı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:843; lib/ui/pages/device_inventory_page.dart:879"
+        },
+        {
+          "id": "U7.03",
+          "baslik": "Uygulamadan kartı stoğa geri alma",
+          "adimlar": [
+            "Askıdaki kartta \"Stoğa Al\" düğmesine basın.",
+            "\"Cihaz stoğa alınsın mı?\" sorusunda \"Stoğa Al\"ı seçin."
+          ],
+          "beklenen": "Kartın durumu \"Stokta\" olur.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Askıda bir deneme kartı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:677; lib/ui/pages/device_inventory_page.dart:843"
+        },
+        {
+          "id": "U7.04",
+          "baslik": "Uygulamadan envanterden silme",
+          "adimlar": [
+            "Kartta \"Envanterden Sil\" düğmesine basın.",
+            "\"Cihaz envanterden silinsin mi?\" penceresinde kartın UID'sini yazın.",
+            "\"Evet, Sil\" düğmesine basın."
+          ],
+          "beklenen": "\"envanterden silindi.\" bildirimi çıkar ve kart listeden kalkar; UID doğru yazılmadan silme yapılmaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kullanılmayacak, stokta bir deneme kartı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:891; lib/ui/pages/device_inventory_page.dart:907"
+        },
+        {
+          "id": "U7.05",
+          "baslik": "Devredeki kart korunur",
+          "adimlar": [
+            "\"Cihaz Envanteri\"nde \"Devrede / Aktif\" süzgecini seçin.",
+            "Bir kartın düğmelerine bakın."
+          ],
+          "beklenen": "Kartta \"Askıya Al\" ve \"Envanterden Sil\" yoktur; altında \"Devredeki cihaz askıya alınamaz veya silinemez. Daire değişikliği için acil sıfırlama kullanın.\" yazar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Bir daireye bağlanmış (devrede) kart",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:710"
+        },
+        {
+          "id": "U7.06",
+          "baslik": "Uygulamadan etiket PIN'ini yeniden üretme",
+          "adimlar": [
+            "Kartta \"Etiketi Yeniden Üret\" düğmesine basın.",
+            "\"Etiket yeniden üretilsin mi?\" penceresinde UID'yi yazıp \"Yeniden Üret\"e basın.",
+            "Açılan pencereyi okuyup \"Kaydettim, Kapat\"a basın.",
+            "Eski etiketteki PIN'le kartı eklemeyi deneyin."
+          ],
+          "beklenen": "\"Yeni Etiket Bilgileri\" penceresinde yeni \"Kurulum PIN\" ve karekod görünür; \"Yalnız PIN/karekod yenilendi; yerel anahtar değişmedi.\" notu kurulum ağı parolasının değişmediğini söyler. Eski PIN artık kabul edilmez.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Stokta, etiketi kaybolmuş deneme kartı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:945; lib/ui/pages/service_setup/panel/label_reissue_dialog.dart:120"
+        },
+        {
+          "id": "U7.07",
+          "baslik": "Kurulum PIN kilidini kaldırma",
+          "adimlar": [
+            "Kartın altındaki kilit notunu görün ve \"PIN Kilidini Kaldır\" düğmesine basın.",
+            "\"PIN kilidi kaldırılsın mı?\" sorusunda \"Kilidi Kaldır\"ı seçin.",
+            "Doğru PIN'le kartı eklemeyi yeniden deneyin."
+          ],
+          "beklenen": "\"PIN kilidi kaldırıldı.\" bildirimi çıkar ve kilit notu kaybolur; PIN ve etiket değişmez, doğru PIN hemen kabul edilir.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Kurulum PIN'i art arda yanlış girildiği için kilitlenmiş stok kartı",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/device_inventory_page.dart:921; server/src/routes/inventory_routes.js:14"
+        }
+      ]
+    },
+    {
+      "id": "U8",
+      "baslik": "Uygulama: aboneler, Home Admin ve acil sıfırlama",
+      "maddeler": [
+        {
+          "id": "U8.01",
+          "baslik": "Bütün daireleri görme",
+          "adimlar": [
+            "Menüden \"Tüm Aboneler & Atamalar\"ı açın.",
+            "\"Abone ara\" kutusuna başka bir teknisyenin kurduğu dairenin adını yazın."
+          ],
+          "beklenen": "\"Abonelerim & Cihaz Atama\" sayfasında sistemdeki bütün daireler (başka teknisyenlerin kurdukları dahil) ve \"Toplam Abone\" sayısı görünür; aranan daire bulunur.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Başka bir servis sorumlusunun kurduğu en az bir daire",
+          "yeni": false,
+          "kaynak": "server/src/services/service_panel_service.js:14; lib/ui/widgets/super_user_drawer.dart:105"
+        },
+        {
+          "id": "U8.02",
+          "baslik": "Yarım kalan kurulumu aboneler listesinden sürdürme",
+          "adimlar": [
+            "\"Abonelerim & Cihaz Atama\"da durumu \"Bekliyor\" olan dairenin kartında \"Kurulumu sürdür\" düğmesine basın.",
+            "Dairede birden çok pano varsa \"Hangi pano?\" listesinden birini seçin.",
+            "Yarım kayıt sorusu çıkarsa \"Kaldığınız Yerden Devam\"ı seçin."
+          ],
+          "beklenen": "Kurulum sihirbazı o pano için 5. adımdan (ağ bağlantısı) açılır; telefonda yarım kayıt varsa önce \"Bu panonun yarım kalmış kurulumu var\" sorusu gelir. Bu düğme yalnız süper kullanıcıda vardır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Panosu bağlanmış ama devreye alınmamış bir deneme dairesi",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_subscribers_page.dart:575; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:257"
+        },
+        {
+          "id": "U8.03",
+          "baslik": "Sahibin onayı olmadan Home Admin atama",
+          "adimlar": [
+            "Dairenin kartında \"Yöneticiyi Devret\" düğmesine basın; \"Yeni yönetici adı\" ve e-posta ya da telefonu yazın.",
+            "\"Sahibe ulaşılamıyor mu? (süper yönetici)\" bağlantısına dokunun ve \"Gerekçe\" alanına en az 15 karakter yazın.",
+            "\"Gerekçeyle Zorla Ata\" düğmesine basın; açılan onay penceresine \"ZORLA\" yazıp \"Zorla Ata\"yı seçin."
+          ],
+          "beklenen": "Mevcut yöneticiye onay kodu gönderilmeden atama yapılır; yeşil bildirim çıkar ve dairenin kartında \"Home Admin:\" satırında yeni kişinin adı görünür. Eski yöneticinin bu evdeki erişimi kalkar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Home Admin'i olan bir deneme dairesi; yeni yönetici için e-posta ya da telefon",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/assign_admin_dialog.dart:579; server/src/services/service_panel_service.js:29"
+        },
+        {
+          "id": "U8.04",
+          "baslik": "Zorla atamada kısa gerekçe kabul edilmez",
+          "adimlar": [
+            "\"Yöneticiyi Devret\" penceresinde \"Sahibe ulaşılamıyor mu? (süper yönetici)\" bağlantısına dokunun.",
+            "\"Gerekçe\" alanına 15 karakterden kısa bir metin yazıp \"Gerekçeyle Zorla Ata\" düğmesine basın."
+          ],
+          "beklenen": "Alanın altında gerekçenin en az 15 karakter olması gerektiğini ve şu anki karakter sayısını söyleyen uyarı çıkar; onay penceresi açılmaz, atama yapılmaz.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Home Admin'i olan bir deneme dairesi",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/panel/assign_admin_dialog.dart:380"
+        },
+        {
+          "id": "U8.05",
+          "baslik": "72 saat sınırı olmadan acil sıfırlama (stoğa alma)",
+          "adimlar": [
+            "Menüden \"Acil Sıfırlama\"yı açın.",
+            "\"Cihaz UID (Pano Etiketi)\" alanına panonun UID'sini, \"Sıfırlama Gerekçesi\"ne en az 15 karakter yazın; \"Yeni Sahip\"i boş bırakın.",
+            "\"Acil Sıfırla & Eski Aileyi Çıkar\" düğmesine basın; \"Acil Sıfırlama Onayı\" penceresinde UID'yi yazıp \"Sıfırla\"yı seçin."
+          ],
+          "beklenen": "Servis personeline gösterilen \"Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin\" notu çıkmaz ve işlem reddedilmez. Sonuçta \"Cihaz sıfırlandı ve stoğa alındı.\" yazar ve \"YENİ KURULUM PIN (yalnızca bir kez gösterilir)\" görünür; eski ailenin erişimi kalkar.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "72 saatten önce ya da başka bir teknisyen tarafından kurulmuş, panolu bir deneme dairesi",
+          "yeni": false,
+          "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:78; lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52; lib/ui/pages/family/transfer_ownership_dialog.dart:1087"
+        },
+        {
+          "id": "U8.06",
+          "baslik": "Acil sıfırlamada panoyu yeni sahibe devretme",
+          "adimlar": [
+            "\"Acil Sıfırlama\"da UID'yi ve gerekçeyi yazın; \"Yeni Sahip\" alanına yeni sahibin e-postasını ya da telefonunu yazın.",
+            "\"Acil Sıfırla & Eski Aileyi Çıkar\" düğmesine basın, UID'yi yazıp \"Sıfırla\"yı seçin."
+          ],
+          "beklenen": "Sonuçta \"hesabına devredildi.\" satırı ve \"Süper yönetici hesabına cihaz anahtarı verilmez\" notu görünür: panoyu bağlamak için yeni sahibin uygulamasından servis PIN'i alınıp servis girişiyle sihirbaz açılmalıdır. Sonuç ekranında sihirbaza geçiş yoktur, yalnız \"Kapat\" düğmesi vardır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Panolu bir deneme dairesi; yeni sahibin e-postası ya da telefonu",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/family/transfer_ownership_dialog.dart:1149; lib/ui/pages/service_setup/panel/emergency_reset_card.dart:450; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:252"
+        }
+      ]
+    },
+    {
+      "id": "U9",
+      "baslik": "Uygulama: süper hesapla kurulum sihirbazı ve sistem doktoru",
+      "maddeler": [
+        {
+          "id": "U9.01",
+          "baslik": "Süper hesapla kurulum sihirbazını açma",
+          "adimlar": [
+            "Ana ekranda \"Tüm Paneli Aç\" düğmesine basın.",
+            "\"Görevler ve Araçlar\" sekmesinde \"Kurulum Sihirbazı\"nı açın.",
+            "\"Yeni Kurulum Başlat\" düğmesine basın."
+          ],
+          "beklenen": "Sihirbaz 1. adımda açılır ve \"Süper yönetici hesabı (cihaz anahtarını sunucudan alamaz; gerekirse elle girilir).\" bilgisini gösterir; \"Bağlantıyı Doğrula\" çalışır.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "",
+          "yeni": false,
+          "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:180; lib/ui/pages/service_setup/steps/step_1_preparation.dart:66"
+        },
+        {
+          "id": "U9.02",
+          "baslik": "Envanterde olmayan kart sihirbazda reddedilir",
+          "adimlar": [
+            "Sihirbazın 2. adımında \"Karekodu okutamıyorum: elle yazacağım\"a dokunun.",
+            "\"Cihaz seri numarası\"na envanterde olmayan bir UID (ör. AHBU-S3-000000), \"Kurulum PIN (6 rakam)\" alanına herhangi 6 rakam yazın.",
+            "\"Bilgileri Kullan\" düğmesine basın."
+          ],
+          "beklenen": "\"Bu cihaz envanterde kayıtlı değil\" uyarısı çıkar ve sihirbaz sonraki adıma geçmez (süper kullanıcı bütün envanteri gördüğü için kart gerçekten kayıtsız sayılır).",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Sihirbaz 2. adımda",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/service_setup/logic/identify_logic.dart:151; lib/ui/pages/service_setup/steps/step_2_identify.dart:189"
+        },
+        {
+          "id": "U9.03",
+          "baslik": "Dairesi seçilmemiş süper hesapta Sistem Doktoru",
+          "adimlar": [
+            "Menüden \"Sistem Doktoru\"nu açın."
+          ],
+          "beklenen": "\"Süper yönetici hesabı belirli bir daireye bağlı değildir\" uyarısı çıkar ve önce Aboneler listesinden bir daire seçmeniz istenir.",
+          "rol_notu": "süper kullanıcı",
+          "on_kosul": "Süper hesapta seçili daire yok",
+          "yeni": false,
+          "kaynak": "lib/ui/pages/system_doctor_dialog.dart:321"
+        }
+      ]
+    }
+  ]
+}

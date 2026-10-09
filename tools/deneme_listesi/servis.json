@@ -1,0 +1,2846 @@
+{
+ "rol": "servis",
+ "baslik": "Servis Sorumlusu Deneme Listesi",
+ "aciklama": "Servis sorumlusunun (servis personeli) uygulamada ve servis yazılımında yapabildiği işlerin tek tek denenecek listesi: ofis, atölye, saha, teslim sihirbazı, pano değişimi, acil sıfırlama, abone ve hesap yönetimi, Wi-Fi değişikliği ve servis PIN'iyle erişim. Yalnız süper kullanıcının yapabildiği işler (kart kaydı, etiket basma, firmware yükleme, kalıcı silme vb.) ayrı listededir.",
+ "bolumler": [
+  {
+   "id": "S1",
+   "baslik": "Uygulamaya giriş ve servis konsolu",
+   "maddeler": [
+    {
+     "id": "S1.01",
+     "baslik": "Servis hesabıyla giriş konsolu açar",
+     "adimlar": [
+      "Uygulamayı açın.",
+      "Servis sorumlusu e-posta ve parolanızla giriş yapın."
+     ],
+     "beklenen": "Üst çubukta \"Yetkili Servis Konsolu\" yazar; ekranda \"Saha Servis & Devreye Alma Görevleri\" başlığı ve \"Devreye Alma (Servis Modu)\" kartı görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Servis sorumlusu hesabı",
+     "yeni": false,
+     "kaynak": "lib/ui/dashboard/dashboard_app_bar.dart:54"
+    },
+    {
+     "id": "S1.02",
+     "baslik": "Girişte sözleşme onay ekranı çıkmaz",
+     "adimlar": [
+      "Servis sorumlusu hesabıyla giriş yapın."
+     ],
+     "beklenen": "Kullanıcı Sözleşmesi onay ekranı çıkmadan doğrudan servis konsolu açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:61"
+    },
+    {
+     "id": "S1.03",
+     "baslik": "Konsoldaki görev kartları",
+     "adimlar": [
+      "Servis konsolunda \"Saha Servis & Devreye Alma Görevleri\" bölümüne bakın."
+     ],
+     "beklenen": "\"Devreye Alma (Servis Modu)\", \"Abonelerim & Cihaz Atama\", \"Pano Değişimi (Afet & Hasar)\", \"Wi-Fi Yapılandırma & Kurtarma\" ve \"Acil Sıfırlama\" kartları görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/dashboard/console_dashboards.dart:391"
+    },
+    {
+     "id": "S1.04",
+     "baslik": "Servis Paneli açılır",
+     "adimlar": [
+      "Konsolda \"Devreye Alma (Servis Modu)\" kartına dokunun."
+     ],
+     "beklenen": "\"Servis Paneli\" açılır: \"Yeni Kurulum Başlat\" düğmesi, \"Pano Wi-Fi & Modem Kurulumu\" kartı, \"Devam eden kurulumlar\", \"Mevcut cihazlarım\", \"Yönetim araçları\" ve \"Acil durum\" bölümleri görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:182"
+    },
+    {
+     "id": "S1.05",
+     "baslik": "Yönetim araçları kartları",
+     "adimlar": [
+      "Servis Paneli'nde \"Yönetim araçları\" bölümüne inin."
+     ],
+     "beklenen": "\"Aboneler ve Home Admin\", \"Cihaz Envanteri\", \"Sistem Doktoru\" ve \"Servis Hesapları\" kartları görünür; aktif dairede yetkiniz varsa \"Pano Değişimi\" kartı da çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_tool_cards.dart:81"
+    },
+    {
+     "id": "S1.06",
+     "baslik": "Cihaz envanteri yalnız görüntülenir",
+     "adimlar": [
+      "\"Yönetim araçları\" altında \"Cihaz Envanteri\"'ne dokunun.",
+      "Bir pano kartına bakın."
+     ],
+     "beklenen": "\"Cihaz Envanteri\" kartının alt yazısı \"Stoğunuzdaki panolar ve karekodları\"dır; açılan listede panolarda yalnız \"Karekod Gör\" düğmesi vardır, \"Askıya Al\", \"Etiketi Yeniden Üret\" ve \"Envanterden Sil\" düğmeleri görünmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Stoğunuzda en az bir pano",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:664"
+    },
+    {
+     "id": "S1.07",
+     "baslik": "Envanterde pano arama",
+     "adimlar": [
+      "\"Cihaz Envanteri\"'nde \"Cihaz ara\" kutusuna bir pano seri numarası yazın."
+     ],
+     "beklenen": "Liste yalnız eşleşen panoyu gösterir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:332"
+    },
+    {
+     "id": "S1.08",
+     "baslik": "Sistem Doktoru denetimi",
+     "adimlar": [
+      "\"Yönetim araçları\" altında \"Sistem Doktoru\"'na dokunun.",
+      "Denetimin bitmesini bekleyin."
+     ],
+     "beklenen": "Sonuç \"1. Bulut sunucu ve güvenli bağlantı\", \"2. Ev modemi ve internet\", \"3. Pano gücü ve donanım\" başlıklarıyla görünür; \"Testi Yeniden Çalıştır\" ile tekrarlanabilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/system_doctor_dialog.dart:497"
+    },
+    {
+     "id": "S1.09",
+     "baslik": "Servis Paneli'nden çıkış",
+     "adimlar": [
+      "Servis Paneli'nin en altında \"Çıkış Yap\"'a dokunun.",
+      "Onay sorulursa onaylayın."
+     ],
+     "beklenen": "Oturum kapanır, giriş ekranına dönülür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_mode_page.dart:385"
+    }
+   ]
+  },
+  {
+   "id": "S2",
+   "baslik": "Servis yazılımı: giriş ve envanter",
+   "maddeler": [
+    {
+     "id": "S2.01",
+     "baslik": "Servis yazılımına giriş",
+     "adimlar": [
+      "Servis yazılımını açın (ev_otomasyon_sistemi.bat).",
+      "\"🔐 Sunucuya Giriş\"'e basın.",
+      "Servis sorumlusu e-posta ve parolanızı yazıp giriş yapın."
+     ],
+     "beklenen": "Pencere başlığı \"🔐 Sunucuya Giriş (süper kullanıcı / servis sorumlusu)\"dur; girişten sonra üst şeritte e-postanız ve yanında servis sorumlusu yazar, giriş düğmesi \"🔄 Hesap Değiştir\" olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Windows bilgisayar, internet",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:710"
+    },
+    {
+     "id": "S2.02",
+     "baslik": "Beni hatırla ile kendiliğinden giriş",
+     "adimlar": [
+      "Girişte \"Beni hatırla\" işaretli olsun.",
+      "Servis yazılımını kapatıp yeniden açın."
+     ],
+     "beklenen": "Giriş penceresi çıkmadan oturum kendiliğinden açılır; şeritte \"hatırlanıyor\" yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:118"
+    },
+    {
+     "id": "S2.03",
+     "baslik": "Oturumu kapatma",
+     "adimlar": [
+      "\"🚪 Oturumu Kapat\"'a basın.",
+      "Servis yazılımını kapatıp yeniden açın."
+     ],
+     "beklenen": "Şeritte \"Giriş yapılmadı\" yazar; yeniden açılışta oturum kendiliğinden açılmaz (hatırlanan oturum silinmiştir).",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:73"
+    },
+    {
+     "id": "S2.04",
+     "baslik": "Fabrika kaydı düğmeleri kapalı",
+     "adimlar": [
+      "Servis sorumlusu olarak giriş yapın.",
+      "\"2. Karekod Üret & Etiket Bas (Envanter)\" sekmesine geçin."
+     ],
+     "beklenen": "\"☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\", askıya alma, aktif etme, silme ve etiket yenileme düğmeleri pasiftir; \"Servis sorumlusu olarak giriş yaptınız\" ile başlayan bilgi notu görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1147"
+    },
+    {
+     "id": "S2.05",
+     "baslik": "Envanter listesi ve Daha fazla",
+     "adimlar": [
+      "2. sekmede \"🔄 Listeyi Yenile\"'ye basın.",
+      "Liste 100 kaydı aşıyorsa \"⬇️ Daha fazla\"'ya basın."
+     ],
+     "beklenen": "Tablo dolar; durum satırı gösterilen ve toplam kayıt sayısını yazar (Gösterilen … / Toplam …); \"⬇️ Daha fazla\" sonraki kayıtları tablonun sonuna ekler.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Envanterde 100'den fazla kart (Daha fazla için)",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:92"
+    },
+    {
+     "id": "S2.06",
+     "baslik": "Envanterde UID ya da seri no ile arama",
+     "adimlar": [
+      "Tablonun üstündeki arama kutusuna bir UID ya da seri no yazın.",
+      "\"🔍 Ara\"'ya (ya da Enter'a) basın.",
+      "Kutuyu boşaltıp yeniden \"🔍 Ara\"'ya basın."
+     ],
+     "beklenen": "Önce yalnız eşleşen kart listelenir; kutu boşken yapılan aramada bütün liste geri gelir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:99"
+    },
+    {
+     "id": "S2.07",
+     "baslik": "Sunucudaki anahtarla yeniden provizyon",
+     "adimlar": [
+      "Anahtarı silinmiş (birleşik imaj yüklenmiş) kayıtlı kartı USB ile bağlayın, 1. sekmede portu seçin.",
+      "3. sekmede \"🔑 Sunucudaki Anahtarla Yeniden Provizyon (USB)\"'a basıp onaylayın.",
+      "Sorulan kutuya etiketteki AP parolasını yazın."
+     ],
+     "beklenen": "\"Yeniden Provizyon Tamamlandı\" penceresi çıkar; kartın etiketi geçerli kalır, yeniden kayıt gerekmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı; araç bu işi servis sorumlusuna da açar)",
+     "on_kosul": "Envantere kayıtlı, anahtarı silinmiş kart; USB veri kablosu; kartın etiketi",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:418"
+    }
+   ]
+  },
+  {
+   "id": "S3",
+   "baslik": "Ofis: site ve daireler (servis yazılımı, 4. sekme)",
+   "maddeler": [
+    {
+     "id": "S3.01",
+     "baslik": "Siteleri listeleme",
+     "adimlar": [
+      "\"🏢 4. Siteler\" sekmesine geçin.",
+      "\"🔄 Siteleri Yenile\"'ye basın."
+     ],
+     "beklenen": "Site listesi dolar; durum satırında toplam site sayısı yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:96"
+    },
+    {
+     "id": "S3.02",
+     "baslik": "Site ekleme",
+     "adimlar": [
+      "\"➕ Site Ekle\"'ye basın.",
+      "\"Site adı *\" ve diğer alanları (adres, il, ilçe, sorumlu adı ve telefonu, e-posta, blok ve daire sayısı, not) doldurun.",
+      "\"✓ Kaydet\"'e basın."
+     ],
+     "beklenen": "\"Site Eklendi\" penceresi çıkar; site listede görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1164"
+    },
+    {
+     "id": "S3.03",
+     "baslik": "Site adı zorunlu",
+     "adimlar": [
+      "\"➕ Site Ekle\"'de site adını boş bırakıp \"✓ Kaydet\"'e basın."
+     ],
+     "beklenen": "\"Site adı zorunludur (en çok 120 karakter).\" uyarısı çıkar; site eklenmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:83"
+    },
+    {
+     "id": "S3.04",
+     "baslik": "Site düzenleme",
+     "adimlar": [
+      "Listeden bir site seçip \"✏️ Siteyi Düzenle\"'ye basın.",
+      "Bir alanı değiştirip \"✓ Kaydet\"'e basın."
+     ],
+     "beklenen": "Liste yenilenir; değişiklik site satırında görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:243"
+    },
+    {
+     "id": "S3.05",
+     "baslik": "Kartı bağlı site silinemez",
+     "adimlar": [
+      "Dairesine kart bağlı bir siteyi seçin.",
+      "\"🗑️ Siteyi Sil\"'e basıp onaylayın."
+     ],
+     "beklenen": "\"Bu sitenin dairelerine bağlı kartlar var; site silinemez.\" hatası çıkar; site silinmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Dairesine kart bağlı site",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1101"
+    },
+    {
+     "id": "S3.06",
+     "baslik": "Kartsız site silme",
+     "adimlar": [
+      "Hiçbir dairesine kart bağlı olmayan deneme sitesini seçin.",
+      "\"🗑️ Siteyi Sil\"'e basıp onaylayın."
+     ],
+     "beklenen": "Site listeden kalkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Deneme amaçlı, kartsız site",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1181"
+    },
+    {
+     "id": "S3.07",
+     "baslik": "Toplu daire üretme",
+     "adimlar": [
+      "Siteyi seçip \"🧱 Toplu Daire Üret\"'e basın.",
+      "Blok (ör. A), \"İlk daire no:\", \"Son daire no:\" ve isteğe bağlı daire tipi ile şablonu girin.",
+      "\"✓ Daireleri Üret\"'e basın."
+     ],
+     "beklenen": "\"Daireler Üretildi\" penceresi kaç daire eklendiğini söyler; daireler alttaki tabloda görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:98"
+    },
+    {
+     "id": "S3.08",
+     "baslik": "Var olan daireler atlanır",
+     "adimlar": [
+      "Aynı blok ve aynı numara aralığıyla \"🧱 Toplu Daire Üret\"'i yeniden çalıştırın."
+     ],
+     "beklenen": "Yeni daire eklenmez; ileti \"daire eklendi (var olan blok+no atlandı).\" ile biter ve sayı 0'dır.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Daireleri önceden üretilmiş site",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1228"
+    },
+    {
+     "id": "S3.09",
+     "baslik": "Bir seferde en çok 500 daire",
+     "adimlar": [
+      "\"🧱 Toplu Daire Üret\"'te ilk daire no 1, son daire no 600 yazıp \"✓ Daireleri Üret\"'e basın."
+     ],
+     "beklenen": "\"bir seferde en çok 500 daire üretilir\" uyarısı çıkar; daire üretilmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:276"
+    },
+    {
+     "id": "S3.10",
+     "baslik": "Daireye şablon atama",
+     "adimlar": [
+      "Bir daire seçip \"📐 Şablon Ata\"'ya basın.",
+      "Listeden şablonu seçin."
+     ],
+     "beklenen": "Dairenin şablon sütununda şablon adı ve sürümü görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Sitede ya da Genel'de en az bir şablon",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:100"
+    },
+    {
+     "id": "S3.11",
+     "baslik": "Daireye stoktaki kartı bağlama",
+     "adimlar": [
+      "Kartsız bir daire seçip \"🔗 Kart Bağla\"'ya basın.",
+      "Stoktaki kartın UID'sini (AHBU-S3-XXXXXX) yazıp onaylayın."
+     ],
+     "beklenen": "Dairenin Kart (UID) sütununda kart görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Stokta (IN_STOCK) bir kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:100"
+    },
+    {
+     "id": "S3.12",
+     "baslik": "Stokta olmayan kart bağlanamaz",
+     "adimlar": [
+      "\"🔗 Kart Bağla\"'da müşteriye ait ya da askıdaki bir kartın UID'sini yazın."
+     ],
+     "beklenen": "\"Bu kart stokta değil\" ile başlayan hata çıkar; kart bağlanmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Müşteriye ait ya da askıda kart",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:507"
+    },
+    {
+     "id": "S3.13",
+     "baslik": "Yanlış biçimli UID reddedilir",
+     "adimlar": [
+      "\"🔗 Kart Bağla\"'da ABC123 gibi yanlış biçimli bir UID yazın."
+     ],
+     "beklenen": "\"Geçersiz UID\" uyarısı çıkar; sunucuya bir şey gönderilmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1266"
+    },
+    {
+     "id": "S3.14",
+     "baslik": "Kart değişince yeniden yazım uyarısı",
+     "adimlar": [
+      "Şablonu kartına yazılmış (Yazıldı) bir dairede \"🔗 Kart Bağla\"'ya basın.",
+      "Başka bir stok kartının UID'sini yazın."
+     ],
+     "beklenen": "Kart değişir ve \"Şablon Yeniden Yazılmalı\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Yazıldı durumunda daire, ikinci bir stok kartı",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1278"
+    },
+    {
+     "id": "S3.15",
+     "baslik": "Kart ayrılınca daire Planlandı'ya döner",
+     "adimlar": [
+      "Yazıldı durumundaki bir dairede \"🔗 Kart Bağla\"'ya basın.",
+      "Kutuyu boşaltıp onaylayın."
+     ],
+     "beklenen": "Kart bağlantısı kalkar; daire durumu Planlandı olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Yazıldı durumunda daire",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:103"
+    },
+    {
+     "id": "S3.16",
+     "baslik": "Kurulmuş dairenin kartı değiştirilemez",
+     "adimlar": [
+      "Kuruldu ya da Teslim edildi durumundaki bir dairede \"🔗 Kart Bağla\"'ya basın.",
+      "Başka bir UID yazın (ya da kutuyu boşaltın) ve onaylayın."
+     ],
+     "beklenen": "Sunucu reddeder: kartın yalnız Pano Değişimi ile ya da yönetici tarafından değiştirilebileceğini söyleyen ileti çıkar; kart değişmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kuruldu ya da Teslim edildi durumunda daire",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:101"
+    },
+    {
+     "id": "S3.17",
+     "baslik": "Daire ilerleme durumu",
+     "adimlar": [
+      "Site listesinde \"İlerleme\" sütununa, daire tablosunda \"Durum\" sütununa bakın."
+     ],
+     "beklenen": "Daireler Planlandı → Yazıldı → Kuruldu → Teslim edildi sırasıyla ilerler; site satırı her durumdaki daire sayısını gösterir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:104"
+    },
+    {
+     "id": "S3.18",
+     "baslik": "Daireyi elle Teslim edildi yapma",
+     "adimlar": [
+      "Kartı bağlı, Yazıldı ya da Kuruldu durumundaki daireyi seçin.",
+      "\"✅ Teslim Edildi\"'ye basın.",
+      "\"'Teslim edildi' olarak işaretlensin mi\" sorusuna Evet deyin."
+     ],
+     "beklenen": "Dairenin durumu Teslim edildi olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kartı bağlı, Yazıldı ya da Kuruldu daire",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1304"
+    },
+    {
+     "id": "S3.19",
+     "baslik": "Hazır olmayan daire teslim edilemez",
+     "adimlar": [
+      "Kartı bağlı olmayan ya da Planlandı durumundaki bir dairede \"✅ Teslim Edildi\"'ye basın."
+     ],
+     "beklenen": "\"Teslim Edilemez\" uyarısı çıkar; durum değişmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kartsız ya da Planlandı daire",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1296"
+    },
+    {
+     "id": "S3.20",
+     "baslik": "Daire silme",
+     "adimlar": [
+      "Deneme amaçlı bir daire seçin.",
+      "\"🗑️ Daireyi Sil\"'e basıp onaylayın."
+     ],
+     "beklenen": "Daire tablodan kalkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Deneme amaçlı daire",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1314"
+    },
+    {
+     "id": "S3.21",
+     "baslik": "Kart müşteriye bağlanınca daire Kuruldu olur",
+     "adimlar": [
+      "Site dairesinin kartıyla uygulamadaki sihirbazın 4. adımını (\"Daireye Bağla\") tamamlayın.",
+      "Servis yazılımında daire listesini yenileyin."
+     ],
+     "beklenen": "Dairenin durumu Kuruldu olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Servis yazılımında daireye bağlanmış ve şablonu yazılmış kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:104"
+    },
+    {
+     "id": "S3.22",
+     "baslik": "Sihirbaz bitince daire kendiliğinden teslim olur",
+     "adimlar": [
+      "Site dairesinin kartıyla uygulamada sihirbazı 10. adımda \"Devreye Almayı Tamamla\" ile bitirin.",
+      "Servis yazılımında daire listesini yenileyin."
+     ],
+     "beklenen": "Daire kendiliğinden Teslim edildi durumuna geçer.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Servis yazılımında daireye bağlanmış ve şablonu yazılmış kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:105"
+    },
+    {
+     "id": "S3.23",
+     "baslik": "Pano değişiminde dairenin kartı taşınır",
+     "adimlar": [
+      "Site dairesindeki panoyu uygulamada Pano Değişimi ile yeni bir stok panosuyla değiştirin.",
+      "Servis yazılımında daire listesini yenileyin."
+     ],
+     "beklenen": "Dairenin Kart (UID) sütununda yeni kart görünür (bağlantı sunucuda kendiliğinden taşınır).",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kurulu site dairesi, yeni stok panosu",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:249"
+    },
+    {
+     "id": "S3.24",
+     "baslik": "Daireden kablolama şeması",
+     "adimlar": [
+      "Şablonu atanmış bir daire seçin.",
+      "\"📄 Kablolama Şeması (PDF)\"'ye basıp dosyayı kaydedin."
+     ],
+     "beklenen": "\"Kablolama Şeması Kaydedildi\" penceresi çıkar; PDF başlığında site, blok/daire, şablon sürümü ve Kart UID yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Şablonu atanmış daire",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:338"
+    }
+   ]
+  },
+  {
+   "id": "S4",
+   "baslik": "Ofis: şablon hazırlama (servis yazılımı, 5. sekme)",
+   "maddeler": [
+    {
+     "id": "S4.01",
+     "baslik": "Şablonları listeleme",
+     "adimlar": [
+      "\"📐 5. Şablonlar\" sekmesinde \"Site:\" kutusundan bir site ya da \"Genel (standart şablonlar)\" seçin.",
+      "\"🔄 Şablonları Yenile\"'ye basın."
+     ],
+     "beklenen": "Seçilen sitenin şablonları listelenir; Genel seçiliyken yalnız genel şablonlar gelir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:109"
+    },
+    {
+     "id": "S4.02",
+     "baslik": "Yeni şablon açma",
+     "adimlar": [
+      "\"➕ Yeni Şablon\"'a basın.",
+      "Şablon adını ve daire tipini yazın."
+     ],
+     "beklenen": "Düzenleyici açılır; \"⚡ Röle Çıkışları\", \"🔘 Girişler (DI)\" ve \"🛡️ Güvenlik\" sekmeleri görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:531"
+    },
+    {
+     "id": "S4.03",
+     "baslik": "Şablonu çoğaltma",
+     "adimlar": [
+      "Listeden bir şablon seçip \"📑 Çoğalt\"'a basın.",
+      "Yeni ad verip kaydedin."
+     ],
+     "beklenen": "Aynı içerikte, yeni adlı bir şablon listede görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "En az bir şablon",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:264"
+    },
+    {
+     "id": "S4.04",
+     "baslik": "Ek modül kanallarını uygulama",
+     "adimlar": [
+      "Düzenleyicide \"Ek modül (RS485) var\"'ı işaretleyin, kanal sayısını ve adresi girin.",
+      "\"↔ Kanalları Uygula\"'ya basın."
+     ],
+     "beklenen": "Röle ve giriş tabloları ek kanal sayısı kadar büyür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:110"
+    },
+    {
+     "id": "S4.05",
+     "baslik": "Kanalları Uygula'ya basmadan kaydetme",
+     "adimlar": [
+      "Ek modül kanal sayısını değiştirin.",
+      "\"↔ Kanalları Uygula\"'ya basmadan \"💾 Doğrula ve Kaydet (yeni sürüm)\"'e basın.",
+      "Çıkan soruya Hayır deyin."
+     ],
+     "beklenen": "\"Ek modül değişikliği henüz uygulanmadı\" sorusu çıkar; Hayır deyince kayıt yapılmaz, değişiklik sessizce kaybolmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:828"
+    },
+    {
+     "id": "S4.06",
+     "baslik": "Panjur rölesi çift kurulur",
+     "adimlar": [
+      "\"⚡ Röle Çıkışları\"'nda tek numaralı bir rölenin tipini \"Panjur (çift)\" yapın."
+     ],
+     "beklenen": "Röle ve sonraki röle çift olur: tek numaralı Yukarı, sonraki Aşağı; ikisinin süresi aynıdır.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:111"
+    },
+    {
+     "id": "S4.07",
+     "baslik": "Lambaya dimmer (parlaklık) ekleme",
+     "adimlar": [
+      "Bir \"Lamba/Priz\" satırında \"💡\" düğmesine basın.",
+      "\"Parlaklık ayarı yapılacak mı?\" penceresinde evet deyip dimmer kaynağı, adres ve kanalı girin."
+     ],
+     "beklenen": "Pencere dimmerin nereye konacağını yazar; satırda dimmer kaydı saklanır.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:112"
+    },
+    {
+     "id": "S4.08",
+     "baslik": "Girişlerde yalnız yaylı buton",
+     "adimlar": [
+      "\"🔘 Girişler (DI)\" sekmesinde bir girişin kip listesini açın."
+     ],
+     "beklenen": "Tüm kipler yaylı butondur (ör. \"Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir\"); kalıcı duvar anahtarı seçeneği yoktur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:114"
+    },
+    {
+     "id": "S4.09",
+     "baslik": "Gaz/duman girişi NC olur",
+     "adimlar": [
+      "Bir girişe güvenlik rolü olarak gaz (ya da duman) verin.",
+      "Kontak tipini NO yapmayı deneyin."
+     ],
+     "beklenen": "Giriş NC (normalde kapalı) olarak kaydedilir ve hedef rölesi \"0 - Boşta\" olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:116"
+    },
+    {
+     "id": "S4.10",
+     "baslik": "Güvenlik sekmesine vana ekleme",
+     "adimlar": [
+      "\"🛡️ Güvenlik\" sekmesinde bölge adını yazın.",
+      "\"➕ Cihaz Ekle\" ile vana ekleyip kapanma kipini ve su/gaz seçimini yapın."
+     ],
+     "beklenen": "Vana, boş bir \"Lamba/Priz\" rölesine bağlı olarak listede görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "En az bir boş Lamba/Priz rölesi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:118"
+    },
+    {
+     "id": "S4.11",
+     "baslik": "Güvenlik cihazı panjur/darbe rölesine bağlanamaz",
+     "adimlar": [
+      "Bütün röleleri panjur ya da darbe olan bir şablonda \"🛡️ Güvenlik\" sekmesinde \"➕ Cihaz Ekle\"'ye basın."
+     ],
+     "beklenen": "Cihaz eklenmez; \"güvenlik cihazı panjur/darbe rölesine bağlanamaz\" uyarısı görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:780"
+    },
+    {
+     "id": "S4.12",
+     "baslik": "Tip değişikliği güvenlik cihazını silecekse sorulur",
+     "adimlar": [
+      "Vana bağlı bir rölenin tipini \"Panjur (çift)\" yapın.",
+      "Çıkan soruya Hayır deyin."
+     ],
+     "beklenen": "\"Güvenlik Öğesi Silinecek\" sorusu çıkar; Hayır deyince hiçbir şey değişmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Vanası olan şablon",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:636"
+    },
+    {
+     "id": "S4.13",
+     "baslik": "Doğrula ve kaydet yeni sürüm üretir",
+     "adimlar": [
+      "Düzenleyicide \"💾 Doğrula ve Kaydet (yeni sürüm)\"'e basın."
+     ],
+     "beklenen": "\"Şablon Kaydedildi\" penceresi çıkar; şablonun sürüm numarası bir artar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:120"
+    },
+    {
+     "id": "S4.14",
+     "baslik": "Sürüm geçmişi",
+     "adimlar": [
+      "Şablonu seçip \"🕘 Sürüm Geçmişi\"'ne basın."
+     ],
+     "beklenen": "Eski sürümler listelenir; eski sürümler değişmemiştir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "En az iki kez kaydedilmiş şablon",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:120"
+    },
+    {
+     "id": "S4.15",
+     "baslik": "Kablosuz (köprü) sensörlü şablon reddedilir",
+     "adimlar": [
+      "İçinde kablosuz (köprü, b1..b16) sensör olan bir şablonu açın.",
+      "\"💾 Doğrula ve Kaydet (yeni sürüm)\"'e basın."
+     ],
+     "beklenen": "\"Kablosuz (köprü) sensör bu sürümde desteklenmiyor\" hatası çıkar; şablon kaydedilmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kablosuz sensör içeren eski bir şablon",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:116"
+    },
+    {
+     "id": "S4.16",
+     "baslik": "Aynı anda düzenleme çakışması",
+     "adimlar": [
+      "Aynı şablonu iki bilgisayarda düzenlemeye açın.",
+      "Önce birinde, sonra ötekinde \"💾 Doğrula ve Kaydet (yeni sürüm)\"'e basın."
+     ],
+     "beklenen": "İkinci bilgisayarda \"Şablon Değişti\" sorusu çıkar: yeni sürümü açabilir ya da \"Yine de Üstüne Yaz\" ile bilerek üstüne yazabilirsiniz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "İki bilgisayar ya da iki servis yazılımı penceresi",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1502"
+    },
+    {
+     "id": "S4.17",
+     "baslik": "Şablonu silme",
+     "adimlar": [
+      "Deneme şablonunu seçip \"🗑️ Şablonu Sil\"'e basın ve onaylayın."
+     ],
+     "beklenen": "Şablon listeden kalkar (eski sürümler ve yazım kayıtları sunucuda kalır).",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Deneme amaçlı şablon",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:265"
+    },
+    {
+     "id": "S4.18",
+     "baslik": "Şablondan kablolama şeması",
+     "adimlar": [
+      "Bir şablon seçip \"📄 Kablolama Şeması (PDF)\"'ye basın ve kaydedin."
+     ],
+     "beklenen": "A4 PDF kaydedilir; klemens düzeni, röle/giriş tabloları ve alt bilgide şablon sürümü yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:338"
+    }
+   ]
+  },
+  {
+   "id": "S5",
+   "baslik": "Atölye: şablonu karta yazma ve kontrol listesi",
+   "maddeler": [
+    {
+     "id": "S5.01",
+     "baslik": "Daireden USB ile karta yazma",
+     "adimlar": [
+      "4. sekmede daireyi seçip \"💾 Karta Yaz\"'a basın.",
+      "\"🔌 USB (seri) - önerilen; güvenlik ayarlarını tamamen yazabilir\" seçiliyken \"USB portu:\" kutusundan portu seçin.",
+      "\"💾 Yaz\"'a basın."
+     ],
+     "beklenen": "Sonuç alanında şablonun yazıldığı ve geri okunduğu yazar; \"Şablon Karta Yazıldı\" penceresi çıkar ve daire Yazıldı olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Provizyonlu kart USB'de; kart daireye bağlı, daireye şablon atanmış",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:147"
+    },
+    {
+     "id": "S5.02",
+     "baslik": "Yazımdan sonra kablolama şeması sorusu",
+     "adimlar": [
+      "Başarılı yazımdan sonra \"Kablolama şeması (PDF) şimdi kaydedilsin mi?\" sorusuna Evet deyin.",
+      "Dosyayı kaydedin."
+     ],
+     "beklenen": "\"Kablolama Şeması Kaydedildi\" penceresi çıkar; şemada yazımın yapıldığı kartın UID'si yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Başarılı karta yazım",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1737"
+    },
+    {
+     "id": "S5.03",
+     "baslik": "Daire etiketi kaydetme",
+     "adimlar": [
+      "Daireden yapılan başarılı yazımdan sonra \"Daire Etiketi\" sorusuna Evet deyin.",
+      "PNG dosyasını kaydedin."
+     ],
+     "beklenen": "\"Daire Etiketi Kaydedildi\" penceresi etiketin PIN ve parola içermediğini söyler; etikette kart UID'si, site/blok/daire ve şablon sürümü yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Daireden yapılmış başarılı yazım",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1740"
+    },
+    {
+     "id": "S5.04",
+     "baslik": "Yanlış kart takılıysa yazılmaz",
+     "adimlar": [
+      "Daireye bağlı karttan farklı bir kartı USB'ye takın.",
+      "Daireden \"💾 Karta Yaz\" ile USB yolunu seçip yazın."
+     ],
+     "beklenen": "\"Karta Yazılamadı\" hatası bağlı kartın daireye bağlı kartla eşleşmediğini söyler; karta hiçbir şey yazılmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kartı bağlı daire ve başka bir kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:150"
+    },
+    {
+     "id": "S5.05",
+     "baslik": "Kartsız daireye yazımda kart önce bağlanır",
+     "adimlar": [
+      "Kartı bağlı olmayan, şablonu atanmış bir daireyi seçin.",
+      "Stoktaki kartı USB'ye takıp \"💾 Karta Yaz\" ile yazın."
+     ],
+     "beklenen": "Araç takılı kartı yazmadan önce daireye bağlar, sonra şablonu yazar; daire tablosunda kart ve Yazıldı durumu görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kartsız daire, stoktaki provizyonlu kart",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:296"
+    },
+    {
+     "id": "S5.06",
+     "baslik": "Başka daireye bağlı kart yazılmaz",
+     "adimlar": [
+      "Kartsız bir daireyi seçin.",
+      "Başka bir daireye bağlı kartı USB'ye takıp \"💾 Karta Yaz\" ile yazmayı deneyin."
+     ],
+     "beklenen": "\"başka bir daireye bağlı; şablon yazılmadı\" iletisi çıkar; karta hiçbir şey yazılmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Başka daireye bağlı kart",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1667"
+    },
+    {
+     "id": "S5.07",
+     "baslik": "Ethernet ile anahtarsız yazma",
+     "adimlar": [
+      "Kartı Ethernet kablosuyla atölye ağına bağlayın.",
+      "\"💾 Karta Yaz\"'da \"🌐 Ethernet (LAN) - kartın Ethernet IP'si; anahtar gerekmez\" seçeneğini seçin.",
+      "\"Kartın IP adresi:\" kutusuna kartın Ethernet IP'sini, UID kutusuna kartın UID'sini yazıp \"💾 Yaz\"'a basın."
+     ],
+     "beklenen": "Anahtar sorulmadan şablon yazılır ve geri okunur. Araç IP'nin doğru karta ait olduğunu denetlemez; yanlış IP başka karta yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kablolu Ethernet, firmware v1.3.0+",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:151"
+    },
+    {
+     "id": "S5.08",
+     "baslik": "Ethernet yolunda UID zorunlu",
+     "adimlar": [
+      "Ethernet yolunda UID kutusunu boş bırakıp \"💾 Yaz\"'a basın."
+     ],
+     "beklenen": "\"Yazım kaydı için kart UID'si gerekir\" uyarısı çıkar; yazım başlamaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:400"
+    },
+    {
+     "id": "S5.09",
+     "baslik": "Wi-Fi IP'siyle Ethernet yazımı reddedilir",
+     "adimlar": [
+      "Ethernet yolunda kartın Wi-Fi IP adresini yazıp \"💾 Yaz\"'a basın."
+     ],
+     "beklenen": "Kart anahtar ister ve yazım reddedilir (ör. \"Kart yerel anahtarı kabul etmedi\"); karta hiçbir şey yazılmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Wi-Fi'ye bağlı kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:152"
+    },
+    {
+     "id": "S5.10",
+     "baslik": "Dairenin şablonu değiştiyse sorar",
+     "adimlar": [
+      "Servis yazılımında daire listesini yükleyin.",
+      "Başka bir bilgisayardan dairenin şablonunu değiştirin.",
+      "Listeyi yenilemeden \"💾 Karta Yaz\"'a basın."
+     ],
+     "beklenen": "\"Daire Şablonu Değişti\" sorusu çıkar; Evet derseniz dairenin güncel şablonu yazılır, Hayır derseniz hiçbir şey yazılmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "İki bilgisayar ya da iki servis yazılımı penceresi",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:148"
+    },
+    {
+     "id": "S5.11",
+     "baslik": "Daire silinmiş ya da şablonu kaldırılmışsa yazmaz",
+     "adimlar": [
+      "Daire listesi yüklüyken daireyi başka yerden silin (ya da şablonunu kaldırın).",
+      "Bu pencerede aynı daire için \"💾 Karta Yaz\"'a basın."
+     ],
+     "beklenen": "\"Daire Değişti\" uyarısı çıkar; hiçbir şey yazılmaz, daire listesi yenilenir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "İki bilgisayar ya da iki servis yazılımı penceresi",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1340"
+    },
+    {
+     "id": "S5.12",
+     "baslik": "Farklı şablon yazılırsa daire Yazıldı olmaz",
+     "adimlar": [
+      "5. sekmeden, dairenin şablonundan başka bir şablonu seçip \"💾 Karta Yaz\" ile o dairenin kartına yazın.",
+      "4. sekmede daire listesini yenileyin."
+     ],
+     "beklenen": "\"Daire Şablonu Farklı\" penceresi çıkar; daire Yazıldı yapılmaz ve \"Son yazım\" sütununda \"(farklı şablon)\" görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kartı bağlı daire, ikinci bir şablon",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:155"
+    },
+    {
+     "id": "S5.13",
+     "baslik": "Kartta yarım kalmış şablon tanınır",
+     "adimlar": [
+      "Yazım sırasında gücü kesilmiş (şablonu yarım kalmış) kartı USB'ye takın.",
+      "Aynı şablonu \"💾 Karta Yaz\" ile yeniden yazın."
+     ],
+     "beklenen": "Araç yazmadan önce \"Kartta yarım kalmış şablon uygulaması var\" der; yazım bitince kart normale döner ve daire Yazıldı olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Şablon yazımı yarıda kesilmiş kart",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:153"
+    },
+    {
+     "id": "S5.14",
+     "baslik": "NC tehlike girişi uyarısı",
+     "adimlar": [
+      "NC bağlı gaz, duman ya da su sensörü olan bir şablonu USB ile yazmaya başlayın."
+     ],
+     "beklenen": "Yazmadan önce \"NC Tehlike Girişi\" uyarısı çıkar ve girişi DI-GND arasında köprülemenizi söyler.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Şablonda NC tehlike sensörü",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:304"
+    },
+    {
+     "id": "S5.15",
+     "baslik": "Atölyede kilitlenen alarmı onaylama",
+     "adimlar": [
+      "NC tehlike girişi boşken (köprüsüz) şablonu USB ile yazın.",
+      "\"Alarm Kilitlendi (Atölye)\" penceresinden sonra girişi DI ile GND arasında köprüleyin.",
+      "\"🔕 Alarmı Onayla (USB)\"'ya basın."
+     ],
+     "beklenen": "\"Alarm Onaylandı\" görünür; kuruluk bekleme süresi dolunca bölge normale döner.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Şablonda NC tehlike sensörü, kısa köprü kablosu",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:307"
+    },
+    {
+     "id": "S5.16",
+     "baslik": "İnternetsiz yazımda kayıt bekler",
+     "adimlar": [
+      "Bilgisayarın internetini kesip şablonu USB ile yazın.",
+      "İnternet gelince \"📤 Bekleyen Kayıtları Gönder\"'e basın."
+     ],
+     "beklenen": "Yazımdan sonra \"Yazım Kaydı Bekliyor\" uyarısı çıkar; gönderince kayıt sunucuya işlenir ve daire Yazıldı olur.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:317"
+    },
+    {
+     "id": "S5.17",
+     "baslik": "Bekleyen kayıtla kapatma uyarısı",
+     "adimlar": [
+      "Bekleyen yazım kaydı varken servis yazılımını kapatmayı deneyin."
+     ],
+     "beklenen": "\"Bekleyen Yazım Kaydı\" sorusu çıkar ve kapatırsanız kaydın kaybolacağını söyler.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Gönderilmemiş yazım kaydı",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3365"
+    },
+    {
+     "id": "S5.18",
+     "baslik": "Atölye kontrol listesi",
+     "adimlar": [
+      "Her kart için daire satırını ve basılı belgeleri kontrol edin: kart UID'si, durum, son yazım, şema ve daire etiketi."
+     ],
+     "beklenen": "Kart UID'si etiketle aynı, daire Yazıldı, \"Son yazım\" sütununda başarılı son sürüm var; PDF şemadaki sürüm ve Kart UID etiketle aynı.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Şablonu yazılmış kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:160"
+    }
+   ]
+  },
+  {
+   "id": "S6",
+   "baslik": "Saha: montaj ve kablolama testi",
+   "maddeler": [
+    {
+     "id": "S6.01",
+     "baslik": "Etiket ve şema daireyle eşleşir",
+     "adimlar": [
+      "Kartın etiketindeki blok/daireyi, şemadaki şablon sürümünü ve Kart UID'yi kontrol edin."
+     ],
+     "beklenen": "Hepsi bulunduğunuz daireyle ve kartın etiketiyle aynıdır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Atölyede hazırlanmış kart ve PDF şema",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:168"
+    },
+    {
+     "id": "S6.02",
+     "baslik": "Duvar butonları internetsiz çalışır",
+     "adimlar": [
+      "Panoya enerji verin (internet gerekmez).",
+      "Her lamba butonuna basın, sonra tekrar basın."
+     ],
+     "beklenen": "Şemada yazan lamba yanar, ikinci basışta söner.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Şablonu yazılmış, kablolanmış pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:170"
+    },
+    {
+     "id": "S6.03",
+     "baslik": "Panjur butonu doğru yöne gider",
+     "adimlar": [
+      "Her panjur butonuna basın, sonra tekrar basın."
+     ],
+     "beklenen": "Panjur şemadaki yöne gider, tekrar basınca durur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Motorlu panjur",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:170"
+    },
+    {
+     "id": "S6.04",
+     "baslik": "Su sensörü vanayı kapatır",
+     "adimlar": [
+      "Su sensörünü ıslatın (ya da kontağını tetikleyin)."
+     ],
+     "beklenen": "Vana kapanır; siren varsa çalar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Su sensörü + vana",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:170"
+    },
+    {
+     "id": "S6.05",
+     "baslik": "Gaz dedektörünün kendi testi",
+     "adimlar": [
+      "Gaz dedektörünün kendi test düğmesine basın (gerçek gaz kullanmayın)."
+     ],
+     "beklenen": "Pano alarm verir; gaz vanası varsa kapanır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Gaz dedektörü (gaz vanası varsa)",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:171"
+    },
+    {
+     "id": "S6.06",
+     "baslik": "v1.3.2 fabrika ayarında giriş N, röle N'yi sürer",
+     "adimlar": [
+      "Şablon yazılmamış, v1.3.2 yüklü panoya enerji verin.",
+      "1. girişteki butona, sonra 2. girişteki butona basın."
+     ],
+     "beklenen": "Her giriş aynı numaralı röleyi açıp kapatır (giriş 1 → röle 1, giriş 2 → röle 2); hiçbir röle panjur gibi çalışmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "v1.3.2 yüklü, şablonsuz pano",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:30"
+    }
+   ]
+  },
+  {
+   "id": "S7",
+   "baslik": "Teslim sihirbazı: açma ve genel kurallar",
+   "maddeler": [
+    {
+     "id": "S7.01",
+     "baslik": "Yeni kurulum başlatma",
+     "adimlar": [
+      "Servis Paneli'nde \"Yeni Kurulum Başlat\"'a dokunun."
+     ],
+     "beklenen": "Sihirbaz 1. adımda (Hazırlık) açılır; üstte 10 adımlık sayaç görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:189"
+    },
+    {
+     "id": "S7.02",
+     "baslik": "Adım doğrulanmadan ilerlenemez",
+     "adimlar": [
+      "Herhangi bir adımda işlemi yapmadan \"Devam\"'a basmayı deneyin."
+     ],
+     "beklenen": "\"Devam\" pasiftir; altında ne yapılması gerektiği yazar; ileri atlanamaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:189"
+    },
+    {
+     "id": "S7.03",
+     "baslik": "Adım yönergeleri",
+     "adimlar": [
+      "Bir adımda \"Ne yapacaksın?\" bölümünü açın."
+     ],
+     "beklenen": "O adımda yapılacaklar madde madde listelenir; yeniden dokununca gizlenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/setup_step_scaffold.dart:357"
+    },
+    {
+     "id": "S7.04",
+     "baslik": "Yarım kurulumu sürdürme",
+     "adimlar": [
+      "Sihirbazda 5. adımdayken geri çıkın ve \"Sihirbazdan çıkılsın mı?\" sorusunu onaylayın.",
+      "Servis Paneli'nde \"Devam eden kurulumlar\" altındaki kayıtta \"Devam Et\"'e dokunun."
+     ],
+     "beklenen": "Kayıt kaldığı adımı gösterir; sihirbaz aynı adımdan açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:182"
+    },
+    {
+     "id": "S7.05",
+     "baslik": "Gizli bilgiler telefonda saklanmaz",
+     "adimlar": [
+      "Wi-Fi şifresini girdiğiniz bir kurulumu yarıda bırakın.",
+      "\"Devam Et\" ile yeniden açıp 5. adıma bakın."
+     ],
+     "beklenen": "İlerleme korunmuştur; Wi-Fi şifresi alanı boş gelir (anahtar, PIN, kod, bulut kimliği ve Wi-Fi şifresi telefonda saklanmaz).",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:190"
+    },
+    {
+     "id": "S7.06",
+     "baslik": "Kurulumu bırakma",
+     "adimlar": [
+      "Sihirbazın menüsünden \"Kurulumu bırak (ilerlemeyi sil)\"'i seçin.",
+      "\"İlerlemeyi Sil\" ile onaylayın."
+     ],
+     "beklenen": "Kayıt \"Devam eden kurulumlar\" listesinden kalkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/service_setup_wizard_page.dart:310"
+    },
+    {
+     "id": "S7.07",
+     "baslik": "Mevcut panoda bağlantıyı yeniden kurma",
+     "adimlar": [
+      "Servis Paneli'nde \"Mevcut cihazlarım\" altında panonun \"Bağlantıyı yeniden kur\" düğmesine dokunun."
+     ],
+     "beklenen": "Sihirbaz doğrudan 5. adımdan (Wi-Fi Kurulumu) açılır; 2-4. adımlar atlanır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Aktif dairede kurulu pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:183"
+    },
+    {
+     "id": "S7.08",
+     "baslik": "Mevcut panoda testleri yenileme",
+     "adimlar": [
+      "\"Mevcut cihazlarım\" altında panonun \"Testleri yap\" düğmesine dokunun."
+     ],
+     "beklenen": "Sihirbaz doğrudan 7. adımdan (Röle Testi) açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Aktif dairede kurulu pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:183"
+    },
+    {
+     "id": "S7.09",
+     "baslik": "Yarım kayıt her yoldan sorulur",
+     "adimlar": [
+      "Mevcut bir panoda sihirbazı bir adımda bırakın.",
+      "Aynı panoyu başka bir yoldan, ör. \"Mevcut cihazlarım\" → \"Testleri yap\" ile açın."
+     ],
+     "beklenen": "\"Bu panonun yarım kalmış kurulumu var\" sorusu çıkar: \"Kaldığınız Yerden Devam\", \"Baştan Başla (kayıt silinir)\", \"Vazgeç\".",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Yarım kalmış mevcut pano kaydı",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:184"
+    },
+    {
+     "id": "S7.10",
+     "baslik": "Vazgeç kaydı değiştirmez",
+     "adimlar": [
+      "Aynı soruda \"Vazgeç\"'e dokunun.",
+      "Servis Paneli'nde \"Devam eden kurulumlar\" listesine bakın."
+     ],
+     "beklenen": "Yarım kayıt aynı adımla listede durur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Yarım kalmış mevcut pano kaydı",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:186"
+    },
+    {
+     "id": "S7.11",
+     "baslik": "Parmak izi kilidi sihirbazı kapatmaz",
+     "adimlar": [
+      "Sihirbazda 5. adımdayken telefonun Wi-Fi ayarlarına geçin ve 30 saniyeden uzun kalın.",
+      "Uygulamaya dönüp kilidi parmak izi / yüzle açın."
+     ],
+     "beklenen": "Kilit ekranı sihirbazın üstüne gelir; kilit açılınca sihirbaz aynı adımda sürer, baştan başlamaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Uygulamada parmak izi / yüz kilidi açık",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:192"
+    }
+   ]
+  },
+  {
+   "id": "S8",
+   "baslik": "Sihirbaz 1-4: hazırlık, cihaz, müşteri, daireye bağlama",
+   "maddeler": [
+    {
+     "id": "S8.01",
+     "baslik": "Hazırlık: oturum ve sunucu doğrulama",
+     "adimlar": [
+      "1. adımda \"Bağlantıyı Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "\"Oturumunuz geçerli ve sunucuya ulaşıldı.\" yazar; \"Kalıcı servis personeli hesabı: kurulum yetkiniz müşteriye bağladığınız daire için süreli verilir.\" notu görünür; \"Devam\" açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "İnternet",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:196"
+    },
+    {
+     "id": "S8.02",
+     "baslik": "Etiket karekoduyla cihaz tanıma",
+     "adimlar": [
+      "2. adımda \"Etiketi Tara (Karekod)\"'a dokunun.",
+      "Etiketteki 1. karekodu okutun."
+     ],
+     "beklenen": "\"Cihaz bilgisi alındı\" kartı ve \"Sunucuda stokta görünüyor: kuruluma uygun.\" satırı görünür; PIN gizli gösterilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Stoktaki pano ve etiketi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:197"
+    },
+    {
+     "id": "S8.03",
+     "baslik": "Seri no ve PIN'i elle yazma",
+     "adimlar": [
+      "2. adımda \"Karekodu okutamıyorum: elle yazacağım\"'a dokunun.",
+      "\"Cihaz seri numarası\" ve \"Kurulum PIN (6 rakam)\" alanlarını doldurun.",
+      "\"Bilgileri Kullan\"'a dokunun."
+     ],
+     "beklenen": "\"Cihaz bilgisi alındı\" kartı görünür ve stok durumu denetlenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Stoktaki pano ve etiketi",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_2_identify.dart:179"
+    },
+    {
+     "id": "S8.04",
+     "baslik": "Başka daireye bağlı cihaz kurulamaz",
+     "adimlar": [
+      "2. adımda başka bir daireye zaten bağlı bir panonun etiketini okutun."
+     ],
+     "beklenen": "\"Bu cihaz zaten bir daireye bağlı\" uyarısı çıkar; kurulum ilerlemez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Sahiplenilmiş pano",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/logic/identify_logic.dart:196"
+    },
+    {
+     "id": "S8.05",
+     "baslik": "Müşteriye kod gönderip yazma",
+     "adimlar": [
+      "3. adımda \"E-posta veya telefon\" alanına müşterinin e-postasını yazın.",
+      "\"Kod Gönder\"'e dokunun.",
+      "Müşterinin söylediği 6 haneli kodu \"6 haneli kod\" alanına yazın."
+     ],
+     "beklenen": "Kodun gönderildiği ve kalan geçerlilik süresi görünür; kod yazılınca adım \"Kod girildi\" olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Müşteri hesabı ya da müşterinin e-postası",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:198"
+    },
+    {
+     "id": "S8.06",
+     "baslik": "Kodu yeniden gönderme",
+     "adimlar": [
+      "Kod gelmezse düğmedeki bekleme süresinin bitmesini bekleyin.",
+      "\"Kodu Yeniden Gönder\"'e dokunun."
+     ],
+     "beklenen": "Bekleme bitene kadar düğme geri sayar; sonra yeni kod gönderilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_3_customer.dart:126"
+    },
+    {
+     "id": "S8.07",
+     "baslik": "Kendi hesabınıza kurulum yapılamaz",
+     "adimlar": [
+      "3. adımda kendi e-postanızı yazıp \"Kod Gönder\"'e dokunun."
+     ],
+     "beklenen": "\"Kendi adınıza kurulum yapılamaz\" uyarısı çıkar; kod gönderilmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/logic/customer_logic.dart:223"
+    },
+    {
+     "id": "S8.08",
+     "baslik": "Telefonla giren müşteriye kod gönderilemez",
+     "adimlar": [
+      "3. adımda uygulamaya yalnız telefonla (SMS) giren bir müşterinin telefonunu yazın.",
+      "\"Kod Gönder\"'e dokunun."
+     ],
+     "beklenen": "\"Müşteriye onay kodu gönderilemiyor\" uyarısı çıkar; ileti müşterinin panoyu kendi uygulamasından etiketteki karekodla sahiplenmesini, sonra size servis PIN'i vermesini söyler.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "E-postasız (yalnız telefonla giren) müşteri hesabı",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:198"
+    },
+    {
+     "id": "S8.09",
+     "baslik": "Cihazı müşterinin dairesine bağlama",
+     "adimlar": [
+      "4. adımda özeti kontrol edin; isterseniz \"Daire adı (isteğe bağlı)\" yazın.",
+      "\"Daireye Bağla\"'ya dokunun.",
+      "\"Cihaz daireye bağlansın mı?\" sorusuna \"Evet, Bağla\" deyin."
+     ],
+     "beklenen": "\"Cihaz müşterinin dairesine bağlandı.\" yazar; \"Bu daire için kurulum yetkiniz\" ile başlayan satır yetkinin bitiş tarihini (yaklaşık 72 saat sonrası) gösterir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "2. ve 3. adımları tamamlanmış kurulum",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:202"
+    },
+    {
+     "id": "S8.10",
+     "baslik": "Hesabı olmayan müşteriye hesap açılır",
+     "adimlar": [
+      "Uygulamada hesabı olmayan bir e-postayla 3. ve 4. adımları tamamlayın."
+     ],
+     "beklenen": "4. adım sonucunda \"Müşteri için yeni hesap açıldı; etkinleştirme e-postası gönderildi.\" yazar; müşteriye davet e-postası gelir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Uygulamada hesabı olmayan müşteri e-postası",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_4_claim.dart:167"
+    },
+    {
+     "id": "S8.11",
+     "baslik": "Site dairesinde ev adı ve kanallar şablondan",
+     "adimlar": [
+      "Servis yazılımında daireye bağlanmış ve şablonu yazılmış kartla 4. adımı tamamlayın.",
+      "Müşterinin uygulamasında ev adına ve kanal adlarına bakın."
+     ],
+     "beklenen": "Ev adı site adı + blok-no biçiminde gelir (ör. Güneş Sitesi A-12); kanal adları şablondakiyle aynıdır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Site dairesine bağlı, şablonu yazılmış kart",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:203"
+    },
+    {
+     "id": "S8.12",
+     "baslik": "Yanlış kurulum PIN'i 2. adıma döndürür",
+     "adimlar": [
+      "2. adımda PIN'i bilerek yanlış yazın.",
+      "3. adımı tamamlayıp 4. adımda \"Daireye Bağla\" deyin."
+     ],
+     "beklenen": "\"Kurulum PIN'i hatalı\" uyarısı kalan deneme hakkıyla çıkar; sihirbaz 2. adıma döner.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:204"
+    },
+    {
+     "id": "S8.13",
+     "baslik": "5 yanlış PIN'de kilit",
+     "adimlar": [
+      "Yanlış kurulum PIN'ini 5 kez deneyin."
+     ],
+     "beklenen": "\"Cihaz geçici olarak kilitlendi\" uyarısı çıkar; yaklaşık 15 dakika beklemek gerekir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Deneme panosu",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:289"
+    },
+    {
+     "id": "S8.14",
+     "baslik": "Yanlış müşteri kodu 3. adıma döndürür",
+     "adimlar": [
+      "3. adımda müşteri kodunu yanlış yazın.",
+      "4. adımda \"Daireye Bağla\" deyin."
+     ],
+     "beklenen": "\"Müşteri kodu hatalı\" uyarısı kalan deneme hakkıyla çıkar; sihirbaz 3. adıma döner.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/logic/claim_logic.dart:367"
+    }
+   ]
+  },
+  {
+   "id": "S9",
+   "baslik": "Sihirbaz 5-6: ağ ve bulut bağlantısı",
+   "maddeler": [
+    {
+     "id": "S9.01",
+     "baslik": "Kurulum ağından panoyu bulma",
+     "adimlar": [
+      "Telefonu etiketin 2. karekoduyla panonun kurulum ağına (AHBU-XXXXXX) bağlayın.",
+      "5. adımda \"Bağlandım: Panoyu Kontrol Et\"'e dokunun."
+     ],
+     "beklenen": "\"Doğru pano bulundu\" satırı panonun kimliğiyle görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Provizyonlu pano, Wi-Fi ile kurulacak",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:206"
+    },
+    {
+     "id": "S9.02",
+     "baslik": "Ev Wi-Fi'sini panoya yükleme",
+     "adimlar": [
+      "\"Ağları Tara\"'ya dokunup müşterinin ağını seçin (ya da adını elle yazın).",
+      "Şifreyi yazıp \"Yeni Wi-Fi Şifresini Panoya Yükle\"'ye dokunun."
+     ],
+     "beklenen": "Listede \"Pano yalnızca 2,4 GHz Wi-Fi ağlarına bağlanabilir.\" notu vardır; pano bağlanınca \"Pano ev Wi-Fi ağına bağlandı\" yazar ve telefonu ev Wi-Fi'sine geri almanız istenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Müşterinin 2,4 GHz Wi-Fi ağı ve şifresi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:209"
+    },
+    {
+     "id": "S9.03",
+     "baslik": "Hazırlanmamış panoyu hazırlama",
+     "adimlar": [
+      "Provizyonsuz panonun kurulum ağına bağlanıp \"Bağlandım: Panoyu Kontrol Et\"'e dokunun.",
+      "\"Kurulum ağı parolası\" ve \"Kurulum ağı parolası (tekrar)\" alanlarına etiketteki parolayı yazın.",
+      "\"Panoyu Hazırla\"'ya dokunun."
+     ],
+     "beklenen": "Önce \"Pano henüz hazırlanmamış: kurulum ağı şu an parolasız (açık).\" uyarısı görünür; hazırlıktan sonra \"Pano hazırlandı. Kurulum ağı şimdi parolalı olarak yeniden başlıyor\" yazar ve telefonu etiketteki parolayla yeniden bağlamanız istenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Provizyonsuz pano ve etiketi",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:207"
+    },
+    {
+     "id": "S9.04",
+     "baslik": "İki parola uyuşmazsa pano hazırlanmaz",
+     "adimlar": [
+      "\"Panoyu Hazırla\" formunda iki parola alanına farklı değerler yazın.",
+      "\"Panoyu Hazırla\"'ya dokunun."
+     ],
+     "beklenen": "\"Kurulum ağı parolaları eşleşmiyor.\" uyarısı çıkar; pano hazırlanmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Provizyonsuz pano",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:208"
+    },
+    {
+     "id": "S9.05",
+     "baslik": "Etiketteki paroladan farklıysa pano hazırlanmaz",
+     "adimlar": [
+      "Önce \"Etiketteki kurulum ağı karekodunu uygulamayla oku (parolayı göster)\" ile etiketi okutun.",
+      "İki alana da etikettekinden farklı ama aynı parolayı yazıp \"Panoyu Hazırla\"'ya dokunun."
+     ],
+     "beklenen": "\"Yazdığınız parola etiketteki parolayla eşleşmiyor.\" uyarısı çıkar; pano hazırlanmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Provizyonsuz pano ve etiketi",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:209"
+    },
+    {
+     "id": "S9.06",
+     "baslik": "Ethernet'li panoyu doğrulama",
+     "adimlar": [
+      "5. adımda \"Pano kabloyla (Ethernet) bağlı\"'yı seçin.",
+      "\"Panonun Ethernet IP adresi\" alanına IP'yi yazıp \"Ethernet ile Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "\"Pano ev ağına Ethernet ile bağlı\" yazar; kurulum ağı ve Wi-Fi bilgisi istenmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kablolu Ethernet ile modeme bağlı, v1.3.0+ provizyonlu pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:211"
+    },
+    {
+     "id": "S9.07",
+     "baslik": "Ethernet bildirmeyen pano",
+     "adimlar": [
+      "Ethernet yolunda yanlış bir IP (ya da panonun Wi-Fi IP'sini) yazıp \"Ethernet ile Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "\"Pano Ethernet bağlantısı bildirmiyor\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:212"
+    },
+    {
+     "id": "S9.08",
+     "baslik": "Zaten ev ağındaki panoyu IP ile doğrulama",
+     "adimlar": [
+      "5. adımda \"Pano zaten ev ağında: IP ile bağlan\"'a dokunun.",
+      "\"Pano IP adresi\"ni yazıp \"Bu IP ile Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "Adım tamamlanır ve \"Pano ev ağında\" durumu görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Ev ağına bağlı pano ve IP adresi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:213"
+    },
+    {
+     "id": "S9.09",
+     "baslik": "Buluta bağlama",
+     "adimlar": [
+      "Telefonu ev Wi-Fi'sine geri alın.",
+      "6. adımda \"Panoya Bağlan\"'a, ardından \"Buluta Bağla ve Bekle\"'ye dokunun."
+     ],
+     "beklenen": "En çok 90 saniye içinde \"Pano sunucuda çevrimiçi: bulut bağlantısı doğrulandı.\" yazar; adım \"Çevrimiçi\" olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Ev ağında, internete çıkan pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:214"
+    },
+    {
+     "id": "S9.10",
+     "baslik": "Kendiliğinden çevrimiçi pano adımı hemen geçer",
+     "adimlar": [
+      "Bulut kimliğini kendisi almış (çevrimiçi) bir panoyla 6. adımı açın."
+     ],
+     "beklenen": "Adım hemen tamamlanır: \"Pano sunucuda zaten çevrimiçi: çalışan panonun bulut kimliği DEĞİŞTİRİLMEDİ.\"",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Provizyonlu, v1.3.0+, ağa bağlı ve sahiplenilmiş pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:214"
+    },
+    {
+     "id": "S9.11",
+     "baslik": "90 saniyede bağlanamayan pano",
+     "adimlar": [
+      "Panonun internetini kesin (modem kablosu çıkarılabilir).",
+      "6. adımda \"Buluta Bağla ve Bekle\"'ye dokunun."
+     ],
+     "beklenen": "\"Pano 90 saniyede buluta bağlanamadı\" uyarısı nedenle birlikte çıkar; \"Kimliği Yeniden Yaz\" ile yeniden denenebilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:292"
+    }
+   ]
+  },
+  {
+   "id": "S10",
+   "baslik": "Sihirbaz 7: şablon, röle ve güvenlik testi",
+   "maddeler": [
+    {
+     "id": "S10.01",
+     "baslik": "Sihirbazda şablon uygulama",
+     "adimlar": [
+      "7. adımda \"Şablon uygula (isteğe bağlı)\" kartında \"Şablon Seç\"'e dokunun.",
+      "Siteyi ya da \"Genel (standart) şablonlar\"'ı, sonra şablonu seçin; önizlemeyi kontrol edin.",
+      "\"Panoya Uygula\"'ya dokunun."
+     ],
+     "beklenen": "\"panoya yazıldı. Röle adları ve türleri şablondan geldi\" iletisi çıkar; röle, panjur ve giriş listeleri şablondaki adlarla dolar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "v1.3.0+ pano; servis yazılımında hazırlanmış şablon",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:218"
+    },
+    {
+     "id": "S10.02",
+     "baslik": "Panodaki şablon görünür",
+     "adimlar": [
+      "Atölyede şablonu yazılmış panoyla 7. adımda \"Röleleri Listele\"'ye dokunun."
+     ],
+     "beklenen": "Listenin üstünde panodaki şablonun sürümü (Şablon vN) görünür; röleler şablondaki adlarla gelir, yalnız test edilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Şablonu yazılmış pano",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_7_relays.dart:81"
+    },
+    {
+     "id": "S10.03",
+     "baslik": "Eski firmware şablonu desteklemez",
+     "adimlar": [
+      "v1.3.0'dan eski bir panoda 7. adımda şablon uygulamayı deneyin."
+     ],
+     "beklenen": "\"Pano yazılımı şablonu desteklemiyor\" uyarısı çıkar; şablonsuz devam edilebilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "v1.3.0'dan eski pano",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_7_template.dart:69"
+    },
+    {
+     "id": "S10.04",
+     "baslik": "Lamba rölesi testi",
+     "adimlar": [
+      "7. adımda \"Röleleri Listele\"'ye dokunun.",
+      "Bir lamba rölesinde \"Aç\" ve \"Kapat\"'a dokunun.",
+      "\"Lamba / yük gerçekten çalıştı mı?\" sorusuna \"Evet, çalıştı\" deyin."
+     ],
+     "beklenen": "Röle satırında \"Pano: açıldı ✔\" görünür, ardından röle \"Doğrulandı\" olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Lamba bağlı röle",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:219"
+    },
+    {
+     "id": "S10.05",
+     "baslik": "Yük çalışmadıysa sorunlu işaretlenir",
+     "adimlar": [
+      "Bir lamba rölesinde \"Aç\"/\"Kapat\"'tan sonra \"Hayır, çalışmadı\" deyin."
+     ],
+     "beklenen": "Röle \"Sorun var\" olarak işaretlenir; adım tamamlanmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_7_relays.dart:293"
+    },
+    {
+     "id": "S10.06",
+     "baslik": "Bağlı olmayan röle Kullanılmıyor",
+     "adimlar": [
+      "Yük bağlı olmayan bir rölede \"Kullanılmıyor\"'a dokunun."
+     ],
+     "beklenen": "Röle \"Kullanılmıyor\" sayılır; bu röle test edilmeden adım tamamlanabilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:220"
+    },
+    {
+     "id": "S10.07",
+     "baslik": "Darbe rölesi tetikleme",
+     "adimlar": [
+      "Darbe tipindeki bir rölede \"Tetikle\"'ye dokunun."
+     ],
+     "beklenen": "Röle kısa süre çeker ve bırakır; pano yanıtı satırda işaretlenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Darbe tipinde röle",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:220"
+    },
+    {
+     "id": "S10.08",
+     "baslik": "Panjur röleleri bu adımda denenmez",
+     "adimlar": [
+      "7. adımda panjur rölelerinin satırına bakın."
+     ],
+     "beklenen": "Satırda \"Panjur rölesi\" etiketi vardır; burada açılıp kapatılmaz, 8. adımda yönüyle birlikte denenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Panjuru olan pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:219"
+    },
+    {
+     "id": "S10.09",
+     "baslik": "Kanala vana atama",
+     "adimlar": [
+      "Bir rölede \"Bu kanala ne bağlı?\" sorusunda vanayı seçin.",
+      "\"Vana, rölede enerji varken mi kapalı?\" ve \"Bu vana neyi kesiyor?\" sorularını yanıtlayın."
+     ],
+     "beklenen": "Güvenlik ayarları kartında \"Panoya yazılmadı\" etiketi çıkar (henüz yazılmadı).",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Vana bağlı röle",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:221"
+    },
+    {
+     "id": "S10.10",
+     "baslik": "Kablosuz sensör ekle düğmesi görünmez",
+     "adimlar": [
+      "7. adımda \"Girişler ve Sensörler\" bölümüne bakın."
+     ],
+     "beklenen": "\"Kablosuz sensör ekle\" düğmesi görünmez (v1.3.2 dahil hiçbir pano desteklemiyor); sensörler yalnız panodaki girişlere atanır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:221"
+    },
+    {
+     "id": "S10.11",
+     "baslik": "Panoda kayıtlı kablosuz sensör kaldırılmalı",
+     "adimlar": [
+      "Daha önce kablosuz sensör kaydedilmiş bir panoda 7. adımı açın.",
+      "Sensör satırında \"Kaldır\"'a dokunup güvenlik ayarlarını yeniden yazın."
+     ],
+     "beklenen": "Sensör \"Bu panoda kablosuz sensör desteklenmiyor; kaldırın.\" uyarısıyla görünür; kaldırılana kadar kayıt yapılamaz, kaldırılınca panodan da silinir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Panoda kayıtlı kablosuz sensör",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:222"
+    },
+    {
+     "id": "S10.12",
+     "baslik": "Güvenlik ayarlarını yazma ve bölge testi",
+     "adimlar": [
+      "Sensör ve vana atamalarını yapın.",
+      "\"Güvenlik Ayarlarını Panoya Yaz ve Test Et\"'e dokunun."
+     ],
+     "beklenen": "Ayarlar panoya yazılır ve kart \"Panoda kayıtlı\" olur; bölge testinde su vanası kapanır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Su sensörü + vana",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:225"
+    },
+    {
+     "id": "S10.13",
+     "baslik": "Gaz vanası testten sonra kapalı kalır",
+     "adimlar": [
+      "Gaz vanası olan bölgede \"Güvenlik Ayarlarını Panoya Yaz ve Test Et\"'e dokunun."
+     ],
+     "beklenen": "Önce \"Test gaz vanasını kapatır.\" uyarısı çıkar; testten sonra gaz vanası kapalı kalır (yalnız yerinde elle açılır).",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Gaz vanası",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_7_safety.dart:46"
+    },
+    {
+     "id": "S10.14",
+     "baslik": "Bölge testi geçmezse adım tamamlanmaz",
+     "adimlar": [
+      "Vananın kablosunu çıkarıp güvenlik testini çalıştırın.",
+      "Kabloyu takıp \"Bölge Testini Yeniden Çalıştır\"'a dokunun."
+     ],
+     "beklenen": "Test geçmeyince adım tamamlanmaz ve yeniden çalıştırma düğmesi görünür; kablo düzelince test geçer.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Vana",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_7_safety.dart:767"
+    },
+    {
+     "id": "S10.15",
+     "baslik": "Çevrimdışı panoya güvenlik yazımı sıraya alınır",
+     "adimlar": [
+      "Panonun internetini kesin.",
+      "\"Güvenlik Ayarlarını Panoya Yaz ve Test Et\"'e dokunun."
+     ],
+     "beklenen": "\"Pano çevrimdışı. Değişiklikler pano bağlanınca (24 saat içinde) uygulanacak.\" yazar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_7_safety.dart:708"
+    }
+   ]
+  },
+  {
+   "id": "S11",
+   "baslik": "Sihirbaz 8-10: panjur, duvar butonları ve teslim",
+   "maddeler": [
+    {
+     "id": "S11.01",
+     "baslik": "Panjur yön testi",
+     "adimlar": [
+      "8. adımda \"Panjurları Listele\"'ye dokunun.",
+      "Bir panjurda \"Yukarı\"'ya dokunun.",
+      "\"Panjur gerçekten YUKARI mı gitti?\" sorusuna \"Evet, yukarı gitti\" deyin."
+     ],
+     "beklenen": "\"Yön doğrulandı.\" görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Motorlu panjur",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:226"
+    },
+    {
+     "id": "S11.02",
+     "baslik": "Ters bağlı panjur",
+     "adimlar": [
+      "Panjur aşağı gittiyse \"Hayır, aşağı gitti\" deyin.",
+      "YUKARI ve AŞAĞI kablolarını yer değiştirip \"Düzelttim, yeniden dene\"'ye dokunun."
+     ],
+     "beklenen": "Önce \"Yön ters: YUKARI ve AŞAĞI kablolarını yer değiştirin.\" yazar; düzeltip yeniden deneyince yön doğrulanır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Motorlu panjur",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_8_shutters.dart:343"
+    },
+    {
+     "id": "S11.03",
+     "baslik": "Panjur süresini ölçüp kaydetme",
+     "adimlar": [
+      "\"Ölçüme Hazırla\"'ya dokunun; \"Alta İndir\" ile panjuru en alta indirip \"Alta indi\" deyin.",
+      "\"Ölçümü Başlat\"'a dokunun; panjur tam açılınca \"Bitti: panjur tam açıldı\"'ya dokunun.",
+      "\"Kaydet ve Panoda Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "\"Kayıtlı süre:\" satırı ölçülen saniyeyle görünür (sunucuya kaydedildi, panoda doğrulandı).",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Motorlu panjur; pano çevrimiçi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:226"
+    },
+    {
+     "id": "S11.04",
+     "baslik": "Panjur süresini elle girme",
+     "adimlar": [
+      "\"Süreyi biliyorum: elle gireceğim\"'e dokunun.",
+      "Süreyi (1-300 sn) yazıp \"Bu Süreyi Kullan\"'a dokunun."
+     ],
+     "beklenen": "Süre kaydedilir ve panjur hazır sayılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Motorlu panjur; pano çevrimiçi",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_8_shutters.dart:419"
+    },
+    {
+     "id": "S11.05",
+     "baslik": "Dairede motorlu panjur yok beyanı",
+     "adimlar": [
+      "Panoda panjur çifti tanımlı ama dairede motor yoksa \"Bu dairede motorlu panjur yok\"'a dokunun.",
+      "\"Onaylıyorum\" deyin."
+     ],
+     "beklenen": "Adım tamamlanır; teslim raporuna teknisyen beyanı olarak yazılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Panjur rölesi tanımlı, motorsuz daire",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_8_shutters.dart:64"
+    },
+    {
+     "id": "S11.06",
+     "baslik": "Duvar butonlarını algılama",
+     "adimlar": [
+      "9. adımda \"Dinlemeyi Başlat\"'a dokunun.",
+      "Duvardaki her butona sırayla basın (1 saniye basılı tutun)."
+     ],
+     "beklenen": "Basılan her giriş \"Algılandı\" olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Girişlere bağlı duvar butonları",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:228"
+    },
+    {
+     "id": "S11.07",
+     "baslik": "Butonu olmayan giriş",
+     "adimlar": [
+      "Butonu bağlı olmayan girişte \"Bu girişte buton yok\"'a dokunun."
+     ],
+     "beklenen": "Giriş \"Buton yok\" olarak işaretlenir; adım tamamlanabilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:228"
+    },
+    {
+     "id": "S11.08",
+     "baslik": "Güvenlik girişleri buton sayılmaz",
+     "adimlar": [
+      "Sensör ya da vana geri bildirimi atanmış girişleri olan panoda 9. adımı açın."
+     ],
+     "beklenen": "Bu girişler listede yoktur; üstte güvenlik girişi sayısını veren ve \"bu adımda gösterilmez.\" ile biten not görünür; teslim raporunda buton sayılmazlar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Güvenlik rolü atanmış girişler",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:228"
+    },
+    {
+     "id": "S11.09",
+     "baslik": "Müşteri onayı olmadan teslim edilemez",
+     "adimlar": [
+      "10. adımda onay kutusunu işaretlemeden \"Devreye Almayı Tamamla\"'ya bakın."
+     ],
+     "beklenen": "\"Devreye almak için yukarıdaki müşteri onay kutusunu işaretleyin.\" notu görünür; düğme çalışmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_10_handover.dart:189"
+    },
+    {
+     "id": "S11.10",
+     "baslik": "Devreye almayı tamamlama",
+     "adimlar": [
+      "\"Kontrol listesi\"ni kontrol edin; isterseniz \"Montaj notu\" ve \"Teslim alan kişi\" yazın.",
+      "\"Müşteriye kurulumu gösterdim ve teslimi onayladı\" kutusunu işaretleyin.",
+      "\"Devreye Almayı Tamamla\"'ya dokunun."
+     ],
+     "beklenen": "\"Kurulum tamamlandı: sunucu tüm testleri doğruladı ve cihazı devreye aldı.\" yazar; adım \"Devreye alındı\" olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "1-9. adımları tamamlanmış kurulum",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:231"
+    },
+    {
+     "id": "S11.11",
+     "baslik": "Ethernet'li kurulumda ağ satırı",
+     "adimlar": [
+      "Ethernet ile kurulan bir panoda 10. adımdaki \"Kontrol listesi\"ne bakın."
+     ],
+     "beklenen": "Ağ satırı Wi-Fi yerine Ethernet bağlantısını gösterir ve tamam işaretlidir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Ethernet ile kurulan pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:231"
+    },
+    {
+     "id": "S11.12",
+     "baslik": "Kurulum raporunu paylaşma",
+     "adimlar": [
+      "Devreye almadan sonra \"Raporu Kopyala / Paylaş\"'a dokunun."
+     ],
+     "beklenen": "\"Rapor panoya kopyalandı\" görünür; rapor PIN, cihaz anahtarı, bulut kimliği ve Wi-Fi şifresi içermez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Tamamlanmış kurulum",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:232"
+    },
+    {
+     "id": "S11.13",
+     "baslik": "Android alarm bildirimi hatırlatması",
+     "adimlar": [
+      "10. adımdaki notlara bakın."
+     ],
+     "beklenen": "Müşterinin Android telefonunda \"Arka planda alarm bildirimi\" ayarını açmasını hatırlatan not ve siren önerisi görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:232"
+    }
+   ]
+  },
+  {
+   "id": "S12",
+   "baslik": "Pano değişimi",
+   "maddeler": [
+    {
+     "id": "S12.01",
+     "baslik": "Pano değişimi formunu doldurma",
+     "adimlar": [
+      "Konsolda \"Pano Değişimi (Afet & Hasar)\"'a dokunun; \"Değişim yapılacak daire\"nin doğru olduğunu kontrol edin.",
+      "Eski panoyu seçin; \"Yeni pano kimliği\" (etiketi kamerayla okutabilirsiniz), \"Kurulum PIN'i\" ve isterseniz \"Değişim nedeni\" girin."
+     ],
+     "beklenen": "\"Eski Panonun Ayarlarını Yeni Panoya Aktar\" düğmesi kullanılabilir olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Aktif dairede kurulu pano; yeni stok panosu ve etiketi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:244"
+    },
+    {
+     "id": "S12.02",
+     "baslik": "Değişimi onaylama",
+     "adimlar": [
+      "\"Eski Panonun Ayarlarını Yeni Panoya Aktar\"'a dokunun.",
+      "\"Pano değişimi onayı\" penceresinde \"Panoyu Değiştir\"'e dokunun."
+     ],
+     "beklenen": "\"Pano değişimi tamamlandı\" yazar ve kaç kanalın aktarıldığı (… \"kanal yeni panoya aktarıldı.\") görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "S12.01 tamamlanmış",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:244"
+    },
+    {
+     "id": "S12.03",
+     "baslik": "Panjur süreleri aktarılır",
+     "adimlar": [
+      "Panjurlu bir evde değişim sonuç ekranına bakın."
+     ],
+     "beklenen": "\"Panjur süreleri yeni pano çevrimiçi olunca otomatik uygulanacak.\" (ya da aktarıldı) ve her panjurun süresi yazar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Panjur süresi kaydedilmiş ev",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:245"
+    },
+    {
+     "id": "S12.04",
+     "baslik": "Kanal adları yeni panoya gelir",
+     "adimlar": [
+      "Değişimden sonra yeni panonun kanal adlarına bakın."
+     ],
+     "beklenen": "Eski panodaki kanal adları ve kurallar aynen gelmiştir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Değişimi yapılmış ev",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:245"
+    },
+    {
+     "id": "S12.05",
+     "baslik": "Yeni panoyu sihirbazla bağlama",
+     "adimlar": [
+      "Sonuç ekranında \"Yeni Panoyu Şimdi Bağla\"'ya dokunun."
+     ],
+     "beklenen": "Sihirbaz yeni pano için 5. adımdan (Wi-Fi Kurulumu) açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Değişimi yapılmış ev",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:245"
+    },
+    {
+     "id": "S12.06",
+     "baslik": "Güvenlik ayarlı evde değişim servise açık",
+     "adimlar": [
+      "Sensörü ya da vanası kayıtlı bir evde servis hesabınızla pano değişimini yapın."
+     ],
+     "beklenen": "Değişim reddedilmez; \"Bu evde pano değişimini yetkili servis personeli yapmalıdır.\" uyarısı çıkmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Su/gaz sensörü ya da vanası olan ev",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:14"
+    },
+    {
+     "id": "S12.07",
+     "baslik": "Güvenlik ayarları aktarılmadı uyarısı",
+     "adimlar": [
+      "Su/gaz sensörü ya da vanası olan evde değişimi tamamlayın.",
+      "Sonuç ekranına bakın."
+     ],
+     "beklenen": "Kırmızı \"Su/gaz koruması şu an çalışmıyor\" uyarısı çıkar: sensör, vana ve bölge ayarları yeni panoya aktarılmamıştır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Su/gaz sensörü ya da vanası olan ev",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:247"
+    },
+    {
+     "id": "S12.08",
+     "baslik": "Güvenlik ayarlarını yeni panoya yeniden yazma",
+     "adimlar": [
+      "Değişimden sonra sihirbazın 7. adımında güvenlik atamalarını yeniden yapın.",
+      "\"Güvenlik Ayarlarını Panoya Yaz ve Test Et\"'e dokunun."
+     ],
+     "beklenen": "Bölge testi geçer, vana kapanır; su/gaz koruması yeniden çalışır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Su/gaz sensörü ya da vanası olan, değişimi yapılmış ev",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:248"
+    },
+    {
+     "id": "S12.09",
+     "baslik": "Eski panoyla aynı kimlik reddedilir",
+     "adimlar": [
+      "\"Yeni pano kimliği\"ne eski panonun kimliğini yazıp devam edin."
+     ],
+     "beklenen": "\"Yeni pano, değiştirilecek eski panoyla aynı olamaz.\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/replace_board_dialog.dart:201"
+    },
+    {
+     "id": "S12.10",
+     "baslik": "Kurulum PIN'i 6 rakam olmalı",
+     "adimlar": [
+      "\"Kurulum PIN'i\"ne 5 rakam yazıp devam edin."
+     ],
+     "beklenen": "\"Kurulum PIN'i tam 6 rakam olmalıdır.\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/replace_board_dialog.dart:203"
+    },
+    {
+     "id": "S12.11",
+     "baslik": "Bağlantı koparsa durum kontrolü",
+     "adimlar": [
+      "\"Panoyu Değiştir\"'e dokunduktan hemen sonra telefonun internetini kesin.",
+      "İnternet gelince \"Durumu Kontrol Et\"'e dokunun."
+     ],
+     "beklenen": "\"Değişimin sonucu belirsiz\" kartı çıkar; işlem körlemesine yinelenmez, durum kontrolü değişimin yapılıp yapılmadığını söyler.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/replace_board_dialog.dart:642"
+    }
+   ]
+  },
+  {
+   "id": "S13",
+   "baslik": "Acil sıfırlama",
+   "maddeler": [
+    {
+     "id": "S13.01",
+     "baslik": "Acil sıfırlama kartı",
+     "adimlar": [
+      "Servis Paneli'nde \"Acil durum\" bölümüne inin."
+     ],
+     "beklenen": "\"Acil Servis Sıfırlaması\" kartında \"Cihaz kimliği\", \"Sıfırlama gerekçesi\", \"Yeni sahip\" alanları ve \"Acil Sıfırla\" düğmesi vardır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:298"
+    },
+    {
+     "id": "S13.02",
+     "baslik": "Gerekçe en az 15 karakter",
+     "adimlar": [
+      "Gerekçeye 15 karakterden kısa bir metin yazıp \"Acil Sıfırla\"'ya dokunun."
+     ],
+     "beklenen": "\"Gerekçe en az\" ile başlayan uyarı (en az 15 karakter, şu anki sayıyla) çıkar; sıfırlama yapılmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:252"
+    },
+    {
+     "id": "S13.03",
+     "baslik": "Kimlik yazarak onay",
+     "adimlar": [
+      "Geçerli kimlik ve gerekçeyle \"Acil Sıfırla\"'ya dokunun.",
+      "\"Acil sıfırlama onayı\" penceresinde cihaz kimliğini aynen yazın."
+     ],
+     "beklenen": "Kimlik aynen yazılmadan onay düğmesi açılmaz; yazınca sıfırlama yapılabilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Son 72 saatte kurduğunuz bir evin panosu",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:252"
+    },
+    {
+     "id": "S13.04",
+     "baslik": "Panoyu stoğa alma",
+     "adimlar": [
+      "\"Yeni sahip\"'i boş bırakıp sıfırlamayı onaylayın."
+     ],
+     "beklenen": "\"Sıfırlama tamamlandı\" ve \"Cihaz stoğa alındı; eski daire bağlantısı kaldırıldı.\" yazar; eski ailenin erişimi biter.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Son 72 saatte kurduğunuz bir evin panosu",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:253"
+    },
+    {
+     "id": "S13.05",
+     "baslik": "Yeni kurulum PIN'i bir kez gösterilir",
+     "adimlar": [
+      "Sıfırlama sonucunu okuyun, PIN'i not edin.",
+      "\"Kaydettim, Kapat\"'a dokunun."
+     ],
+     "beklenen": "Sonuçta \"Yeni kurulum PIN\" bir kez gösterilir; pencere kapanınca yeniden gösterilmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Tamamlanmış acil sıfırlama",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:253"
+    },
+    {
+     "id": "S13.06",
+     "baslik": "Panoyu yeni sahibe devretme",
+     "adimlar": [
+      "\"Yeni sahip\" alanına yeni sahibin e-postasını ya da telefonunu yazıp sıfırlayın.",
+      "Sonuç ekranında \"Panoyu şimdi bağla\"'ya dokunun."
+     ],
+     "beklenen": "Cihazın yeni sahibe devredildiği yazar; sihirbaz 5. adımdan açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Son 72 saatte kurduğunuz bir evin panosu; yeni sahibin hesabı",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:675"
+    },
+    {
+     "id": "S13.07",
+     "baslik": "Kendinizi yeni sahip yapamazsınız",
+     "adimlar": [
+      "\"Yeni sahip\" alanına kendi e-postanızı yazıp \"Acil Sıfırla\"'ya dokunun."
+     ],
+     "beklenen": "\"Kendi hesabınızı yeni sahip olarak seçemezsiniz.\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:144"
+    },
+    {
+     "id": "S13.08",
+     "baslik": "72 saat dışındaki ev sıfırlanamaz",
+     "adimlar": [
+      "72 saatten önce kurulmuş ya da sizin kurmadığınız bir evin panosunu sıfırlamayı deneyin."
+     ],
+     "beklenen": "Sunucu reddeder; hata kutusunda \"Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını sıfırlayabilir\" notu görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "72 saatten eski ya da başkasının kurduğu ev",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52"
+    },
+    {
+     "id": "S13.09",
+     "baslik": "Yeni sahip yalnız sonraki alarmları görür",
+     "adimlar": [
+      "Eski sahibin döneminde alarm kaydı olan panoyu acil sıfırlamayla yeni sahibe devredin.",
+      "Yeni sahibin uygulamasında alarm geçmişine bakın."
+     ],
+     "beklenen": "Yeni sahip yalnız devirden sonraki ve hâlâ açık alarmları görür; eski kapanmış alarmlar görünmez.",
+     "rol_notu": "servis sorumlusu (yeni sahibin hesabıyla kontrol)",
+     "on_kosul": "Alarm geçmişi olan pano; yeni sahibin hesabı",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:28"
+    }
+   ]
+  },
+  {
+   "id": "S14",
+   "baslik": "Aboneler ve Home Admin",
+   "maddeler": [
+    {
+     "id": "S14.01",
+     "baslik": "Abone listesi",
+     "adimlar": [
+      "Konsolda \"Abonelerim & Cihaz Atama\"'ya dokunun."
+     ],
+     "beklenen": "\"Toplam Abone\", \"Home Admin Var\", \"Atama Bekleyen\" sayaçları ve devreye aldığınız daireler listelenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:315"
+    },
+    {
+     "id": "S14.02",
+     "baslik": "Abone arama",
+     "adimlar": [
+      "\"Abone ara\" kutusuna daire adı, adres, pano UUID'si ya da müşteri adı yazın."
+     ],
+     "beklenen": "Yalnız eşleşen daireler listelenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:351"
+    },
+    {
+     "id": "S14.03",
+     "baslik": "Sahipsiz daireye Home Admin atama",
+     "adimlar": [
+      "\"Home Admin henüz atanmadı\" yazan dairede \"Home Admin Ata\"'ya dokunun.",
+      "\"Yeni yönetici adı\" ve e-posta ya da telefon girip devam edin.",
+      "\"Yönetici değişikliğini onaylıyor musunuz?\" sorusuna \"Evet, Ata\" deyin."
+     ],
+     "beklenen": "Atama tamamlanır; daire satırında Home Admin'in adı görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Home Admin'i olmayan daire",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:256"
+    },
+    {
+     "id": "S14.04",
+     "baslik": "Yöneticiyi kodla devretme",
+     "adimlar": [
+      "Home Admin'i olan dairede \"Yöneticiyi Devret\"'e dokunun; yeni yöneticinin bilgilerini girip \"Evet, Devret\" deyin.",
+      "Mevcut yöneticiye giden kodu \"6 haneli onay kodu\" alanına yazıp onaylayın."
+     ],
+     "beklenen": "\"Mevcut yöneticiye onay kodu gönderildi.\" görünür; doğru kodla yönetim yeni kişiye geçer.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Home Admin'i olan daire; mevcut yöneticiye ulaşılabiliyor",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/assign_admin_dialog.dart:533"
+    },
+    {
+     "id": "S14.05",
+     "baslik": "Aynı kişi yeniden atanamaz",
+     "adimlar": [
+      "\"Yöneticiyi Devret\"'te mevcut yöneticinin e-postasını yazıp devam edin."
+     ],
+     "beklenen": "\"Bu kişi zaten dairenin mevcut yöneticisi.\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Home Admin'i olan daire",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/assign_admin_dialog.dart:229"
+    },
+    {
+     "id": "S14.06",
+     "baslik": "Telefon alanı +90 ile hazır gelir",
+     "adimlar": [
+      "\"Home Admin Ata\" penceresinde \"Telefon numarası\" alanına bakın.",
+      "Alana 0555 123 45 67 yazın (ya da yapıştırın)."
+     ],
+     "beklenen": "Alanın başında \"+90\" hazırdır; numara 555 123 45 67 biçimine çevrilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:23"
+    },
+    {
+     "id": "S14.07",
+     "baslik": "Sahibe ulaşılamazsa süper kullanıcıya yönlendirir",
+     "adimlar": [
+      "Mevcut yöneticisine kod gönderilemeyen bir dairede \"Yöneticiyi Devret\"'i deneyin."
+     ],
+     "beklenen": "Hata iletisi \"Süper yöneticiye başvurun.\" ile biter; zorla atama seçeneği servis sorumlusuna açılmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Yöneticisine kod gönderilemeyen daire",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/assign_admin_dialog.dart:292"
+    },
+    {
+     "id": "S14.08",
+     "baslik": "Atamadan sonra yeni yönetici yalnız sonraki alarmları görür",
+     "adimlar": [
+      "Alarm geçmişi olan bir dairede yöneticiyi devredin.",
+      "Yeni yöneticinin uygulamasında alarm geçmişine bakın."
+     ],
+     "beklenen": "Yeni yönetici yalnız atamadan sonraki ve hâlâ açık alarmları görür.",
+     "rol_notu": "servis sorumlusu (yeni yöneticinin hesabıyla kontrol)",
+     "on_kosul": "Alarm geçmişi olan daire",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:28"
+    },
+    {
+     "id": "S14.09",
+     "baslik": "\"Kurulumu sürdür\" düğmesi servis sorumlusuna görünüyor mu (sihirbaz onu buraya yönlendiriyor)",
+     "adimlar": [
+      "Servis sorumlusu hesabıyla kurulum sihirbazında zaten bir daireye bağlı bir kartı seçin; sihirbaz \"Aboneler > Kurulumu sürdür ile devam edin\" der",
+      "\"Abonelerim & Cihaz Atama\" ekranını açıp o abonenin satırına bakın"
+     ],
+     "beklenen": "Bugünkü kodda \"Kurulumu sürdür\" düğmesi yalnız süper kullanıcıya görünüyor; servis sorumlusu göremiyor, yani sihirbazın yönlendirmesi ona boşa çıkıyor. Servis sorumlusunun da görmesini istiyorsanız \"Böyle istemiyorum\" işaretleyip not yazın.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "kurulumu yarım kalmış bir daire",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:575; lib/ui/pages/service_setup/logic/claim_logic.dart:406"
+    }
+   ]
+  },
+  {
+   "id": "S15",
+   "baslik": "Müşteri hesapları (Servis Hesapları)",
+   "maddeler": [
+    {
+     "id": "S15.01",
+     "baslik": "Hesap sayfası açılır",
+     "adimlar": [
+      "Servis Paneli'nde \"Yönetim araçları\" altında \"Servis Hesapları\"'na dokunun."
+     ],
+     "beklenen": "Sayfa başlığı \"Servis ve Saha Konsolu\"; \"Hesaplar\" ve \"Görevler ve Araçlar\" sekmeleri görünür; not yalnız oluşturduğunuz müşteri hesaplarını yönetebileceğinizi söyler.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_management_page.dart:374"
+    },
+    {
+     "id": "S15.02",
+     "baslik": "Müşteri hesabı ekleme",
+     "adimlar": [
+      "\"Müşteri Ekle\"'ye dokunun.",
+      "\"Ad soyad\", \"E-posta\" ve isterseniz \"Telefon\" ile \"Görev / bölge notu\" girin.",
+      "\"Kaydet\"'e dokunun."
+     ],
+     "beklenen": "Pencere başlığı \"Yeni Müşteri Hesabı\"dır, hesap türü ve parola alanı yoktur; kayıttan sonra etkinleştirme bağlantısının e-postaya gönderildiği yazar ve hesap \"Davet bekliyor\" durumunda listelenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kullanılmamış bir e-posta adresi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:256"
+    },
+    {
+     "id": "S15.03",
+     "baslik": "Müşteri telefonu tek biçimde kaydedilir",
+     "adimlar": [
+      "\"Müşteri Ekle\"'de \"Telefon\" alanına 0555 123 45 67 yazın.",
+      "Kaydedip hesap kartındaki telefona bakın."
+     ],
+     "beklenen": "Alanın başında \"+90\" hazırdır; numara 555 123 45 67 olarak görünür ve +905… biçiminde saklanır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:261"
+    },
+    {
+     "id": "S15.04",
+     "baslik": "Hatalı telefon reddedilir",
+     "adimlar": [
+      "\"Telefon\" alanına 4 ile başlayan bir numara yazıp \"Kaydet\"'e dokunun."
+     ],
+     "beklenen": "\"Cep numarası 5 ile başlamalıdır (5XX XXX XX XX)\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "lib/ui/common/validators.dart:86"
+    },
+    {
+     "id": "S15.05",
+     "baslik": "Müşteri hesabını dondurma",
+     "adimlar": [
+      "Bir müşteri kartında \"Dondur\"'a dokunun.",
+      "\"Hesap dondurulsun mu?\" sorusunu onaylayın."
+     ],
+     "beklenen": "\"hesabı donduruldu.\" iletisi çıkar; durum \"Donduruldu\" olur ve müşteri giriş yapamaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Oluşturduğunuz etkin müşteri hesabı",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:258"
+    },
+    {
+     "id": "S15.06",
+     "baslik": "Dondurulmuş hesabı açma",
+     "adimlar": [
+      "Dondurulmuş müşteri kartında \"Aktifleştir\"'e dokunun."
+     ],
+     "beklenen": "\"hesabı aktifleştirildi.\" iletisi çıkar; durum \"Aktif\" olur. Süper kullanıcının dondurduğu müşteri hesabı da açılabilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Dondurulmuş müşteri hesabı",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:35"
+    },
+    {
+     "id": "S15.07",
+     "baslik": "Davet bekleyen hesap dondurulup açılınca davette kalır",
+     "adimlar": [
+      "\"Davet bekliyor\" durumundaki hesabı dondurun.",
+      "Sonra \"Aktifleştir\" ile açın."
+     ],
+     "beklenen": "Durum yeniden \"Davet bekliyor\" olur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Davet bekleyen müşteri hesabı",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:258"
+    },
+    {
+     "id": "S15.08",
+     "baslik": "Bağlantıyı yeniden gönderme",
+     "adimlar": [
+      "Etkin müşteride \"Bağlantı gönder\"'e, davet bekleyen müşteride \"Daveti yeniden gönder\"'e dokunun."
+     ],
+     "beklenen": "\"Parola sıfırlama bağlantısı\" (davet bekleyende \"Hesap etkinleştirme bağlantısı\") müşterinin adresine gönderildi iletisi çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Müşteri hesabı",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_management_page.dart:344"
+    },
+    {
+     "id": "S15.09",
+     "baslik": "Müşteri bilgilerini düzenleme",
+     "adimlar": [
+      "Müşteri kartında \"Düzenle\"'ye dokunun.",
+      "Adı değiştirip \"Güncelle\"'ye dokunun."
+     ],
+     "beklenen": "\"hesabı güncellendi.\" iletisi çıkar; pencerede parola alanı yoktur, parolanın kart üzerinden bağlantıyla sıfırlanacağını söyleyen not vardır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Müşteri hesabı",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:510"
+    },
+    {
+     "id": "S15.10",
+     "baslik": "Telefonu değiştirilen müşteri SMS'le giremez",
+     "adimlar": [
+      "Müşterinin telefonunu \"Düzenle\" ile değiştirin.",
+      "Müşteri bu numarayla SMS girişini denesin."
+     ],
+     "beklenen": "Numara doğrulanmamış sayılır; SMS girişi bu hesaba açılmaz, müşteri e-posta ve şifresiyle girer.",
+     "rol_notu": "servis sorumlusu (müşterinin telefonuyla kontrol)",
+     "on_kosul": "Müşteri hesabı ve telefonu",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:260"
+    },
+    {
+     "id": "S15.11",
+     "baslik": "Hesaplarda arama",
+     "adimlar": [
+      "\"Hesap ara\" kutusuna müşterinin adını, e-postasını ya da telefonunu yazın."
+     ],
+     "beklenen": "Yalnız eşleşen müşteri hesapları listelenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_management_page.dart:589"
+    },
+    {
+     "id": "S15.12",
+     "baslik": "Görevler ve Araçlar sekmesi",
+     "adimlar": [
+      "\"Görevler ve Araçlar\" sekmesine geçin."
+     ],
+     "beklenen": "\"Kurulum Sihirbazı\" kısayolu ve servis araçları kartları görünür; \"Servis Hesapları\" kartı burada tekrar görünmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_tool_cards.dart:77"
+    }
+   ]
+  },
+  {
+   "id": "S16",
+   "baslik": "Wi-Fi değişikliği (modem ya da şifre değişince)",
+   "maddeler": [
+    {
+     "id": "S16.01",
+     "baslik": "Girişsiz Wi-Fi sihirbazı",
+     "adimlar": [
+      "Giriş ekranında \"Pano Wi-Fi Kurulumu (İnternet Gerekmez)\"'e dokunun."
+     ],
+     "beklenen": "\"Wi-Fi Kurulum & Kurtarma Sihirbazı\" açılır; giriş ya da internet istemez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/auth/login_page.dart:499"
+    },
+    {
+     "id": "S16.02",
+     "baslik": "Servis Paneli'nden Wi-Fi sihirbazı",
+     "adimlar": [
+      "Servis Paneli'nde \"Pano Wi-Fi & Modem Kurulumu\" kartındaki \"Wi-Fi Kurulum & Kurtarma Sihirbazı\"'na dokunun."
+     ],
+     "beklenen": "Aynı sihirbaz açılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/panel/wifi_setup_card.dart:72"
+    },
+    {
+     "id": "S16.03",
+     "baslik": "Panoyla bağlantıyı test etme",
+     "adimlar": [
+      "Telefonu panonun kurulum ağına (etiketin 2. karekodu ya da etiketteki AP parolası) bağlayın.",
+      "Sihirbazda \"Bağlantıyı Test Et\"'e dokunun."
+     ],
+     "beklenen": "\"Pano ile bağlantı kuruldu\" yazar ve panonun kimliği görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kurulum ağı açık pano ve etiketi",
+     "yeni": false,
+     "kaynak": "lib/ui/common/wifi_provision_panel.dart:611"
+    },
+    {
+     "id": "S16.04",
+     "baslik": "Yeni Wi-Fi bilgisini yükleme",
+     "adimlar": [
+      "\"Ağları Tara\" ile yeni ağı seçin (ya da \"Modem Wi-Fi Karekodu Tara (Kamera)\" ile okutun).",
+      "\"Wi-Fi Şifresi\"ni yazıp \"Yeni Wi-Fi Şifresini Panoya Yükle\"'ye dokunun."
+     ],
+     "beklenen": "\"Pano ev Wi-Fi ağına bağlandı!\" yazar; kurulum ağı kısa sürede kapanır, telefonu ev ağına geri almanız istenir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Yeni modemin 2,4 GHz ağı ve şifresi",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:267"
+    },
+    {
+     "id": "S16.05",
+     "baslik": "Kurulum ağında değilken uyarı",
+     "adimlar": [
+      "Telefon panonun kurulum ağına bağlı değilken \"Bağlantıyı Test Et\"'e dokunun."
+     ],
+     "beklenen": "\"Pano bulunamadı.\" ile başlayan ve kurulum ağına bağlanmanızı söyleyen uyarı çıkar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/common/wifi_provision_panel.dart:441"
+    },
+    {
+     "id": "S16.06",
+     "baslik": "Wi-Fi kopunca kurulum ağı açılır",
+     "adimlar": [
+      "Wi-Fi ile çalışan panonun modemini kapatın.",
+      "Birkaç dakika bekleyip telefonun Wi-Fi listesine bakın."
+     ],
+     "beklenen": "Panonun kurulum ağı (AHBU-XXXXXX) listede görünür; yaklaşık 10 dakika açık kalır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Wi-Fi ile bağlı, provizyonlu pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:273"
+    }
+   ]
+  },
+  {
+   "id": "S17",
+   "baslik": "Servis PIN'iyle müşteri evine erişim (geçici servis oturumu)",
+   "maddeler": [
+    {
+     "id": "S17.01",
+     "baslik": "Servis PIN'iyle giriş",
+     "adimlar": [
+      "Giriş ekranında \"Yetkili Servis Girişi (PIN)\"'e dokunun.",
+      "\"Servis PIN Kodu\"nu ve isterseniz adınızı yazıp \"Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "Müşterinin evinin ekranı açılır; üst çubukta (telefonda ⋮ menüsünde) \"Servis Modu (devreye alma)\" seçeneği bulunur.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Ev sahibinin ürettiği 6 haneli servis PIN'i",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:181"
+    },
+    {
+     "id": "S17.02",
+     "baslik": "PIN 6 rakam olmalı",
+     "adimlar": [
+      "\"Servis PIN Kodu\"na 5 rakam yazıp \"Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "\"Lütfen 6 haneli geçerli PIN giriniz\" uyarısı çıkar.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/auth/service_pin_dialog.dart:64"
+    },
+    {
+     "id": "S17.03",
+     "baslik": "Yanlış ya da süresi dolmuş PIN",
+     "adimlar": [
+      "Yanlış ya da süresi dolmuş bir PIN'le \"Doğrula\"'ya dokunun."
+     ],
+     "beklenen": "PIN'in hatalı olduğunu söyleyen hata çıkar; oturum açılmaz.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/auth/service_pin_dialog.dart:83"
+    },
+    {
+     "id": "S17.04",
+     "baslik": "Geçici oturum bandı ve süre",
+     "adimlar": [
+      "Evin ekranında \"Servis Modu (devreye alma)\"'ya dokunun (telefonda ⋮ menüsünden)."
+     ],
+     "beklenen": "Servis Paneli'nde \"Geçici servis oturumu\" bandı kalan süreyi (en çok 2 saat) sayar; \"Geçici servis oturumunda cihazı müşteriye bağlama (claim) yapılamaz\" notu görünür.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Açık servis PIN oturumu",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/session_banner.dart:216"
+    },
+    {
+     "id": "S17.05",
+     "baslik": "PIN oturumunda acil sıfırlama yok",
+     "adimlar": [
+      "Servis Paneli'ni sonuna kadar kaydırın."
+     ],
+     "beklenen": "\"Acil durum\" bölümü ve acil sıfırlama kartı görünmez.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Açık servis PIN oturumu",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:78"
+    },
+    {
+     "id": "S17.06",
+     "baslik": "PIN oturumunda 3-4. adımlar atlanır",
+     "adimlar": [
+      "\"Yeni Kurulum Başlat\"'a dokunun.",
+      "2. adımda \"Panoları Listele\" ile dairedeki panoyu seçin."
+     ],
+     "beklenen": "3. ve 4. adımlarda \"Geçici servis oturumunda bu adım gerekmez\" yazar; kurulum 5. adımla sürer.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Açık servis PIN oturumu, sahiplenilmiş pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:191"
+    },
+    {
+     "id": "S17.07",
+     "baslik": "PIN oturumunda şablon uygulanamaz",
+     "adimlar": [
+      "PIN oturumunda sihirbazın 7. adımına gelin."
+     ],
+     "beklenen": "\"Şablon uygula (isteğe bağlı)\" kartı görünmez.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Açık servis PIN oturumu",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:191"
+    },
+    {
+     "id": "S17.08",
+     "baslik": "PIN'le güvenlik ayarlı evde pano değişimi",
+     "adimlar": [
+      "PIN oturumunda Servis Paneli → \"Yönetim araçları\" → \"Pano Değişimi\"'ni açın.",
+      "Değişimi tamamlayın."
+     ],
+     "beklenen": "Değişim yapılır; \"Bu evde pano değişimini yetkili servis personeli yapmalıdır.\" uyarısı çıkmaz; sonuçta \"Yeni Panoyu Şimdi Bağla\" görünür.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Su/gaz sensörü ya da vanası olan ev; yeni stok panosu",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:15"
+    },
+    {
+     "id": "S17.09",
+     "baslik": "Servis rolüyle hırsız alarmı kurulamaz",
+     "adimlar": [
+      "PIN oturumunda evin ekranındaki alarm kipi kartına bakın."
+     ],
+     "beklenen": "Kip seçici yoktur, yalnız mevcut kip yazar; alarm kurulamaz ya da çözülemez.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Hırsız alarmı tanımlı ev",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:81"
+    },
+    {
+     "id": "S17.10",
+     "baslik": "Gaz vanası uzaktan açılamaz",
+     "adimlar": [
+      "PIN oturumunda kapalı gaz vanasının kartına bakın."
+     ],
+     "beklenen": "Açma düğmesi yoktur; \"Gaz vanası güvenlik gereği yalnız yerinde açılır\" açıklaması görünür.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Gaz vanası",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:82"
+    },
+    {
+     "id": "S17.11",
+     "baslik": "Servis oturumunun bitişi",
+     "adimlar": [
+      "\"Servis Oturumunu Kapat\"'a dokunun ya da 2 saatlik sürenin dolmasını bekleyin."
+     ],
+     "beklenen": "Süre dolunca \"Oturum süresi doldu\" ekranı ve \"Giriş Ekranına Dön\" düğmesi çıkar; yarım kurulum ilerlemesi telefonda kalır.",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
+     "on_kosul": "Açık servis PIN oturumu",
+     "yeni": false,
+     "kaynak": "lib/ui/pages/service_setup/session_banner.dart:365"
+    },
+    {
+     "id": "S17.12",
+     "baslik": "Oturum bitince pano yeni bulut kimliği alır",
+     "adimlar": [
+      "Servis PIN oturumunu kapatın.",
+      "Birkaç dakika sonra ev sahibinin uygulamasında panonun durumuna bakıp bir röle açıp kapatın."
+     ],
+     "beklenen": "Pano kısa bir kopuştan sonra yeniden çevrimiçi olur ve komutlar çalışır (bulut kimliği yenilenmiş, pano yenisini kendisi almıştır).",
+     "rol_notu": "servis sorumlusu (müşteri PIN'iyle; ev sahibinin hesabıyla kontrol)",
+     "on_kosul": "Tek panolu ev, v1.3.0+ provizyonlu pano",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:20"
+    }
+   ]
+  },
+  {
+   "id": "S18",
+   "baslik": "Panonun kendi davranışları",
+   "maddeler": [
+    {
+     "id": "S18.01",
+     "baslik": "Ethernet'li provizyonlu panoda kurulum ağı açılmaz",
+     "adimlar": [
+      "Provizyonlu panoyu Ethernet kablosuyla modeme bağlayıp yeniden başlatın.",
+      "Telefonun Wi-Fi listesine bakın."
+     ],
+     "beklenen": "Panonun AHBU-XXXXXX kurulum ağı görünmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kablolu Ethernet, provizyonlu v1.3.0+ pano",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:274"
+    },
+    {
+     "id": "S18.02",
+     "baslik": "v1.3.2 pano gömülü sunucuya bağlanır",
+     "adimlar": [
+      "v1.3.2 yüklü panoyu sihirbazla kurun.",
+      "Uygulamada panonun çevrimiçi olduğunu kontrol edin."
+     ],
+     "beklenen": "Pano firmware'e gömülü sunucuya (evotomasyon.gudeteknoloji.com.tr) bağlanır ve çevrimiçi görünür; başka sunucu adresi kabul edilmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "v1.3.2 yüklü pano",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:32"
+    },
+    {
+     "id": "S18.03",
+     "baslik": "Yeni evde varsayılan kanallar lamba",
+     "adimlar": [
+      "Şablonsuz, v1.3.2 yüklü bir panoyla sihirbazı tamamlayın.",
+      "Müşterinin uygulamasında kanal listesine bakın."
+     ],
+     "beklenen": "8 kanalın hepsi Röle 1 … Röle 8 adlı lamba olarak gelir; panjur yoktur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "v1.3.2 yüklü, şablonsuz pano",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:29"
+    },
+    {
+     "id": "S18.04",
+     "baslik": "Eski panolu evlerde adlar değişmez",
+     "adimlar": [
+      "v1.3.1 panolu, kurulu bir evin kanal adlarına bakın."
+     ],
+     "beklenen": "Kanal adları ve röle görevleri önceki gibidir; yeni varsayılan liste bu evleri değiştirmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "v1.3.1 panolu kurulu ev",
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:31"
+    }
+   ]
+  },
+  {
+   "id": "S19",
+   "baslik": "Hata iletileri (sık görülenler)",
+   "maddeler": [
+    {
+     "id": "S19.01",
+     "baslik": "Panjur hareketliyken karta yazım",
+     "adimlar": [
+      "Panjur hareket halindeyken şablonu karta yazmayı deneyin."
+     ],
+     "beklenen": "\"Kart meşgul (panjur hareket halinde olabilir ya da bellek yetersiz).\" iletisi çıkar; birkaç saniye sonra yeniden yazılabilir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Panjurlu kart",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/template_model.py:547"
+    },
+    {
+     "id": "S19.02",
+     "baslik": "Hırsız alarmı kuruluyken karta yazım",
+     "adimlar": [
+      "Hırsız alarmı kurulu karta şablon yazmayı deneyin."
+     ],
+     "beklenen": "\"Hırsız alarmı kurulu; önce alarmı kapatın.\" iletisi çıkar; karta hiçbir şey yazılmaz.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Hırsız alarmı kurulu kart",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/template_model.py:546"
+    },
+    {
+     "id": "S19.03",
+     "baslik": "Eski firmware'li karta şablon",
+     "adimlar": [
+      "v1.3.0'dan eski firmware'li karta şablon yazmayı deneyin."
+     ],
+     "beklenen": "\"Kartın firmware'i şablon yazmayı desteklemiyor\" iletisi çıkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "v1.3.0'dan eski kart",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/template_model.py:549"
+    },
+    {
+     "id": "S19.04",
+     "baslik": "Yarıda kalan yazım",
+     "adimlar": [
+      "Yazım sürerken kartın USB kablosunu çekin.",
+      "Kartı yeniden takıp aynı şablonu yeniden yazın."
+     ],
+     "beklenen": "Kart yeni şablonu bitirmediyse \"Şablon yarım kaldı; aynı şablonu yeniden yazın.\" iletisi çıkar; yeniden yazımdan sonra başarı görünür.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Deneme kartı",
+     "yeni": false,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:297"
+    },
+    {
+     "id": "S19.05",
+     "baslik": "Yanlış parola ile servis yazılımı girişi",
+     "adimlar": [
+      "Servis yazılımında yanlış parolayla giriş yapmayı deneyin."
+     ],
+     "beklenen": "\"E-posta veya parola hatalı.\" iletisi çıkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:553"
+    },
+    {
+     "id": "S19.06",
+     "baslik": "İnternetsiz servis yazılımı",
+     "adimlar": [
+      "Bilgisayarı internetsiz bir ağa (ör. panonun kurulum ağına) bağlayıp \"🔄 Siteleri Yenile\"'ye basın."
+     ],
+     "beklenen": "\"Sunucuya ulaşılamadı.\" ile başlayan ileti çıkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": false,
+     "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:613"
+    }
+   ]
+  }
+ ]
+}
