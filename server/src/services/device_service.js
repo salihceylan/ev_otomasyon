@@ -23,6 +23,7 @@
 
 const crypto = require('crypto');
 const { generateNumericPin, isUuid } = require('../utils/helpers');
+const { canonicalPhone } = require('../utils/phone');
 const { httpError } = require('../utils/http_errors');
 const { can } = require('../utils/role_matrix');
 const { validateCommand, capabilityForCommand, isSafeTarget, KINDS } = require('../utils/command_schema');
@@ -93,6 +94,17 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SIX_DIGITS = /^\d{6}$/;
 const TIME_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
+// Karar 18: evde guvenlik yapilandirmasi var mi? Bulut kopyasi device_configs 'safety' govdesinde sensor ya da eylemci
+// (vana / siren). Yalniz bolge ADI tanimli govde sayilmaz (pano degisimindeki safety_restore kurali ile ayni, C4).
+const HAS_SAFETY_CONFIG_SQL =
+  `SELECT EXISTS (
+     SELECT 1 FROM devices d
+       JOIN device_configs c ON c.device_id = d.id AND c.module = 'safety'
+      WHERE d.home_id = $1
+        AND (COALESCE(c.body -> 'sensors', '[]'::jsonb) NOT IN ('[]'::jsonb, 'null'::jsonb)
+          OR COALESCE(c.body -> 'actuators', '[]'::jsonb) NOT IN ('[]'::jsonb, 'null'::jsonb))
+   ) AS has_safety_config`;
+
 // --- Saf yardimcilar -----------------------------------------------------------
 
 function normalizeDeviceUuid(value) {
@@ -111,7 +123,8 @@ function normalizeIdentifier(raw) {
     return EMAIL_PATTERN.test(email) ? { type: 'email', value: email } : null;
   }
   const phone = s.replace(/[\s().-]/g, '');
-  return /^\+?\d{7,15}$/.test(phone) ? { type: 'phone', value: phone } : null;
+  // karar 11: TR cep numarasi kanonik "+905XXXXXXXXX" (kullanici kaydi ve 042 ile ayni bicim)
+  return /^\+?\d{7,15}$/.test(phone) ? { type: 'phone', value: canonicalPhone(phone) } : null;
 }
 
 function digitsOf(value) {
@@ -150,32 +163,14 @@ function isDebugOtpAllowed(env) {
   return env.ALLOW_DEBUG_OTP === 'true' && env.NODE_ENV !== 'production';
 }
 
-// Varsayilan kanal yerlesimi: firmware varsayilanlariyla ayni (ConfigManager::resetToDefaults):
-// 1-2 Salon panjuru, 3-4 Oda panjuru, 5-8 aydinlatma, 9+ ek modul. TEK INSERT ... SELECT generate_series.
+// Varsayilan kanal yerlesimi: firmware v1.3.2 fabrika varsayilaniyla ayni (SystemConfig.h applyFactoryRelayDefaults).
+// Sahip karari (2026-10-09): hicbir rolenin sabit gorevi yok -> 1-8 "Röle N", 9+ "Ek Modül Röle N"; hepsi lamba, oda Genel.
+// Panjur yalniz servisin sablonundan / panonun gercek yerlesiminden gelir. TEK INSERT ... SELECT generate_series.
 const SEED_ENDPOINTS_SQL = `
   INSERT INTO endpoints (home_id, device_id, channel_index, name, type, room, shutter_pair_index, shutter_duration_sec)
   SELECT $1::uuid, $2::uuid, g.n,
-         CASE g.n
-           WHEN 1 THEN 'Salon Panjur Yukarı'
-           WHEN 2 THEN 'Salon Panjur Aşağı'
-           WHEN 3 THEN 'Oda Panjur Yukarı'
-           WHEN 4 THEN 'Oda Panjur Aşağı'
-           WHEN 5 THEN 'Salon Aydınlatma'
-           WHEN 6 THEN 'Mutfak Aydınlatma'
-           WHEN 7 THEN 'Koridor Aydınlatma'
-           WHEN 8 THEN 'Balkon Aydınlatma'
-           ELSE 'Ek Modül Röle ' || (g.n - 8)
-         END,
-         CASE WHEN g.n <= 4 THEN 'shutter' ELSE 'light' END,
-         CASE g.n
-           WHEN 1 THEN 'Salon' WHEN 2 THEN 'Salon'
-           WHEN 3 THEN 'Oda'   WHEN 4 THEN 'Oda'
-           WHEN 5 THEN 'Salon' WHEN 6 THEN 'Mutfak'
-           WHEN 7 THEN 'Koridor' WHEN 8 THEN 'Balkon'
-           ELSE 'Genel'
-         END,
-         CASE WHEN g.n <= 4 THEN (g.n + 1) / 2 ELSE NULL END,
-         CASE WHEN g.n <= 4 THEN 20 ELSE NULL END
+         CASE WHEN g.n <= 8 THEN 'Röle ' || g.n ELSE 'Ek Modül Röle ' || (g.n - 8) END,
+         'light', 'Genel', NULL::int, NULL::int
     FROM generate_series(1, $3::int) AS g(n)
   ON CONFLICT (device_id, channel_index) DO NOTHING`;
 
@@ -1511,6 +1506,9 @@ class DeviceService {
         }
       }
 
+      // 9z) Karar 14: sahiplik donemi - sifirlamadan onceki ailenin kapanmis alarm gecmisi gosterilmez (acik alarmlar kalir)
+      if (homeId) await tx.query('UPDATE homes SET ownership_epoch = NOW() WHERE id = $1', [homeId]);
+
       // 10) Denetim kayitlari (IP dahil)
       await tx.query(
         `INSERT INTO emergency_reset_logs
@@ -1751,6 +1749,15 @@ class DeviceService {
       );
       if (homeRes.rows.length === 0) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
       const home = homeRes.rows[0];
+
+      // 3b) Karar 18: guvenlik yapilandirmasi (sensor / vana / bolge) olan evde pano degisimini yalniz yetkili servis
+      //     (personel, servis oturumu, super) yapar; ev sahibinin kendi degisimi 403 (islem geri alinir, PIN harcanmaz).
+      if (actor && actor.access === 'owner' && !['service_user', 'super_user'].includes(actor.globalRole)) {
+        const sc = await tx.query(HAS_SAFETY_CONFIG_SQL, [homeId]);
+        if (sc && sc.rows && sc.rows[0] && sc.rows[0].has_safety_config === true) {
+          throw httpError(403, 'Güvenlik ayarları olan evde pano değişimini yetkili servis yapmalıdır.', 'REPLACE_REQUIRES_SERVICE');
+        }
+      }
 
       // 4) Eski pano: sessiz "ilk pano" (LIMIT 1) yedegi YOK
       let oldDevice;
@@ -2940,6 +2947,7 @@ const instance = new DeviceService();
 
 module.exports = instance;
 module.exports.DeviceService = DeviceService;
+module.exports.SQL = Object.freeze({ HAS_SAFETY_CONFIG: HAS_SAFETY_CONFIG_SQL });
 module.exports.helpers = Object.freeze({
   normalizeDeviceUuid,
   normalizeIdentifier,

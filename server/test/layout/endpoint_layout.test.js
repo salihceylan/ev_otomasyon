@@ -26,17 +26,11 @@ const FW_NAMES = ['Salon Panjur (Yukari)', 'Salon Panjur (Asagi)', 'Oda Panjur (
   'Salon Aydinlatma', 'Mutfak Aydinlatma', 'Koridor Aydinlatma', 'Balkon Aydinlatma'];
 const FW_TYPES = ['shutter_up', 'shutter_down', 'shutter_up', 'shutter_down', 'light', 'light', 'light', 'light'];
 
-// Tasarim §1 / §5.2: bulut tohum sablonu (kanal 1-2 ve 3-4 panjur, 5-8 aydinlatma, 9+ "Ek Modül Röle N").
+// Bulut tohum sablonu. Sahip karari (2026-10-09): HICBIR rolenin sabit gorevi yok -> 1-8 "Röle N" lamba (oda Genel),
+// firmware v1.3.2 fabrika varsayilaniyla ayni; panjur yalniz servisin sablonundan gelir. 9+ "Ek Modül Röle N".
 const SEED_EXPECTED = [
   null,
-  { name: 'Salon Panjur Yukarı', type: 'shutter', room: 'Salon', pair: 1, durationSec: 20 },
-  { name: 'Salon Panjur Aşağı', type: 'shutter', room: 'Salon', pair: 1, durationSec: 20 },
-  { name: 'Oda Panjur Yukarı', type: 'shutter', room: 'Oda', pair: 2, durationSec: 20 },
-  { name: 'Oda Panjur Aşağı', type: 'shutter', room: 'Oda', pair: 2, durationSec: 20 },
-  { name: 'Salon Aydınlatma', type: 'light', room: 'Salon', pair: null, durationSec: null },
-  { name: 'Mutfak Aydınlatma', type: 'light', room: 'Mutfak', pair: null, durationSec: null },
-  { name: 'Koridor Aydınlatma', type: 'light', room: 'Koridor', pair: null, durationSec: null },
-  { name: 'Balkon Aydınlatma', type: 'light', room: 'Balkon', pair: null, durationSec: null },
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ name: `Röle ${n}`, type: 'light', room: 'Genel', pair: null, durationSec: null })),
 ];
 
 const ROW_FIELDS = ['id', 'channel_index', 'name', 'type', 'room', 'shutter_pair_index', 'shutter_duration_sec'];
@@ -69,11 +63,25 @@ function seedOf(channel) {
   return s;
 }
 
-/** Tohum satirlari (claim aninda acilan sablon). */
+// Duzenek: 2026-10-09 oncesi tohumla acilmis ev (1-2 Salon / 3-4 Oda panjuru, 5-8 aydinlatma). Varsayilan pano bildirimi
+// (FW_NAMES / FW_TYPES, eski fabrika yerlesimi) ile birebir eslesir; plan testleri bu duzenegi kullanir. 9+ guncel tohum.
+const LEGACY_SEED = [
+  null,
+  { name: 'Salon Panjur Yukarı', type: 'shutter', room: 'Salon', pair: 1, durationSec: 20 },
+  { name: 'Salon Panjur Aşağı', type: 'shutter', room: 'Salon', pair: 1, durationSec: 20 },
+  { name: 'Oda Panjur Yukarı', type: 'shutter', room: 'Oda', pair: 2, durationSec: 20 },
+  { name: 'Oda Panjur Aşağı', type: 'shutter', room: 'Oda', pair: 2, durationSec: 20 },
+  { name: 'Salon Aydınlatma', type: 'light', room: 'Salon', pair: null, durationSec: null },
+  { name: 'Mutfak Aydınlatma', type: 'light', room: 'Mutfak', pair: null, durationSec: null },
+  { name: 'Koridor Aydınlatma', type: 'light', room: 'Koridor', pair: null, durationSec: null },
+  { name: 'Balkon Aydınlatma', type: 'light', room: 'Balkon', pair: null, durationSec: null },
+];
+
+/** Duzenek satirlari: eski tohumla acilmis ev (bkz. LEGACY_SEED). */
 function seedRows(n = 8) {
   const rows = [];
   for (let c = 1; c <= n; c += 1) {
-    const s = seedOf(c);
+    const s = c <= 8 ? LEGACY_SEED[c] : seedOf(c);
     rows.push({
       id: 'ep-' + c,
       channel_index: c,
@@ -796,8 +804,9 @@ test('plan 5d: sinif sablondaki sinifa GERI dondu, pano adi fabrika adi -> sablo
   assert.deepEqual(plan.ruleRelayChannels, [1, 2]);
 });
 
+/** Eski fabrika panosu (FW_NAMES) bildiriminde beklenen bulut satiri: eski tohum (LEGACY_SEED). */
 function rowOfSeed(channel) {
-  const s = SEED_EXPECTED[channel];
+  const s = LEGACY_SEED[channel];
   return { name: s.name, type: s.type, room: s.room, shutter_pair_index: s.pair, shutter_duration_sec: s.durationSec };
 }
 
@@ -1314,6 +1323,18 @@ test('D1 isFactoryLayout: yalniz tam 8 role + fabrika tipleri + her ad varsayila
   assert.equal(L.isFactoryLayout(extract(fwState({ types: sh }))), false, '5-6 panjur');
   assert.equal(L.isFactoryLayout(extract(fwState({ types: FW_TYPES.concat(['light', 'light']), names: fwNames(10) }))), false, '10 role');
   assert.equal(L.isFactoryLayout(extract(fwState({ types: FW_TYPES.slice(0, 4), names: FW_NAMES.slice(0, 4) }))), false, '4 role');
+  // v1.3.2+ fabrika yerlesimi (sahip karari 2026-10-09: sabit rol yok): 8 lamba, "Röle N" ya da bos ad
+  const allLights = new Array(8).fill('light');
+  const releNames = Array.from({ length: 8 }, (_, i) => 'Röle ' + (i + 1));
+  assert.equal(L.isFactoryLayout(extract(fwState({ types: allLights, names: releNames }))), true, 'v1.3.2 fabrika');
+  assert.equal(L.isFactoryLayout(extract(fwState({ types: allLights, names: new Array(8).fill('') }))), true, 'v1.3.2 bos adlar');
+  const releCustom = releNames.slice();
+  releCustom[2] = 'Mutfak Spot';
+  assert.equal(L.isFactoryLayout(extract(fwState({ types: allLights, names: releCustom }))), false, 'v1.3.2 ozel ad');
+  const releShutter = allLights.slice();
+  releShutter[0] = 'shutter_up';
+  releShutter[1] = 'shutter_down';
+  assert.equal(L.isFactoryLayout(extract(fwState({ types: releShutter, names: releNames }))), false, 'v1.3.2 + servis panjuru');
   assert.equal(L.isFactoryLayout(null), false);
   assert.equal(L.isFactoryLayout({}), false);
 });
@@ -1707,7 +1728,10 @@ test('foldName: sapkali / aksanli harfler tek harfe katlanir (sozcuk bolunmez)',
 test('foldName: panonun fabrika adi ile bulut sablon adi her kanalda (1..40) ayni anahtara duser', () => {
   // "Varsayilan pano + tohum satirlari -> degisiklik yok" kuralinin dayanagi (§5.3: fabrika adlari buluta tasinmaz).
   for (let c = 1; c <= 40; c += 1) {
-    assert.equal(L.foldName(L.firmwareDefaultName(c)), L.foldName(seedOf(c).name), 'kanal ' + c);
+    const legacyCloud = c <= 8 ? LEGACY_SEED[c].name : seedOf(c).name;
+    assert.equal(L.foldName(L.legacyFirmwareDefaultName(c)), L.foldName(legacyCloud), 'eski surum, kanal ' + c);
+    assert.equal(L.foldName(L.firmwareDefaultName(c)), L.foldName(seedOf(c).name), 'v1.3.2+, kanal ' + c);
+    assert.equal(L.isBoardDefaultName(c, L.firmwareDefaultName(c)), true, 'v1.3.2+ fabrika adi varsayilan, kanal ' + c);
   }
 });
 
@@ -1815,8 +1839,24 @@ test('seedDefaults(1..9): tohum sablonu (tasarim §1)', () => {
     { name: 'Ek Modül Röle 32', type: 'light', room: 'Genel', pair: null, durationSec: null });
 });
 
+test('eski bulut tohumu (2026-10-09 oncesi evler): ad ve oda hala otomatik sayilir, pano yerlesimi ustune yazabilir', () => {
+  const legacy = [null, ['Salon Panjur Yukarı', 'Salon'], ['Salon Panjur Aşağı', 'Salon'], ['Oda Panjur Yukarı', 'Oda'],
+    ['Oda Panjur Aşağı', 'Oda'], ['Salon Aydınlatma', 'Salon'], ['Mutfak Aydınlatma', 'Mutfak'],
+    ['Koridor Aydınlatma', 'Koridor'], ['Balkon Aydınlatma', 'Balkon']];
+  for (let c = 1; c <= 8; c += 1) {
+    const [name, room] = legacy[c];
+    assert.equal(L.isCloudAutoName(c, name), true, 'kanal ' + c + ' eski tohum adi otomatik');
+    assert.equal(L.isBoardDefaultName(c, name), true, 'kanal ' + c + ' eski tohum adi panoda da varsayilan');
+    assert.equal(L.isAutoRoom(c, room, 'Kullanici Adi'), true, 'kanal ' + c + ' eski tohum odasi otomatik');
+  }
+  // Baska kanalin eski tohum adi otomatik DEGIL (kullanici adi gibi davranir).
+  assert.equal(L.isCloudAutoName(5, 'Salon Panjur Yukarı'), false);
+});
+
 test('firmwareDefaultName: panonun fabrika adlari', () => {
-  for (let c = 1; c <= 8; c += 1) assert.equal(L.firmwareDefaultName(c), FW_NAMES[c - 1]);
+  for (let c = 1; c <= 8; c += 1) assert.equal(L.firmwareDefaultName(c), 'Röle ' + c);
+  for (let c = 1; c <= 8; c += 1) assert.equal(L.legacyFirmwareDefaultName(c), FW_NAMES[c - 1], 'v1.3.1- kanal ' + c);
+  assert.equal(L.legacyFirmwareDefaultName(9), 'Ek Modül Röle 1');
   assert.equal(L.firmwareDefaultName(9), 'Ek Modül Röle 1');
   assert.equal(L.firmwareDefaultName(16), 'Ek Modül Röle 8');
 });
@@ -1965,10 +2005,16 @@ test('sinif ve varsayilan ad yardimcilari', () => {
   assert.equal(L.genericName(2, 'impulse'), 'Röle 2');
 
   // sinif sablonla ayniysa sablon adi, degilse tarafsiz ad
-  assert.equal(L.defaultNameFor(1, 'shutter_up'), 'Salon Panjur Yukarı');
+  // Guncel tohum (sabit rol yok): 1-8 "Röle N" lamba; panjur bildiren kanal genel panjur adi alir.
+  assert.equal(L.defaultNameFor(1, 'shutter_up'), 'Panjur 1 Yukarı');
   assert.equal(L.defaultNameFor(1, 'light'), 'Röle 1');
-  assert.equal(L.defaultNameFor(6, 'light'), 'Mutfak Aydınlatma');
-  assert.equal(L.defaultNameFor(6, 'impulse'), 'Mutfak Aydınlatma');
+  assert.equal(L.defaultNameFor(6, 'light'), 'Röle 6');
+  assert.equal(L.defaultNameFor(6, 'impulse'), 'Röle 6');
+  // Eski surum pano kendi eski fabrika adini bildiriyorsa eski tohum adi korunur (mevcut evlerde ad degismez).
+  assert.equal(L.defaultNameFor(1, 'shutter_up', 'Salon Panjur (Yukari)'), 'Salon Panjur Yukarı');
+  assert.equal(L.defaultNameFor(6, 'light', 'Mutfak Aydinlatma'), 'Mutfak Aydınlatma');
+  assert.equal(L.defaultNameFor(6, 'light', 'Röle 6'), 'Röle 6');
+  assert.equal(L.defaultNameFor(1, 'light', 'Salon Panjur (Yukari)'), 'Röle 1', 'sinif uymuyorsa eski ad kullanilmaz');
   assert.equal(L.defaultNameFor(6, 'shutter_down'), 'Panjur 3 Aşağı');
   assert.equal(L.defaultNameFor(9, 'light'), 'Ek Modül Röle 1');
   assert.equal(L.defaultNameFor(9, 'shutter_up'), 'Panjur 5 Yukarı');
@@ -2000,50 +2046,38 @@ test('tohum tutarliligi: seedDefaults, device_service.js SEED_ENDPOINTS_SQL ile 
   assert.ok(end > start);
   const sql = src.slice(start, end);
 
-  // Plan Step 5: her tohum adi kaynak metinde gecmeli.
-  for (let c = 1; c <= 8; c += 1) {
-    assert.ok(sql.includes("'" + seedOf(c).name + "'"), 'kanal ' + c + ' adi SQL sablonunda yok');
-  }
-  assert.ok(sql.includes("ELSE 'Ek Modül Röle ' || (g.n - 8)"), '9+ ad kurali degismis');
+  // Sahip karari (2026-10-09): tohumda sabit rol yok -> panjur yok, hepsi lamba, oda Genel.
+  assert.ok(sql.includes("CASE WHEN g.n <= 8 THEN 'Röle ' || g.n ELSE 'Ek Modül Röle ' || (g.n - 8) END"), 'ad kurali degismis');
+  assert.ok(/'light',\s*'Genel',\s*NULL::int,\s*NULL::int\s/.test(sql), 'tip/oda/cift/sure kurali degismis');
+  assert.ok(!sql.includes("'shutter'"), 'tohumda panjur olmamali');
   assert.equal(seedOf(9).name, 'Ek Modül Röle ' + (9 - 8));
-
-  // Daha siki: CASE tablolarini ayristir ve alan alan karsilastir.
-  const whens = Array.from(sql.matchAll(/WHEN\s+(\d+)\s+THEN\s+'([^']*)'/g)).map((m) => [Number(m[1]), m[2]]);
-  assert.equal(whens.length, 16, 'ad (8) + oda (8) WHEN satiri beklenir');
-  const sqlNames = new Map(whens.slice(0, 8));
-  const sqlRooms = new Map(whens.slice(8));
-  assert.ok(sql.includes("CASE WHEN g.n <= 4 THEN 'shutter' ELSE 'light' END"), 'tip kurali degismis');
-  assert.ok(sql.includes('CASE WHEN g.n <= 4 THEN (g.n + 1) / 2 ELSE NULL END'), 'cift kurali degismis');
-  assert.ok(sql.includes('CASE WHEN g.n <= 4 THEN 20 ELSE NULL END'), 'sure kurali degismis');
-  assert.ok(sql.includes("ELSE 'Genel'"), '9+ oda kurali degismis');
   for (let c = 1; c <= 40; c += 1) {
     const expected = {
-      name: c <= 8 ? sqlNames.get(c) : 'Ek Modül Röle ' + (c - 8),
-      type: c <= 4 ? 'shutter' : 'light',
-      room: c <= 8 ? sqlRooms.get(c) : 'Genel',
-      pair: c <= 4 ? Math.floor((c + 1) / 2) : null,
-      durationSec: c <= 4 ? 20 : null,
+      name: c <= 8 ? 'Röle ' + c : 'Ek Modül Röle ' + (c - 8),
+      type: 'light',
+      room: 'Genel',
+      pair: null,
+      durationSec: null,
     };
     assert.deepEqual({ ...L.seedDefaults(c) }, expected, 'kanal ' + c);
   }
 });
 
-test('fabrika adi tutarliligi: firmwareDefaultName(1..8), pano ConfigManager.cpp metninde gecer', (t) => {
-  const file = path.join(__dirname, '..', '..', '..', 'ev_otomasyon_servis_yazilimi', 'waveshare_s3_demo', 'src',
-    'ConfigManager.cpp');
-  if (!fs.existsSync(file)) {
+test('fabrika adi tutarliligi: firmwareDefaultName(1..8) = "Röle N", pano SystemConfig.h applyFactoryRelayDefaults ile ayni', (t) => {
+  const dir = path.join(__dirname, '..', '..', '..', 'ev_otomasyon_servis_yazilimi', 'waveshare_s3_demo', 'src');
+  const sys = path.join(dir, 'SystemConfig.h');
+  const cfgMgr = path.join(dir, 'ConfigManager.cpp');
+  if (!fs.existsSync(sys) || !fs.existsSync(cfgMgr)) {
     t.skip('pano kaynagi bu agacta yok (yalniz server/ cikarilmis)');
     return;
   }
-  const src = fs.readFileSync(file, 'utf8');
-  let last = -1;
-  for (let c = 1; c <= 8; c += 1) {
-    const idx = src.indexOf('"' + L.firmwareDefaultName(c) + '"');
-    assert.ok(idx >= 0, 'kanal ' + c + ' fabrika adi pano kaynaginda yok: ' + L.firmwareDefaultName(c));
-    assert.ok(idx > last, 'fabrika adlari pano kaynagindaki sirayla ayni olmali (kanal ' + c + ')');
-    last = idx;
-  }
-  assert.ok(src.includes('"Ek Modül Röle %d", i - 7'), '9+ fabrika adi kurali degismis');
+  // Sahip karari (2026-10-09): sabit rol yok. Pano adlari onek + kanal numarasi; tipler hepsi RELAY_TYPE_LIGHT.
+  const src = fs.readFileSync(sys, 'utf8');
+  assert.ok(src.includes('numberedName(r.name, "Röle ", (unsigned)(i + 1))'), '1-8 fabrika adi kurali degismis');
+  assert.ok(src.includes('numberedName(r.name, "Ek Modül Röle ", (unsigned)(i - 7))'), '9+ fabrika adi kurali degismis');
+  assert.ok(/applyFactoryRelayDefaults[\s\S]*?r\.type = RELAY_TYPE_LIGHT;/.test(src), 'fabrika tipi lamba degil');
+  assert.ok(fs.readFileSync(cfgMgr, 'utf8').includes('applyFactoryRelayDefaults(config);'), 'ConfigManager fabrika tablosunu kullanmiyor');
+  for (let c = 1; c <= 8; c += 1) assert.equal(L.firmwareDefaultName(c), 'Röle ' + c);
   assert.equal(L.firmwareDefaultName(9), 'Ek Modül Röle 1');
 });
 

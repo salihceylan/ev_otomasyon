@@ -306,6 +306,38 @@ function createWorld({ clock = createClock() } = {}) {
     return { rows: [], rowCount: hit.length };
   });
 
+  // Karar 14 / 17A (2026-10-09): sahiplik donemi ve cihaz MQTT kimligi dondurmesi (gercek servis SQL'i)
+  db.on('UPDATE homes SET ownership_epoch = NOW() WHERE id = $1', (ctx) => {
+    const h = state.homes.find((x) => x.id === ctx.params[0]);
+    if (h) patch(ctx, h, { ownership_epoch: now() });
+    return { rows: [], rowCount: h ? 1 : 0 };
+  });
+  const endedForCred = (x) => !x.device_cred_rotated_at && (x.revoked_at || new Date(x.expires_at).getTime() <= now().getTime());
+  db.on('UPDATE service_sessions SET device_cred_rotated_at = NOW() WHERE home_id = $1', (ctx) => {
+    const hit = state.service_sessions.filter((x) => x.home_id === ctx.params[0] && endedForCred(x));
+    for (const x of hit) patch(ctx, x, { device_cred_rotated_at: now() });
+    return { rows: [], rowCount: hit.length };
+  });
+  db.on('SELECT DISTINCT home_id FROM service_sessions WHERE device_cred_rotated_at IS NULL', ({ sql, params }) => {
+    const scoped = sql.endsWith('AND home_id = $1');
+    const ids = [...new Set(state.service_sessions.filter((x) => endedForCred(x) && (!scoped || x.home_id === params[0])).map((x) => x.home_id))];
+    return ids.map((home_id) => ({ home_id }));
+  });
+  db.on('SELECT id, device_uuid, firmware_version FROM devices WHERE home_id = $1 ORDER BY id', ({ params }) =>
+    state.devices
+      .filter((d) => d.home_id === params[0])
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((d) => ({ id: d.id, device_uuid: d.device_uuid, firmware_version: d.firmware_version === undefined ? null : d.firmware_version }))
+  );
+  db.on("UPDATE mqtt_credentials SET expires_at = NOW() WHERE home_id = $1 AND kind = 'device'", (ctx) => {
+    const t = now().getTime();
+    const hit = state.mqtt_credentials.filter(
+      (c) => c.home_id === ctx.params[0] && c.kind === 'device' && (!c.expires_at || new Date(c.expires_at).getTime() > t)
+    );
+    for (const c of hit) patch(ctx, c, { expires_at: now() });
+    return hit.map((c) => ({ username: c.username }));
+  });
+
   // bireysel-3: ayni sahibin yeniden sahiplenmesi (yaniti kaybolan claim)
   db.on("FROM devices d JOIN homes h ON h.id = d.home_id JOIN home_users hu ON hu.home_id = d.home_id AND hu.user_id = $2 AND hu.role = 'owner' WHERE d.device_uuid = $1", ({ params }) => {
     const dev = state.devices.find((d) => d.device_uuid === params[0] && d.home_id);
@@ -892,6 +924,19 @@ function createWorld({ clock = createClock() } = {}) {
     const ep = state.endpoints.some((e) => e.device_id === deviceId && e.home_id === homeId && e.actuator_type);
     return [{ safety_restore_required: cfg || ep }];
   });
+  // Karar 18: evde guvenlik yapilandirmasi (sensor / eylemci) var mi (ev sahibinin pano degisimi kapisi)
+  db.on('AS has_safety_config', ({ params }) => {
+    const len = (v) => (Array.isArray(v) ? v.length : 0);
+    const devIds = new Set(state.devices.filter((d) => d.home_id === params[0]).map((d) => d.id));
+    const has = (state.device_configs || []).some(
+      (c) => devIds.has(c.device_id) && c.module === 'safety' && c.body && (len(c.body.sensors) > 0 || len(c.body.actuators) > 0)
+    );
+    return [{ has_safety_config: has }];
+  });
+  // Karar 17B: cihaz MQTT kimligi baglamasi icin evin pano MAC'leri
+  db.on('SELECT mac_address FROM devices WHERE home_id = $1', ({ params }) =>
+    state.devices.filter((d) => d.home_id === params[0]).map((d) => ({ mac_address: d.mac_address }))
+  );
   db.on('SELECT 1', () => [{ '?column?': 1 }]);
   db.on('SELECT count(*) AS count FROM endpoints WHERE home_id = $1', ({ params }) => [
     { count: String(state.endpoints.filter((e) => e.home_id === params[0]).length) },

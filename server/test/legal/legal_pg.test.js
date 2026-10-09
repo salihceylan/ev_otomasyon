@@ -1,7 +1,8 @@
 'use strict';
 
 // Yasal metinler GERCEK PostgreSQL'de (yalitilmis gecici veritabani; scripts/migrate.js 001..039):
-//  - 039 semasi: kolon tipleri, CHECK'ler, FK ON DELETE CASCADE, indeks; dosya iki kez daha -> hata yok, veri korunur
+//  - 039 semasi (+ 043: user_id NULL olabilir, FK ON DELETE SET NULL - karar 15): kolon tipleri, CHECK'ler, indeks; dosya
+//    iki kez daha -> hata yok, veri korunur; kalici silmede kabul satiri anonim kalir
 //  - gercek uygulama (createApp + src/db): kayit + accept_terms_version -> kabul satiri ve users.terms_* AYNI
 //    transaction'da (terms_accepted_at = accepted_at); 409 LEGAL_VERSION_MISMATCH'te hesap YOK; ATOMIKLIK: kabul
 //    yazimi (tetikleyiciyle) bozulunca hesap da YOK (gercek ROLLBACK)
@@ -52,7 +53,7 @@ test('039 + yasal metin uclari gercek PG', { skip: PG_SKIP }, async (t) => {
       return r.body.data;
     };
 
-    await t.test('039 semasi: tipler, CHECK, FK CASCADE, indeks; dosya iki kez daha (idempotent)', async () => {
+    await t.test('039 semasi: tipler, CHECK, FK SET NULL (043), indeks; dosya iki kez daha (idempotent)', async () => {
       const cols = await q(
         `SELECT table_name, column_name, data_type, is_nullable, column_default
            FROM information_schema.columns
@@ -67,7 +68,7 @@ test('039 + yasal metin uclari gercek PG', { skip: PG_SKIP }, async (t) => {
         cols.rows.filter((r) => r.table_name === 'legal_acceptances').map((r) => [r.column_name, r.data_type, r.is_nullable]),
         [
           ['id', 'bigint', 'NO'],
-          ['user_id', 'uuid', 'NO'],
+          ['user_id', 'uuid', 'YES'],
           ['document', 'text', 'NO'],
           ['version', 'integer', 'NO'],
           ['accepted_at', 'timestamp with time zone', 'NO'],
@@ -94,7 +95,13 @@ test('039 + yasal metin uclari gercek PG', { skip: PG_SKIP }, async (t) => {
       assert.equal((await one("SELECT count(*)::int AS n FROM schema_migrations WHERE name = '039_legal_acceptances.sql'")).n, 1);
 
       await q('DELETE FROM users WHERE id = $1', [u.id]);
-      assert.equal((await one('SELECT count(*)::int AS n FROM legal_acceptances WHERE user_id = $1', [u.id])).n, 0, 'ON DELETE CASCADE');
+      assert.equal((await one('SELECT count(*)::int AS n FROM legal_acceptances WHERE user_id = $1', [u.id])).n, 0, 'kullanici baglantisi kalkar');
+      // Karar 15 (043): kabul satiri kalici silmede SILINMEZ, anonimlesir (ispat icin)
+      assert.equal((await one("SELECT count(*)::int AS n FROM legal_acceptances WHERE user_id IS NULL AND document = 'privacy'")).n, 1, 'ON DELETE SET NULL');
+      const fk = await one(
+        `SELECT confdeltype FROM pg_constraint WHERE conname = 'legal_acceptances_user_id_fkey' AND conrelid = 'legal_acceptances'::regclass`
+      );
+      assert.equal(fk.confdeltype, 'n', 'FK ON DELETE SET NULL');
     });
 
     await t.test('kayit + accept_terms_version: kabul satiri ve users.terms_* ayni transaction (ayni zaman damgasi)', async () => {

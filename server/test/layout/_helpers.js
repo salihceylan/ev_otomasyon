@@ -17,6 +17,14 @@ const FW_NAMES = Object.freeze([
   'Salon Aydinlatma', 'Mutfak Aydinlatma', 'Koridor Aydinlatma', 'Balkon Aydinlatma',
 ]);
 const FW_TYPES = Object.freeze(['shutter_up', 'shutter_down', 'shutter_up', 'shutter_down', 'light', 'light', 'light', 'light']);
+// 2026-10-09 oncesi bulut tohumu (sahip karariyla tohum "Röle N" lambaya dondu); mevcut evleri temsil eden duzenek.
+const LEGACY_SEED = Object.freeze([
+  null,
+  ...[['Salon Panjur Yukarı', 'Salon'], ['Salon Panjur Aşağı', 'Salon'], ['Oda Panjur Yukarı', 'Oda'], ['Oda Panjur Aşağı', 'Oda']]
+    .map(([name, room], i) => Object.freeze({ name, type: 'shutter', room, pair: Math.floor(i / 2) + 1, durationSec: 20 })),
+  ...[['Salon Aydınlatma', 'Salon'], ['Mutfak Aydınlatma', 'Mutfak'], ['Koridor Aydınlatma', 'Koridor'], ['Balkon Aydınlatma', 'Balkon']]
+    .map(([name, room]) => Object.freeze({ name, type: 'light', room, pair: null, durationSec: null })),
+]);
 
 /**
  * Pano `state` yuku uretir.
@@ -91,10 +99,10 @@ function makeWorld(SQL) {
     w.devices.set(d.id, d);
     return d;
   };
-  /** Tohum sablonu satirlari (kanal `from`..`to`). */
+  /** Duzenek satirlari (kanal `from`..`to`): 1-8 eski tohum (LEGACY_SEED, FW_NAMES panosuyla eslesir), 9+ guncel tohum. */
   w.seed = (d, to = 8, from = 1) => {
     for (let c = from; c <= to; c += 1) {
-      const s = seedDefaults(c);
+      const s = c <= 8 ? LEGACY_SEED[c] : seedDefaults(c);
       w.endpoints.push({
         id: `ep-${d.id.slice(0, 4)}-${c}`,
         home_id: d.home_id,
@@ -280,4 +288,11 @@ function makeWorld(SQL) {
   return w;
 }
 
-module.exports = { T0, FW_NAMES, FW_TYPES, fwState, layoutOf, makeLogger, makeWorld };
+/** v1.3.2+ fabrika panosu (sabit rol yok): 1-8 "Röle N" lamba; 9+ ek modul. */
+function factoryV132Set(count = 8) {
+  const set = {};
+  for (let c = 1; c <= Math.min(8, count); c += 1) set[c] = { name: `Röle ${c}`, type: 'light' };
+  return set;
+}
+
+module.exports = { T0, FW_NAMES, FW_TYPES, LEGACY_SEED, factoryV132Set, fwState, layoutOf, makeLogger, makeWorld };

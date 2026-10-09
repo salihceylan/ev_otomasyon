@@ -198,6 +198,8 @@ class TransferService {
         `INSERT INTO home_users (home_id, user_id, role) VALUES ($1, $2, 'owner')`,
         [transfer.home_id, newUserId]
       );
+      // Karar 14: sahiplik donemi - eski ailenin kapanmis alarm gecmisi yeni sahibe gosterilmez (acik alarmlar gorunur)
+      await tx.query('UPDATE homes SET ownership_epoch = NOW() WHERE id = $1', [transfer.home_id]);
 
       // Cihaz/envanter sahipligi
       await tx.query(
@@ -215,6 +217,12 @@ class TransferService {
 
       // Yalnizca bu eve ait erisimler: servis PIN/oturum, uygulama MQTT kimlikleri, davet/kural temizligi.
       const service = await serviceTokenService.revokeHomeServiceAccess(transfer.home_id, tx, 'home_transfer');
+      // Karar 17A: eski aile / servis oturumu cihaz MQTT kimligini kopyalamis olabilir -> dondurulur (tek panolu ev,
+      // fw >= 1.3.0). Servis iptalinden SONRA: az once biten oturumlar da isaretlenir (supurucu ikinci kez dondurmez).
+      const credSvc = optionalModule('device_credential_rotation');
+      const credRotation = credSvc && typeof credSvc.rotate === 'function'
+        ? await credSvc.rotate(transfer.home_id, { tx, reason: 'home_transfer' })
+        : null;
       // Servis oturumu MQTT kimlikleri (uyelik-6) + evin uygulama kimlikleri: COMMIT sonrasi hepsi atilir.
       let usernames = Array.isArray(service && service.mqtt_usernames) ? service.mqtt_usernames.slice() : [];
       if (mqtt && typeof mqtt.revokeHomeAccess === 'function') {
@@ -223,7 +231,7 @@ class TransferService {
       }
       const cleanup = await homeCleanupHook(tx, transfer.home_id);
 
-      return { transfer, usernames, service, cleanup, rotation, rotationSvc };
+      return { transfer, usernames, service, cleanup, rotation, rotationSvc, credRotation, credSvc };
     });
 
     if (outcome.already) {
@@ -237,6 +245,7 @@ class TransferService {
 
     // Commit SONRASI: ayni surecteki servis oturumu onbellegi ve acik MQTT baglantilari.
     invalidateServiceSessionCache();
+    if (outcome.credSvc && typeof outcome.credSvc.afterCommit === 'function') await outcome.credSvc.afterCommit(outcome.credRotation);
     if (outcome.rotationSvc && typeof outcome.rotationSvc.afterCommit === 'function') outcome.rotationSvc.afterCommit(outcome.rotation);
     let kickWarning = null;
     if (mqtt && typeof mqtt.kickUsernames === 'function' && outcome.usernames.length > 0) {

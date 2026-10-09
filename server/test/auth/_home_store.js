@@ -273,6 +273,25 @@ function createHomeStore({ now = () => Date.now() } = {}) {
     // ---------------- cihaz sahipligi (yalnizca kayit) ----------------
     [/UPDATE device_inventory SET claimed_by_user_id = \$1 WHERE claimed_home_id = \$2/, (p) => { s.deviceUpdates.push(['inventory', ...p]); return []; }],
     [/UPDATE devices SET claimed_by = \$1 WHERE home_id = \$2/, (p) => { s.deviceUpdates.push(['devices', ...p]); return []; }],
+
+    // ---------------- karar 14 / 17A (2026-10-09) ----------------
+    [/^UPDATE homes SET ownership_epoch = NOW\(\) WHERE id = \$1$/, (p) => {
+      const h = s.homes.get(p[0]);
+      if (h && typeof h === 'object') h.ownership_epoch = NOW();
+      s.deviceUpdates.push(['ownership_epoch', p[0]]);
+      return [];
+    }],
+    // Bu depoda pano satiri yok: cihaz MQTT kimligi dondurmesi 'no_device' ile sonuclanir.
+    [/^SELECT id, device_uuid, firmware_version FROM devices WHERE home_id = \$1 ORDER BY id$/, () => []],
+    [/^UPDATE service_sessions SET device_cred_rotated_at = NOW\(\) WHERE home_id = \$1 AND device_cred_rotated_at IS NULL/, (p) => {
+      s.sessions.filter((x) => x.home_id === p[0] && !x.device_cred_rotated_at && (x.revoked_at || !alive(x.expires_at)))
+        .forEach((x) => { x.device_cred_rotated_at = NOW(); });
+      return [];
+    }],
+    [/^SELECT DISTINCT home_id FROM service_sessions WHERE device_cred_rotated_at IS NULL/, (p) => {
+      const ended = s.sessions.filter((x) => !x.device_cred_rotated_at && (x.revoked_at || !alive(x.expires_at)) && (p.length === 0 || x.home_id === p[0]));
+      return [...new Set(ended.map((x) => x.home_id))].map((home_id) => ({ home_id }));
+    }],
   ];
 
   s.handle = async (params, text) => {

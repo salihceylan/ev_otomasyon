@@ -95,6 +95,9 @@ class AccountDeletionService {
   get authMiddleware() {
     return this._deps.authMiddleware || require('../middlewares/auth_middleware');
   }
+  get deviceCredRotation() {
+    return this._deps.deviceCredRotation || require('./device_credential_rotation');
+  }
   get rotation() {
     return this._deps.rotation || require('./local_key_rotation');
   }
@@ -226,8 +229,10 @@ class AccountDeletionService {
         ),
       ];
       const rotations = [];
+      const credRotations = []; // karar 17A: silinen owner/resident cihaz MQTT kimligini kopyalamis olabilir
       for (const homeId of rotateHomeIds) {
         rotations.push(await this.rotation.scheduleRotation(homeId, { tx, reason: 'member_deleted' }));
+        credRotations.push(await this.deviceCredRotation.rotate(homeId, { tx, reason: 'member_deleted' }));
       }
 
       // Push token'lar (tablo 030 ile gelir; yoksa atlanir)
@@ -321,8 +326,10 @@ class AccountDeletionService {
         releasedHomes: emptyHomeIds.length,
         sessionsRevoked: (sessions.rows || []).length,
         rotations,
+        credRotations,
       };
     });
+    if (outcome.credRotations && outcome.credRotations.length > 0) await this.deviceCredRotation.afterCommit(outcome.credRotations);
     if (outcome.rotations.length > 0) this.rotation.afterCommit(outcome.rotations); // pano-6: COMMIT sonrasi uzlastirici
 
     // --- 3) Commit SONRASI: onbellek + acik MQTT baglantilari (hata silmeyi bozmaz) ---

@@ -23,7 +23,7 @@ const SKIP = URL_ ? false : 'EV_PG_TEST_URL tanimli degil (gercek PostgreSQL ger
 const { MqttBridge } = require('../../src/mqtt_bridge');
 const { createEndpointLayoutSync, constants } = require('../../src/services/endpoint_layout_sync');
 const { extractReportedLayout, seedDefaults, parseBase, serializeBase, DEFAULT_SHUTTER_SEC } = require('../../src/utils/endpoint_layout');
-const { fwState } = require('./_helpers');
+const { fwState, LEGACY_SEED, factoryV132Set } = require('./_helpers');
 
 const { SHRINK_CONFIRM_MS, AUDIT_EVENT } = constants;
 const DEVICE_SERVICE_PATH = path.join(__dirname, '..', '..', 'src', 'services', 'device_service.js');
@@ -84,11 +84,11 @@ test.after(async () => {
 });
 
 // ------------------------------------------------------------------------------
-// Fikstur: ev + cihaz(lar) + kullanici + tohum satirlari (seedDefaults ile)
+// Fikstur: ev + cihaz(lar) + kullanici + duzenek satirlari (1-8 eski tohum LEGACY_SEED: varsayilan FW_NAMES panosuyla eslesir; 9+ seedDefaults)
 // ------------------------------------------------------------------------------
 async function seedRows(db, homeId, deviceId, count) {
   for (let c = 1; c <= count; c += 1) {
-    const s = seedDefaults(c);
+    const s = c <= 8 ? LEGACY_SEED[c] : seedDefaults(c);
     await db.query(
       'INSERT INTO endpoints (home_id, device_id, channel_index, name, type, room, shutter_pair_index, shutter_duration_sec) ' +
         'VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
@@ -609,9 +609,9 @@ test('15) uretim tohum SQL\'i (device_service SEED_ENDPOINTS_SQL) ile seedDefaul
         `kanal ${c}`
       );
     }
-    // uretim tohumu + varsayilan pano: esitleme satirlara dokunmaz (iki sablon tutarli)
+    // uretim tohumu + v1.3.2 fabrika panosu (sabit rol yok): esitleme satirlara dokunmaz (iki sablon tutarli)
     const svc = makeSync(db);
-    const res = await sync(svc, fx, layoutOf({ count: 16 }));
+    const res = await sync(svc, fx, layoutOf({ count: 16, set: factoryV132Set(16) }));
     assert.equal(res.status, 'applied', JSON.stringify(res));
     assert.equal(res.summary.inserted + res.summary.retyped + res.summary.renamed + res.summary.reroomed + res.summary.deleted, 0);
     assert.equal((await auditsOf(db, fx.dev)).length, 0);

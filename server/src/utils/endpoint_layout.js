@@ -61,7 +61,16 @@ function relaySigRow(r) {
 }
 
 // Bulut tohum sablonu: device_service.js SEED_ENDPOINTS_SQL ile BIREBIR ayni olmalidir (test bunu denetler).
+// Sahip karari (2026-10-09): HICBIR rolenin sabit gorevi yok -> 1-8 "Röle N" lamba, oda Genel (firmware v1.3.2 fabrika
+// varsayilaniyla ayni). Panjur yalniz servisin sablonundan / panonun gercek yerlesiminden gelir.
 const SEED_TABLE = Object.freeze([
+  null,
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => Object.freeze({ name: `Röle ${n}`, type: 'light', room: DEFAULT_ROOM })),
+]);
+
+// 2026-10-09 oncesi bulut tohumu (1-2 Salon / 3-4 Oda panjuru, 5-8 aydinlatma). Mevcut evlerde bu adlar ve odalar duruyor:
+// "otomatik ad / oda" sayilmaya devam eder, panonun yerlesimi gelince ustune yazilabilir.
+const LEGACY_SEED_TABLE = Object.freeze([
   null,
   Object.freeze({ name: 'Salon Panjur Yukarı', type: 'shutter', room: 'Salon' }),
   Object.freeze({ name: 'Salon Panjur Aşağı', type: 'shutter', room: 'Salon' }),
@@ -73,8 +82,18 @@ const SEED_TABLE = Object.freeze([
   Object.freeze({ name: 'Balkon Aydınlatma', type: 'light', room: 'Balkon' }),
 ]);
 
-// Panonun fabrika varsayilan adlari: ConfigManager.cpp applyDefaults (ASCII; 9+ icin Turkce harfli).
-const FIRMWARE_DEFAULT_NAMES = Object.freeze([
+/** Kanalin eski tohum kaydi (1-8), yoksa null. */
+function legacySeed(channel) {
+  const c = Number(channel);
+  return Number.isInteger(c) && c >= 1 && c <= 8 ? LEGACY_SEED_TABLE[c] : null;
+}
+
+// Panonun fabrika varsayilan adlari.
+//  * v1.3.2+ (sahip karari 2026-10-09: HICBIR rolenin sabit rolu yok): 1-8 "Röle N", hepsi lamba (genel ac-kapa);
+//    firmware SystemConfig.h applyFactoryRelayDefaults. Panjur yalniz servisin yazdigi sablon/yapilandirmadan gelir.
+//  * v1.3.1 ve oncesi (sahada hala var): 1-2 Salon / 3-4 Oda panjuru, 5-8 aydinlatma (ASCII). Bu adlar da "varsayilan ad" sayilir.
+// 9+ (ek modul) her iki surumde "Ek Modül Röle N".
+const LEGACY_FIRMWARE_DEFAULT_NAMES = Object.freeze([
   null,
   'Salon Panjur (Yukari)',
   'Salon Panjur (Asagi)',
@@ -205,11 +224,18 @@ function seedDefaults(channel) {
   return { name: `Ek Modül Röle ${c - 8}`, type: 'light', room: DEFAULT_ROOM, pair: null, durationSec: null };
 }
 
-/** Panonun fabrika varsayilan adi. */
+/** Panonun (v1.3.2+) fabrika varsayilan adi: 1-8 "Röle N", 9+ "Ek Modül Röle N". */
 function firmwareDefaultName(channel) {
   const c = Number(channel);
-  if (Number.isInteger(c) && c >= 1 && c <= 8) return FIRMWARE_DEFAULT_NAMES[c];
+  if (Number.isInteger(c) && c >= 1 && c <= 8) return `Röle ${c}`;
   return `Ek Modül Röle ${c - 8}`;
+}
+
+/** v1.3.1 ve oncesi panonun fabrika adi (1-4 Salon/Oda panjuru, 5-8 aydinlatma); 9+ yeni surumle ayni. */
+function legacyFirmwareDefaultName(channel) {
+  const c = Number(channel);
+  if (Number.isInteger(c) && c >= 1 && c <= 8) return LEGACY_FIRMWARE_DEFAULT_NAMES[c];
+  return firmwareDefaultName(c);
 }
 
 /** Sinifi tohumdan farkli kanal icin tarafsiz ad: "Panjur 3 Yukarı" / "Röle 2". */
@@ -219,8 +245,16 @@ function genericName(channel, reportedType) {
   return `Röle ${c}`;
 }
 
-/** Pano ad vermemisse (fabrika adi) bulutta kullanilacak ad. */
-function defaultNameFor(channel, reportedType) {
+/**
+ * Pano ad vermemisse (fabrika adi) bulutta kullanilacak ad. Eski surum pano (v1.3.1-) kendi eski fabrika adini (ya da eski
+ * tohum adini) bildiriyorsa eski tohum adi kullanilir (mevcut evlerde adlar degismesin); aksi halde guncel tohum / genel ad.
+ */
+function defaultNameFor(channel, reportedType, reportedName) {
+  const legacy = legacySeed(channel);
+  if (legacy !== null && classOf(legacy.type) === classOf(reportedType) && typeof reportedName === 'string') {
+    const f = foldName(reportedName);
+    if (f === foldName(legacyFirmwareDefaultName(channel)) || f === foldName(legacy.name)) return legacy.name;
+  }
   const seed = seedDefaults(channel);
   return classOf(seed.type) === classOf(reportedType) ? seed.name : genericName(channel, reportedType);
 }
@@ -229,16 +263,25 @@ function defaultNameFor(channel, reportedType) {
 function isBoardDefaultName(channel, name) {
   if (isBlankName(name)) return true;
   const f = foldName(name);
-  return f === foldName(firmwareDefaultName(channel)) || f === foldName(seedDefaults(channel).name);
+  const legacy = legacySeed(channel);
+  return (
+    f === foldName(firmwareDefaultName(channel)) ||
+    f === foldName(legacyFirmwareDefaultName(channel)) ||
+    f === foldName(seedDefaults(channel).name) ||
+    (legacy !== null && f === foldName(legacy.name))
+  );
 }
 
 /** Buluttaki ad otomatik (kullanicinin vermedigi) bir ad mi? */
 function isCloudAutoName(channel, name) {
   if (isBlankName(name)) return true;
   const f = foldName(name);
+  const legacy = legacySeed(channel);
   return (
     f === foldName(seedDefaults(channel).name) ||
+    (legacy !== null && f === foldName(legacy.name)) ||
     f === foldName(firmwareDefaultName(channel)) ||
+    f === foldName(legacyFirmwareDefaultName(channel)) ||
     f === foldName(genericName(channel, 'light')) ||
     f === foldName(genericName(channel, 'shutter_up'))
   );
@@ -261,6 +304,10 @@ function deriveRoom(name) {
 
 /** Bir ad icin otomatik oda: tohum adiysa tohum odasi, degilse addan turetilen oda, o da yoksa "Genel". */
 function autoRoomFor(channel, name, reportedType) {
+  const legacy = legacySeed(channel);
+  if (legacy !== null && classOf(legacy.type) === classOf(reportedType) && foldName(name) === foldName(legacy.name)) {
+    return legacy.room;
+  }
   const seed = seedDefaults(channel);
   if (classOf(seed.type) === classOf(reportedType) && foldName(name) === foldName(seed.name)) return seed.room;
   return deriveRoom(name) || DEFAULT_ROOM;
@@ -272,6 +319,8 @@ function isAutoRoom(channel, room, previousName) {
   const k = foldName(room);
   if (k === foldName(DEFAULT_ROOM)) return true;
   if (k === foldName(seedDefaults(channel).room)) return true;
+  const legacy = legacySeed(channel);
+  if (legacy !== null && k === foldName(legacy.room)) return true;
   const derived = deriveRoom(previousName);
   return derived !== null && k === foldName(derived);
 }
@@ -396,8 +445,9 @@ function actuatorVector(reported) {
   return { channels, acts };
 }
 
-// Panonun fabrika tipleri (ConfigManager.cpp applyDefaults): 1-2 ve 3-4 panjur cifti, 5-8 lamba.
-const FACTORY_TYPES = Object.freeze(['shutter_up', 'shutter_down', 'shutter_up', 'shutter_down', 'light', 'light', 'light', 'light']);
+// Panonun fabrika tipleri: v1.3.2+ hepsi lamba (sabit rol yok); v1.3.1 ve oncesi 1-2 ve 3-4 panjur cifti, 5-8 lamba.
+const FACTORY_TYPES = Object.freeze(new Array(8).fill('light'));
+const LEGACY_FACTORY_TYPES = Object.freeze(['shutter_up', 'shutter_down', 'shutter_up', 'shutter_down', 'light', 'light', 'light', 'light']);
 
 /**
  * D1: bildirim panonun TAM fabrika yerlesimi mi? Tam 8 role; tipler fabrika tipleri; her ad varsayilan
@@ -408,8 +458,9 @@ function isFactoryLayout(reported) {
   if (reported.relays.length !== FACTORY_TYPES.length) return false;
   // Eylemci tasiyan pano kurulumcu tarafindan yapilandirilmistir: GECICI (D1) degildir; eylemci atamasi ertelenmez.
   if (hasActuators(reported)) return false;
-  return reported.relays.every(
-    (r, i) => r && r.id === i + 1 && r.type === FACTORY_TYPES[i] && isBoardDefaultName(r.id, r.name)
+  // Fabrika tip vektorlerinden BIRI (v1.3.2+ ya da eski surum) tum kanallarda tutmali; adlar varsayilan olmali.
+  return [FACTORY_TYPES, LEGACY_FACTORY_TYPES].some((types) =>
+    reported.relays.every((r, i) => r && r.id === i + 1 && r.type === types[i] && isBoardDefaultName(r.id, r.name))
   );
 }
 
@@ -475,7 +526,7 @@ function planCore({ reported, base, rows, confirmShrink, provisional }) {
     const position = cls === 'shutter' && Number.isInteger(reported.shutterPos[pair]) ? reported.shutterPos[pair] : 0;
 
     if (!row) {
-      const name = custom ? r.name : defaultNameFor(c, r.type);
+      const name = custom ? r.name : defaultNameFor(c, r.type, r.name);
       inserts.push({
         channel_index: c,
         name,
@@ -501,7 +552,7 @@ function planCore({ reported, base, rows, confirmShrink, provisional }) {
     // --- ad ---
     let name = row.name;
     if (classChanged) {
-      name = custom ? r.name : defaultNameFor(c, r.type);
+      name = custom ? r.name : defaultNameFor(c, r.type, r.name);
     } else {
       const b = baseById.get(c);
       const prev = b && typeof b.name === 'string' ? b.name : undefined;
@@ -509,7 +560,7 @@ function planCore({ reported, base, rows, confirmShrink, provisional }) {
         if (prev !== undefined && prev !== r.name) name = r.name; // pano tarafinda ad degisti: son yazan kazanir
         else if (isCloudAutoName(c, row.name)) name = r.name; // bulut adi otomatik: pano adini al
       } else if (prev !== undefined && prev !== r.name && !isBoardDefaultName(c, prev) && row.name === prev) {
-        name = defaultNameFor(c, r.type); // pano adi varsayilana dondu ve bulut eski pano adini gosteriyordu
+        name = defaultNameFor(c, r.type, r.name); // pano adi varsayilana dondu ve bulut eski pano adini gosteriyordu
       }
     }
 
@@ -630,6 +681,7 @@ module.exports = {
   classOf,
   seedDefaults,
   firmwareDefaultName,
+  legacyFirmwareDefaultName,
   genericName,
   defaultNameFor,
   isBoardDefaultName,

@@ -498,12 +498,23 @@ class AdminUserService {
                   (SELECT COUNT(*)::int FROM home_users o
                     WHERE o.home_id = hu.home_id AND o.role = 'owner' AND o.user_id <> $1) AS other_owners,
                   (SELECT COUNT(*)::int FROM home_users m
-                    WHERE m.home_id = hu.home_id AND m.user_id <> $1) AS other_members
+                    WHERE m.home_id = hu.home_id AND m.user_id <> $1) AS other_members,
+                  (SELECT COUNT(*)::int FROM devices d WHERE d.home_id = hu.home_id) AS device_count
              FROM home_users hu
             WHERE hu.user_id = $1 AND hu.role = 'owner'`,
           [target.id]
         );
-        const blocked = (owned.rows || []).filter((h) => Number(h.other_owners) === 0 && Number(h.other_members) > 0);
+        const soleOwned = (owned.rows || []).filter((h) => Number(h.other_owners) === 0);
+        // Karar 16 (kendi hesap silme ile ayni kural, account_deletion_service SOLE_OWNER): panolu evin tek sahibi
+        // kalici silinemez; ev ve pano sahipsiz kalir / pano envanterde "sahiplenilmis" olarak takili kalirdi.
+        if (soleOwned.some((h) => Number(h.device_count) > 0)) {
+          throw new HttpError(
+            409,
+            'Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama yapın.',
+            'SOLE_OWNER_WITH_DEVICES'
+          );
+        }
+        const blocked = soleOwned.filter((h) => Number(h.other_members) > 0);
         if (blocked.length > 0) {
           throw new HttpError(
             409,
@@ -511,8 +522,9 @@ class AdminUserService {
             'CONFLICT'
           );
         }
-        const homesToDelete = (owned.rows || [])
-          .filter((h) => Number(h.other_owners) === 0 && Number(h.other_members) === 0)
+        // Kalan tek-sahipli evlerin uyesi de panosu da yok: ev kaydi silinir.
+        const homesToDelete = soleOwned
+          .filter((h) => Number(h.other_members) === 0)
           .map((h) => h.home_id);
 
         const usernames = await authService.revokeUserMqttCredentials(target.id, { tx });
@@ -551,7 +563,7 @@ class AdminUserService {
     return {
       success: true,
       message: outcome.deletedHomes > 0
-        ? `Kullanıcı kalıcı olarak silindi (${outcome.deletedHomes} boş daire kaldırıldı).`
+        ? `Kullanıcı kalıcı olarak silindi (üyesi ve panosu olmayan ${outcome.deletedHomes} daire kaydı da silindi).`
         : 'Kullanıcı kalıcı olarak silindi.',
     };
   }

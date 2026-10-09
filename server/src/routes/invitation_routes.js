@@ -12,6 +12,7 @@
 //   POST   /homes/join                          giris yapmis kullanici (servis oturumu HARIC)
 //   GET    /homes/:homeId/members               super | staff | owner | resident | gecerli misafir
 //   DELETE /homes/:homeId/members/:targetUserId owner | super_user   (CONTRACTS §1.4 "Uye cikar")
+//   DELETE /homes/:homeId/members/me           evin her uyesi (owner HARIC: 409 OWNER_CANNOT_LEAVE; servis oturumu HARIC)
 
 const express = require('express');
 const InvitationService = require('../services/invitation_service');
@@ -121,6 +122,19 @@ router.get(
   asyncHandler(async (req, res) => {
     const result = await InvitationService.getHomeMembers(req.homeAccess.home_id, req.homeAccess);
     return successResponse(res, result);
+  })
+);
+
+// Karar 13: evden ayrilma. ':targetUserId' rotasindan ONCE tanimli olmali ('me' UUID degildir). Ev erisim kapisi
+// (requireHomeAccess) bilincli olarak YOK: suresi bitmis misafir / kurulum uyeligi de kendi kaydini silebilir; uyelik
+// servis katmaninda dogrulanir (404).
+router.delete(
+  '/homes/:homeId/members/me',
+  authenticateToken,
+  rejectServiceSession,
+  asyncHandler(async (req, res) => {
+    const result = await InvitationService.leaveHome(req.params.homeId, req.user.id, { ip: clientIp(req) });
+    return successResponse(res, result, 'Evden ayrıldınız.');
   })
 );
 

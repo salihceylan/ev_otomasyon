@@ -28,6 +28,7 @@
 
 const crypto = require('crypto');
 const { HttpError } = require('../utils/helpers');
+const { deviceClientId } = require('./device_credential_rotation');
 
 const BCRYPT_COST = 10; // makine kimligi, yuksek entropili rastgele parola: baglanti basina maliyet dusuk tutulur
 const USER_CREDENTIAL_MAX_TTL_MS = 12 * 60 * 60 * 1000; // CONTRACTS §1.5: min(12 saat, misafir bitisi)
@@ -180,6 +181,13 @@ class MqttCredentialService {
     const password = randomPassword();
     const passwordHash = await this.bcrypt.hash(password, BCRYPT_COST);
 
+    // Karar 17B: kimlik panonun MQTT istemci kimligine baglanir (EMQX sorgusu client_id doluysa ${clientid} esitligi
+    // ister). Yalniz TEK panolu evde: cok panolu evde ortak d_{t} her panoya gider (baglama yok, NULL).
+    const macs = await q('SELECT mac_address FROM devices WHERE home_id = $1', [homeId]);
+    const macRows = (macs && macs.rows) || [];
+    const boundClientId = macRows.length === 1 ? deviceClientId(macRows[0].mac_address) : null;
+
+    // Gecersiz kilinmis (karar 17A: expires_at gecmis) satir da silinir: yeni kimlik "dondurme bekliyor" isaretini kaldirir.
     const removed = await q(
       `DELETE FROM mqtt_credentials WHERE home_id = $1 AND kind = 'device' RETURNING username`,
       [homeId]
@@ -189,7 +197,7 @@ class MqttCredentialService {
       `INSERT INTO mqtt_credentials (username, password_hash, is_superuser, kind, home_id, device_id, client_id, expires_at)
        VALUES ($1, $2, FALSE, 'device', $3, $4, $5, NULL)
        RETURNING id`,
-      [username, passwordHash, homeId, deviceId, username]
+      [username, passwordHash, homeId, deviceId, boundClientId]
     );
     const credentialId = inserted.rows[0].id;
 
@@ -278,7 +286,8 @@ class MqttCredentialService {
       `INSERT INTO mqtt_credentials (username, password_hash, is_superuser, kind, home_id, user_id, client_id, expires_at)
        VALUES ($1, $2, FALSE, 'app', $3, $4, $5, $6)
        RETURNING id`,
-      [username, passwordHash, homeId, userId, username, expiresAt]
+      // Karar 17B: uygulama kimligi istemci kimligine BAGLANMAZ (client_id NULL); yanittaki client_id oneridir.
+      [username, passwordHash, homeId, userId, null, expiresAt]
     );
     const credentialId = inserted.rows[0].id;
 

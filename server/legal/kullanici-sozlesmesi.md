@@ -2,8 +2,8 @@
 id: terms
 slug: kullanici-sozlesmesi
 title: Kullanıcı Sözleşmesi ve Son Kullanıcı Lisans Koşulları
-version: 1
-effective_date: 2026-10-08
+version: 2
+effective_date: 2026-10-09
 status: draft
 requires_acceptance: true
 ---
@@ -118,13 +118,13 @@ Eve eklediğiniz Aile Üyeleri ve Misafirler, rollerinin izin verdiği ölçüde
 
 Ev Sahibi, Aile Üyelerini ve Misafirleri Uygulamadaki “Aile & Misafir Yönetimi” ekranından evden çıkarabilir; çıkarılan kişinin Bulut Hizmeti üzerinden erişimi hemen sona erer. Kurulumu yapan servis personelinin evinize erişimi kurulumdan 72 saat sonra kendiliğinden sona erer; bu erişimi aynı ekrandan daha önce de kaldırabilirsiniz.
 
-Bir Aile Üyesi çıkarıldığında, tek panolu evlerde Panonun yerel ağ anahtarı da otomatik olarak değiştirilir; böylece çıkarılan kişinin bildiği anahtar Yerel Modda geçersiz olur. Pano o sırada çevrimdışıysa değişiklik, Pano yeniden bağlandığında tamamlanır. Aynı değişiklik daire devrinde, Yetkili Servisin evdeki üyelikleri sona erdiren Ev Sahibi atamasında, hesap silmede ve yerel anahtarı okumuş bir servis oturumu sona erdiğinde de yapılır. Birden fazla Panosu olan evlerde bu değişiklik otomatik yapılmaz; böyle bir durumda Yetkili Servisten destek isteyin.
+Bir Aile Üyesi çıkarıldığında, tek panolu evlerde Panonun yerel ağ anahtarı da otomatik olarak değiştirilir; böylece çıkarılan kişinin bildiği anahtar Yerel Modda geçersiz olur. Pano o sırada çevrimdışıysa değişiklik, Pano yeniden bağlandığında tamamlanır. Aynı değişiklik bir Aile Üyesinin evden kendisi ayrılmasında, daire devrinde, Yetkili Servisin evdeki üyelikleri sona erdiren Ev Sahibi atamasında, hesap silmede ve yerel anahtarı okumuş bir servis oturumu sona erdiğinde de yapılır. Birden fazla Panosu olan evlerde bu değişiklik otomatik yapılmaz; böyle bir durumda Yetkili Servisten destek isteyin.
 
 Anahtarın değişmesi, çıkarılan kişinin ev ağınıza bağlanmasını engellemez. Bu kişi Wi-Fi şifrenizi biliyorsa şifrenizi de değiştirin (5.7).
 
 ### 5.7 Ev ağınız
 
-Yerel Modda Uygulama Panoya ev ağınız üzerinden bağlanır ve bu bağlantı şifreli bağlantı (TLS) kullanmaz. Kurulum biçimine bağlı olarak ev ağınıza bağlanabilen herkes Panoyu yerel ağ üzerinden kontrol edebilir. Bu nedenle ev ağınıza kimlerin bağlanabildiğini kontrol edin: Wi-Fi şifrenizi güçlü tutun ve yalnızca güvendiğiniz kişilerle paylaşın, misafirleriniz için ayrı bir misafir ağı kullanın, evden çıkardığınız kişiler şifreyi biliyorsa şifreyi değiştirin ve modeminizin yönetim şifresini değiştirin.
+Yerel Modda Uygulama Panoya ev ağınız üzerinden bağlanır ve bu bağlantı şifreli bağlantı (TLS) kullanmaz. Pano ev ağınıza kablolu (Ethernet) bağlıysa, ev ağınıza bağlanan herkes Panoyu yerel anahtar olmadan kontrol edebilir; Uygulama bu ağda, Uygulamaya giriş yapılmamış olsa bile Panoyu yönetmeye izin verir. Kısacası kablolu bağlı Panoda ev ağınıza bağlanabilen herkes Panoyu yönetebilir. Bu nedenle ev ağınıza kimlerin bağlanabildiğini kontrol edin: Wi-Fi şifrenizi güçlü tutun ve yalnızca güvendiğiniz kişilerle paylaşın, misafirleriniz için ayrı bir misafir ağı kullanın, evden çıkardığınız kişiler şifreyi biliyorsa şifreyi değiştirin ve modeminizin yönetim şifresini değiştirin.
 
 ## 6. Hizmetin Niteliği ve Sınırları
 
@@ -134,7 +134,7 @@ Yerel Modda Uygulama Panoya ev ağınız üzerinden bağlanır ve bu bağlantı 
 - Bulut Hizmeti; bakım, güncelleme, güvenlik önlemleri veya kontrolümüz dışındaki arızalar nedeniyle zaman zaman kesintiye uğrayabilir. Planlı bakımları mümkün olduğunca önceden duyurur ve kesintileri kısa tutmaya çalışırız. Hizmetin kesintisiz, gecikmesiz veya hatasız olacağını taahhüt etmeyiz.
 - Uygulamadan gönderilen bir komut Panoya ulaşmayabilir veya gecikebilir. Pano komutu onaylamazsa Uygulama bunu size bildirir; böyle bir durumda cihazın gerçek durumunu kontrol edin.
 - Hizmeti geliştirmek, güvenlik açıklarını kapatmak veya mevzuata uymak için Uygulamayı ve Bulut Hizmetini güncelleyebiliriz. Pano yazılımı uzaktan güncellenmez; güncellenmesi gerektiğinde bunu Yetkili Servis yerinde yapar. Bazı güncellemeler Hizmeti kullanmaya devam etmeniz için gerekli olabilir. Hizmetin temel niteliklerini aleyhinize değiştiren değişiklikleri önceden bildiririz; böyle bir değişikliği kabul etmezseniz Sözleşmeyi ücretsiz olarak sona erdirebilirsiniz.
-- **Personelimizin erişimi:** Güde Teknoloji'nin yönetici yetkisindeki personeli; destek, arıza giderme ve güvenlik amacıyla Bulut Hizmeti üzerinden evinizin kayıtlarını, anlık durumunu ve alarm geçmişini görebilir, cihazlarınıza komut gönderebilir, zamanlı kuralları yönetebilir ve üyeleri evden çıkarabilir; hırsız alarmını kuramaz veya çözemez ve gaz vanasını açamaz. Kurulumu yapan servis personeli de kurulumdan sonraki 72 saat boyunca evinizin durumunu görebilir, cihazlarınıza komut gönderebilir ve Panonun yerel anahtarını görebilir. Ayrıntılar Gizlilik Politikası ve KVKK Aydınlatma Metni'nde yer alır.
+- **Personelimizin erişimi:** Güde Teknoloji'nin yönetici yetkisindeki personeli; destek, arıza giderme ve güvenlik amacıyla Bulut Hizmeti üzerinden evinizin kayıtlarını, anlık durumunu ve alarm geçmişini görebilir, cihazlarınıza komut gönderebilir, zamanlı kuralları yönetebilir ve üyeleri evden çıkarabilir; hırsız alarmını kuramaz veya çözemez ve gaz vanasını açamaz. Kurulumu yapan servis personeli de kurulumdan sonraki 72 saat boyunca evinizin durumunu görebilir, cihazlarınıza komut gönderebilir ve Panonun yerel anahtarını görebilir. Ayrıca yönetici ve servis personelimiz, kablolu kurulum ve servis işleri için cihaz envanteri üzerinden, size teslim edilmiş Panolar dahil her Panonun yerel anahtarını süre sınırı olmaksızın görebilir; her görüntüleme kayıt altına alınır. Ayrıntılar Gizlilik Politikası ve KVKK Aydınlatma Metni'nde yer alır.
 - İnternet servis sağlayıcınız, uygulama mağazaları, telefonunuzun işletim sistemi ve Google ya da Apple ile giriş gibi üçüncü taraf hizmetler kendi koşullarına tabidir ve bizim kontrolümüzde değildir.
 
 ## 7. Güvenlik Uyarıları: Lütfen Dikkatle Okuyun

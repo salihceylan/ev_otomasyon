@@ -154,6 +154,9 @@ class ServicePanelService {
   get cleanup() {
     return this._deps.cleanup || require('./home_cleanup');
   }
+  get deviceCredRotation() {
+    return this._deps.deviceCredRotation || require('./device_credential_rotation');
+  }
   get rotation() {
     return this._deps.rotation || require('./local_key_rotation');
   }
@@ -755,6 +758,7 @@ class ServicePanelService {
       // 7) Uyelikler: sahip varsa daire DEVRI (tum uyelikler kalkar; islemi yapan staff'in servis uyeligi haric)
       let removedMemberships = 0;
       let removedKeyHolders = 0; // pano-6: yerel anahtari okuyabilen (owner/resident) ve yeni sahip OLMAYAN cikanlar
+      let removedCredHolders = 0; // karar 17A: cihaz MQTT kimligini alabilen (owner/resident/service_user) cikanlar
       if (mode !== MODES.NO_OWNER) {
         const removed = await q(
           `DELETE FROM home_users
@@ -766,6 +770,9 @@ class ServicePanelService {
         removedMemberships = (removed.rows || []).length;
         removedKeyHolders = (removed.rows || []).filter(
           (m) => (m.role === 'owner' || m.role === 'resident') && m.user_id !== targetUser.id
+        ).length;
+        removedCredHolders = (removed.rows || []).filter(
+          (m) => ['owner', 'resident', 'service_user'].includes(m.role) && m.user_id !== targetUser.id
         ).length;
       }
       await q(
@@ -779,6 +786,8 @@ class ServicePanelService {
       // 8) Cihaz / envanter sahipligi
       await q('UPDATE device_inventory SET claimed_by_user_id = $1 WHERE claimed_home_id = $2', [targetUser.id, homeId]);
       await q('UPDATE devices SET claimed_by = $1 WHERE home_id = $2', [targetUser.id, homeId]);
+      // Karar 14: sahiplik donemi - onceki donemin kapanmis alarm gecmisi yeni sahibe gosterilmez (acik alarmlar gorunur)
+      await q('UPDATE homes SET ownership_epoch = NOW() WHERE id = $1', [homeId]);
 
       // 8b) pano-6: cikarilan owner/resident panonun yerel anahtarini biliyor -> bekleyen yolla dondurulur (tek panolu ev;
       //     cihaz satirlari yukarida zaten kilitli). COMMIT sonrasi uzlastirici.
@@ -788,6 +797,11 @@ class ServicePanelService {
       //    kimlikleri ve davet/kural/bekleyen devir temizligi
       // Servis (PIN) oturumu MQTT kimlikleri (user_id bos) HER modda silinir (uyelik-6; NO_OWNER dahil): COMMIT sonrasi atilir.
       const service = await this.serviceTokens.revokeHomeServiceAccess(homeId, tx, 'admin_assigned');
+      // 9a) Karar 17A: cikarilan uyeler / biten servis oturumlari cihaz MQTT kimligini kopyalamis olabilir -> dondurulur
+      //     (tek panolu ev, fw >= 1.3.0). Servis iptalinden SONRA: az once biten oturumlar isaretlenir.
+      const credRotation = removedCredHolders > 0 || (service && service.revoked_sessions > 0)
+        ? await this.deviceCredRotation.rotate(homeId, { tx, reason: 'admin_assigned' })
+        : null;
       let usernames = Array.isArray(service && service.mqtt_usernames) ? service.mqtt_usernames.slice() : [];
       let cleanup = null;
       if (mode !== MODES.NO_OWNER) {
@@ -829,10 +843,12 @@ class ServicePanelService {
         neutralized,
         securityReset,
         rotation,
+        credRotation,
       };
     });
 
     if (!outcome.ok) throw outcome.error;
+    if (outcome.credRotation) await this.deviceCredRotation.afterCommit(outcome.credRotation); // 17A: once eski baglanti atilir
     if (outcome.rotation) this.rotation.afterCommit(outcome.rotation); // pano-6: en iyi caba, firlatmaz
 
     // --- Commit SONRASI yan etkiler (hicbiri atamayi bozmaz; hatalar `warnings` olarak doner) ---

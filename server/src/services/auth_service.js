@@ -26,6 +26,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { HttpError, generateNumericPin, sha256Hex, isUuid } = require('../utils/helpers');
+const { canonicalPhone } = require('../utils/phone');
 const jwtConfig = require('../middlewares/jwt_config');
 const { invalidateUserAuthCache, invalidateServiceSessionCache } = require('../middlewares/auth_middleware');
 const pin = require('../utils/pin');
@@ -132,7 +133,7 @@ function normalizePhone(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const s = String(value).trim().replace(/[\s\-().]/g, '');
   if (!/^\+?\d{10,15}$/.test(s)) return null;
-  return s;
+  return canonicalPhone(s); // karar 11: TR cep numarasi "+905XXXXXXXXX"
 }
 
 /** E-posta ya da telefon. Gecersizse null. */

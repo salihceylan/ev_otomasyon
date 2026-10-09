@@ -415,13 +415,36 @@ test('C4: eski panonun guvenlik yapilandirmasinda sensor/eylemci varsa safety_re
   ]) {
     const ctx = await setup();
     ctx.world.state.device_configs = [{ device_id: ctx.oldDev.id, module: 'safety', rev: 3, crc: '0000000a', body }];
-    const r = await ctx.replace();
+    // Karar 18: guvenlik yapilandirmali evde degisimi yetkili servis yapar (servis oturumu)
+    const r = await ctx.replace({}, ctx.actorFor('service_session', { userId: null, globalRole: 'service_session', isServiceSession: true }));
     assert.strictEqual(r.safety_restore, 'required', JSON.stringify(body));
     assert.ok(Array.isArray(r.warnings) && r.warnings.includes(SAFETY_RESTORE_WARNING), JSON.stringify(r.warnings));
     assert.strictEqual(r.message, REPLACE_MESSAGE);
     const audit = ctx.world.state.device_audit_logs.find((a) => a.event === 'board_replaced');
     assert.strictEqual(audit.details.safety_restore, 'required');
   }
+});
+
+test('karar 18: guvenlik yapilandirmali (sensor / vana) evde ev sahibinin pano degisimi 403 REPLACE_REQUIRES_SERVICE; hicbir sey degismez', async () => {
+  for (const body of [
+    { sensors: [{ id: 'd3', kind: 'water', zone: 1 }], actuators: [] },
+    { sensors: [], actuators: [{ id: 'a1', relay: 5, kind: 'valve' }] },
+  ]) {
+    const ctx = await setup();
+    ctx.world.state.device_configs = [{ device_id: ctx.oldDev.id, module: 'safety', rev: 3, crc: '0000000a', body }];
+    const before = JSON.stringify(ctx.world.state.device_inventory);
+    await assert.rejects(ctx.replace(), (e) => {
+      assert.strictEqual(e.status || e.statusCode, 403);
+      assert.strictEqual(e.code, 'REPLACE_REQUIRES_SERVICE');
+      assert.strictEqual(e.message, 'Güvenlik ayarları olan evde pano değişimini yetkili servis yapmalıdır.');
+      return true;
+    });
+    assert.strictEqual(JSON.stringify(ctx.world.state.device_inventory), before, 'envanter (PIN sayaci dahil) degismez');
+  }
+  // Bos guvenlik govdesi (yalniz bolge adi): ev sahibi degistirebilir (safety_restore not_required ile ayni kural)
+  const plain = await setup();
+  plain.world.state.device_configs = [{ device_id: plain.oldDev.id, module: 'safety', rev: 1, crc: '00000001', body: { sensors: [], actuators: [], zones: [{ id: 1, name: 'Ev' }] } }];
+  assert.ok(await plain.replace());
 });
 
 test('C4: tasinan uc noktada actuator_type dolu ise required; guvenlik yapilandirmasiz evde not_required ve uyari yok', async () => {

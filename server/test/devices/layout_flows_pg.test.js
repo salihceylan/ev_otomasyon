@@ -235,7 +235,8 @@ test('PG D6 REASSIGNED: satirlar tohuma doner; ayni imzali sonraki canli state R
       actor: c.helpers.act(root), deviceUuid: t.dev.device_uuid, confirmUid: t.dev.device_uuid, reason: REASON, newOwnerIdentifier: newOwner.email,
     });
     assert.equal(r.action, 'REASSIGNED');
-    assert.equal(await types(c, t.dev.id), '1:shutter 2:shutter 3:shutter 4:shutter 5:light 6:light 7:light 8:light', 'satirlar tohuma dondu');
+    // Tohum (sahip karari 2026-10-09): sabit rol yok, 1-8 lamba.
+    assert.equal(await types(c, t.dev.id), '1:light 2:light 3:light 4:light 5:light 6:light 7:light 8:light', 'satirlar tohuma dondu');
 
     clock += 30 * 1000; // hiz siniri gecti, RECHECK (5 dk) DOLMADI
     await send();

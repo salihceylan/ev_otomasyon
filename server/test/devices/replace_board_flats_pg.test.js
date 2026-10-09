@@ -117,9 +117,11 @@ test('pano degisimi + site dairesi (atolye-7/8) gercek PG', { skip: PG_SKIP }, a
       "INSERT INTO device_configs (device_id, module, rev, crc, body) VALUES ($1, 'safety', 4, '0000abcd', $2::jsonb)",
       [old5.id, JSON.stringify({ sensors: [{ id: 'd3', kind: 'water', zone: 1 }], actuators: 'bozuk' })]
     );
-    const r3 = await deviceService.replaceBoard({
-      actor: ownerActor, homeId: c5.home_id, oldDeviceUuid: 'AHBU-RBF-0005', newDeviceUuid: 'AHBU-RBF-0006', setupPin: PIN, reason: REASON,
-    });
+    // Karar 18: guvenlik yapilandirmali evde ev sahibi degistiremez (403, hicbir sey degismez); yetkili servis / super yapar
+    const args5 = { homeId: c5.home_id, oldDeviceUuid: 'AHBU-RBF-0005', newDeviceUuid: 'AHBU-RBF-0006', setupPin: PIN, reason: REASON };
+    await expectHttp(deviceService.replaceBoard({ actor: ownerActor, ...args5 }), 403, 'REPLACE_REQUIRES_SERVICE');
+    assert.equal((await db.query("SELECT status FROM device_inventory WHERE device_uuid = 'AHBU-RBF-0006'")).rows[0].status, 'IN_STOCK');
+    const r3 = await deviceService.replaceBoard({ actor: { ...sup, access: 'super_user' }, ...args5 });
     assert.equal(r3.safety_restore, 'required');
     assert.ok((r3.warnings || []).some((w) => w.startsWith('Eski panonun güvenlik ayarları')), JSON.stringify(r3.warnings));
     assert.equal(r3.message, 'Pano değişimi tamamlandı. Kanal adları, kurallar ve panjur süreleri yeni panoya taşındı.');

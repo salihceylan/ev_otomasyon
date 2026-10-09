@@ -29,6 +29,9 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // pano-6: biten servis oturumlari icin
 // pano-6: anahtari okumus ve bitmis (iptal / suresi dolmus) ama rotasyonu yapilmamis oturumlar
 const ENDED_READ_SESSIONS_COND =
   'local_key_read_at IS NOT NULL AND key_rotated_at IS NULL AND (revoked_at IS NOT NULL OR expires_at <= NOW())';
+// Karar 17A (migration 043): biten HER servis oturumu (oturum cihaz MQTT kimligini alabilir) icin cihaz kimligi bir kez
+// dondurulur; device_credential_rotation.rotate evin bitmis oturumlarini isaretler.
+const ENDED_CRED_SESSIONS_COND = 'device_cred_rotated_at IS NULL AND (revoked_at IS NOT NULL OR expires_at <= NOW())';
 
 function normalizeTechnicianName(value) {
   if (typeof value !== 'string') return 'Yetkili Servis';
@@ -42,6 +45,7 @@ class ServiceTokenService {
     // undefined: varsayilan mqtt_credential_service modulu; null: bilincli devre disi (test)
     this._mqttCredentials = undefined;
     this._localKeyRotation = undefined; // undefined: varsayilan local_key_rotation modulu (pano-6)
+    this._deviceCredRotation = undefined; // undefined: varsayilan device_credential_rotation modulu (karar 17A)
     this._sweepTimer = null;
     this._sweepRunning = false;
   }
@@ -64,6 +68,9 @@ class ServiceTokenService {
    * @returns {Promise<{homes:number, scheduled:number}>}
    */
   async sweepEndedSessions({ homeId = null } = {}) {
+    // Karar 17A: ONCE cihaz MQTT kimligi dondurulur (eski oturum atilir); yerel anahtar rotasyonunun set_local_key'i
+    // uzlastiricida yeni kimlik gelene kadar bekler. Hata (043'suz veritabani vb.) yerel anahtar turunu durdurmaz.
+    const credOut = await this._sweepDeviceCredentials(homeId);
     const res = homeId
       ? await db.query(`SELECT DISTINCT home_id FROM service_sessions WHERE ${ENDED_READ_SESSIONS_COND} AND home_id = $1`, [homeId])
       : await db.query(`SELECT DISTINCT home_id FROM service_sessions WHERE ${ENDED_READ_SESSIONS_COND}`);
@@ -85,7 +92,50 @@ class ServiceTokenService {
         console.warn(`[SERVIS] Servis oturumu anahtar rotasyonu yapilamadi (ev=${String(h).slice(0, 8)}): ${err && err.code ? err.code : 'hata'}`);
       }
     }
+    if (credOut.rotated > 0) {
+      console.log(`[SERVIS] Biten servis oturumlari: ${credOut.rotated} evde cihaz MQTT kimligi donduruldu.`);
+    }
     return { homes: homes.length, scheduled };
+  }
+
+  /** Test / DI: cihaz MQTT kimligi dondurma servisi (karar 17A; rotate + afterCommit). undefined = varsayilan modul. */
+  setDeviceCredRotation(svc) {
+    this._deviceCredRotation = svc;
+  }
+
+  _credRotation() {
+    if (this._deviceCredRotation !== undefined) return this._deviceCredRotation;
+    return require('./device_credential_rotation');
+  }
+
+  /** Karar 17A: bitmis ve islenmemis servis oturumu olan her ev icin AYRI islemde cihaz kimligi dondurmesi. */
+  async _sweepDeviceCredentials(homeId) {
+    const out = { homes: 0, rotated: 0 };
+    const svc = this._credRotation();
+    if (!svc || typeof svc.rotate !== 'function') return out;
+    let homes = [];
+    try {
+      const res = homeId
+        ? await db.query(`SELECT DISTINCT home_id FROM service_sessions WHERE ${ENDED_CRED_SESSIONS_COND} AND home_id = $1`, [homeId])
+        : await db.query(`SELECT DISTINCT home_id FROM service_sessions WHERE ${ENDED_CRED_SESSIONS_COND}`);
+      homes = ((res && res.rows) || []).map((r) => r.home_id).filter(Boolean);
+    } catch (err) {
+      console.warn(`[SERVIS] Servis oturumu cihaz kimligi supurmesi basarisiz: ${err && err.code ? err.code : 'hata'}`);
+      return out;
+    }
+    out.homes = homes.length;
+    for (const h of homes) {
+      try {
+        const r = await db.withTransaction((tx) => svc.rotate(h, { tx, reason: 'service_session_ended' }));
+        if (r && r.rotated) {
+          out.rotated += 1;
+          await svc.afterCommit(r);
+        }
+      } catch (err) {
+        console.warn(`[SERVIS] Servis oturumu cihaz kimligi dondurulemedi (ev=${String(h).slice(0, 8)}): ${err && err.code ? err.code : 'hata'}`);
+      }
+    }
+    return out;
   }
 
   /** pano-6: periyodik supurme (5 dk, unref: sureci acik tutmaz). Ikinci cagri yeni zamanlayici kurmaz. */

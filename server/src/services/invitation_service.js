@@ -49,6 +49,18 @@ function getLocalKeyRotation() {
 
 /** Panonun yerel anahtarini okuyabilen ev rolleri (role_matrix LOCAL_KEY; misafir okuyamaz). */
 const KEY_HOLDER_ROLES = Object.freeze(['owner', 'resident']);
+/**
+ * Karar 17A: cihaz MQTT kimligini gorebilen / alabilen ev rolleri (owner ve servis personeli: role_matrix
+ * device_credential; resident yerel anahtarla bootstrap'tan). Bunlarin erisimi bitince evin cihaz kimligi dondurulur.
+ */
+const DEVICE_CRED_HOLDER_ROLES = Object.freeze(['owner', 'resident', 'service_user']);
+
+/** Karar 17A: cihaz MQTT kimligi dondurma servisi (testte enjekte edilebilir; undefined = varsayilan modul). */
+let deviceCredRotationOverride;
+function getDeviceCredRotation() {
+  if (deviceCredRotationOverride !== undefined) return deviceCredRotationOverride;
+  return require('./device_credential_rotation');
+}
 
 async function kickAfterCommit(usernames) {
   const svc = getMqttCredentialService();
@@ -524,10 +536,15 @@ class InvitationService {
       let rotation = null;
       const rotationSvc = KEY_HOLDER_ROLES.includes(targetRole) ? getLocalKeyRotation() : null;
       if (rotationSvc) rotation = await rotationSvc.scheduleRotation(homeId, { tx, reason: 'member_removed' });
-      return { usernames, rotation, rotationSvc };
+      // Karar 17A: cikarilan owner/resident cihaz MQTT kimligini kopyalamis olabilir -> dondurulur (tek panolu ev, fw >= 1.3.0)
+      const credSvc = KEY_HOLDER_ROLES.includes(targetRole) ? getDeviceCredRotation() : null;
+      const credRotation = credSvc ? await credSvc.rotate(homeId, { tx, reason: 'member_removed' }) : null;
+      return { usernames, rotation, rotationSvc, credRotation, credSvc };
     });
 
-    if (outcome.rotationSvc) outcome.rotationSvc.afterCommit(outcome.rotation); // COMMIT sonrasi uzlastirici (en iyi caba)
+    // COMMIT sonrasi: once dondurulen cihaz kimliginin baglantilari atilir, sonra uzlastirici (en iyi caba)
+    if (outcome.credSvc) await outcome.credSvc.afterCommit(outcome.credRotation);
+    if (outcome.rotationSvc) outcome.rotationSvc.afterCommit(outcome.rotation);
     const kick = await kickAfterCommit(outcome.usernames);
     const result = { message: 'Kullanıcı evden çıkarıldı ve erişimi iptal edildi.' };
     if (kick && (kick.skipped || kick.failed > 0)) {
@@ -535,7 +552,71 @@ class InvitationService {
     }
     return result;
   }
+
+  /**
+   * Karar 13: uyenin evden kendi istegiyle ayrilmasi (DELETE /homes/:homeId/members/me). Ev sahibi ayrilamaz (409
+   * OWNER_CANNOT_LEAVE). Diger uyelikler (resident, guest, service_user): uyelik silinir, kullanicinin BU evdeki
+   * uygulama MQTT kimlikleri iptal edilir ve baglantilari atilir; resident ayrilirsa yerel anahtar bekleyen yolla
+   * dondurulur (member_removed ile ayni, pano-6); resident / service_user ayrilirsa cihaz MQTT kimligi dondurulur
+   * (karar 17A); denetim kaydi 'member_left'.
+   * @param {string} homeId
+   * @param {string} userId
+   * @param {{ip?:string|null}} [opts]
+   */
+  static async leaveHome(homeId, userId, { ip = null } = {}) {
+    if (!isUuid(String(homeId || ''))) {
+      throw new HttpError(400, 'Geçersiz ev kimliği.', 'VALIDATION');
+    }
+    if (!isUuid(String(userId || ''))) {
+      throw new HttpError(401, 'Oturum geçersiz.', 'UNAUTHORIZED');
+    }
+    const mqtt = getMqttCredentialService();
+    const outcome = await db.withTransaction(async (tx) => {
+      const mine = await tx.query(
+        'SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2 FOR UPDATE',
+        [homeId, userId]
+      );
+      if (mine.rows.length === 0) {
+        throw new HttpError(404, 'Bu evin üyesi değilsiniz.', 'NOT_FOUND');
+      }
+      const role = mine.rows[0].role;
+      if (role === 'owner') {
+        throw new HttpError(409, 'Ev sahibi evden ayrılamaz; önce evi devredin.', 'OWNER_CANNOT_LEAVE');
+      }
+
+      await tx.query('DELETE FROM home_users WHERE home_id = $1 AND user_id = $2', [homeId, userId]);
+
+      let usernames = [];
+      if (mqtt && typeof mqtt.revokeUserAccess === 'function') {
+        const revoked = await mqtt.revokeUserAccess({ homeId, userId, tx });
+        usernames = (revoked && revoked.usernames) || [];
+      }
+      // pano-6: ayrilan resident panonun yerel anahtarini biliyor -> bekleyen yolla dondurulur (tek panolu ev)
+      const rotationSvc = KEY_HOLDER_ROLES.includes(role) ? getLocalKeyRotation() : null;
+      const rotation = rotationSvc ? await rotationSvc.scheduleRotation(homeId, { tx, reason: 'member_left' }) : null;
+      // Karar 17A: resident / servis personeli cihaz MQTT kimligini kopyalamis olabilir -> dondurulur
+      const credSvc = DEVICE_CRED_HOLDER_ROLES.includes(role) ? getDeviceCredRotation() : null;
+      const credRotation = credSvc ? await credSvc.rotate(homeId, { tx, reason: 'member_left' }) : null;
+
+      await tx.query(
+        `INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details)
+         VALUES ('member_left', NULL, $1, $2, $3, $4, $5::jsonb)`,
+        [homeId, userId, role, ip ? String(ip).slice(0, 64) : null, JSON.stringify({ role })]
+      );
+      return { usernames, rotation, rotationSvc, credRotation, credSvc };
+    });
+
+    if (outcome.credSvc) await outcome.credSvc.afterCommit(outcome.credRotation);
+    if (outcome.rotationSvc) outcome.rotationSvc.afterCommit(outcome.rotation);
+    await kickAfterCommit(outcome.usernames);
+    return { left: true, home_id: homeId };
+  }
 }
+
+/** Test / DI: cihaz kimligi dondurma servisi (undefined = varsayilan modul). */
+InvitationService.setDeviceCredRotation = (svc) => {
+  deviceCredRotationOverride = svc;
+};
 
 module.exports = InvitationService;
 module.exports.normalizeInviteCode = normalizeInviteCode;

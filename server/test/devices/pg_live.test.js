@@ -136,7 +136,7 @@ function getCtx() {
 }
 
 /** Hizli kurulum: sahip + sahiplenmis cihaz (+ cevrimici). */
-async function makeHome(c, { online = true, pinPlain = '135790' } = {}) {
+async function makeHome(c, { online = true, pinPlain = '135790', shutters = true } = {}) {
   const h = c.helpers;
   const owner = await h.user();
   const inv = await h.inventory({ pinPlain });
@@ -146,6 +146,12 @@ async function makeHome(c, { online = true, pinPlain = '135790' } = {}) {
   const home = await h.one('SELECT * FROM homes WHERE id = $1', [r.home_id]);
   const dev = await h.one('SELECT * FROM devices WHERE device_uuid = $1', [inv.device_uuid]);
   if (online) await c.q('UPDATE devices SET is_online = TRUE, last_seen_at = NOW() WHERE id = $1', [dev.id]);
+  // Tohumda sabit rol yok (sahip karari 2026-10-09: 8 lamba). Bu dosyadaki testler servis sablonuyla 1-4 panjur kurulmus
+  // evi varsayar: sablon yazimini SQL ile taklit et.
+  if (shutters) {
+    await c.q(`UPDATE endpoints SET type = 'shutter', shutter_pair_index = (channel_index + 1) / 2, shutter_duration_sec = 20
+                WHERE device_id = $1 AND channel_index <= 4`, [dev.id]);
+  }
   const access = (a, extra = {}) => ({ userId: owner.id, globalRole: 'user', ip: '127.0.0.1', access: a, ...extra });
   return { owner, home, dev, uuid: inv.device_uuid, inv, access, r };
 }
@@ -242,7 +248,9 @@ test('PG claim: ev, uyelik, cihaz, 8 kanal, envanter, cihaz kimligi (bcrypt + 5 
   assert.equal(c.secretBox.decrypt(dev.local_key_enc).length, 16);
   const eps = await h.rows('SELECT channel_index, type, shutter_pair_index, shutter_duration_sec, name FROM endpoints WHERE device_id = $1 ORDER BY channel_index', [dev.id]);
   assert.equal(eps.length, 8);
-  assert.deepEqual(eps.filter((e) => e.type === 'shutter').map((e) => [e.channel_index, e.shutter_pair_index, e.shutter_duration_sec]), [[1, 1, 20], [2, 1, 20], [3, 2, 20], [4, 2, 20]]);
+  // Sahip karari (2026-10-09): tohumda sabit rol yok -> 8 "Röle N" lamba, panjur yok.
+  assert.deepEqual(eps.filter((e) => e.type === 'shutter'), []);
+  assert.deepEqual(eps.map((e) => [e.channel_index, e.type, e.name]), [1, 2, 3, 4, 5, 6, 7, 8].map((n) => [n, 'light', `Röle ${n}`]));
   const invRow = await h.one('SELECT * FROM device_inventory WHERE id = $1', [inv.id]);
   assert.equal(invRow.status, 'CLAIMED');
   assert.equal(invRow.pin_hash, 'CLAIMED_BURNED_PIN');

@@ -193,7 +193,10 @@ SELECT h.id AS home_id,
        (d.is_online IS TRUE AND d.last_seen_at IS NOT NULL
          AND d.last_seen_at > CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 second')) AS live,
        (SELECT COUNT(*)::int FROM devices x WHERE x.home_id = h.id) AS device_count,
-       d.local_key_fp AS key_fp
+       d.local_key_fp AS key_fp,
+       EXISTS (SELECT 1 FROM mqtt_credentials c
+                WHERE c.home_id = h.id AND c.kind = 'device'
+                  AND c.expires_at IS NOT NULL AND c.expires_at <= CURRENT_TIMESTAMP) AS cred_rotation_pending
   FROM homes h
   JOIN devices d ON d.home_id = h.id
  WHERE h.mqtt_username = $1
@@ -343,6 +346,7 @@ class DeviceReconciler {
       exhausted: 0,
       skippedOffline: 0,
       skippedMultiDevice: 0,
+      skippedCredRotation: 0,
       skippedNotConnected: 0,
       runtimeSynced: 0,
       localKeyRotated: 0,
@@ -858,6 +862,15 @@ class DeviceReconciler {
       }
       if (row.live !== true) {
         this.counters.skippedOffline += 1; // cevrimdisi: yayin yok; cihaz donunce yeni donem tetikler
+        continue;
+      }
+      if (row.cred_rotation_pending === true) {
+        // Karar 17A: cihaz MQTT kimligi donduruldu (eski oturum atildi / atilacak); pano bootstrap ile YENI kimlik alip
+        // baglanana kadar yeni anahtar yayinlanmaz (eski kimligi kopyalayan dinleyemesin). Yeni kimlik gecersiz satiri
+        // siler; panonun sonraki cevrimici donemi yayini tetikler.
+        this.counters.skippedCredRotation += 1;
+        this._logOnce(home, `local_key|cred_rotation|${row.device_id}`, 'log',
+          `yerel_anahtar ${tag} sonuc=atlandi (cihaz MQTT kimligi yenilenmeyi bekliyor)`);
         continue;
       }
       try {

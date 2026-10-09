@@ -305,6 +305,32 @@ function createWorld({ clock = createClock() } = {}) {
     for (const r of rows) patch(ctx, r, { claimed_by_user_id: ctx.params[0] });
     return { rows: [], rowCount: rows.length };
   });
+  // Karar 14 / 17A (2026-10-09): sahiplik donemi ve cihaz MQTT kimligi dondurmesi
+  db.on('UPDATE homes SET ownership_epoch = NOW() WHERE id = $1', (ctx) => {
+    const h = s.homes.find((x) => x.id === ctx.params[0]);
+    if (h) patch(ctx, h, { ownership_epoch: now() });
+    return { rows: [], rowCount: h ? 1 : 0 };
+  });
+  db.on('UPDATE service_sessions SET device_cred_rotated_at = NOW() WHERE home_id = $1', (ctx) => {
+    const hit = s.service_sessions.filter(
+      (x) => x.home_id === ctx.params[0] && !x.device_cred_rotated_at && (x.revoked_at || ms(x.expires_at) <= now().getTime())
+    );
+    for (const x of hit) patch(ctx, x, { device_cred_rotated_at: now() });
+    return { rows: [], rowCount: hit.length };
+  });
+  db.on('SELECT id, device_uuid, firmware_version FROM devices WHERE home_id = $1 ORDER BY id', ({ params }) =>
+    s.devices
+      .filter((d) => d.home_id === params[0])
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((d) => ({ id: d.id, device_uuid: d.device_uuid, firmware_version: d.firmware_version === undefined ? null : d.firmware_version }))
+  );
+  db.on("UPDATE mqtt_credentials SET expires_at = NOW() WHERE home_id = $1 AND kind = 'device'", (ctx) => {
+    const hit = s.mqtt_credentials.filter(
+      (c) => c.home_id === ctx.params[0] && c.kind === 'device' && (!c.expires_at || ms(c.expires_at) > now().getTime())
+    );
+    for (const c of hit) patch(ctx, c, { expires_at: now() });
+    return hit.map((c) => ({ username: c.username }));
+  });
   // pano-6: yerel anahtar rotasyonu (local_key_rotation.scheduleRotation)
   db.on('SELECT id, device_uuid, local_key_pending_enc FROM devices WHERE home_id = $1 ORDER BY id FOR UPDATE', ({ params }) =>
     s.devices

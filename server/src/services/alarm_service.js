@@ -162,9 +162,11 @@ const SQL = Object.freeze({
   list:
     'SELECT a.id, a.device_id, d.device_uuid, a.aid, a.zone, a.kind, a.status, a.origin, a.sources, a.raised_at, ' +
     'a.device_epoch, a.acked_by, a.acked_at, a.ack_requested_at, a.cleared_at, a.cleared_by ' +
-    'FROM alarms a JOIN devices d ON d.id = a.device_id ' +
+    'FROM alarms a JOIN devices d ON d.id = a.device_id JOIN homes h ON h.id = a.home_id ' +
     "WHERE a.home_id = $1 AND a.origin <> 'tomb' " +
     "AND ($2::boolean IS FALSE OR a.status NOT IN ('cleared', 'lost')) " +
+    // Karar 14 (migration 043): sahiplik el degistirdiyse yalniz o andan sonra baslayan YA DA hala acik alarmlar
+    "AND (h.ownership_epoch IS NULL OR a.raised_at >= h.ownership_epoch OR a.status NOT IN ('cleared', 'lost')) " +
     'AND ($3::bigint IS NULL OR a.id < $3::bigint) ' +
     'ORDER BY a.id DESC LIMIT $4',
   getAlarm:

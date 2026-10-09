@@ -2,8 +2,8 @@
 id: privacy
 slug: gizlilik-politikasi
 title: Gizlilik Politikası ve KVKK Aydınlatma Metni
-version: 1
-effective_date: 2026-10-08
+version: 2
+effective_date: 2026-10-09
 status: draft
 requires_acceptance: false
 ---
@@ -140,8 +140,8 @@ Kurulum, bakım ve arıza işlemleri için gereken bilgiler (ör. adınız, ilet
 
 Şirket içinde verilerinize yalnızca görevi gereği ihtiyaç duyan personelimiz erişir:
 
-- **Yönetici yetkisindeki personelimiz** bütün hesap ve ev kayıtlarını (Ev Sahibinin ve üyelerin adı, e-posta adresi ve telefon numarası dahil) görebilir; ad ve telefon numarası gibi hesap bilgilerini düzeltebilir ve hesapları askıya alabilir. Destek, arıza giderme ve güvenlik amacıyla her evin anlık durumunu, cihaz ve sensör adlarını ve alarm geçmişini görebilir; cihazlara komut gönderebilir, zamanlı kuralları yönetebilir ve üyeleri evden çıkarabilir. Hırsız alarmını kuramaz veya çözemez, Panonun yerel anahtarını göremez ve gaz vanasını açamaz.
-- **Servis personelimiz**, kurulum veya acil sıfırlama işlemini yaptığı evde bu işlemden sonraki 72 saat boyunca evin anlık durumunu, alarm geçmişini ve üye listesini (üyelerin iletişim bilgileri dahil) görebilir, cihazlara komut gönderebilir, zamanlı kuralları yönetebilir ve Panonun yerel anahtarını görebilir. Ev Sahibi bu erişimi Uygulamadaki “Aile & Misafir Yönetimi” ekranından daha önce sona erdirebilir. Servis personeli ayrıca kendi açtığı müşteri hesaplarının bilgilerini (ad, e-posta adresi, telefon numarası, hesap durumu, personel notları ve hesabın bağlı olduğu evler) bu süreyle sınırlı olmaksızın görebilir; ad, telefon numarası, not ve hesap durumu bilgilerini güncelleyebilir.
+- **Yönetici yetkisindeki personelimiz** bütün hesap ve ev kayıtlarını (Ev Sahibinin ve üyelerin adı, e-posta adresi ve telefon numarası dahil) görebilir; ad ve telefon numarası gibi hesap bilgilerini düzeltebilir ve hesapları askıya alabilir. Destek, arıza giderme ve güvenlik amacıyla her evin anlık durumunu, cihaz ve sensör adlarını ve alarm geçmişini görebilir; cihazlara komut gönderebilir, zamanlı kuralları yönetebilir ve üyeleri evden çıkarabilir. Hırsız alarmını kuramaz veya çözemez ve gaz vanasını açamaz. Cihaz envanteri üzerinden, size teslim edilmiş Panolar dahil her Panonun yerel anahtarını süre sınırı olmaksızın görebilir; her görüntüleme denetim kaydına yazılır.
+- **Servis personelimiz**, kurulum veya acil sıfırlama işlemini yaptığı evde bu işlemden sonraki 72 saat boyunca evin anlık durumunu, alarm geçmişini ve üye listesini (üyelerin iletişim bilgileri dahil) görebilir, cihazlara komut gönderebilir, zamanlı kuralları yönetebilir ve Panonun yerel anahtarını görebilir. Ev Sahibi bu erişimi Uygulamadaki “Aile & Misafir Yönetimi” ekranından daha önce sona erdirebilir. Bu sürenin dışında da servis personelimiz, kablolu (Ethernet) kurulum ve servis işleri için cihaz envanteri üzerinden, size teslim edilmiş Panolar dahil her Panonun yerel anahtarını süre sınırı olmaksızın görebilir; her görüntüleme denetim kaydına yazılır. Servis personeli ayrıca kendi açtığı müşteri hesaplarının bilgilerini (ad, e-posta adresi, telefon numarası, hesap durumu, personel notları ve hesabın bağlı olduğu evler) bu süreyle sınırlı olmaksızın görebilir; ad, telefon numarası, not ve hesap durumu bilgilerini güncelleyebilir.
 - **Servis PIN'iyle açılan geçici oturumlar** yalnızca ilgili evle ve en çok 2 saatle sınırlıdır. Bu oturumda teknisyen evin anlık durumunu ve alarm geçmişini görebilir, cihazlara komut gönderebilir ve Panonun yerel anahtarını görebilir; üye listesini göremez.
 
 ### 5.3 Ev içinde görülen bilgiler
@@ -195,7 +195,7 @@ Aşağıdaki kayıtlar belirtilen süreler boyunca saklanır:
 - **Pano, kurulum, devreye alma, Pano değişimi, acil sıfırlama ve Ev Sahibi ataması kayıtları:** [DOLDURULACAK: cihaz, kurulum ve acil sıfırlama kayıtlarının saklama süresi].
 - **Alarm geçmişi:** [DOLDURULACAK: alarm geçmişinin saklama süresi].
 - **Denetim kayıtları (IP adresi dahil):** [DOLDURULACAK: denetim kayıtlarının saklama süresi].
-- **Kullanıcı Sözleşmesi kabul kayıtları:** hesabınız silinse de ispat amacıyla [DOLDURULACAK: sözleşme kabul kayıtlarının saklama süresi].
+- **Kullanıcı Sözleşmesi kabul kayıtları:** hesabınız silinse de ispat amacıyla [DOLDURULACAK: sözleşme kabul kayıtlarının saklama süresi]. Hesap kalıcı olarak silinirse kabul kaydı, hesapla bağlantısı kaldırılarak saklanır.
 - **Site ve toplu kurulum kayıtları (site sorumlusunun bilgileri dahil):** [DOLDURULACAK: site ve toplu kurulum kayıtlarının saklama süresi].
 - **Sunucu erişim kayıtları ve uygulama günlükleri:** [DOLDURULACAK: sunucu erişim kayıtları ve uygulama günlüklerinin saklama süresi].
 - **Yedekler:** [DOLDURULACAK: yedeklerin saklama süresi]. Silinen veriler yedeklerden bu sürenin sonunda silinir.
@@ -237,13 +237,13 @@ Kişisel verilerinizi korumak için aldığımız başlıca teknik önlemler:
 - Hatalı giriş ve kod denemeleri sınırlanır; çok sayıda hatalı denemede geçici kilit uygulanır.
 - Bulut Hizmeti üzerinden her kullanıcı yalnızca rolünün izin verdiği işlemleri yapabilir; yetki denetimi sunucuda yapılır. Misafirler üyelerin iletişim bilgilerini göremez; hırsız alarmını Bulut Hizmeti üzerinden yalnızca Ev Sahibi ve Aile Üyeleri kurup çözebilir; gaz vanası Uygulamadan açılamaz.
 - Uygulamanın canlı durum bağlantısı yalnızca okuma yetkisine sahiptir ve bağlantı kimliği en çok 12 saat geçerlidir.
-- Erişimi sona eren kişinin bildiği anahtar geçersiz kalsın diye, tek panolu evlerde Panonun yerel anahtarı üye çıkarma, daire devri, Ev Sahibi ataması, hesap silme ve yerel anahtarı okumuş bir servis oturumunun bitişinde otomatik olarak değiştirilir.
+- Erişimi sona eren kişinin bildiği anahtar geçersiz kalsın diye, tek panolu evlerde Panonun yerel anahtarı üye çıkarma, evden ayrılma, daire devri, Ev Sahibi ataması, hesap silme ve yerel anahtarı okumuş bir servis oturumunun bitişinde otomatik olarak değiştirilir. Aynı durumlarda ve her servis oturumunun bitişinde, yeni yazılımlı tek panolu evlerde Panonun bulut bağlantı bilgisi de yenilenir; Pano birkaç dakika çevrimdışı görünebilir.
 - Önemli işlemler denetim kaydına yazılır.
 - Telefonunuzda oturum bilgileri ve Pano anahtarları işletim sisteminin güvenli deposunda tutulur.
 
 İdari önlemler: [DOLDURULACAK: idari tedbirler (personel gizlilik taahhütleri, eğitim, yetki gözden geçirme, veri işleyen sözleşmeleri)]
 
-**Bilmeniz gereken sınırlar:** Yerel Modda Uygulama ile Pano arasındaki iletişim ev ağınızda gerçekleşir ve şifreli bağlantı (TLS) kullanmaz; ev ağınıza bağlı biri bu iletişimi izleyebilir. Kurulum biçimine bağlı olarak ev ağınıza bağlanabilen herkes Panoyu yerel ağ üzerinden kontrol edebilir. Bu nedenle ev ağınızı güçlü bir Wi-Fi şifresiyle korumanız ve misafirleriniz için ayrı bir ağ kullanmanız önemlidir. Kurulumu yapan servis personelinin gördüğü yerel anahtar, kurulum süresi bitince kendiliğinden değişmez. Pano, ev Wi-Fi bilgilerini ve anahtarlarını kendi belleğinde tutar; Panonun bulunduğu elektrik panosuna yetkisiz kişilerin erişmesini önleyin.
+**Bilmeniz gereken sınırlar:** Yerel Modda Uygulama ile Pano arasındaki iletişim ev ağınızda gerçekleşir ve şifreli bağlantı (TLS) kullanmaz; ev ağınıza bağlı biri bu iletişimi izleyebilir. Pano ev ağınıza kablolu (Ethernet) bağlıysa, ev ağınıza bağlanan herkes Panoyu yerel anahtar olmadan kontrol edebilir; Uygulama bu ağda, Uygulamaya giriş yapılmamış olsa bile Panoyu yönetmeye izin verir. Kısacası kablolu bağlı Panoda ev ağınıza bağlanabilen herkes Panoyu yönetebilir. Bu nedenle ev ağınıza kimlerin bağlanabildiğini kontrol etmeniz, ev ağınızı güçlü bir Wi-Fi şifresiyle korumanız ve misafirleriniz için ayrı bir ağ kullanmanız önemlidir. Kurulumu yapan servis personelinin gördüğü yerel anahtar, kurulum süresi bitince kendiliğinden değişmez; yetkili personelimiz Panonun yerel anahtarını cihaz envanterinden her zaman görebilir. Pano, ev Wi-Fi bilgilerini ve anahtarlarını kendi belleğinde tutar; Panonun bulunduğu elektrik panosuna yetkisiz kişilerin erişmesini önleyin.
 
 Kişisel verilerinizin hukuka aykırı olarak başkalarınca elde edildiğini öğrenirsek KVKK m. 12/5 uyarınca durumu en kısa sürede size ve Kişisel Verileri Koruma Kuruluna bildiririz.
 

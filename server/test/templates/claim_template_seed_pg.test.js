@@ -86,7 +86,7 @@ test('claim + sablon tohumu gercek PG', { skip: PG_SKIP }, async () => {
     const r2 = await deviceService.claimDevice({ actor: { userId: owner2.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-C035-0002', setupPin: '135790', homeName: 'Daire 9' });
     assert.equal(r2.home_name, 'Daire 9');
     const e2 = (await db.query("SELECT e.name FROM endpoints e JOIN devices d ON d.id = e.device_id WHERE d.device_uuid = 'AHBU-C035-0002' ORDER BY e.channel_index")).rows;
-    assert.equal(e2[0].name, 'Salon Panjur Yukarı');
+    assert.equal(e2[0].name, 'Röle 1'); // sahip karari (2026-10-09): tohumda sabit rol yok
   } finally {
     await env.close();
   }
