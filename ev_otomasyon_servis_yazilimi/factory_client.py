@@ -56,6 +56,10 @@ import template_model as tm
 # ---------------------------------------------------------------------------
 DEFAULT_SERVER_URL = "https://evotomasyon.gudeteknoloji.com.tr"
 DEFAULT_DEVICE_HOST = "192.168.4.1"  # cihaz kurulum/kurtarma AP adresi (CONTRACTS §3)
+# Etiket karekodunun (claim) kökü: Flutter uygulamasının Android manifestindeki uygulama bağlantısı (autoVerify)
+# süzgeciyle AYNI şema + ana makine. Sunucu adresi (EV_SERVER_URL) ya da sunucunun APP_PUBLIC_URL'si farklı olsa da
+# etikete yalnız bu kök basılır: başka kök telefon kamerasıyla okutulunca uygulamayı açmaz.
+CLAIM_LINK_BASE = "https://evotomasyon.gudeteknoloji.com.tr"
 
 ENV_SERVER_URL = "EV_SERVER_URL"          # QA için: http://127.0.0.1:5000
 ENV_DEVICE_HOST = "EV_DEVICE_AP_HOST"     # QA için: 127.0.0.1:8081 (firmware simülatörü)
@@ -378,7 +382,7 @@ def normalize_device_host(raw: Optional[str]) -> str:
     return shown_host + (f":{port}" if port else "")
 
 
-def build_claim_url(uid: str, pin: str, base: str = DEFAULT_SERVER_URL) -> str:
+def build_claim_url(uid: str, pin: str, base: str = CLAIM_LINK_BASE) -> str:
     """Etiket karekodu içeriği: ``https://<host>/claim?uid=<UID>&pin=<PIN>`` (QrClaimParser biçimi)."""
     query = urllib.parse.urlencode([("uid", uid), ("pin", pin)])
     return f"{base.rstrip('/')}/claim?{query}"
@@ -407,8 +411,12 @@ def parse_claim_url(url: Any) -> Optional[tuple[str, str]]:
 
 
 def claim_url_matches(url: Any, uid: str, pin: str) -> bool:
+    """Sunucunun verdiği adres etikete AYNEN basılabilir mi: uid/PIN aynı VE kök birebir ``CLAIM_LINK_BASE``
+    (şema, ana makine, port; Android ana makine eşleşmesi büyük/küçük harf duyarlıdır). Değilse adres yerelde üretilir."""
     parsed = parse_claim_url(url)
-    return parsed is not None and parsed == (uid.strip().upper(), pin)
+    if parsed is None or parsed != (uid.strip().upper(), pin):
+        return False
+    return url.startswith(CLAIM_LINK_BASE + "/claim?")
 
 
 # ---------------------------------------------------------------------------

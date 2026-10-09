@@ -767,7 +767,7 @@ Testler gerçek ağa/COM porta/esptool'a **çıkmaz** (sahte HTTP, sahte seri po
 
 | Karekod | İçerik | Okuyan |
 |---|---|---|
-| 1) Daireye bağla | `https://<sunucu>/claim?uid=<UID>&pin=<PIN>` (AP parolası **yok**) | Uygulama (QrClaimParser) |
+| 1) Daireye bağla | `https://evotomasyon.gudeteknoloji.com.tr/claim?uid=<UID>&pin=<PIN>` (AP parolası **yok**; kök sabittir: uygulamanın Android uygulama bağlantısı ana makinesi, `factory_client.CLAIM_LINK_BASE`; sunucu adresi ya da sunucunun `APP_PUBLIC_URL`'si farklı olsa da değişmez) | Uygulama (QrClaimParser) |
 | 2) Kurulum Wi-Fi'sine bağlan | `WIFI:T:WPA;S:<AP SSID>;P:<ap_pass>;;` | Telefon kamerası (Android / iOS 11+) ve uygulamanın WifiQrParser'ı |
 
 - **AP SSID** = `AHBU-` + MAC'in son 6 hex'i, büyük harf (firmware `WiFiManager::apSsid()` ile aynı kural; ağ gizli değildir, bu yüzden `H:true` yoktur). **ap_pass** = etikette yazan değer.

@@ -260,9 +260,13 @@ class _AppShellState extends State<AppShell> {
         darkTheme: AppTheme.darkTheme,
         themeMode: themeMode,
         // Derin bağlantı (Android'de flutter_deeplinking_enabled): e-postadaki sihirli bağlantı ve
-        // cihaz etiketi bağlantısı rota olarak gelir; üreteç yoksa Flutter istisna fırlatırdı.
+        // cihaz etiketi bağlantısı rota olarak gelir; üreteç yoksa Flutter istisna fırlatırdı. Soğuk açılışta Android
+        // ilk rotayı tam URL olarak verir: ilk yığın (ana sayfa altta) `deepLinkInitialRoutes` ile kurulur. Flutter
+        // `home` ile `onGenerateInitialRoutes`'u birlikte kabul etmez; ana sayfa bu yüzden `routes['/']`'dadır.
+        onGenerateInitialRoutes: (initialRoute) => deepLinkInitialRoutes(initialRoute, home: (_) => widget.home),
         onGenerateRoute: deepLinkOnGenerateRoute,
         onUnknownRoute: deepLinkOnUnknownRoute,
+        routes: <String, WidgetBuilder>{Navigator.defaultRouteName: (_) => widget.home},
         builder: (context, child) {
           // Sağlayıcı ve afiş köprüsü Navigator'ın ÜSTÜNDE: tüm sayfalar/diyaloglar denetleyiciyi okuyabilir; afiş
           // ScaffoldMessenger üzerinden (MaterialBanner/SnackBar) gösterilir, köprü kendisi bir şey çizmez.
@@ -285,7 +289,6 @@ class _AppShellState extends State<AppShell> {
             ),
           );
         },
-        home: widget.home,
       ),
     );
   }

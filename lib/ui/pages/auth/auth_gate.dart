@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../../../services/automation_state.dart';
 import '../../../services/biometric_auth_service.dart';
 import '../../common/confirm_dialogs.dart';
+import '../../common/deep_links.dart';
 import '../../motion/motion.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
@@ -150,15 +151,25 @@ class _AuthGateState extends State<AuthGate> {
 
   /// Çerçeve sonunda (kapının yeni görünümü kurulduktan sonra) tüm itilmiş rotaları kapatır. Kapatılanlar
   /// arasında Wi-Fi sihirbazı varsa ve kilit biyometrik kilitse, kilit açılınca sihirbaz yeniden açılır.
+  ///
+  /// Biyometrik kilitte kapatılanlar arasında bir derin bağlantı sayfası varsa (Android `onNewIntent`'i `onResume`'dan
+  /// önce çağırır: arka plandaki uygulamaya gelen etiket / e-posta bağlantısı kilitten HEMEN ÖNCE itilir) sayfa kilit
+  /// ekranının üstünde yeniden açılır: oturum verisi göstermez, kilit açılana kadar bekler; bağlantı kaybolmaz.
   void _closePushedRoutes({required bool lockedByBiometrics}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _lockRoute = null; // kilit rotası (varsa) da kapanır
       if (!mounted) return;
       var wizardWasOpen = false;
-      Navigator.of(context).popUntil((route) {
+      DeepLink? pendingLink;
+      final navigator = Navigator.of(context);
+      navigator.popUntil((route) {
         if (route.settings.name == WifiRecoveryDialog.routeName) wizardWasOpen = true;
+        final arguments = route.settings.arguments;
+        if (arguments is DeepLink) pendingLink ??= arguments; // en üstteki (en son gelen) bağlantı
         return route.isFirst;
       });
+      final link = pendingLink;
+      if (lockedByBiometrics && link != null) unawaited(navigator.push<void>(deepLinkRoute(link)));
       if (!wizardWasOpen || !lockedByBiometrics) return;
       final state = _state;
       if (state != null && gateViewFor(state) == AuthGateView.dashboard) {

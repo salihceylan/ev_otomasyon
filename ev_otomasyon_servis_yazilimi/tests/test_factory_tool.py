@@ -482,6 +482,39 @@ class ClaimUrlTests(unittest.TestCase):
         self.assertFalse(fc.claim_url_matches(url, UID, "654321"))
         self.assertFalse(fc.claim_url_matches(url, "AHBU-S3-AAAAAA", "123456"))
 
+    def test_claim_url_matches_only_the_app_link_origin(self):
+        """uid/PIN tutsa da başka şema / ana makine / port taşıyan adres etikete AYNEN basılamaz: telefon kamerasıyla
+        okutulunca uygulama açılmaz (manifestteki autoVerify ana makinesi tektir) ve uygulamanın okuyucusu da reddeder."""
+        query = "/claim?uid=%s&pin=123456" % UID
+        for origin in (
+            "http://127.0.0.1:5000",                          # QA sunucusunun APP_PUBLIC_URL'si
+            "https://x.y",
+            "https://www.evotomasyon.gudeteknoloji.com.tr",   # alt alan adı
+            "https://evotomasyon.gudeteknoloji.com.tr:8443",  # port
+            "http://evotomasyon.gudeteknoloji.com.tr",        # düz http
+            "https://EVOTOMASYON.gudeteknoloji.com.tr",       # Android ana makine eşleşmesi büyük/küçük harf duyarlı
+        ):
+            self.assertFalse(fc.claim_url_matches(origin + query, UID, "123456"), origin)
+        self.assertTrue(fc.claim_url_matches("https://evotomasyon.gudeteknoloji.com.tr" + query, UID, "123456"))
+
+
+class AppLinkManifestConsistencyTests(unittest.TestCase):
+    """Etiket karekodunun kökü, Flutter uygulamasının Android manifestindeki uygulama bağlantısı (autoVerify) süzgeciyle
+    AYNI olmalı (şema, ana makine, /claim yolu): biri değişip diğeri kalırsa karekod telefon kamerasıyla uygulamayı açmaz."""
+
+    MANIFEST = os.path.join(os.path.dirname(TOOL_DIR), "android", "app", "src", "main", "AndroidManifest.xml")
+
+    @unittest.skipUnless(os.path.exists(MANIFEST), "Flutter uygulaması (android/) bu kopyada yok")
+    def test_label_origin_matches_the_android_app_link_filter(self):
+        with open(self.MANIFEST, encoding="utf-8") as handle:
+            manifest = re.sub(r"<!--.*?-->", "", handle.read(), flags=re.S)
+        blocks = re.findall(r'<intent-filter[^>]*android:autoVerify="true"[^>]*>(.*?)</intent-filter>', manifest, flags=re.S)
+        self.assertEqual(len(blocks), 1, "tek autoVerify süzgeci beklenir")
+        parts = urllib.parse.urlsplit(fc.build_claim_url(UID, "123456"))
+        self.assertEqual(re.findall(r'android:scheme="([^"]+)"', blocks[0]), [parts.scheme])
+        self.assertEqual(re.findall(r'android:host="([^"]+)"', blocks[0]), [parts.netloc])
+        self.assertIn(parts.path, re.findall(r'android:pathPrefix="([^"]+)"', blocks[0]))
+
 
 # ============================================================================================================
 # Adres normalizasyonu
@@ -728,6 +761,22 @@ class ServerClientTests(unittest.TestCase):
             result = client.register_device(uid=UID, mac=MAC, pin="123456", model="M", batch_no="B")
             self.assertFalse(result.qr_from_server)
             self.assertEqual(result.qr_claim_url, fc.build_claim_url(UID, "123456"))
+
+    def test_register_ignores_a_server_qr_on_another_host(self):
+        """Sunucunun APP_PUBLIC_URL'si farklıysa (QA, www, port) uid/PIN tutsa bile etikete uygulama bağlantısı kökü basılır."""
+        client, api = make_client()
+        client.login("a@example.com", FAKE_PASSWORD)
+        original = api.routes["POST /api/v1/admin/inventory/register"]
+
+        def patched(call):
+            status, payload, headers = original(call)
+            payload["data"]["qr_claim_url"] = "http://127.0.0.1:5000/claim?uid=%s&pin=123456" % UID
+            return status, payload, headers
+
+        api.routes["POST /api/v1/admin/inventory/register"] = patched
+        result = client.register_device(uid=UID, mac=MAC, pin="123456", model="M", batch_no="B")
+        self.assertFalse(result.qr_from_server)
+        self.assertEqual(result.qr_claim_url, "https://evotomasyon.gudeteknoloji.com.tr/claim?uid=%s&pin=123456" % UID)
 
     def test_register_without_local_key_is_an_error(self):
         client, api = make_client()
@@ -1251,6 +1300,22 @@ class LabelReissueClientTests(unittest.TestCase):
         self.assertEqual(scrubber.scrub("pin " + NEW_PIN), "pin ***")
         self.assertEqual(api.calls[-1].path, "/api/v1/admin/inventory/%s/reissue-label" % UID)
 
+    def test_reissue_ignores_a_server_qr_on_another_host(self):
+        """Yeni etikete de yalnız uygulama bağlantısı kökü basılır (sunucu adresi başka ana makinedeyse yerelde üretilir)."""
+        client, api = make_client()
+        route = reissue_route()
+
+        def patched(call):
+            status, payload, headers = route(call)
+            payload["data"]["qr_claim_url"] = "https://www.evotomasyon.gudeteknoloji.com.tr/claim?uid=%s&pin=%s" % (UID, NEW_PIN)
+            return status, payload, headers
+
+        api.routes["POST /api/v1/admin/inventory/%s/reissue-label" % UID] = patched
+        client.login("a@example.com", FAKE_PASSWORD)
+        result = client.reissue_label(UID)
+        self.assertFalse(result.qr_from_server)
+        self.assertEqual(result.qr_claim_url, "https://evotomasyon.gudeteknoloji.com.tr/claim?uid=%s&pin=%s" % (UID, NEW_PIN))
+
     def test_reissue_needs_a_super_user_session_and_a_valid_reply(self):
         client, api = make_client(env={fc.ENV_API_KEY: "k" * 40})
         client.use_api_key()
@@ -1715,6 +1780,13 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(payload, fc.build_claim_url(UID, "482915"))
         payload = tool.label_qr_payload(self.record(qr_claim_url=""))
         self.assertEqual(payload, fc.build_claim_url(UID, "482915"))
+
+    def test_qr_payload_always_carries_the_app_link_host(self):
+        """Kayıttaki adres uid/PIN tutsa da başka ana makinedeyse etikete uygulama bağlantısı kökü basılır."""
+        for origin in ("http://127.0.0.1:5000", "https://www.evotomasyon.gudeteknoloji.com.tr"):
+            record = self.record(qr_claim_url="%s/claim?uid=%s&pin=482915" % (origin, UID))
+            self.assertEqual(tool.label_qr_payload(record),
+                             "https://evotomasyon.gudeteknoloji.com.tr/claim?uid=%s&pin=482915" % UID, origin)
 
     def test_image_encodes_the_claim_url_first_and_the_wifi_qr_second(self):
         captured = []

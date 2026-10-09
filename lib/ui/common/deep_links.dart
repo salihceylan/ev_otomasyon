@@ -12,12 +12,18 @@ import '../theme/app_theme.dart';
 // =============================================================================
 // Derin bağlantı (Flutter yerleşik destek; yeni paket YOK).
 //
-// Android'de gelen `https://<site>/reset-password#token=...` bağlantısı Flutter'a
-// `/reset-password#token=...` (yalnızca yol + parça) olarak, iOS'ta tam URL olarak iletilir. Navigator
-// 1.0 uygulaması bunu `pushNamed` ile açar; `MaterialApp.onGenerateRoute` / `onUnknownRoute` bu
-// dosyadaki işlevlerle **uygulama kabuğunda bağlıdır** (`lib/ui/app_shell.dart`):
+// Android gömücüsü (Flutter 3.47, `FlutterActivityAndFragmentDelegate`) bağlantıyı TAM URL olarak verir
+// (`intent.getData().toString()`):
+//
+// * soğuk açılış: ilk rota (`PlatformDispatcher.defaultRouteName`) `https://<site>/claim?uid=..&pin=..` olur ve
+//   [deepLinkInitialRoutes] ile açılır (ana sayfa altta, bağlantı sayfası üstte);
+// * sıcak açılış (`onNewIntent`): `pushRouteInformation`; çerçeve (`WidgetsApp.didPushRouteInformation`) adresi
+//   yol + sorgu + parçaya indirip (`/claim?uid=..&pin=..`) `pushNamed` eder.
+//
+// Bu dosyadaki işlevler **uygulama kabuğunda bağlıdır** (`lib/ui/app_shell.dart`):
 //
 //   MaterialApp(
+//     onGenerateInitialRoutes: (r) => deepLinkInitialRoutes(r, home: ...),
 //     onGenerateRoute: deepLinkOnGenerateRoute,
 //     onUnknownRoute: deepLinkOnUnknownRoute,
 //     ...
@@ -26,6 +32,10 @@ import '../theme/app_theme.dart';
 // Bağlanmazsa Flutter bilinmeyen rotada istisna fırlatırdı (debug: FlutterError, release: null denetimi).
 //
 // Belirteçler (sihirli bağlantı) loglanmaz ve rota adında saklanmaz (rota adı sabit `/deep-link`).
+//
+// Android `onNewIntent`'i `onResume`'dan ÖNCE çağırır: arka plandaki uygulamaya gelen bağlantının sayfası, ön plana
+// dönüşteki biyometrik yeniden kilitten (>= 30 sn) ÖNCE itilir. Kilit itilmiş sayfaları kapatır; `AuthGate` bağlantı
+// sayfasını kilit ekranının üstünde yeniden açar (sayfa kilit açılana kadar bekler).
 // =============================================================================
 
 /// Derin bağlantının türü.
@@ -82,13 +92,21 @@ DeepLink? parseDeepLink(String? routeOrUrl) {
   return DeepLink.magic(link);
 }
 
+/// Derin bağlantı sayfalarının rota adı: belirteç / PIN rota adında TAŞINMAZ. Çözülmüş bağlantı yalnız bellekte, rotanın
+/// `arguments` alanındadır ([DeepLink.toString] içeriği gizler): biyometrik yeniden kilit sayfayı kapatınca `AuthGate`
+/// bağlantıyı buradan alıp sayfayı kilit ekranının üstünde yeniden açar.
+const String deepLinkRouteName = '/deep-link';
+
 /// `MaterialApp.onGenerateRoute`: derin bağlantıyı ilgili sayfaya çevirir; derin bağlantı değilse
 /// `null` döner (normal yönlendirme sürer).
 Route<dynamic>? deepLinkOnGenerateRoute(RouteSettings settings) {
   final link = parseDeepLink(settings.name);
-  if (link == null) return null;
-  // Rota adı belirteç taşımasın.
-  const safe = RouteSettings(name: '/deep-link');
+  return link == null ? null : deepLinkRoute(link);
+}
+
+/// Çözülmüş bağlantının sayfası (rota adı [deepLinkRouteName]).
+Route<dynamic> deepLinkRoute(DeepLink link) {
+  final safe = RouteSettings(name: deepLinkRouteName, arguments: link);
   switch (link.kind) {
     case DeepLinkKind.magicLink:
       // Giriş VE şifre sıfırlama kolu: sayfa açılış / biyometrik kilit sürerken bekler (istek atılmaz, kilit
@@ -102,6 +120,21 @@ Route<dynamic>? deepLinkOnGenerateRoute(RouteSettings settings) {
     case DeepLinkKind.invalid:
       return MaterialPageRoute<void>(settings: safe, builder: (_) => _InvalidLinkPage(message: link.message!));
   }
+}
+
+/// `MaterialApp.onGenerateInitialRoutes` (uygulama kabuğu): soğuk açılışın ilk rota yığını.
+///
+/// Android ilk rotayı tam URL olarak verir; Flutter'ın varsayılan üreteci (`Navigator.defaultGenerateInitialRoutes`)
+/// `/` ile başlamayan adı ana sayfasız TEK rota yapar: bağlantı sayfasının altında ana sayfa (`AuthGate`) kalmaz,
+/// "Ana Ekrana Dön", geri tuşu ve işlem sonrası dönüş (`popUntil(isFirst)`) hiçbir yere götürmez. Burada ana sayfa
+/// ([home]) HER ZAMAN en alttadır; ilk rota tanınan bir derin bağlantıysa sayfası üstüne konur, değilse yalnız ana
+/// sayfa açılır.
+List<Route<dynamic>> deepLinkInitialRoutes(String initialRoute, {required WidgetBuilder home}) {
+  final link = deepLinkOnGenerateRoute(RouteSettings(name: initialRoute));
+  return <Route<dynamic>>[
+    MaterialPageRoute<void>(settings: const RouteSettings(name: Navigator.defaultRouteName), builder: home),
+    ?link,
+  ];
 }
 
 /// `MaterialApp.onUnknownRoute`: bilinmeyen rota **hata fırlatmaz**; kullanıcıya açık sayfa gösterir.
