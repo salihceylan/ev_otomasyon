@@ -874,6 +874,16 @@ class ServerClientTests(unittest.TestCase):
         query = urllib.parse.parse_qs(api.calls[-1].query)
         self.assertEqual(query, {"limit": ["100"], "offset": ["0"], "status": ["IN_STOCK"]})
 
+    def test_list_inventory_passes_search_and_offset(self):
+        # sozlesme-5: arama ve sayfalama sunucuya iletilir (inventory_service search/offset destekler).
+        client, api = make_client()
+        client.login("a@example.com", FAKE_PASSWORD)
+        client.list_inventory(search="  AHBU-S3-000020 ", offset=100)
+        query = urllib.parse.parse_qs(api.calls[-1].query)
+        self.assertEqual(query, {"limit": ["100"], "offset": ["100"], "search": ["AHBU-S3-000020"]})
+        client.list_inventory(search="   ")
+        self.assertNotIn("search", api.calls[-1].query)
+
     def test_changing_server_address_drops_session(self):
         client, _ = make_client()
         client.login("a@example.com", FAKE_PASSWORD)
@@ -2426,6 +2436,18 @@ class AppSmokeTests(unittest.TestCase):
         self.app.start_flash()
         self.assertEqual(FakePopen.instances[-1].args[-2], "0x0")
 
+    def test_flash_probe_shows_an_incomplete_template(self):
+        # sozlesme-4: kartın STATUS'unda şablon "YARIM" ise flash öncesi yoklama bunu günlükte ve onay penceresinde söyler.
+        self._app_image(os.path.join(tool.RELEASES_DIR, "v1.0.1", "app_0x10000_v1.0.1.bin"))
+        self.firmware.provisioned = True
+        self.firmware.tpl_id, self.firmware.tpl_ver = self.TID, 4
+        self.firmware.tpl_incomplete = True
+        self.dialogs.confirm = False
+        self.app.start_flash()
+        self.assertEqual(FakePopen.instances, [])
+        self.assertIn("şablon %s v4 (YARIM" % self.TID, self.dialogs.of("confirm")[0][2])
+        self.assertIn("şablon: %s v4 (YARIM" % self.TID, self.app.log_text.get("1.0", "end"))
+
     def test_merged_flash_on_a_blank_board_needs_no_extra_confirmation(self):
         self.firmware.unresponsive = True  # boş kart / Waveshare yazılımı: ~10 sn boyunca hiç yanıt yok, SYNC'e de yanıt yok
         self.app.start_flash()
@@ -2987,7 +3009,7 @@ class AppSmokeTests(unittest.TestCase):
         self.assertTrue(self.app.client.is_authenticated)
         self.assertIn("yonetici@example.com", self.app.lbl_session.cget("text"))
         self.assertEqual(len(self.app.inv_tree.get_children()), 2)
-        self.assertIn("Toplam: 2", self.app.inv_status_var.get())
+        self.assertIn("Gösterilen 2 / Toplam 2", self.app.inv_status_var.get())  # sozlesme-5: sayfalı liste
         self.assertEqual(self.api.paths(), ["POST /api/v1/auth/login", "GET /api/v1/admin/inventory"])
         self.assertEqual(self.api.calls[1].headers["authorization"], "Bearer " + ACCESS_1)
         self.assert_no_callback_errors()
@@ -3195,6 +3217,60 @@ class AppSmokeTests(unittest.TestCase):
             self.app.delete_selected_device()
         self.assertEqual(len([c for c in self.api.calls if c.method == "DELETE"]), 1)
         self.assert_no_callback_errors()
+
+    def test_inventory_search_and_more_reach_records_beyond_the_first_page(self):
+        # sozlesme-5: 150 kartlık envanterde ilk sayfa 100 satır; 'Daha fazla' kalanları ekler, arama eski kartı bulur ve
+        # işlem (askıya alma) o UID ile yapılır.
+        uids = ["AHBU-S3-%06d" % i for i in range(150, 0, -1)]
+
+        def inventory(call):
+            query = urllib.parse.parse_qs(call.query)
+            term = (query.get("search") or [""])[0].lower()
+            rows = [uid for uid in uids if term in uid.lower()]
+            offset, limit = int(query["offset"][0]), int(query["limit"][0])
+            items = [{"serial_no": int(uid[-6:]), "device_uuid": uid, "mac_address": "AA:BB:CC:00:00:00", "model": "M",
+                      "status": "IN_STOCK", "created_at": "2026-10-01T10:00:00Z"} for uid in rows[offset:offset + limit]]
+            return 200, {"success": True, "data": {"total": len(rows), "items": items, "stats": {
+                "total": 150, "in_stock": 150, "claimed": 0, "suspended": 0, "revoked": 0}}}, {}
+
+        self.api.routes["GET /api/v1/admin/inventory"] = inventory
+        self.patch_login()
+        self.app.login_clicked()
+        self.assertEqual(len(self.app.inv_tree.get_children()), 100)
+        self.assertIn("Gösterilen 100 / Toplam 150", self.app.inv_status_var.get())
+        self.assertEqual(str(self.app.btn_inv_more.cget("state")), "normal")
+        self.app.load_more_inventory()
+        self.assertEqual(len(self.app.inv_tree.get_children()), 150)
+        self.assertEqual(urllib.parse.parse_qs(self.api.calls[-1].query)["offset"], ["100"])
+        self.assertIn("Gösterilen 150 / Toplam 150", self.app.inv_status_var.get())
+        self.assertEqual(str(self.app.btn_inv_more.cget("state")), "disabled")
+        self.app.inv_search_entry.insert(0, "ahbu-s3-000020")
+        self.app.search_inventory()
+        rows = self.app.inv_tree.get_children()
+        self.assertEqual([str(self.app.inv_tree.item(row)["values"][1]) for row in rows], ["AHBU-S3-000020"])
+        self.assertIn("Gösterilen 1 / Toplam 1", self.app.inv_status_var.get())
+        self.api.routes["PATCH /api/v1/admin/inventory/AHBU-S3-000020/status"] = lambda call: (
+            200, {"success": True, "data": {"status": "SUSPENDED"}}, {})
+        self.app.inv_tree.selection_set(rows[0])
+        self.app.suspend_selected_device()
+        self.assertIn("PATCH /api/v1/admin/inventory/AHBU-S3-000020/status", self.api.paths())
+        last = self.api.calls[-1]  # işlemden sonra liste aynı aramayla yenilenir
+        self.assertEqual((last.method, urllib.parse.parse_qs(last.query).get("search")), ("GET", ["ahbu-s3-000020"]))
+        self.assert_no_callback_errors()
+
+    def test_late_inventory_page_of_an_older_list_is_ignored(self):
+        # sozlesme-5: 'Daha fazla' yanıtı, arada yeni bir arama/yenileme başladıysa tabloya EKLENMEZ (eski ölçütün satırları).
+        self.patch_login()
+        self.app.login_clicked()
+        pending = []
+        with mock.patch.object(self.app, "run_background", side_effect=lambda work, done: pending.append((work, done))):
+            self.app.load_more_inventory()
+            self.app.inv_search_entry.insert(0, "AHBU-S3-000001")
+            self.app.search_inventory()
+        for work, done in (pending[1], pending[0]):  # arama önce, eski 'Daha fazla' sonra döner
+            done(work(), None)
+        self.assertEqual(len(self.app.inv_tree.get_children()), 2)
+        self.assertIn("Gösterilen 2 / Toplam 2 (arama: AHBU-S3-000001)", self.app.inv_status_var.get())
 
     def test_actions_without_selection_inform_user(self):
         self.patch_login()

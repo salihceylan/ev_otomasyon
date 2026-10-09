@@ -46,6 +46,9 @@ FLAT_STATUS_TEXT = {"planned": "Planlandı", "written": "Yazıldı", "installed"
 _REJECTED_RECORD_STATUSES = frozenset({400, 404, 409, 422})
 RECORD_REJECTED_STATUS = "sunucu reddetti (kayıt kuyruktan çıkarıldı)"
 RECORD_PENDING_STATUS = "işlenemedi, bekliyor ('📤 Bekleyen Kayıtları Gönder')"
+# Sözleşme C2: yazılan şablon dairenin güncel şablonu değil -> kayıt işlendi ama daire 'Yazıldı' yapılmadı.
+FLAT_TEMPLATE_MISMATCH_TEXT = ("Karta yazılan şablon dairenin güncel şablonu değil; daire Yazıldı yapılmadı. Daire listesini "
+                               "yenileyip güncel şablonu yazın.")
 
 
 def write_record_rejected(exc: BaseException) -> bool:
@@ -120,22 +123,28 @@ def _short_time(value: Any) -> str:
 def flat_last_write_text(flat: dict[str, Any], template: Optional[dict[str, Any]] = None) -> str:
     """Daire listesindeki 'Son yazım' sütunu (atolye-7; sözleşme 18 ``last_write`` + ``last_ok_write``): başarısız yazım
     ``⚠ vN (kod)``, şablonun güncel sürümünden eski son başarılı yazım 'eski sürüm', dairenin kartından başka bir karta yapılan
-    yazım 'başka kart' olarak ayrı gösterilir. Eski sunucu (``result`` alanı yok) başarılı sayılır."""
+    yazım 'başka kart' olarak ayrı gösterilir. Eski sunucu (``result`` alanı yok) başarılı sayılır. Son başarılı yazım dairenin
+    şablonundan başka bir şablonsa (sözleşme C2: ``last_ok_write.template_id``; eski sunucu göndermez) '(farklı şablon)' eklenir
+    ve sürümü dairenin şablonunun sürümüyle karşılaştırılmaz."""
     last = flat.get("last_write") if isinstance(flat.get("last_write"), dict) else None
     ok = flat.get("last_ok_write") if isinstance(flat.get("last_ok_write"), dict) else None
     shown = last or ok
     if shown is None:
         return ""
     where = f"{str(shown.get('via', '')).upper()} · {_short_time(shown.get('at'))}"
+    flat_tid, ok_tid = flat.get("template_id"), (ok or {}).get("template_id")
+    other_template = bool(flat_tid) and bool(ok_tid) and ok_tid != flat_tid
     if last is not None and last.get("result") == "error":
         parts = [f"⚠ v{last.get('version')} ({last.get('error_code') or 'hata'}) · {where}"]
         if ok is None:
             parts.append("başarılı yazım yok")
+        elif other_template:
+            parts.append(f"son başarılı v{ok.get('version')} (farklı şablon)")
     else:
-        parts = [f"v{shown.get('version')} · {where}"]
+        parts = [f"v{shown.get('version')}{' (farklı şablon)' if other_template else ''} · {where}"]
     current = (template or {}).get("current_version")
     ok_version = (ok or {}).get("version")
-    if isinstance(ok_version, int) and isinstance(current, int) and ok_version < current:
+    if not other_template and isinstance(ok_version, int) and isinstance(current, int) and ok_version < current:
         parts.append(f"eski sürüm (son başarılı v{ok_version}, güncel v{current})")
     flat_uid = str(flat.get("device_uuid") or "").upper()
     written_uid = str((ok or {}).get("device_uuid") or (last or {}).get("device_uuid") or "").upper()
@@ -1314,8 +1323,34 @@ class SiteTemplateTabsMixin:
         if not flat.get("template_id"):
             self.ui_info("Şablon Atanmamış", "Önce '📐 Şablon Ata' ile daireye bir şablon atayın.")
             return
-        self._call_server("Şablon Alınamadı", lambda: self.client.get_template(flat["template_id"]),
-                          lambda tpl: self.open_template_write(tpl, site=site, flat=flat))
+
+        def fetch() -> tuple[Optional[dict[str, Any]], Any]:
+            # tarama-sunucu-cihaz-site-6: liste eski olabilir (ofis dairenin şablonunu değiştirmiş olabilir) -> daire satırı
+            # yazımdan hemen önce sunucudan yeniden okunur; şablon dairenin GÜNCEL şablonundan alınır.
+            fresh = next((f for f in self.client.list_flats(site["id"]) if isinstance(f, dict) and f.get("id") == flat.get("id")),
+                         None)
+            if fresh is None or not fresh.get("template_id"):
+                return fresh, None
+            return fresh, self.client.get_template(fresh["template_id"])
+
+        def fetched(result: tuple[Optional[dict[str, Any]], Any]) -> None:
+            fresh, tpl = result
+            if fresh is None or tpl is None:
+                self.refresh_flats()
+                self.ui_warn("Daire Değişti", f"{flat_display_name(flat)} sunucuda bulunamadı ya da şablonu kaldırılmış; "
+                             "hiçbir şey yazılmadı. Daire listesi yenilendi.")
+                return
+            if fresh["template_id"] != flat["template_id"]:
+                self.refresh_flats()
+                if not self.ui_confirm("Daire Şablonu Değişti",
+                                       f"{flat_display_name(flat)} dairesinin şablonu liste yüklendikten sonra değiştirilmiş. "
+                                       f"Dairenin güncel şablonu ({_body_of(tpl).get('meta', {}).get('name', '?')}) "
+                                       "yazılsın mı?\n'Hayır' derseniz hiçbir şey yazılmaz."):
+                    self._tpl_say("Yazım yapılmadı (dairenin şablonu değişmiş; daire listesi yenilendi).")
+                    return
+            self.open_template_write(tpl, site=site, flat=fresh)
+
+        self._call_server("Şablon Alınamadı", fetch, fetched)
 
     def flat_wiring_pdf(self) -> None:
         site, flat = self._selected_site(), None
@@ -1891,6 +1926,9 @@ class SiteTemplateTabsMixin:
                                   f"Yazım kaydı işlendi ama kart {entry['uid']} başka bir daireye bağlı (daire {other}…); seçili "
                                   "dairenin durumu DEĞİŞMEDİ. Doğru daireye yazdığınızdan emin olun; gerekirse kartı o daireden "
                                   "ayırıp bu daireye bağlayın.")
+                elif isinstance(reply, dict) and reply.get("warning") == "FLAT_TEMPLATE_MISMATCH":  # sözleşme C2
+                    self._tpl_say(f"⚠ Kart {entry['uid']}, v{entry['version']}: {FLAT_TEMPLATE_MISMATCH_TEXT}")
+                    self.ui_warn("Daire Şablonu Farklı", FLAT_TEMPLATE_MISMATCH_TEXT)
             if refresh:
                 self.refresh_flats()
             status = "sunucuya işlendi"

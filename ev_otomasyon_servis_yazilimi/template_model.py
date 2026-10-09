@@ -304,7 +304,6 @@ def _check_safety(safety: Any, n: int, types: list[str], dis: list[dict[str, Any
     if len(sensors) > MAX_SENSORS:
         raise _Fail("count", "safety.sensors")
     seen_di: set[int] = set()
-    seen_bridge: set[int] = set()
     for index, sensor in enumerate(sensors):
         path = f"safety.sensors[{index}]"
         _only_keys(sensor, SENSOR_KEYS, path, ("id", "kind", "zone"))
@@ -341,9 +340,8 @@ def _check_safety(safety: Any, n: int, types: list[str], dis: list[dict[str, Any
         else:
             if control:
                 raise _Fail("sensor_src", f"{path}.id")
-            if number in seen_bridge:
-                raise _Fail("sensor_dup", f"{path}.id")
-            seen_bridge.add(number)
+            # Sözleşme C1: firmware'de köprü (hub) sürücüsü yok; köprü sensörü karta yazılmaz (sunucu crossValidate ile aynı sıra).
+            raise _Fail("sensor_bridge_unsupported", f"{path}.id")
         if control:
             if zone != 0 and zone not in zone_ids:
                 raise _Fail("sensor_zone", f"{path}.zone")
@@ -513,6 +511,7 @@ ERROR_TEXTS: dict[str, str] = {
     "sensor_kind": "Sensör türü geçersiz.",
     "sensor_zone": "Sensör bölgesi tanımlı bir bölge olmalı.",
     "sensor_src": "Yerel kumanda rolleri yalnız panodaki girişlerden (DI) kullanılabilir.",
+    "sensor_bridge_unsupported": "Kablosuz (köprü) sensör bu sürümde desteklenmiyor; sensörü panodaki bir girişe (d1..d40) bağlayın.",
     "sensor_di_range": "Sensör girişi kanal sayısının dışında.",
     "sensor_dup": "Aynı giriş iki kez sensör olarak tanımlanmış.",
     "sensor_di_is_button": "Sensör olarak kullanılan girişin hedef rölesi 'boşta' (0) olmalı.",
@@ -553,6 +552,7 @@ ERROR_TEXTS: dict[str, str] = {
     "unreachable": "Karta ağdan ulaşılamadı. IP adresini, Ethernet kablosunu ve bilgisayarın aynı ağda olduğunu kontrol edin.",
     "no_response": "Kart yanıt vermedi.",
     "readback_mismatch": "Yazım sonrası karttan okunan şablon kimliği/sürümü beklenenle eşleşmiyor.",
+    "tpl_incomplete": "Şablon yarım kaldı; aynı şablonu yeniden yazın.",
     "cfg_invalid": "Kart şablonu geçersiz buldu (güvenlik ayarları ana yapılandırmayla uyuşmuyor).",
     "mac_mismatch": "Bağlı kart seçilen daireye bağlı kartla eşleşmiyor.",
     "factory_ap_only": "Kart provizyonu bu yoldan kabul etmedi (eski firmware olabilir).",

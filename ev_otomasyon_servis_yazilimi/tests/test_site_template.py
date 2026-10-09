@@ -115,6 +115,26 @@ class FixtureValidationTests(unittest.TestCase):
                 self.assertEqual(broken(mutate), code)
                 self.assertIn(code, tm.ERROR_TEXTS) if code != "count" else None
 
+    def test_bridge_sensor_is_refused_with_the_server_code(self):
+        # Sözleşme C1: firmware'de köprü (hub) sürücüsü yok; b1..b16 sensörü karta yazılmaz. Sıra sunucu crossValidate ile
+        # aynı: kontrol türü -> sensor_src (değişmez), aksi halde sensor_bridge_unsupported (dup denetiminden önce).
+        def issue_with(*sensors):
+            t = ok_template()
+            t["safety"]["sensors"].extend(sensors)
+            return tm.validate_template(t)
+
+        issue = issue_with({"id": "b1", "kind": "water", "zone": 1, "name": "Kablosuz Su"})
+        self.assertIsNotNone(issue)
+        self.assertEqual(issue.code, "sensor_bridge_unsupported")
+        self.assertEqual(issue.path, "safety.sensors[2].id")
+        self.assertIn("Kablosuz (köprü) sensör bu sürümde desteklenmiyor; sensörü panodaki bir girişe (d1..d40) bağlayın.",
+                      str(issue))
+        self.assertEqual(issue_with({"id": "b16", "kind": "gas", "zone": 1, "active_open": 1}).code, "sensor_bridge_unsupported")
+        self.assertEqual(issue_with({"id": "b2", "kind": "alarm_ack", "zone": 0}).code, "sensor_src")
+        self.assertEqual(issue_with({"id": "b3", "kind": "motion", "zone": 1}, {"id": "b3", "kind": "motion", "zone": 1}).code,
+                         "sensor_bridge_unsupported")
+        self.assertIn("sensor_bridge_unsupported", tm.ERROR_TEXTS)
+
     def test_unsafe_code_and_path_are_not_echoed(self):
         text = tm.describe_error("<script>", "a b{}")
         self.assertNotIn("<script>", text)
@@ -516,6 +536,35 @@ class SerialTemplateWriterTests(unittest.TestCase):
         self.assertEqual((outcome.template_id, outcome.version), (TID, 4))
         self.assertNotIn("TPL ABORT", self.firmware.received)
 
+    # ---- sozlesme-4: yarım kalmış şablon (STATUS "Sablon: <id> vN YARIM ...") -------------------------------------------
+    def test_status_line_with_yarim_marks_the_template_incomplete(self):
+        status = fc.SerialStatus()
+        status.absorb(f"  - Sablon: {TID} v3 YARIM (guvenli kip; seri TPL ile yeniden yazin)")
+        self.assertEqual((status.template, status.template_incomplete), ((TID, 3), True))
+        status = fc.SerialStatus()
+        status.absorb(f"  - Sablon: {TID} v3")
+        self.assertEqual((status.template, status.template_incomplete), ((TID, 3), False))
+        self.assertIsNone(fc.SerialStatus().template_incomplete)  # satır yok (v1.3.0 öncesi): bilinmiyor
+
+    def test_lost_commit_reply_on_an_incomplete_board_is_not_reported_as_written(self):
+        # Kartta T v4 yarım kalmış; aynı şablon yeniden yazılırken COMMIT yanıtı kaybolur ve uygulama başarısız olur.
+        # TPL STATUS ESKİ kaydı (T v4) gösterir; STATUS hâlâ YARIM -> araç "yazıldı" demez.
+        writer = self.writer(tpl_mute_commit=True, tpl_error="storage", tpl_incomplete=True)
+        self.firmware.tpl_id, self.firmware.tpl_ver = TID, 4
+        progress = []
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            writer.write("COM7", self.envelope(), template_id=TID, version=4, progress=progress.append)
+        self.assertEqual(ctx.exception.code, "tpl_incomplete")
+        self.assertIn("Şablon yarım kaldı; aynı şablonu yeniden yazın.", str(ctx.exception))
+        self.assertTrue(any("YARIM" in p for p in progress), progress)  # yazmadan önce kartın durumu söylendi
+
+    def test_lost_commit_reply_that_completes_an_incomplete_board_is_success(self):
+        writer = self.writer(tpl_mute_commit=True, tpl_incomplete=True)
+        self.firmware.tpl_id, self.firmware.tpl_ver = TID, 4
+        outcome = writer.write("COM7", self.envelope("A-12"), template_id=TID, version=4)
+        self.assertEqual((outcome.template_id, outcome.version), (TID, 4))
+        self.assertFalse(self.firmware.tpl_incomplete)
+
     def test_lost_commit_reply_without_apply_aborts_with_error(self):
         with self.assertRaises(fc.TemplateWriteError) as ctx:
             self.writer(tpl_mute_commit=True, tpl_error="storage").write("COM7", self.envelope(), template_id=TID, version=4)
@@ -679,13 +728,14 @@ class LanTemplateWriterTests(unittest.TestCase):
                     self.assertIn("panjur rölesine", str(ctx.exception))
 
     def test_pending_apply_is_polled_until_the_template_appears(self):
-        state = {"polls": 0}
+        state = {"polls": 0, "posted": False}
 
         def device(method, url, headers, body, timeout):
             if url.endswith("/api/template/apply"):
+                state["posted"] = True
                 return fc.TransportResponse(202, {}, json.dumps({"pending": True}).encode())
             if url.endswith("/api/template"):
-                state["polls"] += 1
+                state["polls"] += state["posted"]  # sozlesme-4: yazım öncesi kayıt okuması yoklama sayılmaz
                 done = state["polls"] >= 3
                 return fc.TransportResponse(200, {}, json.dumps(
                     {"template_id": TID if done else None, "version": 4 if done else 0, "label": "A-12"}).encode())
@@ -711,9 +761,14 @@ class LanTemplateWriterTests(unittest.TestCase):
         self.assertEqual(sum(sleeps), 20.0)
 
     def test_network_error_after_post_is_resolved_by_reading_back(self):
+        posted = []
+
         def applied(method, url, headers, body, timeout):
             if url.endswith("/api/template/apply"):
+                posted.append(url)
                 raise fc.NetworkError("koptu")
+            if not posted:  # sozlesme-4: yazım öncesi kayıt (boş kart)
+                return fc.TransportResponse(200, {}, json.dumps({"template_id": None, "version": 0}).encode())
             return fc.TransportResponse(200, {}, json.dumps({"template_id": TID, "version": 4, "label": "A-12"}).encode())
 
         outcome = fc.TemplateLanWriter("192.168.1.60", transport=applied).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
@@ -727,6 +782,97 @@ class LanTemplateWriterTests(unittest.TestCase):
         with self.assertRaises(fc.TemplateWriteError) as ctx:
             fc.TemplateLanWriter("192.168.1.60", transport=not_applied).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
         self.assertEqual(ctx.exception.code, "unreachable")
+
+    # ---- sozlesme-4: yarım kalmış (incomplete) şablon ve uygulama sürerken görülen ESKİ kayıt ---------------------------
+    @staticmethod
+    def template_board(records, *, apply=None, log=None):
+        """GET /api/template sırayla ``records`` (sonuncusu tekrarlanır); apply -> ``apply`` (TransportResponse ya da istisna)."""
+        queue = list(records)
+
+        def device(method, url, headers, body, timeout):
+            if log is not None:
+                log.append(url.rsplit("/api/", 1)[-1])
+            if url.endswith("/api/template/apply"):
+                if isinstance(apply, BaseException):
+                    raise apply
+                return apply or fc.TransportResponse(202, {}, json.dumps({"pending": True}).encode())
+            if url.endswith("/api/template"):
+                record = queue.pop(0) if len(queue) > 1 else queue[0]
+                return fc.TransportResponse(200, {}, json.dumps(record).encode())
+            return fc.TransportResponse(404, {}, b"{}")
+        return device
+
+    def test_pending_apply_on_an_incomplete_board_is_not_reported_as_written(self):
+        # Kartta T v4 yarım kalmış (incomplete). Aynı şablon yeniden yazılırken 202 döner; yoklamalar hep ESKİ kaydı (T v4,
+        # incomplete) görür ve uygulama başarısız kalır -> araç "yazıldı" DEMEZ.
+        stale = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": None, "incomplete": True}
+        sleeps = []
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=self.template_board([stale]), sleep=sleeps.append).write(
+                base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "tpl_incomplete")
+        self.assertIn("Şablon yarım kaldı; aynı şablonu yeniden yazın.", str(ctx.exception))
+        self.assertEqual(sum(sleeps), 20.0)  # uygulama sürüyor olabilir: süre dolana kadar beklendi
+
+    def test_pending_apply_succeeds_once_the_incomplete_flag_is_gone(self):
+        stale = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": None, "incomplete": True}
+        done = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": 61}
+        sleeps = []
+        outcome = fc.TemplateLanWriter("192.168.1.60", transport=self.template_board([stale, stale, stale, done]),
+                                       sleep=sleeps.append).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual((outcome.template_id, outcome.version), (TID, 4))
+        self.assertEqual(sleeps, [1.0, 1.0])  # 1 ön okuma + 2 eski yoklama, 3. yoklamada yeni kayıt
+
+    def test_pending_rewrite_of_the_same_template_waits_for_a_new_apply_time(self):
+        # Aynı T v4 (tamam) yeniden yazılıyor: uygulama sürerken kayıt aynı görünür; başarı ancak uygulama anı değişince.
+        old = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": 5}
+        new = dict(old, applied_at_uptime_s=95)
+        sleeps = []
+        outcome = fc.TemplateLanWriter("192.168.1.60", transport=self.template_board([old, old, old, new]),
+                                       sleep=sleeps.append).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(outcome.version, 4)
+        self.assertEqual(sleeps, [1.0, 1.0])
+
+    def test_network_error_after_post_on_an_incomplete_board_is_not_reported_as_written(self):
+        stale = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": None, "incomplete": True}
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=self.template_board([stale], apply=fc.NetworkError("koptu"))).write(
+                base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "tpl_incomplete")
+        # Aynı şablon (tamam) yeniden yazılırken bağlantı koptu ve kayıt değişmedi: uygulandığı kanıtlanamaz.
+        same = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": 5}
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=self.template_board([same], apply=fc.NetworkError("koptu"))).write(
+                base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "unreachable")
+
+    def test_readback_that_still_reports_incomplete_is_not_reported_as_written(self):
+        stale = {"template_id": None, "version": 0, "label": "", "applied_at_uptime_s": None, "incomplete": True}
+        after = {"template_id": TID, "version": 4, "label": "A-12", "applied_at_uptime_s": 70, "incomplete": True}
+        applied = fc.TransportResponse(200, {}, json.dumps({"ok": True, "template_id": TID, "version": 4, "rev": 3}).encode())
+        log = []
+        with self.assertRaises(fc.TemplateWriteError) as ctx:
+            fc.TemplateLanWriter("192.168.1.60", transport=self.template_board([stale, after], apply=applied, log=log)).write(
+                base.FAKE_LOCAL_KEY, b"{}", template_id=TID, version=4)
+        self.assertEqual(ctx.exception.code, "tpl_incomplete")
+        self.assertEqual(log, ["template", "template/apply", "template"])  # yazmadan önce kayıt okundu
+
+    def test_template_pre_read_refused_by_the_board_stops_before_apply(self):
+        # Yazım öncesi okuma kartın kesin reddini alırsa (Wi-Fi IP'sinde anahtar 401, kilit 423, eski firmware 404) apply
+        # gönderilmez: aynı hata döner ve kartın hatalı deneme sayacı yazım başına iki kez artmaz.
+        for status, error, code in ((401, "unauthorized", "key_mismatch"), (423, "locked", "locked"),
+                                    (404, "not_found", "unsupported_fw")):
+            calls = []
+
+            def device(method, url, headers, body, timeout, s=status, e=error):
+                calls.append(url.rsplit("/api/", 1)[-1])
+                return fc.TransportResponse(s, {}, json.dumps({"error": e}).encode())
+
+            with self.subTest(kod=code), self.assertRaises(fc.TemplateWriteError) as ctx:
+                fc.TemplateLanWriter("192.168.1.60", transport=device).write(base.FAKE_LOCAL_KEY, b"{}", template_id=TID,
+                                                                             version=4)
+            self.assertEqual(ctx.exception.code, code)
+            self.assertEqual(calls, ["template"])
 
     def test_factory_init_over_ethernet_is_refused_with_turkish_hint(self):
         device = base.FakeDevice()
@@ -1432,7 +1578,9 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         self.dialogs.confirm = False
         self.app.start_template_write(ok_template(), self._eth_request())
         self.assertNotIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
-        self.assertEqual([c[1] for c in calls], ["http://192.168.1.60/api/template/apply", "http://192.168.1.60/api/template"])
+        # sozlesme-4: yazım öncesi şablon kaydı okunur (GET /api/template), sonra uygulanır ve geri okunur.
+        self.assertEqual([c[1] for c in calls], ["http://192.168.1.60/api/template", "http://192.168.1.60/api/template/apply",
+                                                 "http://192.168.1.60/api/template"])
         record = [c for c in self.api.calls if c.path == "/api/v1/template-writes"][-1]
         self.assertEqual((record.body["via"], record.body["result"]), ("eth", "ok"))
 
@@ -1446,6 +1594,8 @@ class SiteTemplateAppTests(base.AppSmokeTests):
                 return fc.TransportResponse(200, {}, json.dumps({"device": base.UID, "provisioned": True}).encode())
             if url.endswith("/api/template/apply"):
                 return fc.TransportResponse(403, {}, json.dumps({"error": "local_loosen_forbidden"}).encode())
+            if url.endswith("/api/template"):  # sozlesme-4: yazım öncesi kayıt okuması (boş kart)
+                return fc.TransportResponse(200, {}, json.dumps({"template_id": None, "version": 0}).encode())
             return fc.TransportResponse(404, {}, b"{}")
 
         self.app._device_transport = device
@@ -1455,8 +1605,10 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         self.assertNotIn(f"GET /api/v1/admin/inventory/{base.UID}/local-key", self.api.paths())
         # Kullanıcı kararları: IP<->UID ön denetimi YOK; Ethernet'te kart anahtar istemez -> sabit biçim başlığı gider.
         self.assertNotIn("http://192.168.1.60/api/status", [c[1] for c in device_calls])
-        self.assertEqual(device_calls[0][2]["X-Device-Key"], fc.ETH_NO_KEY)
-        self.assertEqual(device_calls[0][1], "http://192.168.1.60/api/template/apply")
+        # sozlesme-4: önce şablon kaydı okunur, sonra uygulanır (kart reddeder).
+        self.assertEqual([c[1] for c in device_calls], ["http://192.168.1.60/api/template",
+                                                        "http://192.168.1.60/api/template/apply"])
+        self.assertEqual({c[2]["X-Device-Key"] for c in device_calls}, {fc.ETH_NO_KEY})
         shown = self.dialogs.all_text() + self.app.tpl_log.get("1.0", "end")
         self.assertNotIn(base.FAKE_LOCAL_KEY, shown)
         self.assertNotIn("USB ile yazın", self.dialogs.of("error")[-1][2])
@@ -1592,6 +1744,105 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         self._select_site_and_flat()
         self.assertTrue(str(self.app.flats_tree.item("0")["values"][6]).startswith("⚠ v5 (zone_latched)"))
 
+    # ---- tarama-sunucu-cihaz-site-6 (sözleşme C2/C13): dairenin güncel şablonu dışındaki yazım ---------------------------
+    def test_flat_last_write_column_marks_a_write_of_another_template(self):
+        ui = __import__("site_template_ui")
+        tpl = {"id": TID, "current_version": 5}
+        at = "2026-10-08T10:00:00Z"
+        other_tid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        write = {"template_id": other_tid, "version": 3, "via": "usb", "at": at, "result": "ok", "device_uuid": base.UID}
+        flat = {"template_id": TID, "device_uuid": base.UID, "last_write": write, "last_ok_write": dict(write)}
+        self.assertEqual(ui.flat_last_write_text(flat, tpl), "v3 (farklı şablon) · USB · 2026-10-08 10:00")
+        # Başka şablonun sürümü dairenin şablonunun sürümüyle karşılaştırılmaz ("eski sürüm" denmez).
+        failed = dict(flat, last_write={"template_id": TID, "version": 5, "via": "eth", "at": at, "result": "error",
+                                        "error_code": "busy", "device_uuid": base.UID})
+        text = ui.flat_last_write_text(failed, tpl)
+        self.assertTrue(text.startswith("⚠ v5 (busy)"), text)
+        self.assertIn("son başarılı v3 (farklı şablon)", text)
+        self.assertNotIn("eski sürüm", text)
+        same = dict(flat, last_write=dict(write, template_id=TID, version=5), last_ok_write=dict(write, template_id=TID, version=5))
+        self.assertEqual(ui.flat_last_write_text(same, tpl), "v5 · USB · 2026-10-08 10:00")
+        legacy = dict(flat, last_write={k: v for k, v in write.items() if k != "template_id"},
+                      last_ok_write={k: v for k, v in write.items() if k != "template_id"})  # eski sunucu: template_id yok
+        self.assertNotIn("farklı şablon", ui.flat_last_write_text(legacy, tpl))
+
+    def test_write_record_warning_about_another_template_is_shown_also_for_queued_records(self):
+        ui = __import__("site_template_ui")
+        text = ("Karta yazılan şablon dairenin güncel şablonu değil; daire Yazıldı yapılmadı. Daire listesini yenileyip güncel "
+                "şablonu yazın.")
+        self._select_site_and_flat()
+        state = {"fail": False}
+        self.api.routes["POST /api/v1/template-writes"] = lambda call: (
+            (503, {"success": False, "code": "SERVICE_UNAVAILABLE", "message": "x"}, {}) if state["fail"]
+            else (201, {"success": True, "data": {"id": "w-1", "warning": "FLAT_TEMPLATE_MISMATCH",
+                                                  "flat_template_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}}, {}))
+        self.dialogs.confirm = False
+        self.app.start_template_write(ok_template(), ui.TemplateWriteRequest("usb", label="A-12", port="COM7"),
+                                      site=self.app._sites[0], flat=self.app._flats[0])
+        self.assertEqual(sum(text in c[2] for c in self.dialogs.calls), 1)
+        self.assertEqual(self.app.tpl_log.get("1.0", "end").count(text), 1)
+        state["fail"] = True  # kayıt kuyruğa düşer, sonra 'Bekleyen Kayıtları Gönder' ile gönderilir
+        self.app.start_template_write(ok_template(), ui.TemplateWriteRequest("usb", label="A-12", port="COM7"),
+                                      site=self.app._sites[0], flat=self.app._flats[0])
+        self.assertEqual(len(self.app._pending_writes), 1)
+        state["fail"] = False
+        self.app.send_pending_writes()
+        self.assertEqual(self.app._pending_writes, [])
+        self.assertEqual(sum(text in c[2] for c in self.dialogs.calls), 2)
+        self.assertEqual(self.app.tpl_log.get("1.0", "end").count(text), 2)
+
+    def test_flat_write_rereads_the_flat_and_asks_when_its_template_changed(self):
+        other_tid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        changed = [{"id": FLAT_ID, "site_id": SITE_ID, "block": "A", "number": 12, "flat_type": "3+1", "template_id": other_tid,
+                    "device_uuid": None, "status": "planned", "last_write": None}]
+        other_body = copy.deepcopy(ok_template())
+        other_body["meta"]["template_id"] = other_tid
+        self.api.routes[f"GET /api/v1/templates/{other_tid}"] = lambda call: (
+            200, {"success": True, "data": {"id": other_tid, "current_version": 2, "body": other_body}}, {})
+        opened = []
+        for answer in (False, True):
+            with self.subTest(yanit=answer):
+                site_routes(self.api)  # listede (önbellekte) eski şablon TID
+                self.api.routes[f"GET /api/v1/templates/{other_tid}"] = lambda call: (
+                    200, {"success": True, "data": {"id": other_tid, "current_version": 2, "body": other_body}}, {})
+                self._select_site_and_flat()
+                self.api.routes[f"GET /api/v1/sites/{SITE_ID}/flats"] = lambda call: (200, {"success": True, "data": changed}, {})
+                self.dialogs.calls.clear()
+                self.dialogs.confirm = answer
+                with mock.patch.object(self.app, "open_template_write",
+                                       side_effect=lambda tpl, **kw: opened.append((tpl, kw))):
+                    self.app.write_flat_template()
+                question = self.dialogs.of("confirm")
+                self.assertEqual([c[1] for c in question], ["Daire Şablonu Değişti"])
+                self.assertEqual(len(opened), 1 if answer else 0)
+        tpl, kw = opened[0]
+        self.assertEqual((tpl["id"], kw["flat"]["template_id"]), (other_tid, other_tid))
+        self.assertNotIn(f"GET /api/v1/templates/{TID}", self.api.paths())  # eski şablon hiç istenmedi
+        self.assert_no_callback_errors()
+
+    def test_flat_write_with_an_unchanged_template_asks_nothing(self):
+        self._select_site_and_flat()
+        before = len(self.api.calls)
+        opened = []
+        with mock.patch.object(self.app, "open_template_write", side_effect=lambda tpl, **kw: opened.append((tpl, kw))):
+            self.app.write_flat_template()
+        self.assertEqual(self.dialogs.of("confirm"), [])
+        self.assertEqual(len(opened), 1)
+        self.assertEqual([f"{c.method} {c.path}" for c in self.api.calls[before:]],
+                         [f"GET /api/v1/sites/{SITE_ID}/flats", f"GET /api/v1/templates/{TID}"])
+
+    def test_flat_link_refused_for_an_installed_flat_shows_the_server_message(self):
+        message = ("Kurulmuş ya da teslim edilmiş dairenin kartı yalnız Pano Değişimi ile ya da yönetici tarafından "
+                   "değiştirilebilir.")
+        self._select_site_and_flat()
+        self.api.routes[f"PUT /api/v1/sites/{SITE_ID}/flats/{FLAT_ID}/device"] = lambda call: (
+            409, {"success": False, "code": "INVALID_STATUS_TRANSITION", "message": message}, {})
+        with mock.patch.object(base.tool.simpledialog, "askstring", return_value=""):
+            self.app.link_flat_device()
+        error = self.dialogs.of("error")[-1]
+        self.assertEqual(error[1], "Kart Bağlanamadı")
+        self.assertIn(message, error[2])
+
     def test_changing_the_card_of_a_written_flat_warns_to_rewrite_the_template(self):
         flats = [{"id": FLAT_ID, "site_id": SITE_ID, "block": "A", "number": 12, "flat_type": "3+1", "template_id": TID,
                   "device_uuid": "AHBU-S3-000001", "status": "written",
@@ -1621,7 +1872,9 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         ui = __import__("site_template_ui")
         self.app.start_template_write(ok_template(), ui.TemplateWriteRequest("eth", label="A-12", host="192.168.1.60",
                                                                              device_uid=base.UID))
-        self.assertEqual(urls, ["http://192.168.1.60/api/template/apply", "http://192.168.1.60/api/template"])
+        # Kimlik (/api/status) sorgulanmaz; yalnız sozlesme-4'ün yazım öncesi şablon kaydı okuması vardır.
+        self.assertEqual(urls, ["http://192.168.1.60/api/template", "http://192.168.1.60/api/template/apply",
+                                "http://192.168.1.60/api/template"])
         record = [c for c in self.api.calls if c.path == "/api/v1/template-writes"][-1]
         self.assertEqual((record.body["via"], record.body["result"]), ("eth", "ok"))
 

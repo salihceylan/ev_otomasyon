@@ -152,6 +152,7 @@ TEMPLATE_AFTER_PROVISION_HINT = (
     "İsteğe bağlı: '📐 Şablon Yaz (aynı USB portu)' ile aynı porttan bu karta kurulum şablonu yazabilirsiniz."
 )
 LABEL_PLACEHOLDER_TEXT = "Henüz etiket üretilmedi.\nSoldaki formdan 'SUNUCU ENVANTERİNE KAYDET' düğmesine basın."
+INVENTORY_PAGE_SIZE = 100        # sunucu sayfası en çok 100 kayıt (sozlesme-5: 'Daha fazla' sonraki sayfayı ekler)
 # Provizyon bekleme süreleri (sn): flash sonrası kullanıcı bilgisayarı kurulum ağına bağlarken
 PROVISION_WAIT_AFTER_FLASH_S = 180
 PROVISION_WAIT_MANUAL_S = 12
@@ -1351,6 +1352,22 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             table_action_row, role="tint.cyan", size="sm", text="🏷️ Etiketi Yeniden Bas (USB)", command=self.reissue_label_via_usb
         )
         self.btn_reissue_label.pack(side=tk.LEFT, padx=4)
+
+        # sozlesme-5: sunucu listesi sayfalıdır (en çok 100); arama ve 'Daha fazla' ilk sayfanın dışındaki kartlara ulaştırır.
+        search_row = theme.frame(table_frame, "frame.surface")
+        search_row.pack(fill=tk.X, pady=(0, 6))
+        theme.label(search_row, "label.field", text="Ara (UID / seri no / MAC):").pack(side=tk.LEFT)
+        self.inv_search_entry = theme.entry(search_row, width=28)
+        self.inv_search_entry.pack(side=tk.LEFT, padx=6)
+        self.inv_search_entry.bind("<Return>", lambda _event: self.search_inventory())
+        theme.button(search_row, role="secondary", size="sm", text="🔍 Ara", command=self.search_inventory).pack(side=tk.LEFT)
+        self.btn_inv_more = theme.button(search_row, role="secondary", size="sm", text="⬇️ Daha fazla",
+                                         command=self.load_more_inventory)
+        self.btn_inv_more.pack(side=tk.LEFT, padx=6)
+        self.btn_inv_more.config(state=tk.DISABLED)
+        self._inv_items: list[dict[str, Any]] = []
+        self._inv_query = ""
+        self._inv_generation = 0  # her yenileme/arama artırır: eski ölçütün geç gelen sayfası tabloya karışmaz
 
         self.inv_status_var = tk.StringVar(value="")
         theme.label(table_frame, "label.status", textvariable=self.inv_status_var, anchor="w", justify="left").pack(fill=tk.X, pady=(0, 6))
@@ -2673,31 +2690,62 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
     def _set_inventory_placeholder(self, text: str) -> None:
         for row in self.inv_tree.get_children():
             self.inv_tree.delete(row)
+        self._inv_items = []
+        self.btn_inv_more.config(state=tk.DISABLED)
         self.inv_status_var.set(text)
 
     def refresh_inventory_list(self) -> None:
-        """Sunucudan envanter listesini çeker (giriş gerekir) ve tabloya doldurur."""
+        """Sunucudan envanterin ilk sayfasını (arama kutusundaki ölçütle) çeker (giriş gerekir) ve tabloya doldurur."""
         if not self.client.is_authenticated:
             self.ensure_login(self.refresh_inventory_list,
                               note="Envanteri görmek için giriş yapın (süper kullanıcı ya da servis sorumlusu).")
             return
+        self._inv_query = query = " ".join(self.inv_search_entry.get().split())
+        self._inv_generation += 1
+        generation = self._inv_generation
         self.inv_status_var.set("⏳ Envanter yükleniyor...")
-        self.run_background(lambda: self.client.list_inventory(limit=100), self._on_inventory_loaded)
+        self.run_background(lambda: self.client.list_inventory(limit=INVENTORY_PAGE_SIZE, search=query),
+                            lambda data, err: self._on_inventory_loaded(data, err, generation=generation))
 
-    def _on_inventory_loaded(self, data: Any, err: Optional[BaseException]) -> None:
+    def search_inventory(self) -> None:
+        """'🔍 Ara' (ya da arama kutusunda Enter): UID / seri no / MAC ile sunucuda arar (ilk sayfa)."""
+        self.refresh_inventory_list()
+
+    def load_more_inventory(self) -> None:
+        """'⬇️ Daha fazla': aynı ölçütle sonraki sayfayı tablonun sonuna ekler."""
+        if not self.client.is_authenticated:
+            self.refresh_inventory_list()
+            return
+        offset, query, generation = len(self._inv_items), self._inv_query, self._inv_generation
+        self.btn_inv_more.config(state=tk.DISABLED)
+        self.inv_status_var.set("⏳ Envanterin devamı yükleniyor...")
+        self.run_background(lambda: self.client.list_inventory(limit=INVENTORY_PAGE_SIZE, offset=offset, search=query),
+                            lambda data, err: self._on_inventory_loaded(data, err, append=True, generation=generation))
+
+    def _on_inventory_loaded(self, data: Any, err: Optional[BaseException], append: bool = False,
+                             generation: Optional[int] = None) -> None:
+        if generation is not None and generation != self._inv_generation:
+            return  # arada yeni yenileme/arama başladı: bu yanıt eski ölçütün
         if err is not None:
             if isinstance(err, SessionExpiredError):
                 self.update_session_bar()
                 self._set_inventory_placeholder("Oturum süresi doldu. Yeniden giriş yapın.")
             else:
                 self.inv_status_var.set("⚠ Liste yüklenemedi: " + self._error_text(err))
+                self.btn_inv_more.config(state=tk.NORMAL if append else tk.DISABLED)
             return
         items = data.get("items") if isinstance(data, dict) else None
-        self._populate_inventory_tree(items if isinstance(items, list) else [])
+        page = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        self._inv_items = (self._inv_items if append else []) + page
+        self._populate_inventory_tree(self._inv_items)
         stats = data.get("stats") if isinstance(data, dict) and isinstance(data.get("stats"), dict) else {}
         total = data.get("total") if isinstance(data, dict) else None
+        total = total if isinstance(total, int) and not isinstance(total, bool) else len(self._inv_items)
+        more = bool(page) and len(self._inv_items) < total
+        self.btn_inv_more.config(state=tk.NORMAL if more else tk.DISABLED)
+        search_note = f" (arama: {self._inv_query})" if self._inv_query else ""
         self.inv_status_var.set(
-            f"Toplam: {total if total is not None else len(items or [])}   |   Stokta: {stats.get('in_stock', '-')}   |   "
+            f"Gösterilen {len(self._inv_items)} / Toplam {total}{search_note}   |   Stokta: {stats.get('in_stock', '-')}   |   "
             f"Sahiplenilmiş: {stats.get('claimed', '-')}   |   Askıda: {stats.get('suspended', '-')}   |   İptal: {stats.get('revoked', '-')}"
         )
 
@@ -3081,12 +3129,20 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.run_background(work, done)
 
     @staticmethod
-    def _probe_settings_text(probe: Any) -> str:
+    def _probe_template_text(probe: Any) -> str:
+        """``<id> vN`` ve (sozlesme-4) STATUS'ta YARIM ise yarım kalmış uygulama notu."""
+        text = f"{probe.template_id} v{probe.template_version}"
+        if getattr(probe, "incomplete", False):
+            text += " (YARIM: şablon uygulaması yarım kalmış, kart güvenli kipte)"
+        return text
+
+    @classmethod
+    def _probe_settings_text(cls, probe: Any) -> str:
         parts = []
         if probe.provisioned:
             parts.append("yerel anahtar tanımlı")
         if probe.template_id:
-            parts.append(f"şablon {probe.template_id} v{probe.template_version}")
+            parts.append(f"şablon {cls._probe_template_text(probe)}")
         return ", ".join(parts) or "ayar"
 
     @staticmethod
@@ -3120,7 +3176,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         if probe is not None:
             self._last_probe = probe
             self.log(f"[KART] AHBU firmware'i yanıt verdi (MAC {probe.mac or '?'}; "
-                     f"{'provizyonlu' if probe.provisioned else 'provizyonsuz'}; şablon: {probe.template_id or 'yok'}).")
+                     f"{'provizyonlu' if probe.provisioned else 'provizyonsuz'}; "
+                     f"şablon: {self._probe_template_text(probe) if probe.template_id else 'yok'}).")
         elif err is not None:
             self.log(f"[KART] Kartın durumu okunamadı: {reason}")
         lost = downgrade_lost_features(probe, check.missing_features if check is not None else [])

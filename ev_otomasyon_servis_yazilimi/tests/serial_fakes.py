@@ -51,6 +51,7 @@ class FakeFirmwareCli:
         download_mode=False,
         safety_silent=False,
         fault_zones=None,
+        tpl_incomplete=False,
     ):
         self.mac = mac.upper()
         self.provisioned = provisioned
@@ -73,6 +74,8 @@ class FakeFirmwareCli:
         self.tpl_error = tpl_error
         self.tpl_drop_data = tpl_drop_data
         self.tpl_mute_commit = tpl_mute_commit    # COMMIT yanıtı kaybolur (kart yine uygular/uygulamaz)
+        # tpl_incomplete: açılışta yarım kalmış şablon işlemi (txn) vardı; başarılı uygulama siler (main.cpp STATUS "YARIM").
+        self.tpl_incomplete = tpl_incomplete
         # Firmware 1.3.1 (sözleşme 1): STATUS'ta "Bootstrap:" satırından hemen sonra "  - Anahtar izi: <8 hex|yok>".
         # fp_override: kart başka bir iz bildirir (yanlış anahtar benzetimi).
         self.key_fp_supported = key_fp_supported
@@ -288,6 +291,7 @@ class FakeFirmwareCli:
                     self._say("ERR " + self.tpl_error)
                 return
             self.tpl_applied.append(envelope)
+            self.tpl_incomplete = False  # TemplateStore::txnEnd: başarılı uygulama yarım işlem işaretini siler
             self.tpl_id, self.tpl_ver = meta["template_id"], int(meta["version"])
             self.tpl_label = envelope.get("label") or meta.get("name", "")[:31]
             if self.latch_nc_hazards and not self.inputs_bridged:  # atölye: NC tehlike girişi boş -> bölge kilitlenir
@@ -346,7 +350,8 @@ class FakeFirmwareCli:
             lines += ["  - Ethernet: yok -", "  - Bootstrap: idle"]
             if self.key_fp_supported:  # v1.3.1 (sözleşme 1): Bootstrap satırından hemen sonra
                 lines.append("  - Anahtar izi: %s" % (self._key_fp() if self.provisioned else "yok"))
-            lines.append("  - Sablon: %s v%d" % (self.tpl_id or "-", self.tpl_ver))
+            lines.append("  - Sablon: %s v%d%s" % (self.tpl_id or "-", self.tpl_ver,
+                                                     " YARIM (guvenli kip; seri TPL ile yeniden yazin)" if self.tpl_incomplete else ""))
         for text in lines:
             self._say(text)
             self._noise("[WiFiManager] kesintili gunluk")

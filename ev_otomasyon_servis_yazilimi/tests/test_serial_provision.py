@@ -549,6 +549,15 @@ class BoardProbeTests(unittest.TestCase):
         self.assertTrue(probe.has_settings)
         self.assertTrue(backend.all_closed())
 
+    def test_incomplete_template_is_reported_by_the_probe(self):
+        # sozlesme-4: STATUS "Sablon: <id> vN YARIM (...)" -> BoardProbe.incomplete (flash öncesi yoklama ve Karta Yaz gösterir)
+        provisioner, _, firmware, _ = make(provisioned=True)
+        firmware.tpl_id, firmware.tpl_ver = self.TID, 4
+        self.assertIs(provisioner.probe_board("COM7").incomplete, False)
+        firmware.tpl_incomplete = True
+        probe = provisioner.probe_board("COM7")
+        self.assertEqual((probe.template_id, probe.template_version, probe.incomplete), (self.TID, 4, True))
+
     def test_status_lost_while_the_board_restarts_on_port_open_is_sent_again(self):
         # Kart portu açınca yeniden başlar (rst:0x15): açılış sürerken gönderilen ilk STATUS kaybolur.
         provisioner, backend, firmware, _ = make(provisioned=True, boot_ticks=12, boot_drops_input=True)

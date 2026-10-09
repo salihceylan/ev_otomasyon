@@ -93,6 +93,8 @@ class GuideConsistencyTests(unittest.TestCase):
         "Teslim Edildi",
         "Bekleyen Kayıtları Gönder",
         "Alarmı Onayla (USB)",
+        # 2026-10-09 (sozlesme-5): envanter araması ve sayfalama
+        "Daha fazla",
     )
 
     # Bölüm 4b'nin alıntıladığı kart/araç mesajları (template_model.ERROR_TEXTS ve PDF).
@@ -109,6 +111,11 @@ class GuideConsistencyTests(unittest.TestCase):
         "Kalıcı (mandallı) duvar anahtarı DESTEKLENMEZ; tüm girişlere yaylı buton bağlayın",
         "Aç/Kapa – yaylı (kalıcı olmayan) buton; her basışta değiştirir",
         "Basılı tut (yaylı buton; basılıyken açık)",
+        # 2026-10-09: köprü sensörü (C1), yarım kalmış şablon (sozlesme-4), dairenin güncel şablonu (C2)
+        "Kablosuz (köprü) sensör bu sürümde desteklenmiyor",
+        "Şablon yarım kaldı; aynı şablonu yeniden yazın.",
+        "farklı şablon",
+        "Karta yazılan şablon dairenin güncel şablonu değil; daire Yazıldı yapılmadı.",
     )
 
     # Rehberin alıntıladığı pencere başlıkları.
@@ -147,6 +154,10 @@ class GuideConsistencyTests(unittest.TestCase):
         "Alarm Sürüyor",
         "Yazım Kaydı Reddedildi",
         "Teslim Edilemez",
+        # 2026-10-09 (tarama-sunucu-cihaz-site-6): yazımdan önce daire yeniden okunur; yazım kaydı uyarısı
+        "Daire Şablonu Değişti",
+        "Daire Şablonu Farklı",
+        "Daire Değişti",
     )
 
     # Rehberin 6. adımda sıraladığı ilerleme satırları (başlangıç parçaları).

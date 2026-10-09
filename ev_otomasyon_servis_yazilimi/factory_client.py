@@ -1098,11 +1098,15 @@ class ServerClient:
             return RegistrationResult(device, local_key, qr, True)
         return RegistrationResult(device, local_key, build_claim_url(uid, pin), False)
 
-    def list_inventory(self, *, limit: int = 100, offset: int = 0, status: Optional[str] = None) -> dict[str, Any]:
+    def list_inventory(self, *, limit: int = 100, offset: int = 0, status: Optional[str] = None,
+                       search: Optional[str] = None) -> dict[str, Any]:
+        """Sayfalı envanter (``{total, items, stats, ...}``). sozlesme-5: ``search`` (UID / seri no / MAC / model / ev adı;
+        sunucu en çok 64 karakter kullanır, büyük/küçük harf duyarsız) ve ``offset`` sunucuya iletilir."""
+        term = " ".join(str(search or "").split())[:64] or None
         return self.request(
             "GET",
             "/admin/inventory",
-            query={"limit": max(1, min(int(limit), 100)), "offset": max(0, int(offset)), "status": status},
+            query={"limit": max(1, min(int(limit), 100)), "offset": max(0, int(offset)), "status": status, "search": term},
         )
 
     def _require_jwt(self) -> None:
@@ -1882,7 +1886,8 @@ _STATUS_SSID = re.compile(r"\(SSID:\s*(AHBU-[0-9A-Fa-f]{6})")
 # v1.3.0+ (CONTRACTS §3e/§3f) STATUS'un SONUNA eklenen satırlar; 1.3.1 (sözleşme 1) "Anahtar izi" satırı Bootstrap'tan hemen sonra.
 _STATUS_BOOTSTRAP = re.compile(r"(?:^|\s)-\s*Bootstrap:\s*([a-z_]{2,20})")
 _STATUS_KEY_FP = re.compile(r"(?:^|\s)-\s*Anahtar izi:\s*([0-9A-Fa-f]{8}|yok)\b")
-_STATUS_TEMPLATE = re.compile(r"(?:^|\s)-\s*Sablon:\s*(\S{1,40})\s+v(\d{1,10})")
+# sozlesme-4: açılışta yarım kalmış şablon işlemi (txn) varsa satırın sonunda " YARIM (guvenli kip; ...)" (main.cpp cliStatus).
+_STATUS_TEMPLATE = re.compile(r"(?:^|\s)-\s*Sablon:\s*(\S{1,40})\s+v(\d{1,10})(\s+YARIM\b)?")
 _STATUS_SHUTTERS = re.compile(r"(?:^|\s)-\s*Panjurlar:")  # v1.3.0 öncesi STATUS'un son satırı
 _FACTORY_RESULT = re.compile(r"(?:^|\s)(OK factory_init|ERR [a-z_]{1,40})\s*$")
 _RESETKEY_RESULT = re.compile(r"Yerel anahtar (SILINDI|SILINEMEDI)")
@@ -1955,6 +1960,7 @@ class SerialStatus:
     key_fp: Optional[str] = None       # None: satır yok (1.3.1 öncesi) | "": "yok" | 8 küçük harf hex (sözleşme 1)
     bootstrap: Optional[str] = None    # v1.3.0+ "Bootstrap: <durum>" satırı
     template: Optional[tuple[Optional[str], int]] = None  # v1.3.0+ "Sablon: <id|-> v<sürüm>" (STATUS'un son satırı)
+    template_incomplete: Optional[bool] = None  # "Sablon:" satırında YARIM (yarım kalmış uygulama); satır yoksa None
     base_complete: bool = False        # "Panjurlar:" satırı görüldü (v1.3.0 öncesi STATUS'un son satırı)
 
     def absorb(self, line: str) -> None:
@@ -1976,6 +1982,7 @@ class SerialStatus:
         match = _STATUS_TEMPLATE.search(line)
         if match:
             self.template = (None if match.group(1) == "-" else match.group(1), int(match.group(2)))
+            self.template_incomplete = bool(match.group(3))
         if _STATUS_SHUTTERS.search(line):
             self.base_complete = True
 
@@ -2483,6 +2490,7 @@ class BoardProbe:
     template_version: int = 0
     key_fp: Optional[str] = None
     supports_bootstrap: Optional[bool] = None
+    incomplete: bool = False         # sozlesme-4: STATUS'ta şablon "YARIM" (yarım kalmış uygulama; kart güvenli kipte)
 
     @property
     def uid(self) -> Optional[str]:
@@ -2705,7 +2713,7 @@ class SerialProvisioner:
     def _board_probe(self, session: _Session, status: SerialStatus, read_template: bool,
                      cancel: Optional[threading.Event]) -> BoardProbe:
         probe = BoardProbe(mac=status.mac, provisioned=status.provisioned, key_fp=status.key_fp,
-                           supports_bootstrap=status.supports_bootstrap)
+                           supports_bootstrap=status.supports_bootstrap, incomplete=bool(status.template_incomplete))
         if status.template is not None:
             probe.template_id, probe.template_version = status.template
         if read_template:
@@ -3056,6 +3064,10 @@ class TemplateSerialWriter(SerialProvisioner):
         session, status = self._connect_and_probe(port, wait_for_port, say, cancel)
         begun = False
         found_uid = uid_from_mac(status.mac or "")
+        if status.template_incomplete:
+            old_id, old_version = status.template or (None, 0)
+            say(f"Kartta yarım kalmış şablon uygulaması var ({old_id or '-'} v{old_version} YARIM; kart güvenli kipte): "
+                "şablon yeniden yazılıyor.")
         try:
             if expected_uid and not found_uid:
                 raise TemplateWriteError(
@@ -3105,6 +3117,13 @@ class TemplateSerialWriter(SerialProvisioner):
                 say("COMMIT yanıtı gelmedi; kartın şablon durumu TPL STATUS ile denetleniyor...")
                 back = self._read_status(session, cancel)
                 if back is None or back[0] != template_id or back[1] != int(version):
+                    raise
+                # sozlesme-4: TPL STATUS uygulama sürerken/başarısızken de ESKİ kaydı gösterir; kart hâlâ YARIM ise başarı
+                # sayılmaz. STATUS okunamazsa (bilinmiyor) da başarı ilan edilmez.
+                after = self._query_status(session, SERIAL_STATUS_TIMEOUT_S)
+                if after is not None and after.template_incomplete:
+                    raise TemplateWriteError("tpl_incomplete") from None
+                if after is None or after.template_incomplete is None:
                     raise
                 rest = f"{template_id} {int(version)}"
             begun = False
@@ -3218,9 +3237,30 @@ class TemplateLanWriter:
             return payload
         raise self._error(status, payload)
 
+    @staticmethod
+    def _applied(back: Mapping[str, Any], before: Optional[Mapping[str, Any]], template_id: str, version: int) -> bool:
+        """sozlesme-4: 202/kopma sonrası okunan kayıt BU yazımın sonucu mu? Uygulama sürerken ya da başarısız olunca kart ESKİ
+        kaydı gösterir (TemplateApply: RAM kaydı yalnız başarıda değişir): kimlik+sürüm eşleşmeli, ``incomplete`` olmamalı ve
+        yazımdan önce de aynı kimlik+sürüm varsa uygulama anı (``applied_at_uptime_s``) değişmiş olmalı."""
+        if back.get("template_id") != template_id or back.get("version") != int(version) or back.get("incomplete") is True:
+            return False
+        if before is not None and before.get("template_id") == template_id and before.get("version") == int(version):
+            at = back.get("applied_at_uptime_s")
+            return at is not None and at != before.get("applied_at_uptime_s")
+        return True
+
     def write(self, local_key: str, envelope: bytes, *, template_id: str, version: int, label: str = "",
               device_uid: Optional[str] = None, progress: Optional[ProgressCallback] = None) -> TemplateWriteOutcome:
         say = progress or (lambda _message: None)
+        # sozlesme-4: yazmadan önce kartın kaydı (kimlik, sürüm, uygulama anı, yarım) okunur. Kartın kesin reddi (anahtar,
+        # kilit, eski firmware) ya da erişilememesi apply gönderilmeden aynı hatayla döner (Wi-Fi IP'sinde hatalı deneme sayacı
+        # yazım başına iki kez artmaz); başka bir okuma hatasında kayıt bilinmeden yazım yine denenir.
+        try:
+            before: Optional[dict[str, Any]] = self.read(local_key)
+        except TemplateWriteError as exc:
+            if exc.code in ("key_mismatch", "locked", "unsupported_fw", "unreachable"):
+                raise
+            before = None
         say(f"Şablon Ethernet ile gönderiliyor (http://{self.host}/api/template/apply, yerel anahtar gizli)...")
         try:
             reply = self.apply(local_key, envelope)
@@ -3233,7 +3273,9 @@ class TemplateLanWriter:
                 back = self.read(local_key)
             except TemplateWriteError:
                 raise exc from None
-            if back.get("template_id") != template_id or back.get("version") != int(version):
+            if not self._applied(back, before, template_id, version):
+                if back.get("incomplete") is True:
+                    raise TemplateWriteError("tpl_incomplete") from None
                 raise exc from None
             reply = {"ok": True, "template_id": template_id, "version": int(version)}
         if reply.get("pending") is True:  # 202: kart NVS'e yazıyor -> GET /api/template ile 1 sn arayla en çok 20 sn bekle
@@ -3246,10 +3288,12 @@ class TemplateLanWriter:
                     if exc.code not in ("unreachable", "busy"):
                         raise
                     back = {}
-                if back.get("template_id") == template_id and back.get("version") == int(version):
+                if self._applied(back, before, template_id, version):
                     reply = {"ok": True, "template_id": template_id, "version": int(version)}
                     break
                 if waited >= self.PENDING_MAX_S:
+                    if back.get("incomplete") is True:
+                        raise TemplateWriteError("tpl_incomplete")
                     raise TemplateWriteError("tpl_timeout", message="Kart şablonu 20 sn içinde uygulamadı (202 pending). "
                                              "Kartın durumunu kontrol edip yeniden deneyin.")
                 self._sleep(self.PENDING_POLL_S)
@@ -3260,6 +3304,8 @@ class TemplateLanWriter:
         back = self.read(local_key)
         if back.get("template_id") != template_id or back.get("version") != int(version):
             raise TemplateWriteError("readback_mismatch")
+        if back.get("incomplete") is True:  # uygulandı ama işlem işareti kaldı: sonraki açılış güvenli kip
+            raise TemplateWriteError("tpl_incomplete")
         rev = reply.get("rev")
         return TemplateWriteOutcome(
             template_id=template_id,

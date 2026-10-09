@@ -94,7 +94,7 @@ Altında **5 sekme** vardır:
 
 **Roller:** **süper kullanıcı** her şeyi yapar. **Servis sorumlusu** giriş yapabilir (giriş penceresinin başlığı **"Sunucuya Giriş (süper kullanıcı / servis sorumlusu)"**); şeritte **"(servis sorumlusu)"** yazar. Siteleri, şablonları ve karta yazımı kullanır, envanter listesini görür, **Sunucudaki Anahtarla Yeniden Provizyon (USB)** yapabilir; ama **SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET**, **Askıya Al (Kilit)**, **Aktif Et (Stok)**, **Envanterden Sil** ve **Etiketi Yeniden Bas (USB)** düğmeleri onun için kapalıdır (fabrika kaydı ve etiket yenileme yalnızca süper kullanıcıya açıktır).
 
-**Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz ve bir **daireye bağlı** kart **silinemez** ("Kart bir daireye bağlı; önce daireden ayırın.").
+**Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. Sunucu listeyi 100'er kayıtla verir: durum satırı **"Gösterilen X / Toplam Y"** yazar, kalan kayıtlar için **Daha fazla**'ya basın. Eski bir kartı bulmak için tablonun üstündeki kutuya UID'yi, seri numarasını ya da MAC'i yazıp **Ara**'ya (ya da Enter'a) basın; kutu boşken bütün liste gelir, liste yenilenince arama korunur. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz ve bir **daireye bağlı** kart **silinemez** ("Kart bir daireye bağlı; önce daireden ayırın.").
 
 **Etiketi Yeniden Bas (USB)** (yalnız süper kullanıcı): etiketi kaybolan/bozulan **stoktaki** kart USB'de takılıyken basılır. Araç kartın kimliğini seri `STATUS` ile okur, sunucuda **yeni kurulum PIN'i** üretir (eski etiketteki PIN geçersiz olur), kartın **mevcut yerel anahtarını** sunucudan alır (anahtar **değişmez**; alma işlemi kayda geçer), **yeni AP parolası** üretip karta USB'den yazar (`RESETKEY` + `FACTORYINIT`), `STATUS` ile doğrular ve iki karekodlu yeni etiketi önizlemeye koyar ("Etiket Yenilendi"). Kart stokta değilse ya da bir daireye bağlıysa sunucu reddeder ve nedeni gösterilir; karta yazma başarısız olursa **etiket basılmaz** (yeniden deneyin, yeni PIN üretilir).
 
@@ -245,13 +245,16 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
 3. Daireyi seçip **Şablon Ata** ile şablonunu, **Kart Bağla** ile kartın UID'sini (`AHBU-S3-XXXXXX`; boş = bağlantıyı kaldır) girin.
    Şablon eski karta yazılmışken kart değiştirilirse araç **"Şablon yeni karta yeniden yazılmalı"** uyarır. Yalnız **stoktaki** kart
    bağlanır; kart pano değişimiyle bu daireye takıldıysa bağlantı sunucuda otomatik taşınır, değilse süper kullanıcı bağlayabilir.
-   Başka bir daireye bağlı kart için "Kart bir daireye bağlı; önce daireden ayırın." denir.
+   Başka bir daireye bağlı kart için "Kart bir daireye bağlı; önce daireden ayırın." denir. **Kuruldu** ya da **Teslim edildi**
+   durumundaki dairenin kartını değiştirmeyi/ayırmayı sunucu reddederse (yalnız Pano Değişimi ile ya da süper kullanıcı) araç
+   sunucunun iletisini gösterir.
 4. "Durum" sütunu ilerlemeyi gösterir: **Planlandı → Yazıldı → Kuruldu → Teslim edildi** (sitenin "İlerleme" sütunu da bu sayıları
    gösterir). Daire müşteriye teslim edilince **Teslim Edildi** düğmesiyle işaretleyin. Araç önce daireye kart bağlı mı ve durum
    **Yazıldı** ya da **Kuruldu** mu diye bakar; değilse **"Teslim Edilemez"** der ve sunucuya hiçbir şey göndermez (önce **Kart Bağla**,
    sonra **Karta Yaz**). Durum yalnız ileri gider; geri alma yalnız süper kullanıcı. "Son yazım" hangi sürümün hangi yolla (USB/ETH) yazıldığını gösterir:
    başarısız yazım **`⚠ vN (kod)`**, şablonun güncel sürümünden eski son başarılı yazım **"eski sürüm"**, dairenin kartından başka
-   bir karta yapılan yazım **"başka kart (UID)"** olarak ayrıca belirtilir.
+   bir karta yapılan yazım **"başka kart (UID)"**, dairenin şablonundan başka bir şablonun son başarılı yazımı **"(farklı şablon)"**
+   olarak ayrıca belirtilir.
 
 ### 4b.2 Şablon hazırlama (5. Şablonlar sekmesi)
 
@@ -273,7 +276,8 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
      **Basılı tut (yaylı buton; basılıyken açık)**, panjur kipleri de yaylı butondur — kalıcı/mandallı anahtar desteklenmez), kablolama notu ve **güvenlik rolü** (su, gaz, duman, kapı, pencere, hareket...) +
      kontak **NO/NC** + bölge. Gaz/duman dedektörü her zaman **NC** bağlanır; sensör olan girişin hedef rölesi "Boşta" olur.
    - **Güvenlik:** tepkiler açık/kapalı, kuruluk bekleme, bölge adları, güvenlik cihazları (vana / siren / fan; vanada kapanma kipi
-     ve akışkan). Cihaz panjur ya da darbe rölesine bağlanamaz.
+     ve akışkan). Cihaz panjur ya da darbe rölesine bağlanamaz. Kablosuz (köprü) sensör bu sürümde desteklenmiyor: sensörler
+     panodaki girişlere (d1..d40) bağlanır; şablonda köprü sensörü (b1..b16) varsa doğrulama reddeder.
 3. **Doğrula** yerel denetimi yapar; **Doğrula ve Kaydet (yeni sürüm)** önce yerel, sonra sunucu doğrulamasından geçirip **yeni sürüm**
    olarak kaydeder. Sunucu reddederse hata kodu ve alan gösterilir; düzenleyiciye dönüp düzeltebilirsiniz. Siz düzenlerken başka biri
    aynı şablonu kaydettiyse **"Şablon Değişti"** sorusu çıkar: yeni sürümü açabilir ya da bilerek üstüne yazabilirsiniz (öteki
@@ -282,6 +286,9 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
 ### 4b.3 Şablonu karta yazma
 
 1. **Siteler** sekmesinde daireyi seçip **Karta Yaz**'a (ya da **Şablonlar** sekmesinde şablonu seçip **Karta Yaz**'a) basın.
+   Daireden yazımda araç daireyi önce sunucudan yeniden okur: liste yüklendikten sonra dairenin şablonu değiştirildiyse
+   **"Daire Şablonu Değişti"** diye sorar ("Evet": dairenin güncel şablonu yazılır; "Hayır": hiçbir şey yazılmaz). Daire silinmiş ya da
+   şablonu kaldırılmışsa **"Daire Değişti"** der ve yazmaz; iki durumda da daire listesi yenilenir.
 2. Pencerede yol seçin:
    - **USB (seri) — önerilen:** USB portunu seçin. Kart fiziksel olarak bağlı olduğu için güvenlik ayarlarını tamamen yazabilir.
      Daireye bağlı kart varsa araç bağlı kartın o kart olduğunu denetler; değilse hiçbir şey yazmaz. Dairenin kartı yoksa araç
@@ -307,7 +314,13 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
    "Karta Yazım Sonucu" alanında görünür ve sunucuya yazım kaydı işlenir (daire **Yazıldı** olur). Kayıt işlenemezse (oturum yok,
    ağ/sunucu hatası) **kaybolmaz**: bellekte bekler, araç uyarır; giriş yapıp **Bekleyen Kayıtları Gönder**'e basın. Başarı
    penceresi kaydın sonucunu da yazar ("Yazım kaydı: sunucuya işlendi" / "işlenemedi, bekliyor" / "sunucu reddetti"). Kart başka bir
-   daireye bağlıysa sunucu kaydı yine alır ama seçili dairenin durumunu değiştirmez; araç bunu hata penceresiyle bildirir. Sunucu
+   daireye bağlıysa sunucu kaydı yine alır ama seçili dairenin durumunu değiştirmez; araç bunu hata penceresiyle bildirir. Yazılan
+   şablon dairenin güncel şablonu değilse de sunucu kaydı alır ama daireyi Yazıldı yapmaz: **"Daire Şablonu Farklı"** penceresi
+   *"Karta yazılan şablon dairenin güncel şablonu değil; daire Yazıldı yapılmadı. Daire listesini yenileyip güncel şablonu yazın."*
+   der (kayıt kuyruktan sonradan gönderilse de). Kartta yarım kalmış bir şablon uygulaması varsa (seri `STATUS`'ta **YARIM**; kart
+   güvenli kipte) araç bunu yazmadan önce söyler, flaş öncesi yoklama da şablonu "(YARIM ...)" diye gösterir. Yanıt kaybolduğunda
+   (USB'de COMMIT yanıtı yok, Ethernet'te 202 ya da kopma) araç yalnız kart yeni şablonu bitirdiyse başarı der; kart hâlâ yarım
+   görünüyorsa *"Şablon yarım kaldı; aynı şablonu yeniden yazın."* der. Sunucu
    kaydı **kalıcı olarak reddederse** (kart envanterde kayıtlı değil — ör. Ethernet ile kayıtsız karta yazım —, şablon sürümü ya da
    daire bulunamadı, şablon/site silinmiş, daireye başka kart bağlı, şablon başka siteye ait) yeniden göndermek işe yaramaz: kayıt
    kuyruktan çıkarılır ve **"Yazım Kaydı Reddedildi"** penceresi kart UID'si, şablon sürümü ve kodla **bir kez** gösterilir.
