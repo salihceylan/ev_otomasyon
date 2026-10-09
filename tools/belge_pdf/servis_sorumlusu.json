@@ -1,0 +1,60 @@
+{
+  "adim_basliklari": [
+    "^Giriş$", "^Site ve daireler", "^Şablon \\(", "^Kayıt ve etiket", "^Firmware", "^Provizyon",
+    "karta yazma", "montaj ve test", "^Adımlar$", "^Pano değişimi", "^Acil sıfırlama"
+  ],
+  "diyagram": {
+    "baslik": "Genel akış: ofisten teslime",
+    "aciklama": "Kim, hangi aşamada ne yapar? Sütunlar rolleri, soldaki bantlar aşamaları ve belgedeki bölümleri gösterir.",
+    "kulvarlar": ["Süper kullanıcı", "Servis sorumlusu", "Servis oturumu", "Ev sahibi", "Pano"],
+    "asamalar": [
+      {"ad": "Ofis", "bolum": "2", "satirlar": [1, 1]},
+      {"ad": "Atölye", "bolum": "3", "satirlar": [2, 3]},
+      {"ad": "Saha", "bolum": "4", "satirlar": [4, 4]},
+      {"ad": "Teslim", "bolum": "5", "satirlar": [5, 8]},
+      {"ad": "Sonrası", "bolum": "6", "satirlar": [9, 9]}
+    ],
+    "kutular": [
+      {"id": "ofis", "satir": 1, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis sorumlusu",
+       "baslik": "Site, daire ve şablon", "metin": "Toplu daire üret, şablon ata, kart bağla", "bolum": "2.2–2.3"},
+      {"id": "kayit", "satir": 2, "kulvar": "Süper kullanıcı",
+       "baslik": "Kartı envantere kaydet", "metin": "MAC + PIN, karekodlu etiket", "bolum": "3.1"},
+      {"id": "atolye", "satir": 3, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis sorumlusu",
+       "baslik": "Firmware, provizyon, şablonu karta yaz", "metin": "v1.3.0+, provizyon aynı USB'den; daire “Yazıldı”", "bolum": "3.2–3.5"},
+      {"id": "saha", "satir": 4, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis sorumlusu",
+       "baslik": "Montaj ve test", "metin": "Şemaya göre kablola, enerji ver, dene (internet gerekmez)", "bolum": "4"},
+      {"id": "sih14", "satir": 5, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis sorumlusu",
+       "baslik": "Sihirbaz 1–4", "metin": "Cihazı tanı, müşteri kodu, “Daireye Bağla” (72 saat yetki)", "bolum": "5.3"},
+      {"id": "kod", "satir": 5, "kulvar": "Ev sahibi",
+       "baslik": "6 haneli kodu söyler", "metin": "Kod 15 dakika geçerli", "bolum": "5.3"},
+      {"id": "pin", "satir": 6, "kulvar": "Ev sahibi",
+       "baslik": "Servis PIN'i verir", "metin": "6 haneli; 2 saat, tek ev", "bolum": "5.1"},
+      {"id": "oturum", "satir": 6, "kulvar": "Servis oturumu",
+       "baslik": "PIN ile giriş", "metin": "3–4. adım atlanır, şablon yok", "bolum": "5.1–5.2"},
+      {"id": "sih56", "satir": 7, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis oturumu",
+       "baslik": "Sihirbaz 5–6: ağ ve bulut", "metin": "Wi-Fi ya da Ethernet; buluta bağla (en çok 90 sn)", "bolum": "5.3"},
+      {"id": "kimlik", "satir": 7, "kulvar": "Pano",
+       "baslik": "Bulut kimliğini kendisi alır", "metin": "Provizyonlu ve sahiplenilmişse", "bolum": "0, 7"},
+      {"id": "sih710", "satir": 8, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis oturumu",
+       "baslik": "Sihirbaz 7–10: testler ve teslim", "metin": "Röle, panjur, duvar butonu; kurulum raporu", "bolum": "5.3"},
+      {"id": "teslim", "satir": 8, "kulvar": "Ev sahibi",
+       "baslik": "Kurulumu teslim alır", "metin": "Android: arka planda alarm bildirimi", "bolum": "5.3"},
+      {"id": "sonra", "satir": 9, "kulvar": "Süper kullanıcı", "kulvar_son": "Servis sorumlusu",
+       "baslik": "Pano değişimi, acil sıfırlama", "metin": "Wi-Fi değişikliği, abone yönetimi", "bolum": "6"}
+    ],
+    "oklar": [
+      {"den": "ofis", "e": "kayit"},
+      {"den": "kayit", "e": "atolye"},
+      {"den": "atolye", "e": "saha"},
+      {"den": "saha", "e": "sih14"},
+      {"den": "kod", "e": "sih14", "etiket": "kod", "kesikli": true},
+      {"den": "pin", "e": "oturum", "kesikli": true},
+      {"den": "sih14", "e": "sih56"},
+      {"den": "oturum", "e": "sih56"},
+      {"den": "kimlik", "e": "sih56", "etiket": "6. adım hemen biter", "kesikli": true},
+      {"den": "sih56", "e": "sih710"},
+      {"den": "sih710", "e": "teslim"},
+      {"den": "sih710", "e": "sonra"}
+    ]
+  }
+}

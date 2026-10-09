@@ -1,0 +1,61 @@
+{
+  "adim_basliklari": ["^Kayıt$", "servis kurduysa", "ev ağına bağlama", "^Panoyu sahiplenme"],
+  "diyagram": {
+    "baslik": "Genel akış: hesaptan günlük kullanıma",
+    "aciklama": "Pano eve iki yoldan gelir: servis kurar ya da bireysel kullanıcı kendisi sahiplenir. Sonra her rol aynı uygulamayı kendi yetkisiyle kullanır.",
+    "kulvarlar": ["Bireysel kullanıcı", "Ev sahibi", "Aile üyesi", "Misafir", "Pano"],
+    "asamalar": [
+      {"ad": "Hesap", "bolum": "2", "satirlar": [1, 1]},
+      {"ad": "Pano kurulumu", "bolum": "3–4", "satirlar": [2, 3]},
+      {"ad": "Günlük kullanım", "bolum": "5", "satirlar": [4, 5]},
+      {"ad": "Güvenlik", "bolum": "7", "satirlar": [6, 6]},
+      {"ad": "Aile ve paylaşım", "bolum": "8", "satirlar": [7, 8]}
+    ],
+    "kutular": [
+      {"id": "hesap", "satir": 1, "kulvar": "Bireysel kullanıcı", "kulvar_son": "Misafir",
+       "baslik": "Kayıt ol ya da giriş yap", "metin": "Şifre en az 10 karakter; oturum 30 gün; parmak izi ya da yüz tanıma", "bolum": "2"},
+      {"id": "wifi", "satir": 2, "kulvar": "Bireysel kullanıcı",
+       "baslik": "Panoyu ev ağına bağla", "metin": "AHBU-XXXXXX kurulum ağı, 2,4 GHz; Ethernet'te gerekmez", "bolum": "4.1"},
+      {"id": "servis", "satir": 2, "kulvar": "Ev sahibi",
+       "baslik": "Servis kurar", "metin": "6 haneli kodu servise söyle; teslimde ev hazır", "bolum": "3"},
+      {"id": "sahiplen", "satir": 3, "kulvar": "Bireysel kullanıcı",
+       "baslik": "Panoyu sahiplen", "metin": "1. karekod ya da seri no + kurulum PIN'i", "bolum": "4.2"},
+      {"id": "bulut", "satir": 3, "kulvar": "Pano",
+       "baslik": "Buluta kendiliğinden bağlanır", "metin": "Birkaç dakikada; cihaz listesi güncellenir", "bolum": "0, 4.2"},
+      {"id": "kontrol", "satir": 4, "kulvar": "Ev sahibi", "kulvar_son": "Misafir",
+       "baslik": "Işık, panjur, darbe çıkışı; vanayı kapatma", "metin": "Pano 10 sn içinde onaylamazsa komut geri alınır", "bolum": "5.1, 7.2"},
+      {"id": "senaryo", "satir": 5, "kulvar": "Ev sahibi", "kulvar_son": "Aile üyesi",
+       "baslik": "Senaryolar, zamanlı kurallar, çocuk kilidi", "metin": "Misafire görünmez", "bolum": "5.2–5.4"},
+      {"id": "sure", "satir": 5, "kulvar": "Misafir",
+       "baslik": "En çok 72 saat erişim", "metin": "Süre bitince “Erişiminiz sona erdi”", "bolum": "1"},
+      {"id": "alarm", "satir": 6, "kulvar": "Ev sahibi", "kulvar_son": "Aile üyesi",
+       "baslik": "Alarmı onayla, hırsız alarmını kur/çöz", "metin": "Android'de arka planda alarm bildirimi", "bolum": "7"},
+      {"id": "misafir", "satir": 6, "kulvar": "Misafir",
+       "baslik": "Yalnız vanayı kapatır", "metin": "Alarm onaylayamaz, vana açamaz", "bolum": "7.5"},
+      {"id": "internetsiz", "satir": 6, "kulvar": "Pano",
+       "baslik": "İnternetsiz korur", "metin": "Alarm, vana ve siren panoda", "bolum": "7.4"},
+      {"id": "davet", "satir": 7, "kulvar": "Ev sahibi",
+       "baslik": "Davet kodu üretir", "metin": "Aile 24 saat; misafir 2–72 saat", "bolum": "8.1"},
+      {"id": "katil", "satir": 7, "kulvar": "Aile üyesi", "kulvar_son": "Misafir",
+       "baslik": "Kodla eve katılır", "metin": "“Kod ile Bir Eve Katıl” → “Eve Katıl”", "bolum": "8.2"},
+      {"id": "yonet", "satir": 8, "kulvar": "Ev sahibi",
+       "baslik": "Üyeleri yönetir, devreder", "metin": "Devir kodu 48 saat; servis PIN'i 2 saat", "bolum": "8.3–8.5"},
+      {"id": "anahtar", "satir": 8, "kulvar": "Pano",
+       "baslik": "Yerel anahtar değişir", "metin": "Üye çıkınca, tek panolu evde", "bolum": "8.3"}
+    ],
+    "oklar": [
+      {"den": "hesap", "e": "wifi", "etiket": "kendiniz kurarsanız"},
+      {"den": "hesap", "e": "servis", "etiket": "servis kurarsa"},
+      {"den": "wifi", "e": "sahiplen"},
+      {"den": "sahiplen", "e": "bulut", "etiket": "internete çıkınca", "kesikli": true},
+      {"den": "sahiplen", "e": "kontrol"},
+      {"den": "servis", "e": "kontrol"},
+      {"den": "kontrol", "e": "senaryo"},
+      {"den": "senaryo", "e": "alarm"},
+      {"den": "alarm", "e": "davet"},
+      {"den": "davet", "e": "katil", "kesikli": true},
+      {"den": "davet", "e": "yonet"},
+      {"den": "yonet", "e": "anahtar", "kesikli": true}
+    ]
+  }
+}

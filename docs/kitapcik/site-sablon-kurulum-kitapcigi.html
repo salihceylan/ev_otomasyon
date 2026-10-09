@@ -73,6 +73,7 @@
   <tr><td>Şablon ekleme, düzenleme, silme, sürüm geçmişi</td><td>Evet</td><td>Evet</td></tr>
   <tr><td>Şablonu karta yazma (USB / Ethernet), PDF üretme, daireyi "Teslim edildi" işaretleme</td><td>Evet</td><td>Evet</td></tr>
   <tr><td>Stokta olmayan kartı daireye bağlama (pano değişimi dışında)</td><td>Evet</td><td>Hayır</td></tr>
+  <tr><td>Kuruldu ya da Teslim edildi dairenin kartını değiştirme ya da ayırma (pano değişimi dışında)</td><td>Evet</td><td>Hayır</td></tr>
   <tr><td>Kartı sunucu envanterine kaydetme, etiketini yeniden basma, askıya alma, silme</td><td>Evet</td><td>Hayır</td></tr>
   <tr><td>Kurulum PIN kilidini kaldırma (uygulama: Cihaz Envanteri → PIN Kilidini Kaldır)</td><td>Evet</td><td>Hayır</td></tr>
 </table>
@@ -85,11 +86,13 @@
   <li>Siteyi seçin. <span class="btn">Toplu Daire Üret</span>: blok (ör. <code>A</code>), ilk ve son daire numarası (ör. 1–24; bir seferde en çok 500 daire), isteğe bağlı daire tipi ve şablon. Var olan blok+numara atlanır; her blok için tekrarlayın.</li>
   <li>Şablonu sonradan atamak için daireyi seçip <span class="btn">Şablon Ata</span>. Şablonu değişen "Yazıldı" daire "Planlandı"ya döner; yeni şablonu karta yeniden yazın.</li>
 </ol>
-<p><b>Durum sütunu:</b> Planlandı → Yazıldı (şablon dairenin kartına yazıldı) → Kuruldu (kart müşteriye sahiplenildi) → Teslim edildi.
+<p><b>Durum sütunu:</b> Planlandı → Yazıldı (dairenin güncel şablonu dairenin kartına yazıldı; başka bir şablon yazılırsa araç "Daire Şablonu
+Farklı" der ve durum değişmez) → Kuruldu (kart müşteriye sahiplenildi) → Teslim edildi.
 Sihirbazda devreye alma tamamlanınca daire kendiliğinden "Teslim edildi" olur; servis yazılımında daireyi seçip <span class="btn">Teslim Edildi</span>
 ile de işaretleyebilirsiniz (daireye kart bağlı ve durum Yazıldı ya da Kuruldu olmalı). Durum yalnız ileri gider; geri alma yalnız süper
 kullanıcıya açıktır. Daireye bağlanan yeni kartta dairenin şablonu yazılı değilse "Yazıldı" daire "Planlandı"ya döner. <b>Son yazım</b> sütunu son
-yazımın sürümünü ve yolunu (USB/ETH) gösterir; başarısız yazım ⚠ ile, eski sürüm ve başka karta yazım ayrıca belirtilir.</p>
+yazımın sürümünü ve yolunu (USB/ETH) gösterir; başarısız yazım ⚠ ile, eski sürüm ve başka karta yazım ayrıca, dairenin şablonundan başka bir
+şablonun yazımı "(farklı şablon)" diye belirtilir.</p>
 <div class="box">Silme "yumuşaktır": silinen site ya da şablon listeden kalkar ama sürümleri ve yazım kayıtları sunucuda kalır; silinen şablon atandığı dairelerden de kalkar. Dairesine kart bağlı bir site ve kartı bağlı bir daire silinemez.</div>
 
 <h2>3. Ofis: şablon hazırlama</h2>
@@ -105,7 +108,8 @@ yazımın sürümünü ve yolunu (USB/ETH) gösterir; başarısız yazım ⚠ il
     </ul>
     Tip değişikliği bir güvenlik cihazını (vana, siren, fan) ya da dimmeri silecekse araç önce sorar ("Güvenlik Öğesi Silinecek"); "Hayır" derseniz hiçbir şey değişmez.</li>
   <li><b>Parlaklık (dimmer):</b> lamba satırındaki 💡 düğmesi "Parlaklık ayarı yapılacak mı?" diye sorar. Evet derseniz dimmer kaynağını (Modbus dimmer modülü / köprü), adresini ve kanalını girin; pencere dimmerin nereye takılacağını söyler, aynı yönerge şemaya da basılır.</li>
-  <li><b>Girişler:</b> ad, hedef röle, kip (hepsi yaylı buton) ve kablolama notu. Sensör ya da kumanda girişlerinde güvenlik rolü (su baskını, gaz, duman, kapı, pencere, hareket, genel kontak; alarm susturma butonu, vana kapatma butonu, gaz vanası sıfırlama, anahtarlı kontak), kontak tipi (NO/NC) ve bölge seçilir; bu girişin hedef rölesi "Boşta" kalır. Gaz, duman ve anahtarlı kontak her zaman NC'dir.</li>
+  <li><b>Girişler:</b> ad, hedef röle, kip (hepsi yaylı buton) ve kablolama notu. Sensör ya da kumanda girişlerinde güvenlik rolü (su baskını, gaz, duman, kapı, pencere, hareket, genel kontak; alarm susturma butonu, vana kapatma butonu, gaz vanası sıfırlama, anahtarlı kontak), kontak tipi (NO/NC) ve bölge seçilir; bu girişin hedef rölesi "Boşta" kalır. Gaz, duman ve anahtarlı kontak her zaman NC'dir. Kablosuz (köprü)
+sensör bu sürümde desteklenmez: her sensör panodaki bir girişe bağlanır; şablonda köprü sensörü (b1..b16) varsa doğrulama reddeder.</li>
   <li><b>Güvenlik:</b> tepkiler açık/kapalı, kuruluk bekleme süresi, bölge adları ve güvenlik cihazları (vana, siren, fan). Vanada kapanma kipi (enerji verince kapanan / enerji kesilince kapanan / iki röleli) ve akışkan (su/gaz) seçilir.</li>
   <li><span class="btn">Doğrula ve Kaydet (yeni sürüm)</span>: şablon önce yazılımda, sonra sunucuda denetlenir ve yeni sürüm olarak kaydedilir. Hata varsa hangi alanda olduğu gösterilir. Siz düzenlerken başkası aynı şablonu kaydettiyse "Şablon Değişti" sorusu çıkar: yeni sürümü açabilir ya da bilerek üstüne yazabilirsiniz (öteki değişiklikler o zaman yeni sürümde olmaz).</li>
 </ol>
@@ -118,13 +122,18 @@ yazımın sürümünü ve yolunu (USB/ETH) gösterir; başarısız yazım ⚠ il
 <ol>
   <li><b>Kartı kaydet ve etiket al</b> (yalnız süper kullanıcı): <span class="btn">2. Karekod Üret &amp; Etiket Bas</span> sekmesinde karttan MAC'i okuyun, <span class="btn">SUNUCU ENVANTERİNE KAYDET &amp; KAREKOD ÜRET</span>.</li>
   <li><b>Firmware yükle ve provizyon:</b> <span class="btn">1. Firmware Yükleyici</span> sekmesinde USB portunu seçip araçta seçili güncel sürümü (v1.3.1) yükleyin; yükleme bitince araç aynı porttan provizyonu (FACTORYINIT) kendisi yapar ve 3. sekmede "Provizyon doğrulandı ✔" yazar (v1.3.1'de karttaki anahtar izi de kayıtla karşılaştırılır). Kurulu (provizyonlu ya da şablonlu) bir kartı güncelliyorsanız <span class="btn">Güncelle (ayarlar korunur)</span> kipini seçin: birleşik imaj kartın anahtarını, şablonunu ve ayarlarını siler (araç önce sorar). Şablon Ethernet'ten provizyonsuz karta da yazılabilir (kart kablodan gelen isteği anahtarsız kabul eder), ama provizyonsuz panoyla bulut kurulumu ve teslim yapılamaz: provizyonu atölyede tamamlayın.</li>
-  <li><b>Kartı daireye bağla:</b> <span class="btn">🏢 4. Siteler</span> → daireyi seçin → <span class="btn">Kart Bağla</span> → kartın UID'si (<code>AHBU-S3-XXXXXX</code>, etikette yazar; boş bırakılırsa bağlantı kalkar). Yalnız stoktaki kartlar bağlanabilir: pano değişimiyle takılan kartın bağlantısı sunucuda kendiliğinden taşınır, stokta olmayan başka bir kartı yalnız süper kullanıcı bağlayabilir.</li>
+  <li><b>Kartı daireye bağla:</b> <span class="btn">🏢 4. Siteler</span> → daireyi seçin → <span class="btn">Kart Bağla</span> → kartın UID'si (<code>AHBU-S3-XXXXXX</code>, etikette yazar; boş bırakılırsa bağlantı kalkar). Yalnız stoktaki kartlar bağlanabilir: pano değişimiyle takılan kartın bağlantısı sunucuda kendiliğinden taşınır, stokta olmayan başka bir kartı yalnız süper kullanıcı bağlayabilir. Kuruldu ya da Teslim edildi dairenin kartını da yalnız pano değişimi ya da süper kullanıcı değiştirir veya ayırır; Yazıldı dairede kart ayrılırsa daire Planlandı'ya döner.</li>
   <li><b>Şablonu yaz:</b> daireyi seçip <span class="btn">Karta Yaz</span> (provizyondan hemen sonra 3. sekmedeki <span class="btn">📐 Şablon Yaz (aynı USB portu)</span> düğmesi Şablonlar sekmesini açar ve USB portunu hazır getirir). Yol seçin:
     <ul>
       <li><b>USB (önerilen):</b> port seçilir. Araç önce takılı kartın o daireye bağlı kart olduğunu denetler; değilse hiçbir şey yazmaz. Daireye kart bağlı değilse takılı kartı yazmadan önce daireye bağlar (kart başka bir daireye bağlıysa hiçbir şey yazılmaz).</li>
       <li><b>Ethernet:</b> kart atölye ağına kabloyla bağlanır; kartın IP adresi ve UID'si girilir. Anahtar ya da provizyon gerekmez; araç şablonu doğrudan o IP'ye gönderir. <b>Kartın Ethernet IP'sini girin ve doğru karta ait olduğundan emin olun</b>; araç bunu ayrıca denetlemez (UID yalnız yazım kaydı içindir). Kartın Wi-Fi IP'si girilirse yazım reddedilir.</li>
     </ul>
-    Kart şablonu tek parça uygular: geçersizse hiçbir şey değişmez. Sonra araç karttan geri okur ve sonucu sunucuya işler; daire <b>Yazıldı</b> olur. Yazım kaydı sunucuya işlenemezse (oturum yok ya da ağ hatası) araç uyarır ve kaydı bellekte bekletir: giriş yapıp <span class="btn">Bekleyen Kayıtları Gönder</span>'e basın. Araç kapatılırsa bekleyen kayıt kaybolur (kapatırken sorulur).</li>
+    Daireden yazarken araç daireyi önce sunucudan yeniden okur: dairenin şablonu bu arada değiştiyse "Daire Şablonu Değişti" diye sorar ("Evet":
+    güncel şablon yazılır), daire silindiyse ya da şablonu kaldırıldıysa "Daire Değişti" der ve yazmaz. Kartta yarım kalmış bir şablon varsa
+    (YARIM) araç bunu yazmadan önce söyler; Ethernet'te de önce kartın mevcut şablon kaydı okunur.
+    Kart şablonu tek parça uygular: geçersizse hiçbir şey değişmez. Sonra araç karttan geri okur ve sonucu sunucuya işler; daire <b>Yazıldı</b> olur
+    (yazılan şablon dairenin güncel şablonuysa). Yanıt kaybolursa araç yalnız kart yeni şablonu bitirdiyse başarı der; kart hâlâ yarımsa
+    "Şablon yarım kaldı; aynı şablonu yeniden yazın." der. Yazım kaydı sunucuya işlenemezse (oturum yok ya da ağ hatası) araç uyarır ve kaydı bellekte bekletir: giriş yapıp <span class="btn">Bekleyen Kayıtları Gönder</span>'e basın. Araç kapatılırsa bekleyen kayıt kaybolur (kapatırken sorulur).</li>
   <li><b>Etiket:</b> şablon bu oturumda kaydedilen karta yazıldıysa etikete daire satırı eklenir (ör. <code>A Blok / Daire 12 · 3+1 · Şablon v4</code>). Etiketi 2. sekmeden yeniden kaydedip yazdırın, kartın üstüne yapıştırın. Daireye yazımdan sonra araç ayrıca "Daire Etiketi"ni (kart UID'si, site/blok/daire, şablon adı ve sürümü; PIN ve parola içermez) PNG olarak kaydetmeyi sorar: yazdırıp dairenin panosuna yapıştırın.</li>
   <li><b>Kablolama şeması:</b> yazımdan sonra araç şemayı kaydetmeyi sorar; sonradan <span class="btn">📄 Kablolama Şeması (PDF)</span> ile de üretilir. Şemanın başlığında kartın UID'si yazar. Yazdırın ve kartla birlikte paketleyin.</li>
 </ol>
@@ -169,7 +178,8 @@ yazımın sürümünü ve yolunu (USB/ETH) gösterir; başarısız yazım ⚠ il
 </ul>
 <p><b>Pano modeme kabloyla bağlıysa:</b> 5. adımda "Pano kabloyla (Ethernet) bağlı"yı seçin, panonun Ethernet IP adresini yazıp "Ethernet ile Doğrula"ya
 basın; kurulum ağı ve Wi-Fi bilgisi gerekmez. Pano hazırlanmamışsa (provizyonsuz) sihirbaz önce etiketteki AĞ PAROLASI (AP) değeriyle "Panoyu Hazırla"yı
-ister; hazırlık panonun kablolu adresine yapılır ve kablolu bağlantı kesilmez. Hazırlanmamış panoyla bulut, test ve teslim adımları yapılamaz.</p>
+ister (parola iki kez yazılır ya da etiketin karekodu okutulur; etiketteki parolayla uyuşmazsa pano hazırlanmaz); hazırlık panonun kablolu adresine
+yapılır ve kablolu bağlantı kesilmez. Hazırlanmamış panoyla bulut, test ve teslim adımları yapılamaz.</p>
 <div class="box warn">Kablolu Ethernet'ten gelen yerel istek anahtarsız tam yetkilidir: pano modeme kabloyla bağlıysa ev ağındaki her cihaz panoya anahtarsız erişebilir.</div>
 <div class="box">Yerel anahtar kendiliğinden değişir: tek panolu evde ev başka sahibe devredilince, ev sahibi ya da aile bireyi evden çıkarılınca ya da panonun anahtarını okumuş geçici servis (PIN) oturumu bitince sunucu yeni anahtar üretir; pano çevrimiçi olunca yeni anahtarı alır. Uygulama yeni anahtarı kendisi alır; elle not edilmiş eski anahtar artık çalışmaz.</div>
 
@@ -183,7 +193,7 @@ ister; hazırlık panonun kablolu adresine yapılır ve kablolu bağlantı kesil
 <div class="box warn">Şablon ağ üzerinden de güvenlik ayarlarını tamamen değiştirebilir (vana ya da sensör kaldırmak dahil). Doğru şablonu seçtiğinizden emin olun.</div>
 
 <h2>8. İlk kartla deneme (toplu üretimden önce)</h2>
-<p>v1.3.1 bir kartta denendi: açılış, Wi-Fi, bulut bağlantısı ve anahtar izi tamam. Ethernet kablosu ve panonun kendi bulut kimliği gerçek kabloyla henüz denenmedi. İlk sitede şunları bir kartla deneyin:</p>
+<p>v1.3.1 bir kartta denendi: açılış, Wi-Fi, bulut bağlantısı ve anahtar izi tamam. Ethernet kablosu ve panonun kendi bulut kimliği gerçek kabloyla henüz denenmedi. v1.3.2 (kablosuz sensör yazımı reddi, uzun onay sürelerinin çalışması, kalıcı belleğe yazımda yeniden deneme) paketlendi ama kartta denenmedi; araçta seçili sürüm v1.3.1'dir. v1.3.1'de gaz/duman için 875 ms'den, su için 2625 ms'den uzun onay süresi hiç onaylanmaz: şablonda bu değerleri aşmayın. İlk sitede şunları bir kartla deneyin:</p>
 <ul class="chk">
   <li>Firmware v1.3.1 (birleşik imaj) yükleme + otomatik provizyon ("Provizyon doğrulandı ✔", anahtar izi eşleşti).</li>
   <li>Şablonu USB ile yazma ve geri okuma; NC tehlike girişli şablonda köprü ve alarm onayı.</li>
@@ -210,7 +220,10 @@ ister; hazırlık panonun kablolu adresine yapılır ve kablolu bağlantı kesil
   <tr><td>"Kart meşgul"</td><td>Panjur hareket halinde, kart başka bir yazımı bitiriyor ya da belleği o an yetersiz.</td><td>Birkaç saniye bekleyip yeniden deneyin.</td></tr>
   <tr><td>"kilitli (alarmdaki) bölge" / "Hırsız alarmı kurulu"</td><td>Kart güvenlik durumunda (atölyede çoğunlukla boş bırakılmış NC gaz/duman/su girişi).</td><td>Girişi DI-GND köprüleyin, Alarmı Onayla (USB)'ya basın, kuruluk süresi dolunca yeniden yazın. Hırsız alarmını ev sahibi çözer (servis hesapları çözemez).</td></tr>
   <tr><td>"kalıcı belleğinde yer yok"</td><td>Kartın belleği dolu; hiçbir şey yazılmadı.</td><td>Servis ekibine bildirin.</td></tr>
-  <tr><td>Seri durumda <code>Sablon: … YARIM</code></td><td>Yazım sırasında elektrik kesildi; kart güvenli kipte (röleler güvenli konumda).</td><td>Şablonu USB ya da Ethernet ile yeniden yazın.</td></tr>
+  <tr><td>Seri durumda <code>Sablon: … YARIM</code> / "Şablon yarım kaldı; aynı şablonu yeniden yazın."</td><td>Yazım sırasında elektrik kesildi ya da uygulama bitmedi; kart güvenli kipte (röleler güvenli konumda).</td><td>Şablonu USB ya da Ethernet ile yeniden yazın.</td></tr>
+  <tr><td>"Daire Şablonu Farklı" / "Daire Şablonu Değişti"</td><td>Dairenin güncel şablonu karttakinden farklı; daire Yazıldı yapılmadı.</td><td>Listeyi yenileyip dairenin güncel şablonunu yazın.</td></tr>
+  <tr><td>"Kurulmuş ya da teslim edilmiş dairenin kartı …"</td><td>Kuruldu / Teslim edildi dairenin kartı değiştirilmek istendi.</td><td>Pano değişimi yapın ya da süper kullanıcıya başvurun.</td></tr>
+  <tr><td>"Kablosuz (köprü) sensör bu sürümde desteklenmiyor; …"</td><td>Şablonda köprü sensörü (b1..b16) var.</td><td>Sensörü panodaki bir girişe (d1..d40) bağlayıp şablonu düzeltin.</td></tr>
   <tr><td>"Yazım Kaydı Bekliyor" / "Yazım Kaydı İşlenemedi"</td><td>Kart yazıldı ama kayıt sunucuya işlenemedi (oturum yok, ağ ya da sunucu hatası); kayıt araçta bekliyor.</td><td>Giriş yapıp Bekleyen Kayıtları Gönder'e basın; aracı kapatmadan önce gönderin (kapatınca kaybolur).</td></tr>
   <tr><td>"Yazım Kaydı Reddedildi"</td><td>Sunucu kaydı kalıcı olarak reddetti (ör. kart envanterde kayıtlı değil, daireye başka kart bağlı, şablon ya da site silinmiş).</td><td>Penceredeki nedeni giderin (ör. kartı envantere kaydedin, doğru daireyi seçin), gerekirse yeniden yazın.</td></tr>
   <tr><td>"Şablon Değişti"</td><td>Siz düzenlerken başkası şablonu kaydetti; değişiklikleriniz kaydedilmedi.</td><td>Yeni sürümü açın ya da bilerek üstüne yazın.</td></tr>
@@ -218,10 +231,11 @@ ister; hazırlık panonun kablolu adresine yapılır ve kablolu bağlantı kesil
   <tr><td>"Pano yazmayı sürdürüyor" (sihirbaz)</td><td>Kart yazımı bitirmedi; uygulama sonucu kontrol ediyor.</td><td>Birkaç saniye sonra yeniden kontrol edin ("Tekrar dene" şablonu yeniden göndermez).</td></tr>
   <tr><td>"Kurulum PIN'i hatalı" / "Cihaz geçici olarak kilitlendi" (sihirbaz)</td><td>Etiketteki kurulum PIN'i yanlış girildi; 5 yanlışta kart 15 dakika kilitlenir.</td><td>PIN'i etiketten dikkatle okuyun. Kilitte bekleyin ya da süper kullanıcı uygulamada Cihaz Envanteri → PIN Kilidini Kaldır ile açsın.</td></tr>
   <tr><td>"Pano hazırlanmamış" (sihirbaz)</td><td>Panonun provizyonu (cihaz anahtarı) yok; bulut kurulumu ve teslim yapılamaz.</td><td>5. adımda etiketteki AĞ PAROLASI (AP) ile Panoyu Hazırla'ya basın.</td></tr>
+  <tr><td>"Kurulum ağı parolaları eşleşmiyor." / "Yazdığınız parola etiketteki parolayla eşleşmiyor." (sihirbaz)</td><td>Panoyu Hazırla'da AP parolası yanlış yazıldı; pano hazırlanmadı.</td><td>Etiketteki parolayı iki kez dikkatle yazın ya da etiketin karekodunu okutun.</td></tr>
   <tr><td>"Pano Ethernet bağlantısı bildirmiyor" (sihirbaz)</td><td>Girilen adres panonun kablolu adresi değil ya da firmware v1.3.0'dan eski.</td><td>Kabloyu ve IP'yi kontrol edin; olmazsa Wi-Fi ile kurun ("Pano kabloyla bağlı" seçimini kapatın).</td></tr>
 </table>
 
-<footer>AHBU Ev Otomasyonu · Site ve Şablon Kurulum Kitapçığı · Firmware v1.3.1 · Güncelleme: 8 Ekim 2026 (mantık denetimi sonrası) · Kaynak: docs/kitapcik/site-sablon-kurulum-kitapcigi.html</footer>
+<footer>AHBU Ev Otomasyonu · Site ve Şablon Kurulum Kitapçığı · Firmware v1.3.1 · Güncelleme: 9 Ekim 2026 (gece düzeltmeleri sonrası) · Kaynak: docs/kitapcik/site-sablon-kurulum-kitapcigi.html</footer>
 </main>
 </body>
 </html>

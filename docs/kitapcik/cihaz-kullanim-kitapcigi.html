@@ -198,7 +198,8 @@ yapılır; bu alan telefon numarası kabul etmez. <q>VEYA</q> ayracının altın
   <li><q class="b">Telefon Numarası ile Şifresiz Giriş (SMS)</q>: bu düğme yalnız SMS ile giriş hizmeti açıksa görünür. <q>Şifresiz SMS Girişi</q>
   penceresinde <q>Telefon Numarası</q> yazıp <q class="b">Kod Gönder</q>e dokunun, SMS ile gelen <q>Doğrulama Kodu</q>nu yazıp
   <q class="b">Giriş Yap</q>a dokunun. Kod 5 dakika geçerlidir; kimseyle paylaşmayın. Numaranız kayıtlı değilse e-postası olmayan yeni bir hesap
-  açılır; böyle bir hesaba şifre sıfırlama kodu gönderilemez.</li>
+  açılır; böyle bir hesaba şifre sıfırlama kodu gönderilemez. Numara SMS koduyla hiç doğrulanmamış bir hesapta kayıtlıysa (kayıtta ya da
+  servis tarafından yazıldıysa) bu yolla giriş yapılmaz: <q>Bu telefon numarası doğrulanmamış bir hesapta kayıtlı. E-posta adresiniz ve şifrenizle giriş yapın.</q></li>
   <li><q class="b">E-postadaki Bağlantım Var</q>: size e-postayla gelen bir bağlantıyı kullanmak içindir (Bölüm 3).</li>
 </ul>
 <p><q>Servis ve kurulum</q> başlığı altındaki <q>Yetkili Servis Girişi (PIN)</q> servis içindir. <q>Pano Wi-Fi Kurulumu (İnternet Gerekmez)</q>
@@ -244,7 +245,8 @@ süre arka planda kaldıktan sonra kilitlenir ve telefonunuz parmak izinizi ya d
   <tr><td><q>AHBU Akıllı Ev - Hesabınızı etkinleştirin</q></td><td>Bu e-posta adresiyle açılmış bir hesabınız yoksa servis sizin için hesap açar. 72 saat geçerlidir.</td>
   <td>Aşağıdaki adımlarla şifrenizi belirleyin.</td></tr>
 </table>
-<p>Kurulum onay kodu her zaman e-postayla gelir. Bu yüzden servise kullandığınız bir e-posta adresini verin.</p>
+<p>Kurulum onay kodu her zaman e-postayla gelir. Bu yüzden servise kullandığınız bir e-posta adresini verin. Yalnız telefonla (SMS) açılmış
+hesaba kod gönderilemez: panoyu kendiniz karekodla sahiplenin (Bölüm 4), servise Servis PIN'i verin (Bölüm 12).</p>
 
 <h3>3.1 Hesabınızı etkinleştirme (şifre belirleme)</h3>
 <ol>
@@ -429,7 +431,7 @@ cihazlar <q>Genel</q> altında toplanır.</p>
   <q>Zamanlı Otomasyon Kuralları</q> kartından <q>Zamanlı Kurallar</q> sayfasına geçin.</li>
   <li><q class="b">Yeni Kural Ekle</q>ye (hiç kural yoksa <q class="b">İlk Kuralı Ekle</q>) dokunun.</li>
   <li><q>Kanal</q> (hangi çıkış), <q>Eylem</q> (<q>Aç</q> ya da <q>Kapat</q>; darbe çıkışında <q>Tetikle</q>), <q>Saat</q>, <q>Günler</q> ve isterseniz
-  <q>Etiket (opsiyonel)</q> alanlarını doldurun.</li>
+  <q>Etiket (opsiyonel)</q> alanlarını doldurun. Vana, siren ve fan gibi güvenlik çıkışları kanal listesinde yoktur; bunlar kurala bağlanamaz.</li>
   <li><q class="b">Ekle</q>ye dokunun (düzenlerken <q class="b">Güncelle</q>). Başka bir kuralla çakışma varsa uyarı çıkar; yine de kaydetmek için
   <q class="b">Yine de Kaydet</q>.</li>
 </ol>
@@ -697,7 +699,9 @@ Aile üyesi ayarlarda şunu görür: <q>Aile üyesi hesabı: panjur kalibrasyonu
   <li><q>Katılımı Onayla</q> ekranında <q>İşlem</q>, <q>Rolünüz</q> ve <q>Kod geçerliliği</q> satırlarını kontrol edip <q class="b">Eve Katıl</q>a dokunun.
   <q>Eve başarıyla katıldınız!</q> yazar.</li>
 </ol>
-<p>Kodun süresi dolmuş ya da kod kullanılmışsa <q>Bu kodun süresi dolmuş veya daha önce kullanılmış. Yeni bir kod isteyin.</q> yazar.</p>
+<p>Kodun süresi dolmuş ya da kod kullanılmışsa <q>Bu kodun süresi dolmuş veya daha önce kullanılmış. Yeni bir kod isteyin.</q> yazar.
+Kodu siz kullandıysanız ama bağlantı koptuysa aynı kodu yeniden deneyin: <q>Bu davet kodunu zaten kullandınız; dairenin üyesisiniz.</q>
+yazar ve ev listenize gelir.</p>
 
 <h3>11.5 Kişileri yönetme ve evden çıkarma <span class="tag">Ev sahibi</span></h3>
 <p><q>Aile &amp; Misafir Yönetimi</q> sayfasında <q>Kayıtlı Kişiler &amp; Yetkiler</q> listesi bulunur. Misafirlerin kartında kalan süre
@@ -721,7 +725,8 @@ Sayfada <q class="b">Daire listesini yenile</q> ve (başka bir eviniz varsa) <q 
   kabul edebilir. Vazgeçerseniz <q class="b">Devir İşlemini İptal Et</q>.</li>
 </ol>
 <p><b>Devralan kişi:</b> <q>Bir Eve Katıl</q> penceresine (11.4) kodu yazar ya da karekodu okutur → <q>Daire Devrini Onayla</q> ekranında uyarıyı okur,
-<q>DEVRAL</q> yazar ve <q class="b">Daireyi Devral</q>a dokunur.</p>
+<q>DEVRAL</q> yazar ve <q class="b">Daireyi Devral</q>a dokunur. Devir tamamlandığı hâlde bağlantı koptuysa aynı kodu yeniden
+deneyin: önizlemede <q>Bu daireyi zaten devraldınız.</q>, onayda <q>"Ev adı" dairesinin sahipliği zaten size devredildi.</q> yazar ve ev seçilir.</p>
 <div class="box bad"><q>DİKKAT: Onaylarsanız bu dairenin TEK SAHİBİ siz olursunuz. Mevcut ev sahibi dahil tüm sakinlerin ve misafirlerin bu evdeki erişimi kalıcı olarak kaldırılır; servis erişimleri ve davetler iptal edilir. Bu işlem geri alınamaz.</q></div>
 
 <!-- ================================================================== 12 -->
@@ -802,7 +807,8 @@ Misafir kip değiştiremez.</p>
 <q>Sistem Doktoru (Teşhis)</q> (telefonda üç nokta (⋮) <q>Diğer işlemler</q> menüsünde).
 Üç katman denetlenir: <q>1. Bulut sunucu ve güvenli bağlantı</q>, <q>2. Ev modemi ve internet</q>, <q>3. Pano gücü ve donanım</q>. Her biri
 <q>Sağlıklı</q>, <q>Uyarı</q>, <q>Sorun var</q>, <q>Veri yok</q> ya da <q>Pano yok</q> olarak işaretlenir. Sonuçtaki <q>Ne yapmalıyım?</q> bölümünü
-okuyun; düzelttikten sonra <q class="b">Testi Yeniden Çalıştır</q>.</p>
+okuyun; düzelttikten sonra <q class="b">Testi Yeniden Çalıştır</q>. <q>Bulut Bağlantısında Geçici Sorun</q> sunucu tarafındaki geçici bir
+kesintidir: Wi-Fi ayarına ya da sigortaya dokunmadan birkaç dakika sonra yeniden deneyin.</p>
 
 <h3>14.3 Modem ya da Wi-Fi şifresi değişince <span class="tag">Ev sahibi · Aile üyesi</span></h3>
 <p><q>Wi-Fi Şifre Değişimi &amp; Kurtarma</q> kartı: <q>Evinizdeki modem veya Wi-Fi şifresi değiştiyse panoya yeni bilgileri aktarmak için kurtarma sihirbazını başlatın.</q>
@@ -813,13 +819,16 @@ okuyun; düzelttikten sonra <q class="b">Testi Yeniden Çalıştır</q>.</p>
 <p><q>Kanal adlarını ve odalarını, lamba / priz tipini ve panjur sürelerini düzenleyin.</q> → <q class="b">Kanalları Düzenle</q>. Listede
 değiştirmek istediğiniz çıkışın kalem simgesine (<q>Düzenle</q>) dokunun. Pencerede <q>Ad</q> (1–100 karakter), <q>Oda</q> (1–50 karakter), <q>Lamba</q> / <q>Priz</q> tipi ve panjurlarda <q>Panjur süresi (sn, 1-300)</q> alanları vardır;
 ardından <q class="b">Kaydet</q>. Panjur süresi, panjurun bir uçtan öbür uca gitme süresidir; konum bu süreden hesaplanır. Panjur süresi panjur
-hareket ederken ya da pano çevrimdışıyken değiştirilemez. Not: <q>Panonun bildirdiği ad değişirse yerleşim eşitlemesi adınızı güncelleyebilir.</q></p>
+hareket ederken ya da pano çevrimdışıyken değiştirilemez. Panjurun adı ve odası iki rölesine (yukarı ve aşağı) birlikte yazılır.
+Not: <q>Panonun bildirdiği ad değişirse yerleşim eşitlemesi adınızı güncelleyebilir.</q></p>
 
 <h3>14.5 Pano değişimi <span class="tag">Ev sahibi</span></h3>
 <p><q>Felaket Kurtarma &amp; Pano Değişimi</q>: <q>Arızalanan veya yıldırım düşen panoyu yenisiyle değiştirdiğinizde oda isimleri ve ayarlarınız yeni panoya aktarılır.</q>
 <q class="b">Pano Değişimi Sihirbazını Aç</q> → eski panoyu seçin, yeni panonun kimliğini (UID) ve 6 haneli kurulum PIN'ini girin →
 <q class="b">Eski Panonun Ayarlarını Yeni Panoya Aktar</q>. Onay penceresindeki <q class="b">Panoyu Değiştir</q> geri alınamaz. Sonuç belirsiz kalırsa işlemi körlemesine yinelemeyin; önce <q class="b">Durumu Kontrol Et</q>. Yeni pano modeme kabloyla bağlı değilse
 Wi-Fi'ye bağlayın (Bölüm 4.3).</p>
+<div class="box warn"><b>Güvenlik ayarları aktarılmaz:</b> su/gaz sensörü ve vana varsa sonuç ekranı <q>Güvenlik ayarları (su/gaz sensörü, vana)
+yeni panoya aktarılmadı. Yetkili servisi çağırın.</q> der; servis ayarları yeniden yazana kadar su ve gaz koruması çalışmaz.</div>
 
 <h3>14.6 Tema</h3>
 <p><q>Görünüm &amp; Tema Modu</q> kartında <q>Koyu</q>, <q>Açık</q> ya da <q>Sistem</q> seçilir (başlangıçta koyu). Aynı seçim profil penceresinde

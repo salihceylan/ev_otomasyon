@@ -75,8 +75,18 @@ Ek hata kodları (A paketi gerçekleşmesi, 2026-10-01):
 - `users.must_change_password` → giriş yanıtında `must_change_password: true` ise istemci **parola değiştirme ekranına** zorlar (ör. teknisyenin açtığı müşteri hesabı).
 - OTP/sıfırlama yanıtlarında `resend_after` (sn, yeniden gönderme bekleme süresi) ve `remaining_attempts` bulunur; istemci bunları gösterir ve süre dolmadan yeniden gönderimi kapatır.
 - `GET /homes` her ev için ek olarak `mqtt_topic_id`, `access_state` (`active` | `expired` | `not_started`; sunucu gerçekleşmesi, istemci hepsini tanır) ve (misafirse) `valid_until` döner.
+  **Erişim penceresi (C5, 2026-10-09):** her ev öğesinde ayrıca `access_starts_in` (yanıt anındaki SUNUCU saatine göre `valid_from`'a kalan
+  tamsayı saniye, ≥ 0, yukarı yuvarlanır; `valid_from` yoksa `null`) ve `access_expires_in` (misafirde `valid_until`'e, `service_user`'da
+  `installer_expires_at`'e kalan tamsayı saniye, ≥ 0, aşağı yuvarlanır; diğer rollerde `null`). Servis PIN oturumunun ev listesinde ikisi de
+  `null`. Mevcut alanlar değişmez. Uygulama saat farkını (`sunucuNow − yerelNow`) bunlardan hesaplayıp saklar (`server_clock_skew_ms`) ve misafir
+  başlangıç/bitiş kararlarını bu farkla düzeltilmiş saatle verir; alanlar yoksa (eski sunucu) yerel saat.
 - Servis personeli kullanıcı oluştururken **parola veremez**; hesap `pending_invite` olur, etkinleştirme e-postası gider. Yeni: `POST /admin/users/:id/send-reset`.
   Başka bir süper kullanıcının parolasını değiştirmek için `current_password` zorunludur (`REAUTH_REQUIRED`).
+- **Dondurma / çözme (C10, 2026-10-09; migration yok):** `PATCH /admin/users/:id` `is_active:false` `active` hesabı `suspended` yapar;
+  `pending_invite` hesapta durum KORUNUR (yalnız `is_active=FALSE`; davet akışı bozulmaz). `is_active:true` `suspended`'ı `active` yapar,
+  `pending_invite` korunur. Yumuşak silme (`DELETE /admin/users/:id`) `pending_invite` hesapta yalnız `is_active=FALSE` yapar. `deleted` hesapta
+  `is_active` / `role` / parola değişikliği ve yumuşak silme `409 CONFLICT` "Silinmiş hesap üzerinde bu işlem yapılamaz.". Personelin, süperin
+  dondurduğu hesabı çözebilmesi açık karar maddesidir (§3i).
 - Servis oturumu yönetimi (ev sahibi): `GET /homes/:id/service-sessions`, `POST /homes/:id/service-access/revoke`. Servis PIN listesi **PIN değerini göstermez**
   (PIN yalnızca üretim anında bir kez döner).
 - Envanter kaydı (`/admin/inventory/register`): süper kullanıcı JWT'si veya `ADMIN_API_KEY` (≥ 32 karakter) ile; yanıt `local_key` ve PIN'li `qr_claim_url` değerini **yalnızca bir kez** döner.
@@ -94,6 +104,17 @@ Akış denetimi düzeltmeleri (2026-10-04; ayrıntı `docs/superpowers/specs/202
 - **Bilinçli takas (UYELIK-09):** `forgot-password` teslim edilebilir e-postalı var olan hesapta SMTP gönderimini bekler; SMTP geçici arızasında var olan hesap `503 DELIVERY_FAILED`, olmayan (ya da yer tutucu e-postalı) hesap anında `200` alır. Yanıt süresi ve kodu bu yüzden hesap varlığını açığa çıkarabilir (dürüst teslim hatası tasarımının bedeli); IP başına 10/saat ve kimlik başına 60 sn / saatte 5 sınırı numaralandırmayı yavaşlatır, engellemez.
 - **Giriş kilidi (UYELIK-10):** `POST /auth/login` başarısız parola sayacı iki katmanlıdır (süreç belleği, 15 dk pencere): (kimlik | istemci IP) başına 10 ve kimlik başına toplam 50 hatalı deneme. Yalnız `401`'de ikisi birden artar, başarılı girişte ikisi de sıfırlanır; herhangi biri aşılınca `429 RATE_LIMITED` (`Retry-After` = engelleyenlerin en büyüğü). Üçüncü kişi kendi ağından hesabı kilitleyemez: "IP" sayaç anahtarında IPv4'te tek adres, IPv6'da adresin **/64 öneki**dir (fx2 S-5 / M1-01; `rate_limit.limitKey`; `::ffff:` eşlemesi IPv4 sayılır). Aynı indirgeme IP başına auth sınırlayıcılarının hepsinde (login, register, refresh, logout, forgot, reset, magic, otp-send/verify, social, service-login, capabilities) geçerlidir; denetim kayıtlarındaki `ip` tam adrestir. Bilinen takas: ≥ 5 ayrı ağı (IPv6'da ≥ 5 /64) olan dağıtık saldırgan 50 tavanıyla kimliği 15 dk kilitleyebilir ve kimlik başına deneme bütçesi tek katmanlı dönemin 10'u yerine 50'dir (D9). Sayaç anahtarı kimliğin ham kopyasını taşımaz: `sha256(normalize kimlik)` (64 hex; M1-02), uzun kimlik reddedilmez, sayılır. Genel giriş sınırı IP başına 30/15 dk sürer; istemci IP'si `TRUST_PROXY` ile türetilir (yanlış ayarda herkes vekil IP'sini paylaşır). Sayaçlar yeniden başlatmada sıfırlanır.
 - **Şifre sıfırlama bağlantısı (UYELIK-05, UYELIK-K2):** `…/reset-password#token=` oturum AÇIKKEN açılırsa istemci magic-login ile aynı onayı ister ("Bu cihazda şu anda başka bir hesap açık. Bağlantıyla şifre yenilerseniz mevcut oturum kapanır ve bağlantının hesabı açılır." → "Bu Bağlantıyla Devam Et" / "Vazgeç"); onaysız form gösterilmez, istek atılmaz. İki derin bağlantı kolu da (magic-login, reset-password) açılış / biyometrik kilit sürerken bekler: istek atılmaz, kilit atlatılmaz. Sıfırlama yanıtı oturum taşımazsa açık oturum sürer ve başarı iletisi gösterilir.
+- **Telefon-OTP girişi yalnız doğrulanmış telefona (C9, 2026-10-09, migration `041`):** `users.phone_verified BOOLEAN NOT NULL DEFAULT FALSE`;
+  migration telefon-OTP yer tutucu e-postalı (`phone_<no>@ahbu.local`) ve telefonu dolu hesapları `TRUE` yapar. `POST /auth/otp/verify`: telefonu
+  taşıyan hesapta `phone_verified` doğru değilse ve e-postası OTP yer tutucusu değilse `409 CONFLICT` + `reason:"PHONE_NOT_VERIFIED"`, ileti
+  "Bu telefon numarası doğrulanmamış bir hesapta kayıtlı. E-posta adresiniz ve şifrenizle giriş yapın." (kod tüketilmiştir; telefon o hesaptan
+  düşürülmez, yeni hesap açılmaz). Yer tutucu hesapta bayrak `FALSE` kalmışsa giriş olur ve bayrak `TRUE` yapılır; OTP'nin açtığı yeni hesap
+  `TRUE` doğar. Kayıt, yöneticinin açtığı hesap ve Home Admin atamasının açtığı hesap telefonu doğrulanmamış yazar; `PATCH /admin/users/:id`
+  telefonu değiştirince bayrak `FALSE` olur (aynı telefon yeniden kaydedilirse korunur). Doğrulanmamış hesabın etkisizleştirilmesi
+  (`neutralizeUnverifiedAccount`) doğrulanmamış telefonu `NULL` yapar. Bayrak `to_jsonb` ile okunur: kod `041`'siz veritabanında girişi bozmaz ama
+  OTP hesabı açma, personelin telefon değişikliği ve etkisizleştirme hata verir (sıra: önce migration, sonra sunucu). Uygulama sunucu iletisini
+  gösterir. Bilinen yan etki: başkasının doğrulanmamış hesabına yazılmış telefonun sahibi SMS girişinde bu `409`'u alır (kayıtta doğrulama açık
+  karar maddesi `kayit-dogrulama`).
 
 **Bilinen sınır (Faz 2):** daire devrinde **cihaz** MQTT kimliği yenilenmez (uygulama kimlikleri, servis PIN/oturumları ve ev verisi temizlenir). Yenileme,
 kimliği panoya ileten yetkili bir kanal ister (`sys` konusunda iki aşamalı `set_mqtt_credential` döndürmesi veya servis ziyareti). Acil sıfırlama ve pano değişiminde cihaz kimliği zaten yenilenir.
@@ -150,7 +171,10 @@ Rol kaynakları: global `users.role` ∈ {`user`,`service_user`,`super_user`}; e
 | Güvenlik: bölge testi (`safety_test`), güvenlik yapılandırması (`safety_config`) | ✔ | ✔ | ✔ | ✔ | ✖ | ✖ |
 | Güvenlik: hırsız alarmı kur / çöz (`safety_arm`, Faz 2) | ✖ | ✖ | ✖ | ✔ | ✔ | ✖ |
 
-\* staff = `home_users` kaydı olan kalıcı servis personeli (yalnız o evler). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
+\* staff = `home_users` kaydı olan kalıcı servis personeli (yalnız o evler). **İstisna (kullanıcı kararı 2026-10-08, K-Ş4):** `GET /admin/inventory/:uuid/local-key`
+(§3e) ev üyeliği aramaz: global rolü `service_user` ya da `super_user` olan her hesaba HER envanter kartının (müşterinin sahiplendiği kart dahil)
+yerel anahtarını döndürür (Ethernet şablon yazımı için; denetim kaydı + oran sınırı). Bu davranışın yasal metinlerle uyumu açık karar maddesidir
+(`karar-yerel-anahtar-personel`, §3i). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
 \*\*\* Gerekçe ≥ 15 karakter + cihaz UUID'sinin yazarak teyidi + denetim kaydı (IP dahil). Servis personeli kendisini yeni sahip yapamaz.
 Staff'in ev üyeliği claim/devirde 72 saatliğine verilir; istemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
 
@@ -166,14 +190,14 @@ Tüm uçlar `/api/v1/...` altındadır (eski `/api/...` takma adı korunur).
 | Uç | Not |
 |---|---|
 | `GET /auth/capabilities` | **Kimliksiz.** `data: {sms_otp, google, apple}` (boolean); IP başına 120/15 dk, `no-store`. Eski sunucuda `404` (istemci "yetenek yok" sayar). Ayrıntı §1.1b. |
-| `GET /homes` | Her ev: `{ id, name, role, timezone, mqtt_topic_id }`. `role` = ev bazlı rol. |
+| `GET /homes` | Her ev: `{ id, name, role, timezone, mqtt_topic_id }`. `role` = ev bazlı rol. Ek alanlar (`address`, `valid_from`, `valid_until`, `access_state`, `is_expired`, `access_starts_in`, `access_expires_in`): §1.1b. |
 | `POST /homes/:homeId/mqtt-credentials` | Üyelik + misafir süresi doğrulanır. Yanıt: `{ host, port, username, password, client_id, expires_at, topic_id }`. **Salt-okunur** (yalnızca `state`/`status` abonelik) kimlik; süre = `min(12 saat, misafir bitişi)`. İstemci süre dolmadan yeniler. |
 | `POST /devices/:id/command` gövde `{ home_id, command }` | Üyelik + rol matrisi + şema doğrulaması. Yanıt `{ delivered, device_online, command_id }`. Çevrimdışıysa `409 DEVICE_OFFLINE`. **Buluttan tüm komutlar bu uçtan geçer; uygulama MQTT'ye doğrudan yayın yapmaz.** Toplu `all_lights_off` / `all_off` (DAIRE-01): evde `type='plug'` uç noktası VARSA toplu komut yayınlanmaz; "Hepsini Kapat" (§1.5b close-all) ile AYNI kuralla yalnız canlı anlık görüntüdeki AÇIK ışık röleleri için `{relay:N, state:false, id}` sırayla yayınlanır (16'lık gruplar arası 150 ms; çok panolu evde ortak numaralar atlanır). Yanıt `{ delivered:true, device_online:true, command_id: ilk komut \| null, command_ids[], no_change?:true (açık lamba yoktu, komut gönderilmedi), skipped_count? }`; bu yolda istemcinin `id`'si kullanılmaz; canlı anlık görüntü yoksa `409 DEVICE_OFFLINE`. Evde priz yoksa davranış aynıdır (tek toplu komut, istemci `id`'si korunur). |
 | `GET /homes/:homeId/devices` | `[{ device_uuid, name, online, last_seen_at, firmware }]` |
 | `GET /homes/:homeId/devices/:uuid/local-key` | owner/resident/staff/service_session. Yanıt `{ local_key }` (LAN doğrudan mod için). |
-| `PUT /homes/:homeId/endpoints/:id` | `shutter_duration_sec` (1..300), `name`, `room`, `type` (yalnız `light` ↔ `plug`; uygulamada ekranı yok). Yetki: kalibrasyon satırı. Süre verilirse (DAIRE-03/K3) sunucu `set_runtime` yayınlar ve cihaz ONAYINI (canlı `state.last_id` = komut kimliği, §2.4) en çok 4 sn bekler; DB yalnız onaydan sonra yazılır, yanıt `delivered:true, command_id`. Onay yoksa (panjur hareket halinde / ölü zamanda ya da çift panoda yapılandırılmamış: firmware reddeder, `last_id` değişmez) `409 CONFLICT` + `reason:"NOT_APPLIED"` "Pano panjur süresini uygulamadı (panjur hareket halinde olabilir). Panjuru durdurup yeniden deneyin." ve DB DEĞİŞMEZ (aynı gövdedeki ad/oda da yazılmaz). Onaydan sonra kanal yerleşimi değişmişse (ya da tip yazımında satır artık `light/plug` değilse) `409 CONFLICT` + `reason:"TYPE_CHANGED"` "Kanal tipi değişti; listeyi yenileyin.". Çevrimdışı `409 DEVICE_OFFLINE`, broker yok / yayın hatası `502 BROKER_UNAVAILABLE`, onay bekleyici sınırı (1000) doluysa yayın yapılmadan `503 SERVICE_UNAVAILABLE`; istek en kötü ~9 sn sürer. İstemci iki `409`'u ayırır: `reason:"NOT_APPLIED"` (sunucu fx2 S-4'ten itibaren; eski sunucuda mesajdaki "uygulamadı/uygulanmadı") → yenilemez, yinelemez, başlık "Süre panoda uygulanmadı" + sunucu mesajı ("Tekrar dene" panjuru önce durdurur); `reason:"TYPE_CHANGED"` (ya da `reason` yok) yerleşim çakışması → listeyi yeniler ve BİR KEZ yineler. `reason` hata gövdesinin beyaz listeli ek alanıdır (`http_errors` `EXPOSED_EXTRA_KEYS`, `retry_after`/`remaining_attempts` ile aynı desen). |
+| `PUT /homes/:homeId/endpoints/:id` | `shutter_duration_sec` (1..300), `name`, `room`, `type` (yalnız `light` ↔ `plug`; uygulamada ekranı yok). Yetki: kalibrasyon satırı. Süre verilirse (DAIRE-03/K3) sunucu `set_runtime` yayınlar ve cihaz ONAYINI (canlı `state.last_id` = komut kimliği, §2.4) en çok 4 sn bekler; DB yalnız onaydan sonra yazılır, yanıt `delivered:true, command_id`. Onay yoksa (panjur hareket halinde / ölü zamanda ya da çift panoda yapılandırılmamış: firmware reddeder, `last_id` değişmez) `409 CONFLICT` + `reason:"NOT_APPLIED"` "Pano panjur süresini uygulamadı (panjur hareket halinde olabilir). Panjuru durdurup yeniden deneyin." ve DB DEĞİŞMEZ (aynı gövdedeki ad/oda da yazılmaz). Onaydan sonra kanal yerleşimi değişmişse (ya da tip yazımında satır artık `light/plug` değilse) `409 CONFLICT` + `reason:"TYPE_CHANGED"` "Kanal tipi değişti; listeyi yenileyin.". Çevrimdışı `409 DEVICE_OFFLINE`, broker yok / yayın hatası `502 BROKER_UNAVAILABLE`, onay bekleyici sınırı (1000) doluysa yayın yapılmadan `503 SERVICE_UNAVAILABLE`; istek en kötü ~9 sn sürer. İstemci iki `409`'u ayırır: `reason:"NOT_APPLIED"` (sunucu fx2 S-4'ten itibaren; eski sunucuda mesajdaki "uygulamadı/uygulanmadı") → yenilemez, yinelemez, başlık "Süre panoda uygulanmadı" + sunucu mesajı ("Tekrar dene" panjuru önce durdurur); `reason:"TYPE_CHANGED"` (ya da `reason` yok) yerleşim çakışması → listeyi yeniler ve BİR KEZ yineler. `reason` hata gövdesinin beyaz listeli ek alanıdır (`http_errors` `EXPOSED_EXTRA_KEYS`, `retry_after`/`remaining_attempts` ile aynı desen). **Panjur çiftinin adı ve odası (C14, 2026-10-09):** hedef satır panjursa (`type='shutter'`, `shutter_pair_index` dolu) gelen `name` / `room` çiftin İKİ satırına yazılır (süre yolundaki kilit sırası; her satıra tek `UPDATE`: süre + ad + oda birlikte). Panjur dışı satırda davranış aynı. Uygulama oda çiplerini yalnız gösterilen satırlardan (panjurun ikincil satırı hariç) üretir. |
 | `POST /homes/:homeId/commissioning` | `{ device_uuid, checks: { relays:{ok,detail}, buttons:{…}, shutters:{…}, network:{…}, cloud:{…} }, notes }`. `tests_passed` **sunucuda** hesaplanır (zorunlu 5 kontrolün hepsi `ok`). |
-| `POST /devices/claim` | `{ device_uuid, setup_pin, home_name?, target_owner?, otp_code? }`. `home_id` kabul edilmez. `target_owner` varsa OTP zorunlu ve yalnızca staff/super. Yanıt `{ home_id, home_name, device_uuid }`. |
+| `POST /devices/claim` | `{ device_uuid, setup_pin, home_name?, target_owner?, otp_code? }`. `home_id` kabul edilmez. `target_owner` varsa OTP zorunlu ve yalnızca staff/super. Yanıt `{ home_id, home_name, device_uuid }`. **E-postasız müşteri (C8, 2026-10-09):** `target_owner` telefonla bulunan ve e-postası yer tutucu (`phone_<no>@ahbu.local`) olan hesapsa `POST /devices/claim/request-otp` ve claim `400 VALIDATION` + `reason:"CUSTOMER_EMAIL_REQUIRED"` döner, ileti "Bu müşteri uygulamaya telefonla giriş yapıyor; hesabında e-posta olmadığı için onay kodu gönderilemez. Müşteri panoyu kendi uygulamasından etiketteki karekodla sahiplenmeli." (kod üretilmez, e-posta gitmez, kart sahiplenilmez). Uygulama sunucu iletisini ve "müşteri kendi karekoduyla sahiplensin / servis PIN'i versin" yönergesini gösterir. SMS ile kod açık karar maddesidir (§3i). |
 | `POST /devices/emergency-reset` | `{ device_uuid, confirm_uid, reason, new_owner_identifier? }` (bkz. matris). Yanıt, yeni kurulum PIN'ini **bir kez** döner. Yerel anahtar (`local_key_publish` `published\|pending\|failed\|skipped`): §1.5b. |
 | `GET/POST/PUT/DELETE /homes/:homeId/scheduled-rules` | Gövde snake_case: `{ channel, channel_type: "relay"\|"shutter", action, hour, minute, days_of_week, device_id?, label?, enabled }`; `channel` 1 tabanlı. |
 | `PUT /me/push-tokens` gövde `{ token, platform, app_version? }` | Cihazın FCM/APNs belirtecini **oturumdaki kullanıcıya** bağlar (ev bağımsız: alıcılar gönderim anında `home_users`'tan hesaplanır). `token` 20–512 görünür ASCII (boşluk yok), `platform` `android`\|`ios`, `app_version` ≤ 32 karakter. Yanıt `200 {registered:true}`. Aynı belirteç başka kullanıcıya yeniden bağlanabilir (paylaşılan telefon). Kullanıcı başına en çok 10 etkin belirteç (fazlasının en eskisi silinir). **Servis oturumu `403 FORBIDDEN`.** Kullanıcı başına 20/dk (`429`). Hata: `400 VALIDATION`. `Cache-Control: no-store`. |
@@ -195,12 +219,27 @@ Push belirteci uçları (`/me/push-tokens`) hem `/api/v1/me/push-tokens` hem esk
   **Yerel anahtar (SERVIS-01/K1/K2, migration `032`):** her sıfırlama yeni anahtar üretir. Pano ŞU AN iletilebiliyorsa (`is_online` VE köprü broker'a bağlı) yeni anahtar commit ile geçerli olur ve `ev/{t}/sys set_local_key` ile iletilir → `published`; yayın başarısızsa telafi: geçerli anahtar eskisine, yeni anahtar bekleyene çekilir → `pending`. İletilemiyorsa (pano çevrimdışı ya da köprü kopuk) `devices.local_key_enc` ve envanter anahtarı DEĞİŞMEZ (panodaki gerçek anahtar; yerel anahtar ucu bunu verir, "Panoyu şimdi bağla" sihirbazı 6. adımda LAN'dan bununla bağlanıp yeni `device_credential`'ı yazar. **İstisna (M4-02):** yerel anahtar ucu `super_user`'a KAPALIDIR (rol matrisi `local_key`: STAFF, SESSION, OWNER, RESIDENT) ve süper yöneticinin yaptığı devir personele 72 saatlik üyelik VERMEZ (yalnız `service_user` aktöre verilir). Bu yüzden süperin yaptığı `REASSIGNED`'da "Panoyu şimdi bağla" süper hesabıyla 6. adımı geçemez; pano yeni sahibin uygulamasından alınan servis PIN'iyle (servis girişi) bağlanır. Devir tüm üyelikleri sildiği için süperin devrinden sonra evde personel üyeliği kalmaz; personel hesabıyla bağlama yalnız devri personelin kendisi yaptığında (72 saatlik kurulum penceresi içinde) mümkündür), yeni anahtar `devices.local_key_pending_enc`'de bekler → `pending`; köprü uzlaştırıcısı pano buluta bağlanınca iletir (aşağıda "Birikmiş sunucu işleri").
   `pending` iken yanıtta `local_key` YOKTUR ve bekleyen anahtar için `warnings`'e uyarı EKLENMEZ; `pending` tek başına `partial:true` yapmaz (fx2 S-1: bekleyen anahtar hata değildir, uzlaştırıcı otomatik iletir; istemci bilgi notunu `local_key_publish`'ten üretir). Başka gerçek uyarı (ör. çocuk kilidi, EMQX) varsa `partial` onlar yüzünden `true` olur. (fx2 öncesi sunucu "Yeni yerel anahtar şu an panoya iletilemedi (pano ya da bulut bağlantısı yok). …" uyarısını ekleyip `partial:true` dönüyordu.) `local_key` yalnız `skipped` (ev/konu ya da cihaz kaydı yok: anahtar hemen değişir) ve `failed` (yayın + telafi başarısız; telafi CAS'ı arada başka yazım görürse hiçbir şey değiştirmez) durumlarında bir kez döner; ağ üzerinden yazılamaz. `failed` uyarısı (fx2 S-3): "Yeni yerel anahtar panoya iletilemedi; anahtar yalnız bu yanıtta gösterilir. Panoya seri konsoldan RESETKEY ve ardından FACTORYINIT ile (fabrika aracı) yazılabilir." (istemci yönergesiyle aynı; eski "yerinde elle yazılmalıdır" metni kaldırıldı).
   **Çocuk kilidi (M1-03):** komut ŞU AN gönderilebiliyorsa (pano `is_online` VE köprü bağlı) `set_child_lock false` yayınlanır, DB durumu sıfırlanır → `published`. Gönderilemiyorsa `skipped_offline` ve uyarı NEDENE göredir: köprü kopuksa "Bulut bağlantısı yok; …", pano çevrimdışıysa "Pano çevrimdışı; …" + "çocuk kilidi sıfırlama komutu gönderilemedi." Devirde (`REASSIGNED`) bu durumda `homes.child_lock_requested=FALSE, child_lock_requested_at=NOW()` NİYETİ yazılır ve cihazın bildirdiği `child_lock_enabled` KORUNUR (uzlaştırıcı niyeti bildirilen durumla karşılaştırır; durum FALSE'a çekilseydi niyet hemen "karşılandı" sayılıp silinirdi). Pano bağlanıp kilitli bildirirse uzlaştırıcı `set_child_lock false` gönderir; uyarı sonu "Kilit, pano bağlandığında otomatik kaldırılacak." Stoğa dönüşte (`UNCLAIMED`) ev bağı kalmadığı için niyet yazılmaz, DB durumu sıfırlanır; uyarı sonu "Pano yerelde kilitli kalmış olabilir." `skipped_offline` artık yalnız `child_lock_reset` içindir (eski sunucu `skipped_offline` + `local_key` dönebilir; istemci aynı yönergeyle gösterir). REASSIGNED'da eski cihaz MQTT kimliği yine silinir; çevrimdışı pano yeni kimliği sihirbazla (mevcut anahtarla, LAN'dan) alır. İstemci `pending`'i bilgi notu olarak gösterir; uygulanamaz "panoya yerinde yazılmalıdır" yönergesi kaldırıldı.
-- **Pano değişimi yanıtı:** `device_credential`, `shutter_runtimes`, `runtime_sync`, `child_lock` (`pending_device_online` olabilir: cihaz çevrimiçi olunca yeniden uygulanır).
+- **Pano değişimi yanıtı:** `message`, `old_device_uuid`, `new_device_uuid`, `migrated_endpoints_count`, `home_id`, `device_credential`, `shutter_runtimes`, `runtime_sync`, `child_lock` (`pending_device_online` olabilir: cihaz çevrimiçi olunca yeniden uygulanır), `warnings?`.
+  **Güvenlik ayarları aktarılmaz (C4, 2026-10-09):** yanıtta ayrıca `safety_restore: "required" | "not_required"`. `required` = eski panonun bulut
+  kopyasında (`device_configs`, `module='safety'`) en az bir sensör ya da eylemci var VEYA taşınan uç noktalardan birinde `actuator_type` dolu.
+  Güvenlik yapılandırması (sensörler, vanalar, bölgeler) yeni panoya YAZILMAZ (kopya eski cihaz kimliğinde kalır; buluttan geri yükleme açık karar
+  maddesidir). `required` iken `warnings[]`'in ilk öğesi "Eski panonun güvenlik ayarları (sensörler, vanalar, bölgeler) yeni panoya aktarılmadı.
+  Servis bu ayarları yeniden yazana kadar su/gaz koruması ÇALIŞMAZ. Yetkili servisi çağırın." ve değişim denetim kaydının ayrıntısında
+  `safety_restore` bulunur. `message`: "Pano değişimi tamamlandı. Kanal adları, kurallar ve panjur süreleri yeni panoya taşındı." Uygulama
+  `required`'da vurgulu uyarı kartı gösterir ("Güvenlik ayarları (su/gaz sensörü, vana) yeni panoya aktarılmadı. Yetkili servisi çağırın.") ve
+  "bir şey yapmanız gerekmez" demez; alan yoksa (eski sunucu) eski metin, eski uygulama uyarıyı `warnings` listesinden gösterir.
 - **Kısmi başarısızlık** (EMQX kick yapılandırılmamış, çocuk kilidi komutu gönderilemedi, yerel anahtar `failed` vb.; bekleyen anahtar `pending` DEĞİL): **HTTP 200 + `warnings` + `partial: true`** (207 değil; Flutter yalnız 200'ü başarı sayıyor).
 - **Commissioning:** `checks` = 5 zorunlu kontrol (`relays, buttons, shutters, network, cloud`), `tests_passed` **sunucuda** hesaplanır.
 - **Endpoint JSON takma adları:** `channel`, `endpoint_type`, `shutter_position`, `online`.
 - **Hata gövdesi ek alanları:** `retry_after`, `remaining_attempts`, `device_online`, `offline_devices`.
 - Huzur/diagnostic uçları `child_lock` yetenek kümesindedir (misafir yok). `command_id` = 12 karakter rastgele `[A-Za-z0-9_-]`; istemcinin verdiği id de `^[A-Za-z0-9._:-]{1,24}$` olmalıdır (aksi `400`).
+- **Sistem doktoru: bulut bağlantısı kesintisi (C15, 2026-10-09):** `GET /devices/diagnostic/:home_id` (ya da `?home_id=`) köprü broker'a bağlı
+  değilken ya da yeniden bağlanmasının üzerinden 120 sn geçmeden, son görülmesi 120 sn'den eski panoyu evin elektrik/internet arızası diye
+  sınıflandırmaz: `network_status:"UNKNOWN"`, `power_status:"UNKNOWN"`, `level:"warning"`, başlık "Bulut Bağlantısında Geçici Sorun", özet
+  "Sunucumuzun cihazlarla bağlantısında geçici bir sorun var; panonuz büyük olasılıkla çalışıyor. Birkaç dakika sonra yeniden deneyin.", eylem
+  `null` (Wi-Fi kurtarma ya da sigorta önerilmez); genel başlık da bu metindir. Alan adları ve `level` değerleri (`ok|warning|error`) değişmez;
+  köprü oturmuşken sınıflandırma eskisi gibidir (`OFFLINE` / `error`). Uygulama `network_status` `UNKNOWN` iken (rapor bulut bloğu taşıyorsa)
+  Wi-Fi kurtarma önermez ve durumu nötr gösterir.
 - **Davranış (sunucu, zamanlayıcı):** her ev için, `homes.peace_notification_time` (HH:MM; boş/bozuk ⇒ `23:30`) saatinde ve `homes.timezone`
   yerel saatiyle, her yerel gece **en çok bir** bildirim kaydı (`peace_notification_logs`, `UNIQUE (home_id, local_date)`) ve en çok bir push.
   Pencere: hedef saat + `PEACE_CATCHUP_MIN` (varsayılan 60 dk; yeniden başlatma/kesinti telafisi). `peace_notification_enabled = FALSE` ise hiç değerlendirilmez.
@@ -239,6 +278,12 @@ Push belirteci uçları (`/me/push-tokens`) hem `/api/v1/me/push-tokens` hem esk
 - Oturumlar toplu iptal edilince (logout-all, change-password, reset-password, admin parola/rol/dondurma/pasife alma, sosyal kimlik bağlama) kullanıcının TÜM push belirteçleri de kapanır (COMMIT sonrası, FCM yapılandırmasından bağımsız; push hatası iptali/yanıtı bozmaz). Tek cihaz çıkışı belirtece dokunmaz (istemci `DELETE /me/push-tokens` ile kendininkini kaldırır). change-password/reset-password sonrası istemci belirtecini `PUT /me/push-tokens` ile yeniden kaydeder. Aynı yollar kullanıcının TÜM evlerdeki uygulama MQTT kimliklerini de siler ve bağlantıları atar (§1.2, akış denetimi UYELIK-02).
 - Çocuk kilidi `requested`/`requested_at` = bekleyen niyet; cihaz bildirimi niyetle eşleşince ya da niyet 7 günden eskiyse `null`'lanır.
 - Köprü uzlaştırıcısı (`device_reconciler.js`): cihazın çevrimiçi döneminin başında (ilk canlı state / 120 sn sessizlik sonrası) bekleyen çocuk kilidi niyeti ve pano değişimi sonrası `set_runtime` (`devices.config_snapshot.runtime_sync` = pending|synced) uygulanır; cihaz/niyet başına en çok 3 deneme (5/10/20 sn), idempotent. Çok panolu evde `set_runtime` otomatik uygulanmaz (elle kalibrasyon). `cmd` yayıncıları: REST, zamanlayıcı, köprü uzlaştırıcı (yalnız backend).
+  **Panonun onayı (sko-3, 2026-10-09):** komut sonucunu yankılayan panoda (`caps` `intrusion`; `safety_cfg_sync.echoesCfgId` ile aynı kapı)
+  her `set_runtime` için bekleyici yayından ÖNCE kurulur (`expectOutcome`, 5 sn, hedef `uid`); işaret yalnız bütün çiftler `last_id` ile
+  onaylanınca `synced` olur. Ret (`last_rej`) ya da zaman aşımında işaret `pending` kalır, deneme sayılır ve geri çekilmeyle yeniden denenir;
+  yayın başarısızsa bekleyici iptal edilir. Yankı vermeyen (caps'siz / `intrusion`'sız) panoda PUBACK yeterlidir (eski davranış).
+- **Zamanlı kural (sko-4, 2026-10-09):** yayından önceki adımlarda (kural sahibi, cihaz, hedef sorguları) beklenmeyen hata olursa çalıştırma
+  `failed` yazılır ama yuva geri bırakılır (`release`); pencere içinde sonraki dakikada yeniden denenir. Yayından sonraki hatalar eskisi gibidir.
   **Bekleyen yerel anahtar (akış denetimi, migration `032`):** REST bekleyen yazınca köprü `requestReconcile` ile evin çevrimiçi dönem kaydını sıfırlar (pano köprünün kısa kopukluğu boyunca bağlı kaldıysa da sonraki canlı state yeni dönem sayılır). Pano CANLI iken (`is_online` ve `last_seen_at` ≤ `MQTT_OFFLINE_AFTER_SEC`, varsayılan 120 sn) `ev/{t}/sys {cmd:"set_local_key", local_key, id}` yayınlanır; PUBACK sonrası TEK transaction'da (kilit sırası envanter → cihaz) CAS takas (`local_key_enc = local_key_pending_enc`, bekleyen ve zamanı `NULL`; yalnız bekleyen yayınlananla hâlâ aynıysa), `device_inventory.local_key_enc` aynı değere ve `device_audit_logs` `local_key_rotated` (`actor_role='system'`, anahtarsız). Yayın başarısızsa bekleyen kalır (5/10/20 sn, sonra sonraki çevrimiçi dönem); çözülemeyen ya da biçim dışı bekleyen yayınlanmaz (loglanır); çok panolu evde otomatik uygulanmaz. Firmware `sys`'i yankılamaz: kanıt PUBACK'tir. Anahtar ve şifreli değer loglanmaz. Log: `[RECONCILE] yerel_anahtar home=… cihaz=… sonuc=…` (ör. `uygulandi`, `yayin_basarisiz`, `atlandi`, `gecersiz_bekleyen`, `deneme_hakki_bitti`).
 - Süreç: kapanışta `/ready` 503 `shutting_down`; PM2 `kill_timeout` ≥ 12000 ms (systemd `TimeoutStopSec=15`).
 
@@ -265,6 +310,21 @@ Hepsi `/api/v1/...` altındadır (eski `/api/...` takma adı da vardır); başar
   `{device, setup_pin, local_key, qr_claim_url (PIN'li), message}` — gizli değerler **yalnız bu yanıtta** (`no-store`). Sahipsiz cihaz kaydındaki bekleyen yerel anahtar (`devices.local_key_pending_enc`, §1.5b) temizlenir (migration `032` tetikleyicisi `trg_devices_pending_key_superseded`): yeni etiket anahtarı esastır. Hatalar: `400 VALIDATION` (geçersiz UID), `403`, `404 NOT_FOUND`, `409 CONFLICT` (IN_STOCK değil / daireye bağlı), `429 RATE_LIMITED` (kullanıcı başına 20/saat), `503 SERVICE_UNAVAILABLE` (`LOCAL_KEY_SECRET` yok; anahtar üretilemez).
 - **`POST /homes/join-preview`** gövde `{code}` — davet/devir kodunu **TÜKETMEDEN** önizler (giriş yapmış kullanıcı; servis PIN oturumu hariç). Yanıt `data`: `{kind:"invitation"|"transfer", is_transfer, home_name, resident_count, role, expires_at, already_member?, guest_valid_from?, guest_valid_until?}`.
   Bulunamayan/kullanılmış/süresi dolmuş kod AYNI yanıttır: `410 GONE` (numaralandırma ayrımı yok; istemci 404/405'i "uç yok" sayar); devir kodu yalnız HEDEF hesaba önizlenir (`403`), hedef kimlik hiçbir yanıtta dönmez; `400 VALIDATION` (biçim), kendi dairenizi kendinize devir `400`. Hız sınırı: IP başına 30/15 dk, kullanıcı başına 10/15 dk.
+- **Davet / devir kodunun yinelenmesi (C3, 2026-10-09):** yanıtı kaybolan katılımın ya da devrin yinelenmesi kodun kendi kullanıcısı için
+  idempotent başarıdır (hiçbir yazım, MQTT işi ya da temizlik yapılmaz). `POST /homes/join`: kod kullanılmış, `used_by` = çağıran ve çağıran o
+  evin üyesiyse `200` `{home:{id, name, address, role (mevcut), valid_from, valid_until}, already_member:true, message:"Bu davet kodunu zaten
+  kullandınız; dairenin üyesisiniz."}`. `POST /homes/transfer-accept`: devir `COMPLETED`, `accepted_by` = çağıran ve çağıran hâlâ owner ise `200`
+  `{message:"\"<ev adı>\" dairesinin sahipliği zaten size devredildi.", home:{id, name, address, role:"owner"}, already_member:true}`.
+  `POST /homes/join-preview` aynı iki durumda `200` + `already_member:true` (davette `role` = mevcut rol; devirde `kind:"transfer"`,
+  `is_transfer:true`, `role:"owner"`). Başka kullanıcı (ya da artık üye/sahip olmayan kullanıcı) için `410 GONE` aynen. Uygulama: katılım ve
+  devirde her hata yolunda (410, ağ, zaman aşımı) ev listesini sessizce tazeler (`fetchHomes(autoSelect:false)`); başarıda ve `already_member`'da
+  listeyi tazeleyip o evi seçer; devir önizlemesinde `already_member` için "Bu daireyi zaten devraldınız." der.
+- **Davet ve servis PIN'i üretiminde yetki aynı işlemde (hesap-uyelik-7, 2026-10-09):** `POST /homes/:homeId/invitations` ve
+  `POST /homes/:homeId/service-token` yetkisi ev üyeliğinden geliyorsa INSERT ile AYNI transaction'da `home_users` satırı `FOR SHARE` ile yeniden
+  okunur; satır yoksa ya da rol `owner` değilse `403 FORBIDDEN` "Bu işlem için yetkiniz yok." ve hiçbir kod üretilmez (eşzamanlı devir ya da
+  Home Admin atamasından sonra eski sahibin geçerli davet kodu/PIN'i kalmaz). Global `super_user` için üyelik aranmaz. Bilinen nadir yan etki:
+  aynı anda yapılan acil sıfırlama / Home Admin atamasıyla PostgreSQL kilitlenmesi (`40P01`) bir isteği `500` ile düşürebilir; yeniden deneme
+  çalışır, veri bozulmaz.
 
 ### 1.5d Güvenlik uçları ve komutları (WP-S4, 2026-10-06; kod + gerçek PostgreSQL ile doğrulandı)
 
@@ -273,7 +333,7 @@ Tasarım: `docs/superpowers/specs/2026-10-06-guvenlik-iklim-senaryo-mimarisi-des
 | Uç | Yetki | Gövde / yanıt |
 |---|---|---|
 | `GET /homes/:homeId/alarms?state=open\|all&before=<id>&limit=<1..200>` | `view` (tüm roller) | `data: {items:[{id, device_id, device_uuid, aid, zone, kind, status: latched\|fault\|silenced\|cleared\|lost, origin: event\|state, sources[], raised_at, device_epoch, acked_at, ack_requested, cleared_at, cleared_by: device_event\|device_state\|superseded\|lost}], next_before}`; `superseded` = aynı bölgede yeni tehlike türüyle YENİ alarm açıldı (eski satır kapanır); yeniden eskiye, mezar taşı satırları (`origin='tomb'`) listelenmez; `no-store`. |
-| `POST /homes/:homeId/alarms/:alarmId/ack` | `safety_ack` | Gövde `{id?}` (istemci komut kimliği; aşağıda). Panoya `{cmd:"alarm_ack", zone, aid, uid, id}` gider; `zone`/`aid` **alarm satırından**, `uid` cihazdan. Yanıt `{delivered, device_online, command_id, applied: true\|null, alarm_id}`. Kapalı alarm `409 ALARM_NOT_OPEN`. **Pano çevrimdışı:** onay isteği kaydedilir (`alarms.ack_requested_*`) ve `409 DEVICE_OFFLINE` + `ack_queued:true`; pano dönünce köprü onayı YALNIZ state'teki bölge `aid`'si aynıysa gönderir, farklıysa (kullanıcının görmediği yeni alarm) istek düşer. |
+| `POST /homes/:homeId/alarms/:alarmId/ack` | `safety_ack` | Gövde `{id?}` (istemci komut kimliği; aşağıda). Panoya `{cmd:"alarm_ack", zone, aid, uid, id}` gider; `zone`/`aid` **alarm satırından**, `uid` cihazdan. Yanıt `{delivered, device_online, command_id, applied: true\|null, alarm_id}`. Kapalı alarm `409 ALARM_NOT_OPEN`. **Pano çevrimdışı:** onay isteği kaydedilir (`alarms.ack_requested_*`) ve `409 DEVICE_OFFLINE` + `ack_queued:true`; pano dönünce köprü onayı YALNIZ state'teki bölge `aid`'si aynıysa gönderir, farklıysa (kullanıcının görmediği yeni alarm) istek düşer. **İsteyenin yetkisi ve süre (C11, 2026-10-09, migration `040`):** servis PIN oturumunun isteğinde oturum kimliği `alarms.ack_requested_sid`'e (UUID NULL, yabancı anahtarsız) yazılır (kullanıcı isteğinde `ack_requested_by`; `ack_requested_*`'ı temizleyen her yol `sid`'i de temizler). Kuyruktaki onay yalnız istek 24 saatten gençse ve isteyen hâlâ yetkiliyse iletilir: kullanıcı = etkin, engelli durumda olmayan hesap + o evde `safety_ack` rol kümesinde süresi dolmamış üyelik ya da global `super_user`; oturum = var, iptal edilmemiş, süresi dolmamış; ikisi de boş eski satır = istekten sonra o evde iptal edilen servis oturumu yoksa. Aksi halde `alarm_ack` gönderilmez, istek düşer ve `device_audit_logs` `alarm_ack_request_dropped {alarm_id, zone, reason: "expired"\|"revoked"}` (`actor_role='system'`). Uç yanıtı (`409 DEVICE_OFFLINE` + `ack_queued:true`) değişmez. |
 | `POST /homes/:homeId/devices/:deviceId/actuators/:actuatorId` gövde `{to, id?}` (eski `{state}` metni de kabul; uygulama `to` gönderir) | rota: tüm roller; servis: yöne göre `actuator_close`/`actuator_control` | `to`: vana `open\|closed`, siren/fan/diğer `on\|off`. `:deviceId` cihaz kaydı UUID'si ya da `device_uuid`. Panoya `{actuator:"a1", to, uid, id}`. |
 | `POST /homes/:homeId/devices/:deviceId/alarm-test` gövde `{zone, id?}` | `safety_test` | Panoya `{cmd:"alarm_test", zone, uid, id}`. |
 | `GET /homes/:homeId/devices/:deviceId/safety-config` | `view` (tüm roller) | Panonun yapılandırma kopyası (`cfg_dump`'tan; sensör/eylemci/bölge **adları** yalnız burada): `data: {device_uuid, rev, crc, updated_at, policy, zones:[{id,name}], lights, sensors:[{id,kind,zone,active_open,flags,confirm_ms,name}], actuators:[{id,relay,relay2?,kind,close_mode,medium,zones,fb_di,fb_closed_active,fb_timeout_s,run_limit_s,exproof,name}]}` = panonun `GET /api/safety/config` biçimi (§2.6). Kopya henüz yoksa `404 CONFIG_NOT_AVAILABLE`. `no-store`. Uygulama `state.cfg.safety.rev/crc` değişince okur. |
@@ -332,6 +392,10 @@ Tasarım: aynı belge "Faz 2 tasarımı" F2.A-F2.D. Migration `034` (yalnız `pe
 | `DELETE …/safety-config/pending` | `safety_config` | `200 {dropped: n}` (denetim `safety_config_pending_dropped {reason:"cancelled", count}`) |
 | `GET …/safety-config` (mevcut) | `view` | ek alanlar `state_rev` (panonun son bildirdiği rev, yoksa `null`), `next_base_rev` (kuyruk varsa son öğe + 1, yoksa `state_rev`), `pending: [{id, op, item, target, at, role, loosening}]` (yalnız `safety_config` yetkilisine; değer/ad içermez) |
 
+- **Köprü (kablosuz) sensörü (C1, 2026-10-09):** `set.sensor.id` = `b1..b16` ve panonun `caps`'i `bridge` içermiyorsa `400 VALIDATION`
+  "Kablosuz (köprü) sensör bu panoda desteklenmiyor." (ağa çıkmadan); köprü sensörünü SİLMEK (`del.sensor:"bN"`) serbesttir. v1.3.2 firmware
+  yazımda bütün tabloyu doğruladığından, kayıtlı köprü sensörü olan panoda silme dışındaki her yama `cfg_invalid` (`sensor_bridge_unsupported`)
+  ile reddedilir (→ `400 CONFIG_INVALID`): önce köprü sensörleri tek tek silinir. State ayrıştırması (`src:"bridge"`) değişmez.
 - Hatalar: `400 VALIDATION` (gövde), `400 PAYLOAD_TOO_LARGE` (sys yükü > 1024 B), `400 CONFIG_INVALID` (firmware `cfg_invalid`), `403`, `409 FIRMWARE_UNSUPPORTED`
   (`caps` `cfg` yok; ya da `caps` `intrusion` olmadan `set.intrusion` / sensör `flags > 0x07` / `kind:"arm_key"`), `409 CONFIG_NOT_AVAILABLE` (kopya ya da
   panonun `cfg.safety.rev`'i yok; sunucu `cfg_get` ister), `409 CONFIG_PENDING` (çevrimiçi panoda kuyruk dolu ya da aynı panoya başka yama uçuşta),
@@ -353,8 +417,10 @@ Tasarım: aynı belge "Faz 2 tasarımı" F2.A-F2.D. Migration `034` (yalnız `pe
 - Aynı panoya tek uçuş: `device_configs` satır kilidi altında `pending.inflight = {id, at}` yazılır (ağ beklemesi transaction dışında; 30 sn sonra geçersiz).
 - Kuyruk (`device_configs.pending` sürüm 1): `{"v":1, "items":[{id, base_rev, patch:{set|del}, by, role, at, loosening, sent_at?}], "inflight"?}`; ≤ 16 öğe,
   24 sa. Uzlaştırıcı cfg yetenekli panonun her canlı state'inde (kuyruk boşken sorgu yok): süresi dolan → `expired`; isteyenin eve erişimi kalmadı → o ve
-  sonrakiler `revoked`; daha önce gönderilmiş baş öğe ve state rev = `base_rev + 1` (yankılı panoda ayrıca state `last_id` = öğe kimliği, R2) →
-  uygulandı (`applied_inferred`, çift uygulama yok); baş öğenin
+  sonrakiler `revoked`; daha önce gönderilmiş baş öğe ve state rev = `base_rev + 1` (yankılı panoda ayrıca state `last_id` = öğe kimliği, R2,
+  **ya da** state `cfg.safety.id` = öğe kimliği: C6, 2026-10-09, firmware 1.3.2; araya giren röle komutu `last_id`'yi değiştirse de öğe
+  uygulanmış sayılır, `cfg.safety.id` yoksa eski kural) → uygulandı (`applied_inferred`, çift uygulama yok). `cfg.safety.id` `safety_state`'e
+  yazılmaz, yalnız bu çıkarımda kullanılır. Erişim denetimi (`revoked`) `services/requester_access.js` ortak modülündedir (davranış aynı); baş öğenin
   `base_rev`'i ≠ state rev → **pano kazanır**: bütün kuyruk `conflict` ile düşer + owner'a `safety_info {reason:"cfg_pending_dropped"}`; eşitse baş öğe gönderilir
   (tur başına tek öğe). Firmware `cfg_invalid|zone_latched|cfg_conflict|cfg_storage|gas_local_only|armed` → baş öğe ve sonrakiler düşer + bilgi push'u;
   `busy`/zaman aşımı → öğe kalır (en çok 3 deneme / 10 dk). Kuyruk işleri ev uzlaştırmasından ayrı şeritte çalışır (RG-2: yanıt beklemesi ev
@@ -376,7 +442,7 @@ Broker: EMQX, `evotomasyon.gudeteknoloji.com.tr:8884` (TLS). `{t}` = `homes.mqtt
 |---|---|---|---|
 | `ev/{t}/cmd` | **yalnızca backend** | cihaz | `retain=false`, QoS 1. Uygulamalar buraya yayın YAPAMAZ. |
 | `ev/{t}/state` | cihaz | backend, uygulama | `retain=true`, QoS 0/1. Tam anlık durum. |
-| `ev/{t}/status` | cihaz (LWT dahil) | backend, uygulama | `online` / `offline`, `retain=true`, QoS 1. |
+| `ev/{t}/status` | cihaz (LWT dahil) | backend, uygulama | `online` / `offline`, `retain=true`, QoS 1. v1.3.1+: `{"status","uid"}` JSON (§3g; düz metin de okunur). Uygulama (C16, 2026-10-09) çevrimiçiliği `uid` başına tutar: ev çevrimiçi = en az bir pano çevrimiçi; `uid`'siz ileti tek değer gibi işlenir (eski davranış); ev değişince harita temizlenir. |
 | `ev/{t}/sys` | **yalnızca backend** | cihaz | Yönetim komutları (`set_local_key`). `retain=false`. |
 
 ### 2.2 Kimlik ve ACL
@@ -487,6 +553,13 @@ uygulama kendi afişini çıkarır; "Hepsini kapat" mevcut `POST …/close-all` 
 | iOS | `apns-priority=10`, `aps.interruption-level=time-sensitive` (kritik uyarı izni **yok**), `aps.category=SAFETY_ALARM`, `sound=default` | `apns-priority=5`, `interruption-level=active`, `aps.category=SAFETY_INFO` |
 
 Tek gönderim: `alarms.push_status` `pending → claimed → sending → sent|failed|skipped` (yalnız `pending` satır alınır: en çok bir push); `valve_fault` ikinci push'u `fault_push_status` ile aynı döngüden geçer. Push yapılandırılmamışsa ya da alıcı yoksa `skipped` yazılır, alarm kaydı yine açılır. **Yeniden deneme:** gönderim hiçbir belirtece ulaşmazsa (`sent = 0` ya da istisna) 5 sn sonra alıcılar yeniden okunup **bir kez** daha denenir; ikinci deneme de başarısızsa `failed` (`alarm_service.pushRetryDelayMs`, sayaç `pushRetries`).
+**Açık alarmda en az bir kez (C12, 2026-10-09; migration yok):** yarım kalan ya da başarısız push, alarm açıkken (`latched`/`fault`) yeniden
+talep edilir: `pending`, 2 dk'dan eski `claimed`/`sending` ve `push_attempts < 5` iken 1 dk'dan eski `failed` satır CAS ile (`SQL.claimRetry`,
+`push_attempts + 1`) yeniden alınıp gönderilir; `fault_push_status` için `pending` ve 2 dk'dan eski `claimed`/`sending`. Köprü
+`alarm_service.retryStuckPushes`'ı açılıştan ~5 sn sonra bir kez, sonra dakikada en çok bir kez çalıştırır (tur başına en çok 50 satır);
+`end()` alarm servisinin boşalmasını (`idle()`) en çok 3 sn bekler. Açık alarmda yinelenen push bilinçli olarak kabul edilir (yukarıdaki "en çok
+bir push" kuralından sapma); kapanmış ya da susturulmuş alarm, `sent` satır ve 5 denemeyi doldurmuş satır yeniden denenmez. Dağıtımdan sonraki
+ilk turlarda bu koşula uyan eski açık alarmların push'u yeniden gidebilir.
 
 **Faz 2 ekleri (WP-N1, WP-G1, WP-I4, WP-C2; 2026-10-07).**
 - `data.device_uuid` (**yeni, ek alan**, `v` `"1"` kalır): panonun `uid`'si (`devices.device_uuid`, büyük harf, `^[A-Z0-9-]{1,32}$`); hem `safety_alarm` hem
@@ -516,13 +589,13 @@ Tek gönderim: `alarms.push_status` `pending → claimed → sending → sent|fa
 
 | Alan | Tür | Anlam |
 |---|---|---|
-| `caps` | dizge dizisi (≤ 8 × ≤ 12) | yetenekler, ör. `["safety","actuator","event","cfg"]`; yoksa pano güvenlik desteklemiyor sayılır |
+| `caps` | dizge dizisi (≤ 8 × ≤ 12) | yetenekler, ör. `["safety","actuator","event","cfg"]`; yoksa pano güvenlik desteklemiyor sayılır. `bridge` (C1, 2026-10-09): yalnız köprü sürücüsüyle derlenen firmware yazar (`AHBU_BRIDGE_DRIVER=1`); 1.3.2 ve öncesi YAZMAZ. Sunucu ve uygulama köprü sensörü eklemeyi yalnız bu yetenekle açar |
 | `boot` / `bn` | u32 / 8 hex | açılış sayacı (`ahbu_latch`, fabrika sıfırlamasında silinmez) / açılış nonce'u (eid öneki) |
 | `time_ok`, `epoch` | bool, u32 | saat güvenilir mi; `false` ise `since` yazılmaz |
-| `cfg.safety` | `{rev:u32, crc:"8hex"}` | yapılandırma sürümü + CRC32 (pol + bölgeler + dolu sensör/eylemci yuvaları + ışık seçenekleri; `rev` CRC'ye girmez) |
+| `cfg.safety` | `{rev:u32, crc:"8hex", id?}` | yapılandırma sürümü + CRC32 (pol + bölgeler + dolu sensör/eylemci yuvaları + ışık seçenekleri; `rev` CRC'ye girmez). `id` (C6, 1.3.2+; `[A-Za-z0-9_.:-]{1,24}`): GÜNCEL `rev`'i üreten bulut `cfg_patch`'in kimliği; rev başka yoldan (LAN, CLI, şablon) değişince, kimliksiz başarılı yamada ve yeniden başlatmada yazılmaz; LAN `/api/status`'ta yoktur. Araya giren komut `last_id`'yi değiştirse de kalır. Eski sunucu alanı yok sayar |
 | `last_rej` | `{id ≤ 24, code ≤ 24}` | son reddedilen komut; kodlar: `zone_latched`, `zone_test`, `actuator_relay`, `unknown_actuator`, `bad_state`, `unsupported`, `cfg_conflict`, `cfg_invalid`, `gas_local_only`, `stale_ack`, `safe_mode`, `bad_cmd`, `busy`; 1.2.1+: `not_ready`, `cfg_storage`, `armed` (kurulu kipte bulut yaması hırsız alarmını zayıflatırdı) |
 | `relays[].act` | dizge | yalnız eylemci rölelerinde |
-| `sensors[]` | `{id:"d<1..40>"\|"b<1..16>", src:"di"\|"bridge", kind, zone, active, ok}` | ≤ 56; `ok=false` iken `active` anlamsızdır. `kind` ∈ `water, gas, smoke, door, window, motion, generic` **ya da yerel kumanda rolü** `alarm_ack, valve_close, gas_reset` (bu satırlarda `active` = ham basılı seviye; tehlike sensörü DEĞİL, vana açma iznine girmez) |
+| `sensors[]` | `{id:"d<1..40>"\|"b<1..16>", src:"di"\|"bridge", kind, zone, active, ok}` | ≤ 56; `ok=false` iken `active` anlamsızdır. `b<n>` / `src:"bridge"` köprü sürücüsü olmayan firmware'de (1.3.2 dahil) yalnız eski sürümden kalan kayıtlı yapılandırmada görülür ve hep `ok=false`'tur (rapor yok); 1.3.2 yazım yollarında yeni köprü sensörünü reddeder (C1, §2.6 yama sırası). `kind` ∈ `water, gas, smoke, door, window, motion, generic` **ya da yerel kumanda rolü** `alarm_ack, valve_close, gas_reset` (bu satırlarda `active` = ham basılı seviye; tehlike sensörü DEĞİL, vana açma iznine girmez) |
 | `actuators[]` | `{id:"a<1..16>", relay, relay2?, kind, medium?, zones[], pos?\|on?, fb?, fault}` | ≤ 16; `pos` ∈ `closed, closing, open, opening, cmd_closed, cmd_open, unknown`; `medium` (`water\|gas`) yalnız vanada; `fb` yalnız vanada: `true` = geri bildirim KAPALI, `false` = açık, `null` = geri bildirim yok / henüz okunmadı; siren/fan/generic `on` taşır |
 | `safety` | `{policy:"on"\|"off", mode:"normal"\|"safe", reason?, zones:[{id, st, kind?, aid?, since?, since_up, silenced, srcs[]}]}` | **`zones[]` yalnız NORMAL OLMAYAN bölgeleri listeler; listede olmayan bölge `normal`dır** (tüketiciler yokluğu normal saymalı; sunucu `zoneNormal`, uygulama `SafetyState.zoneStatus`). Yokluk ancak liste **tam** ise kanıttır: `zones` dizi değilse ya da bir öğe düşürüldüyse (bilinmeyen `st`, geçersiz öğe, sınır aşımı) sunucu özete `zones_complete:false` yazar ve listede olmayan bölgenin alarm satırına dokunmaz (inceleme turu 2). `st` ∈ `latched, fault, test`; `aid` ≤ 14 karakter; `mode:"safe"` iken `reason` ∈ `cfg_corrupt, latch_orphan, crash_loop` |
 
@@ -554,6 +627,8 @@ Eylemci komutu `state` (boolean) yerine `to` kullanır:
 - **Alarm kimliği (`aid`):** `alarm_raised`'da alarm kimliği olayın kendi `eid`'sidir (`aid` alanı yazılmaz). Kilitli bölgeye YENİ tehlike türü eklenirse (ör. su alarmı sürerken gaz) firmware yeni bir `alarm_raised` üretir: bölgenin alarm kimliği bu olayın `eid`'si olur, `kind` bölgenin bütün türlerinin öncelikli olanıdır (gaz > duman > su), susturma/onay sıfırlanır; eski `aid` ile onay `stale_ack` alır, sunucu eski satırı `cleared_by=superseded` ile kapatır (inceleme E2E-2); `valve_fault`, `valve_fault_cleared`, `alarm_silenced`, `alarm_cleared` olayları bölgenin güncel alarm kimliğini `aid` ile taşır (sunucu alarm satırını bununla bulur; yoksa bölgenin açık alarmı). Test bölgesi ve bölgesiz olaylarda yoktur.
 - Türe özel alanlar: `test_result` → `zone`, `ok`, `fb_ms` (**yalnız** geri bildirimli vanada ölçüldüyse; yoksa alan yok = "gözle doğrulayın");
   `safe_mode` → `reason` (`cfg_corrupt|latch_orphan|crash_loop`); `policy_changed` → `policy`, `via` (`cli|lan|cloud|local_web`); `cfg_conflict` → `rev`, `crc`; `nvs_fail` → `key`.
+  **1.3.2 (fw-tarama-5):** kilit kaydı, hırsız alarmı kipi ya da vana konumu NVS'e yazılamazsa kirli bayrak geri kurulur ve ~2 sn geri çekilmeyle
+  yeniden yazılır (eskiden bir daha denenmezdi); `nvs_fail` ardışık başarısızlıkta anahtar başına BİR kez üretilir, başarılı yazım bunu sıfırlar.
 - Türler: `alarm_raised`, `valve_fault`, `valve_fault_cleared`, `alarm_silenced`, `alarm_cleared`, `test_result`, `sensor_fault`, `sensor_fault_cleared`,
   `actuator_fault`, `safe_mode`, `nvs_fail`, `policy_changed`, `actuator_changed`, `cfg_conflict`. `cfg_dump` olay DEĞİLDİR (outbox dışı, onaysız, parçalı ≤ 3,5 KB).
 - `eid = <bn>-<n>`; `n` açılış başına 1'den, 99999'dan sonra 1. Backend `(device_id, eid)` ile tekilleştirir ve her alışta (yineleme dahil) `event_ack` gönderir.
@@ -586,6 +661,10 @@ yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesin
   `{"id":"d3","kind","zone","active_open":0|1,"flags","confirm_ms","name"}`; eylemci öğesi `{"id":"a1","relay",["relay2"],"kind",
   "close_mode":"energize"|"deenergize"|"pulse","medium":"water"|"gas"|"none","zones":[...],"fb_di","fb_closed_active","fb_timeout_s",
   "run_limit_s","exproof","name"}`. Sensör kind'ları ayrıca `alarm_ack`, `valve_close`, `gas_reset` (yerel kumanda rolleri) olabilir.
+  **Onay süresi `confirm_ms` (100..10000 ms; aralık değişmedi):** onay, tür penceresi içinde 8 kovada biriken aktif süreyle verilir (su 3 sn,
+  gaz/duman 1 sn). 1.3.2 (fw-tarama-3): `confirm_ms` pencereden uzunsa pencere `max(tür penceresi, ⌈confirm_ms / 7⌉ × 8)` ms'ye büyür (sürekli
+  aktif giriş yaklaşık `confirm_ms`'de onaylanır; kısa değerlerde zamanlama aynıdır). 1.3.1 ve öncesi pano uzun değerleri HİÇ onaylamaz
+  (gaz/duman > 875 ms, su > 2625 ms): bu panolarda güncelleme yapılana kadar uzun onay süresi yazmayın.
   **Faz 2 (firmware 1.2.1, `caps` `intrusion`):** 1. parçada `policy`'den hemen sonra `"intrusion":{"exit_s","entry_s"}` (saklanan ham değer;
   0 = varsayılan 45 / 30 sn); sunucu bu anahtarı kopyada korur (`mergeCfgDumpParts`; v1.2.0 kopyasında anahtar yoktur) ve
   `GET …/safety-config` ile uygulamaya verir. Ek kumanda rolü `arm_key` (anahtarlı kontak; state `sensors[]`'te de bu adla görünür).
@@ -596,9 +675,14 @@ yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesin
   ya da `{"base_rev"?:N, "del":{"sensor":"d3"}|{"actuator":"a2"}}`; öğe alanları `cfg_dump` ile aynıdır (eksik isteğe bağlı alanlar
   türün varsayılanını alır; `id`'siz eylemci yeni satırdır). Eylemci silinince sonraki eylemcilerin kimliği bir kayar (`a3` -> `a2`).
   Sıra: yama -> `validate(system, safety)` -> kilitli bölge kuralı -> (LAN ise) gevşetme yasağı -> `rev+1` -> NVS -> loopTask uygulaması.
+  **Köprü sensörü (C1, 1.3.2):** yazım yolları (LAN ve bulut yaması, seri CLI, şablon ayrıştırma ve uygulaması) `validate(…, forWrite=true)`
+  kullanır: DI olmayan sensörde yerel kumanda rolü yine `sensor_src`, diğer her köprü sensörü aralık/yineleme denetiminden ÖNCE
+  `sensor_bridge_unsupported` (derleme anahtarı `AHBU_BRIDGE_DRIVER`, varsayılan 0). Doğrulama bütün tabloya bakar: kayıtlı köprü sensörü olan
+  panoda silme dışındaki her yama reddedilir; `DEL_SENSOR` / `DEL_ACTUATOR` serbesttir. Açılış ve ana yapılandırma değişimi (`/api/config`, CLI)
+  `forWrite=false` kalır: eski sürümden kalan köprü sensörü güvenli kipe düşürmez. Sayısal `CfgErr` kodları değişmedi (yeni kod sona eklendi).
   Çalışırken eklenen su vanasının konumu o anki röle seviyesinden benimsenir (yapılandırma vanayı kendiliğinden açıp kapatmaz).
   Bulut sonuçları: başarı -> state `cfg.safety.rev` artar (1.2.1+: ayrıca `state.last_id` = yamanın `id`'si, otomasyon yeni bir komut
-  işleyene kadar); `base_rev` uyuşmazlığı -> `cfg_conflict` olayı + `last_rej = cfg_conflict`; geçersiz -> `cfg_invalid`; kilitli bölgeye
+  işleyene kadar; 1.3.2+: ayrıca `cfg.safety.id` = yamanın `id`'si, rev başka yoldan değişene kadar, C6); `base_rev` uyuşmazlığı -> `cfg_conflict` olayı + `last_rej = cfg_conflict`; geçersiz -> `cfg_invalid`; kilitli bölgeye
   dokunuyor -> `zone_latched`; NVS payı yetmedi -> `cfg_storage` (1.2.1+; v1.2.0'da `busy`). **Faz 2 incelemesi (G-1, 1.2.1):** bulut yolu
   gevşetebilir ama iki sınıfı uygulayamaz: `isGasRelease` (mevcut gaz vanasının röle(ler)/tür/kip/akışkan kimliğini değiştirmek ya da onu
   silmek; `gas_reset` satır kuralı) -> `gas_local_only` (her zaman); `isIntrusionLoosening` (SF_REACT'li kapı/pencere/hareket sensörünü silmek
@@ -622,7 +706,7 @@ yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesin
   `GET /api/events?after=<eid>` -> `{"bn","events":[olay JSON'u...],"more":bool}` (en çok 16; bilinmeyen/başka açılışın eid'i -> baştan).
   Halka 32 olaydır: `more:true` ise istemci son eid ile devam eder (uygulama en çok 4 sayfa okur, yinelenen eid'i atar). `GET /api/safety/config`
   -> `{rev, crc, policy, intrusion?, zones, lights, sensors, actuators}` (cfg_dump öğeleriyle aynı alanlar, adlar dahil; `intrusion` 1.2.1+).
-  `POST /api/safety/config` -> `200 {"status":"ok","rev","crc"}` | `400 {"error":"cfg_invalid","detail"}` (`detail` ör. `arm_key_not_nc`) | `403 local_loosen_forbidden`
+  `POST /api/safety/config` -> `200 {"status":"ok","rev","crc"}` | `400 {"error":"cfg_invalid","detail"}` (`detail` ör. `arm_key_not_nc`, 1.3.2+: `sensor_bridge_unsupported`) | `403 local_loosen_forbidden`
   | `409 {"error":"cfg_conflict","rev","crc"}` | `409 zone_latched` | `500 storage_error` | `503 busy`.
   `POST /api/config`: güvenlik yapılandırmasıyla uyuşmazsa `409 {"error":"cfg_invalid","detail"}` (kilit varken `409 zone_latched`).
   Açılış güvenli maskesindeki (`safe_msk`) ya da kilit maskesindeki röle, güvenlik tablosu boş olsa bile (güvenli kip `cfg_corrupt`)
@@ -633,11 +717,17 @@ yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesin
   sensör ekleme/güncelleme -> ışık seçenekleri. Yalnız değişen öğe yazılır. Her istek bir öncekinin yanıtındaki `rev`'i `base_rev`
   olarak taşır (`applySafetyConfigPatches`). Eşleme: iki röleli vana `close_mode:"pulse"`, `relay2` = açma rölesi, `run_limit_s` =
   darbe süresi; `fb_di` `0` = geri bildirim yok; fan `exproof`; ışık `src` `1` = Modbus, `2` = köprü (`addr`, `ch`).
+  **Köprü sensörü (C1, 2026-10-09):** "Kablosuz sensör ekle" ve sensörün köprüye atanması yalnız panonun `caps`'i `bridge` içerirken
+  sunulur (`SafetyState.supportsBridge`); panoda kayıtlı olup desteklenmeyen köprü sensörü listede "Bu panoda kablosuz sensör desteklenmiyor;
+  kaldırın." uyarısıyla görünür ve kaldırılana kadar planın kaydını engeller. Panoda olup planda olmayan köprü sensörü (`bN`) için silme
+  yaması üretilir (silmeler önce gider). Ret kodu `sensor_bridge_unsupported` → "Kablosuz (köprü) sensör bu panoda desteklenmiyor.". Işık
+  `src` `2` (köprü dimmer) değişmedi (C1 yalnız sensörleri kapsar).
   Ham RS485 (`/api/rs485/relay`, `/api/rs485/send`) eylemci kanalını açma / toplu yazım / TOGGLE: `409 actuator_relay`; güvenlik etkinken
   (kilit ya da ek modülde eylemci/sensör) `POST /api/rs485/scan`: `409 safety_active`. `GET /api/status` (anahtarlı) MQTT state ile aynı
   ek alanları ve rölelerde `act`'ı taşır.
 - **Seri CLI** (fiziksel erişim): `SAFETY [STATUS]`, `SAFETY TEST <1-4>`, `SAFETY ACK [0-4] [FORCE]`, `SAFETY POLICY ON|OFF`,
-  `SAFETY DEL <aN|dN|bN>`, `REBOOT FORCE` (kilit varken düz `REBOOT` reddedilir).
+  `SAFETY DEL <aN|dN|bN>`, `REBOOT FORCE` (kilit varken düz `REBOOT` reddedilir). `SAFETY DEL bN` 1.3.2'de de serbesttir (kayıtlı köprü
+  sensörünü kaldırmanın yolu).
 
 ## 3. Firmware yerel HTTP API (LAN / AP)
 
@@ -684,7 +774,7 @@ yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesin
 **Seri CLI** (115200 baud, CR/LF, en çok 159 karakter, büyük/küçük harf duyarsız; her komut `[CLI] Komut alindi: …` yankılar — İSTİSNA: `WIFI <ssid> <parola>` maskeli, `FACTORYINIT` hiç yankılanmaz):
 `HELP|?` · `STATUS` (cihaz, STA, AP durumu+SSID, MQTT, `local_key` tanımlı/YOK, ek modül, röle/DI/panjur, `child_lock`, yığın su işaretleri) · `MQTT [PUB]` · `RELAY <n> [ON|OFF|TOGGLE]`, `RELAY ALL ON|OFF` ·
 `SHUTTER <n> UP|DOWN|STOP|STEP|POS <0-100>`, `SHUTTER ALL UP|DOWN|STOP` · `DI|INPUTS`, `CFG|CONFIG`, `SET_DI <di> <hedef 0-N> <mod 0-4>`, `DEFAULT_DI` · `WIFI <ssid> <parola>|WIFI CLEAR` ·
-`EXTMOD <0|1> [kanal]` · `SCAN [RESULT]` (bloklamayan RS485 tarama) · `CH <1-32> [ON|OFF|TOGGLE]` (ham ek modül rölesi; panjur kanalına AÇ/toplu AÇ reddedilir) · `SEND <hex>` · `BAUD <…>` ·
+`EXTMOD <0|1> [kanal]` (1.3.2, fw-tarama-4: herhangi bir panjur hareket ederken ya da beklerken reddedilir, `[CLI-HATA] EXTMOD reddedildi: panjur hareket ediyor; degisiklik yapilmadi.`, LAN yolundaki kuralla aynı; kanal sayısı azalınca kapsam dışı kalan ek modül rölelerine `COIL OFF` yazılır, başarısızsa sonraki turlarda yeniden denenir, 5 ardışık başarısızlıktan sonra bırakılır) · `SCAN [RESULT]` (bloklamayan RS485 tarama) · `CH <1-32> [ON|OFF|TOGGLE]` (ham ek modül rölesi; panjur kanalına AÇ/toplu AÇ reddedilir) · `SEND <hex>` · `BAUD <…>` ·
 `CHILDLOCK [ON|OFF|STATUS]` · `AP [ON|OFF|STATUS]` (servis AP penceresi 10 dk; provizyonluysa yalnız geçerli `ap_pass` varsa; parola asla yazdırılmaz) · `FACTORYINIT <local_key> <ap_pass>` · `RESETKEY` (yerel anahtarı siler → provizyonsuz; yanıt `[CLI-SONUC] Yerel anahtar SILINDI|SILINEMEDI. Cihaz artik PROVIZYONSUZ (FACTORYINIT <local_key> <ap_pass> ya da /api/factory/init). AP gerekirse: AP ON`, firmware 1.1.2+; önceden "yalnizca /api/factory/init" diyordu, SERVIS-06) · `REBOOT|RESTART`.
 
 **`FACTORYINIT <local_key> <ap_pass>` (USB-seri provizyon; fabrika aracının tercih ettiği yol — anahtar açık AP'den DÜZ HTTP ile gitmez):**
@@ -775,10 +865,10 @@ Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message
 |---|---|
 | `GET /sites` · `POST /sites` | Site: `id, name, address, city, district, contact_name, contact_phone, contact_email, block_count, flat_count, notes, created_at, updated_at` (+ liste satırında `flat_stats {planned, written, installed, handed_over}`) |
 | `GET/PATCH/DELETE /sites/:siteId` | DELETE yumuşak (`deleted_at`); dairesine kart bağlı site silinemez (409 `SITE_HAS_DEVICES`) |
-| `GET /sites/:siteId/flats` | Daire: `id, site_id, block, number, flat_type, template_id, device_uuid, status (planned\|written\|installed\|handed_over), last_write {template_id, version, via, at}` |
+| `GET /sites/:siteId/flats` | Daire: `id, site_id, block, number, flat_type, template_id, device_uuid, status (planned\|written\|installed\|handed_over), last_write {template_id, version, via, at, result, error_code, device_uuid}` (son yazım), `last_ok_write {template_id, version, via, at, device_uuid}` (dairenin KARTIYLA son başarılı yazım; `template_id` C2, 2026-10-09: araç dairenin güncel şablonundan farklı yazımı "(farklı şablon)" diye işaretler) |
 | `POST /sites/:siteId/flats/bulk` | `{block, from, to, flat_type?, template_id?}` → oluşturulanlar (var olan blok+no atlanır) |
 | `PATCH/DELETE /sites/:siteId/flats/:flatId` | `flat_type, template_id, status, block, number` |
-| `PUT /sites/:siteId/flats/:flatId/device` | `{device_uuid}` ya da `{device_uuid:null}`; kart envanterde olmalı ve başka daireye bağlı olmamalı (409 `DEVICE_ALREADY_LINKED`) |
+| `PUT /sites/:siteId/flats/:flatId/device` | `{device_uuid}` ya da `{device_uuid:null}`; kart envanterde olmalı ve başka daireye bağlı olmamalı (409 `DEVICE_ALREADY_LINKED`). Stokta olmayan kart yalnız pano değişim kaydıyla (eski = dairenin kartı, yeni = kart) ya da süper kullanıcıyla bağlanır (409 `DEVICE_NOT_IN_STOCK`). **C13 (2026-10-09):** aynı kart → değişiklik yok; `written` dairede kart ayrılınca `planned`; `installed` / `handed_over` dairede başka kart ya da ayırma: değişim kaydı varsa bağlanır ve durum KORUNUR (Pano Değişimi ile aynı); yoksa `super_user` değilse `409 INVALID_STATUS_TRANSITION` "Kurulmuş ya da teslim edilmiş dairenin kartı yalnız Pano Değişimi ile ya da yönetici tarafından değiştirilebilir."; `super_user` ise bağlanır ve durum yeniden hesaplanır (kartsız → `planned`; kartta dairenin şablonuyla başarılı yazım varsa `written`, yoksa `planned`). Kart değişince yeni kartın bu dairenin şablonuyla başarılı yazımı yoksa `written` → `planned` |
 | `GET /templates?site_id=&include_global=1` | Şablon: `id, site_id, name, flat_type, current_version, updated_at, created_by` |
 | `POST /templates` | `{site_id, body}` → şablon + sürüm 1 (`body.meta.template_id/version` sunucuca doldurulur) |
 | `GET /templates/:id` | güncel sürüm `{..., body}` |
@@ -786,14 +876,17 @@ Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message
 | `DELETE /templates/:id` | yumuşak; sürümler ve yazım kayıtları kalır |
 | `GET /templates/:id/versions` · `GET /templates/:id/versions/:version` | sürüm listesi (`version, sha256, created_at, created_by`) · gövde |
 | `POST /templates/validate` | `{body}` → `{ok:true}` ya da 422 `{code:"TEMPLATE_INVALID", error:"<şablon kodu>", path}` |
-| `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth"\|"lan", result:"ok"\|"error", error_code?}`; `ok` ise daire `written` |
+| `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth"\|"lan", result:"ok"\|"error", error_code?}` (`error_code` `[a-z0-9_.:-]{1,48}`; servis yazılımı kendi kodu `tpl_incomplete`'i de gönderebilir); `ok` ise `planned` daire `written`. Yanıt: kayıt + `flat_status`; tek uyarı alanı `warning`: kart başka daireye bağlıysa `DEVICE_LINKED_ELSEWHERE` + `linked_flat_id` (öncelikli), **C2 (2026-10-09):** daire başka bir şablona ayarlıysa `FLAT_TEMPLATE_MISMATCH` + `flat_template_id`; iki durumda da kayıt eklenir, daire durumu DEĞİŞMEZ. Daireye başka kart bağlıysa `409 CONFLICT` |
 | `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; her envanter kartı (müşteri kartı dahil; kullanıcı kararı 2026-10-08); denetim kaydı + oran sınırı |
 
 Claim (K-Ş8): kart bir daireye bağlıysa ev adı `"<site adı> <blok>-<no>"`, uç noktalar karta son yazılan şablon
 sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas alır. Daire durumu `installed`'a geçer.
 
 **Firmware (v1.3.0+).**
-- `POST /api/template/apply` (KEYED), `GET /api/template` (KEYED) — README.md.
+- `POST /api/template/apply` (KEYED), `GET /api/template` (KEYED) — README.md. 1.3.2: şablondaki köprü (kablosuz) sensörü ayrıştırmada ve
+  uygulamada `sensor_bridge_unsupported` (yol `safety.sensors`) ile reddedilir (C1; sunucu `template_schema.crossValidate` ve servis yazılımı
+  `template_model` aynı sırayla: kumanda rolü `sensor_src`, diğer köprü sensörü `sensor_bridge_unsupported`, sonra aralık/yineleme; kodlar
+  aynı, hata yolu sunucuda `safety.sensors`, servis yazılımında öğe düzeyinde `safety.sensors[i].id`).
 - Tam `/api/status` ve MQTT state yeni alanlar: `"tpl":{"id","ver"}` (yalnız şablon yüklüyse), `"eth_connected"`,
   `"eth_ip"`, `"net_if":"wifi"|"eth"|"none"`. Mevcut alanlar değişmez; `ip` etkin arayüzün IP'sidir.
 - Seri: `TPL BEGIN|DATA|COMMIT|ABORT|STATUS`; `STATUS` çıktısına yeni satırlar `Ethernet: <bagli|yok> <ip>` ve
@@ -801,6 +894,17 @@ sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas al�
 - **Kablolu Ethernet'ten gelen yerel API isteği anahtarsız ve provizyonsuz yetkilidir** (KEYED + AP_OR_KEYED; `safety/config`
   gevşetmesi serbest, seri CLI ile eşit). Wi-Fi STA / SoftAP'ten gelenler anahtarlı kalır. Kullanıcı kararı 2026-10-08.
 - Ethernet bağlıyken kurtarma AP'si kendiliğinden açılmaz; MQTT ve SNTP Wi-Fi ya da Ethernet'ten çalışır; UID Wi-Fi MAC'ten.
+
+**Servis yazılımı (2026-10-09 gece).**
+- Ethernet şablon yazımı: `POST /api/template/apply`'dan ÖNCE `GET /api/template` ile kartın mevcut kaydı (`template_id, version,
+  applied_at_uptime_s, incomplete`) okunur; bu okuma 401/423/404 ya da bağlantısızlıkla biterse yazım apply'a gitmez. 202 ya da kopmada başarı
+  için kimlik + sürüm eşleşmeli, `incomplete` olmamalı ve aynı kimlik + sürüm zaten kayıtlıysa `applied_at_uptime_s` değişmiş olmalıdır.
+  Seride COMMIT yanıtı kaybolursa `STATUS`'ta `YARIM` olmamalıdır. Kart yarım kaldıysa sonuç `tpl_incomplete` ("Şablon yarım kaldı; aynı
+  şablonu yeniden yazın."). **IP ↔ UID ön denetimi hâlâ YOKTUR** (kullanıcı kararı 2026-10-08, K-Ş4; yeniden açılması önerildi, uygulanmadı):
+  yanlış IP başka karta yazar.
+- Daireden yazımdan hemen önce daire satırı sunucudan yeniden okunur; şablonu değiştiyse araç sorar, `FLAT_TEMPLATE_MISMATCH` uyarısını
+  (kuyruktan sonradan gönderilen kayıtta da) gösterir. `GET /admin/inventory` çağrısına `search` (≤ 64) ve `offset` iletilir ("Daha fazla",
+  100'lük sayfalar); sunucu bunları zaten destekliyordu.
 
 ## 3f. Panonun bulut kimliğini kendisi alması (bootstrap, 2026-10-08)
 
@@ -823,7 +927,10 @@ bağlansın. Pano yerel anahtarıyla imzalı istekle kendini kanıtlar; sunucu s
 - `202 {"status":"pending"}` — imza doğru ama pano henüz sahiplenilmemiş (stokta): pano daha sonra yeniden dener.
 - `401 {"code":"BOOTSTRAP_DENIED"}` — bilinmeyen kart / imza yanlış / `|now-ts| > 300` / nonce tekrarı / askıda-iptal kart.
   (Hangi nedenin olduğu söylenmez.)
-- `429` — oran sınırı (kart başına saatte 6, IP başına saatte 60).
+- `429 RATE_LIMITED` (+`Retry-After`) — oran sınırı (bellek içi, süreç başına). IP bütçesi saatte 60: ÖNCE bakılır (doluysa kart bütçesine ve
+  servise gidilmez) ve **yalnız 200/202 dışı sonuç harcar** (C7, 2026-10-09: 401, hata ve kart bütçesi 429'u; ortak NAT arkasında 10 dk'da
+  bir 202 alan sahiplenilmemiş panolar sahiplenilen panonun bootstrap'ini kilitleyemez). Kart bütçesi saatte 20: önce bakılır, yalnız imzası
+  doğrulanan (401 olmayan) istek harcar (bireysel-6; sahte istek gerçek kartın hakkını tüketemez). Firmware değişmedi.
 
 **Pano davranışı (v1.3.0):** provizyonlu + ağ (Wi-Fi ya da Ethernet) var + saat senkron + (MQTT kimliği yok **ya da** broker
 art arda 3 kez `not authorized` döndü) ise bootstrap çağrılır. 200 → kimlik NVS'e yazılır (`/api/mqtt/config` ile aynı yol)
@@ -858,6 +965,104 @@ Firmware v1.3.1, sunucu `c5f9ece` (migration `037`, `038`).
   isteğinin tekrarı bu süre içinde oturum ailesini iptal ettirmez.
 - **Migration:** `034` (huzur bildirimi `skipped_hazard`), `035` (site/şablon), `036` (bootstrap nonce), `037` (yerel anahtar
   izi ve tutarlılık), `038` (pano değişimi onarımları).
+
+## 3h. Yasal metinler (2026-10-08)
+
+Kod: `server/legal/<slug>.md`, `src/services/legal_service.js`, `src/utils/legal_markdown.js`, `src/routes/legal_routes.js`, migration `039`;
+uygulama `lib/models/legal_models.dart`, `lib/ui/pages/legal/**`, kayıt ve giriş ekranları. Hukuki içerik, yer tutucular, sürüm kuralı ve yayın
+kontrol listesi: `docs/yasal/README.md` (§3: ilk `final` sürüm `version: 2` olmalı). Yeni ortam değişkeni yok.
+
+**Belgeler.** Sunucu yalnız iki bilinen dosyayı okur (dizindeki başka dosyalar okunmaz):
+
+| `id` | Dosya (`slug`) | Başlık | Onay |
+|---|---|---|---|
+| `terms` | `kullanici-sozlesmesi.md` | Kullanıcı Sözleşmesi ve Son Kullanıcı Lisans Koşulları | ister (`requires_acceptance: true`) |
+| `privacy` | `gizlilik-politikasi.md` | Gizlilik Politikası ve KVKK Aydınlatma Metni | istemez (aydınlatma bilgilendirmedir, rızaya bağlanmaz) |
+
+- Ön bilgi (iki `---` satırı arasında `anahtar: değer`; hepsi zorunlu): `id` (`terms|privacy`), `slug` (`[a-z0-9-]`), `title`, `version` (pozitif
+  tamsayı), `effective_date` (`YYYY-AA-GG`), `status` (`draft|final`), `requires_acceptance` (`true|false`). `id` / `slug` dosyayla ya da
+  `requires_acceptance` yukarıdaki kuralla uyuşmazsa belge REDDEDİLİR. Gövde alt kümesi: `#` / `##` / `###` başlık, paragraf, `-` ile başlayan madde, `N.` ile
+  başlayan numaralı madde, satır içi yalnız `**kalın**`; desteklenmeyen sözdizimi düz metin kalır (loga satır numarasıyla uyarı).
+- Belgeler açılışta bir kez okunur; değişiklik yeniden başlatmayla (dağıtım) yürürlüğe girer. Eksik dizin ya da geçersiz belge sunucuyu
+  DURDURMAZ: o belge yokmuş gibi davranılır (liste boş, sayfa 404, `needs_acceptance` false); log yalnız dosya adı ve neden içerir.
+- Bugünkü durum: iki metin de `version: 1`, `status: draft` (avukat incelemesi ve yer tutucular bekleniyor).
+
+**Uçlar** (`/api/v1/...` ve `/api/...`; JSON yanıtları `Cache-Control: no-store`):
+
+| Uç | Kimlik / sınır | Yanıt |
+|---|---|---|
+| `GET /legal` | kimliksiz; IP başına 600/15 dk | `data.documents: [{id, slug, title, version, effective_date, status, requires_acceptance, url:"/yasal/<slug>"}]`; sıra terms → privacy; yüklü belge yoksa boş liste |
+| `GET /legal/:id` | kimliksiz; aynı sınır | `:id` = `terms` / `privacy` ya da slug. Tek belge + `blocks: [{type: "h1"\|"h2"\|"h3"\|"p"\|"li"\|"oli", text, n?}]` (başlığa eşit ilk `#` düşürülür; HTML sayfa aynı gövdeden). Yoksa `404 NOT_FOUND` "Yasal belge bulunamadı." |
+| `POST /legal/accept` | kullanıcı JWT'si; servis PIN oturumu `403 FORBIDDEN`; kullanıcı başına 30/15 dk | Gövde `{document:"terms", version:N}` (`document` yerine `id` / `slug`; `version` sayı ya da rakam dizgesi) → `200 {document, version, accepted_at}`, ileti "Onayınız kaydedildi.". Son kabul aynı sürümse yeni kayıt yazılmaz (aynı `accepted_at` döner). Hatalar: bilinmeyen belge `400 VALIDATION` "Yasal belge bulunamadı."; `privacy` `400 VALIDATION` "Bu metin bilgilendirme amaçlıdır; onay gerektirmez."; sürüm yok / bozuk `400 VALIDATION`; güncel olmayan sürüm `409 LEGAL_VERSION_MISMATCH` "Kullanıcı Sözleşmesi güncellendi. Lütfen güncel metni okuyup yeniden onaylayın." + `data: {current_version}` |
+| `GET /yasal/:slug` | kimliksiz HTML sayfa (API öneki yok) | `200` (`Cache-Control: public, max-age=300`): başlık, "Sürüm N · Yürürlük: GG.AA.YYYY", taslakta "TASLAK" bandı, gövde. Bilinmeyen slug, yalın `/yasal` ve iç içe yol: `404` HTML (`no-store`). Çerez ve betik yok; CSP stili yalnız SHA-256 özetiyle izinler; `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`; istekten değer yansımaz |
+
+**Kayıt.** `POST /auth/register` isteğe bağlı `accept_terms_version` (ya da `acceptTermsVersion`) alır. Değer güncel sözleşme sürümüne eşit
+olmalıdır; değilse (ya da sözleşme yüklü değilse: `current_version: null`) `409 LEGAL_VERSION_MISMATCH` + `data.current_version` döner ve hesap
+AÇILMAZ (bu denetim e-posta / telefon çakışma denetiminden önce yapılır); bozuk biçim `400 VALIDATION`. Kabul kaydı hesapla AYNI transaction'da
+yazılır (kabul yazılamazsa hesap da açılmaz). Alan yoksa hesap kabulsüz açılır (eski istemci).
+
+**Kullanıcı nesnesi.** Kullanıcı döndüren her yanıtta (giriş, kayıt, `/auth/me`, sosyal giriş, OTP …) `legal: {terms_accepted_version,
+terms_current_version, terms_status, needs_acceptance}`. `needs_acceptance` YALNIZ şu durumda `true`: sözleşme yüklü VE `status: final` VE global
+rol `super_user` / `service_user` değil VE (kabul yok ya da kabul edilen sürüm < güncel sürüm). Taslakta, personelde ve sözleşme yokken hiç `true`
+olmaz. Belge servisi hata verirse alanlar `null` / `false` döner (giriş bozulmaz). Sunucu onayı hiçbir uçta ZORLAMAZ; kapı yalnız istemcidedir
+(sunucuda zorlama açık karar maddesi `karar-sunucu-kapilari`, §3i).
+
+**Veri (migration `039`).** `users.terms_version INTEGER`, `users.terms_accepted_at TIMESTAMPTZ` (NULL = kabul yok). `terms_version` `to_jsonb`
+ile okunur: kod `039`'suz veritabanında giriş / kayıt / profil yanıtlarını bozmaz ama kabul ve `accept_terms_version`'lı kayıt `500` verir (sıra:
+önce migration, sonra sunucu). `legal_acceptances (id BIGSERIAL, user_id UUID → users ON DELETE CASCADE, document 'terms'|'privacy',
+version > 0, accepted_at, ip_address, user_agent ≤ 255 karakter)`, indeks `(user_id, document, accepted_at DESC)`. Kabul satırı ile
+`users.terms_*` aynı transaction'da yazılır; kullanıcı satırı `FOR UPDATE` ile kilitlenir (eşzamanlı iki kabul tek satır). Sunucu bugün
+`privacy` kabulü yazmaz. Yumuşak hesap silmede kabul kayıtları kalır; kullanıcı satırı kalıcı silinirse CASCADE ile silinir (gizlilik
+metniyle çelişki: açık karar `karar-sozlesme-kaydi-saklama`, §3i).
+
+**Uygulama.**
+- Kayıt ekranı güncel sürümü `GET /legal`'dan alır. "Kullanıcı Sözleşmesi'ni okudum ve kabul ediyorum." kutusu işaretlenmeden "Kayıt Ol ve
+  Giriş Yap" pasiftir; sürüm alınamazsa satır içi hata + "Tekrar Dene" (kayıt gönderilemez). `409 LEGAL_VERSION_MISMATCH`'te hesap açılmamıştır:
+  onay kaldırılır, sürüm yeniden alınır. Altındaki "Kişisel verileriniz Gizlilik Politikası ve KVKK Aydınlatma Metni kapsamında işlenir." satırı
+  yalnız bilgilendirmedir (kutu yok). Giriş ekranının altında "Kullanıcı Sözleşmesi" · "Gizlilik ve KVKK" bağlantıları (girişsiz okunur).
+- `needs_acceptance` iken (yalnız bulut kipinde; servis PIN oturumu, personel ve yerel ağ kipinde hiç) giriş kapısı, zorunlu parola
+  değişiminden SONRA tam ekran "Kullanıcı Sözleşmesi" onayını gösterir: "Kabul Ediyorum" / "Çıkış Yap" (geri tuşu kapatmaz). Durum soğuk
+  açılışta, buluta geçişte (hiç eşitlenmediyse ya da 12 sa geçtiyse) ve ön plana dönüşte (son eşitlemeden 12 sa sonra) `/auth/me` ile
+  tazelenir (cekirdek-6, 2026-10-09). Kapı açıkken bildirim yönlendirmesi, etiket bağlantısı ve gece afişi bekletilir (§5).
+- Metinler: "Cihaz & Sistem Ayarları" → "Hakkında" → "Yasal Metinler" ve profil penceresi → "Hakkında" → "Yasal Metinler".
+
+## 3i. 2026-10-09 gece düzeltmeleri: sözleşme değişiklikleri (özet)
+
+Ayrıntılar aşağıdaki bölümlerdedir; değişikliklerin hepsi eklemeli ve geriye uyumludur: hiçbir sunucu / uygulama davranışı firmware sürüm
+numarasına bağlanmaz, yeni firmware özellikleri alan ya da yetenek varlığıyla algılanır (eski pano + yeni sunucu ve yeni pano + eski sunucu
+çalışır). Firmware **v1.3.2** paketlendi (`firmware_releases/v1.3.2`; kartta denenmedi, servis yazılımında seçili sürüm hâlâ v1.3.1). Yeni
+migration'lar `040`, `041` (sıra: `040` → `041` → sunucu kodu). Yasal metinlere (`server/legal`, `docs/yasal`) dokunulmadı.
+
+| Kod | Değişiklik | Bölüm |
+|---|---|---|
+| C1 | Köprü (kablosuz) sensörü: yetenek `bridge`, kod `sensor_bridge_unsupported`; firmware yalnız yazım yollarında reddeder, bulut yaması `400 VALIDATION`, şablon reddi; uygulama ve servis yazılımı kapısı | §1.5e, §2.6, §3e, §2.7 |
+| C2 | Şablon yazım kaydı `FLAT_TEMPLATE_MISMATCH` + `flat_template_id`; `last_ok_write.template_id` | §3e |
+| C3 | Davet / devir kodunun yinelenmesi kodun kendi kullanıcısına `200 already_member` | §1.5c |
+| C4 | Pano değişimi `safety_restore` + uyarı + yeni ileti | §1.5b |
+| C5 | `GET /homes` `access_starts_in` / `access_expires_in` (sunucu saati) | §1.1b |
+| C6 | `state.cfg.safety.id` (1.3.2) ve kuyruk çıkarımı | §2.6, §1.5e |
+| C7 | Bootstrap IP bütçesini yalnız başarısız sonuç harcar | §3f |
+| C8 | E-postasız müşteriye sahiplenme kodu: `CUSTOMER_EMAIL_REQUIRED` | §1.5 |
+| C9 | `users.phone_verified` (`041`), telefon-OTP `409 PHONE_NOT_VERIFIED` | §1.1b |
+| C10 | Dondurma / çözme kuralları; silinmiş hesapta `409` | §1.1b |
+| C11 | `alarms.ack_requested_sid` (`040`); kuyruktaki onayda 24 sa + yetki denetimi, `alarm_ack_request_dropped` | §1.5d |
+| C12 | Açık alarmda push en az bir kez (`retryStuckPushes`) | §2.5 |
+| C13 | Daire kart bağlama kuralları, `409 INVALID_STATUS_TRANSITION` | §3e |
+| C14 | Panjur çiftinin iki satırına ad / oda | §1.5 |
+| C15 | Sistem doktoru: bulut bağlantısı kesintisi `UNKNOWN` / `warning` | §1.5b |
+| C16 | Uygulama `ev/{t}/status`'u `uid` başına tutar | §2.1 |
+| sko-3, sko-4 | Pano değişimi sonrası `set_runtime` onayı; zamanlı kural yuvası geçici hatada geri bırakılır | §1.5b |
+| hesap-uyelik-7 | Davet / servis PIN'i üretiminde üyelik `FOR SHARE` ile yeniden doğrulanır | §1.5c |
+| fw-tarama-3/4/5 | Onay penceresi büyür; `EXTMOD` reddi + kapsam dışı röle OFF; NVS yazımı yeniden denenir | §2.6, §3c |
+| Uygulama | Kapı görünümü bekletmesi, sihirbaz kilidi, misafir penceresi, uç nokta yeniden denemesi … | §5 |
+
+**Açık karar maddeleri (uygulanmadı; gerekçe ve seçenekler akış belgelerinin "Açık kalan konular" bölümlerinde):**
+`karar-yerel-anahtar-personel`, `karar-servis-pin-kaba-kuvvet`, `karar-telefon-bicimi`, `karar-dondurma-yetkisi`,
+`karar-sozlesme-kaydi-saklama`, `karar-evden-ayrilma`, `karar-pano-degisimi-geri-yukleme`, `karar-cihaz-mqtt-kimligi`,
+`karar-sahiplenme-sms`, `karar-alarm-gecmisi-devir`, `karar-kalici-silme-panolu-ev`, `karar-kablosuz-sensor-kapsami`,
+`karar-bulut-host-degisikligi` (yüksek), `karar-kilitliyken-fabrika-sifirlama`, `karar-sunucu-kapilari`; dünden açık `guvenlik-14`,
+`kayit-dogrulama`, `bireysel-9-yayin`, `bireysel-5-eth`. Ethernet şablon yazımında kart UID'sinin doğrulanması (sozlesme-2) önerildi; kullanıcı
+kararı K-Ş4'ü tersine çevireceği için uygulanmadı.
 
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 
@@ -908,7 +1113,7 @@ Maliyet: enerjileme yazımı başına +2 I2C okuması (~0,5 ms normal), KAPATMA 
 - Anahtar: istek `X-Device-Key` taşımaz; yalnız pano kimliği (anahtarsız `status`) okunduktan sonra **O panonun** anahtarı yerel güvenli depoda zaten varsa (ağ çağrısı yok) eklenir. Anahtar için sunucuya GİDİLMEZ, 401'de anahtar yenilenmez (kullanıcıya "kurulum ağına bağlı olun" yönergesi). Başka panonun anahtarı gönderilmez.
 - Sonuç bekleme `GET /api/wifi/status` ile yapılır (`AutomationApiService.fetchWifiStatus`/`awaitWifiConnection`; 404'te eski yazılım için `/api/status`'a düşer); başarı YALNIZ `wifi_connect_state == success`; temas kopması (`lostContact`) başarısızlık değil "belirsiz"dir; `429 rate_limited` (AP kaynaklı dakikada 6) geri sayımlı bekleme gösterir.
 - `WifiProvisionPanel` (ortak bileşen: sihirbaz + servis kurulum sihirbazı adım 5): isteğe bağlı `expectedUid` (yanlış pano ENGELLEMEYEN uyarı), `onDeviceChecked`, `numberedSteps`, `clock`. AP adı etiketten (`AHBU-<MAC son 6>`), parola etiketteki cihaza özel `ap_pass`; panonun kendi kurulum ağı karekodu modem bilgisi olarak kabul edilmez.
-- Biyometrik/oturum kilidi: `AuthGate` pano görünümünden kilit/giriş/zorunlu-parola görünümüne geçerken Navigator'daki TÜM itilmiş sayfaları ve diyalogları kapatır (kök rotaya `popUntil`); `AuthStatus` değerleri aynıdır (`checking|authenticated|unauthenticated`); kilitliyken `fetchHomeMembers`/`getHomeTransferStatus` istek atmaz. Kilit anında Wi-Fi sihirbazı açıksa (`WifiRecoveryDialog.routeName` = `/wifi-setup`) kilit açılınca YALNIZ o sihirbaz yeniden açılır (girilmiş alanlar korunmaz, yeniden test gerekir); diğer sayfalar bilinçli olarak kapalı kalır.
+- Biyometrik/oturum kilidi: `AuthGate` pano görünümünden kilit/giriş/zorunlu-parola görünümüne geçerken Navigator'daki TÜM itilmiş sayfaları ve diyalogları kapatır (kök rotaya `popUntil`); `AuthStatus` değerleri aynıdır (`checking|authenticated|unauthenticated`); kilitliyken `fetchHomeMembers`/`getHomeTransferStatus` istek atmaz. Kilit anında Wi-Fi sihirbazı açıksa (`WifiRecoveryDialog.routeName` = `/wifi-setup`) kilit açılınca YALNIZ o sihirbaz yeniden açılır (girilmiş alanlar korunmaz, yeniden test gerekir); diğer sayfalar bilinçli olarak kapalı kalır. **İstisna (uygulama-ekranlar-1, 2026-10-09):** biyometrik yeniden kilitte servis kurulum sihirbazı açıksa (`ServiceSetupWizardPage.routeName` = `/service-setup`, açık sihirbaz sayacı `isOpen`) rotalar KAPATILMAZ: kök gezgine opak, geri tuşuyla kapanmayan `/biometric-lock` rotası itilir (içerik kilit ekranı), kilit açılınca bu rota kapanır ve sihirbaz aynı durumla (bellekteki cihaz anahtarı dahil) sürer; kilitliyken sihirbaz "oturum bitti" sayılmaz (`isBiometricLocked`). Çıkış, zorunlu parola ya da sözleşme görünümüne geçişte sihirbaz da kapanır. Sihirbaz tek açıcıdan açılır (`service_setup/open_wizard.dart`; mevcut cihaz girişlerinde yarım kayıt varsa "Kaldığınız yerden devam / Baştan başla / Vazgeç" sorusu, "Vazgeç" kaydı değiştirmez).
 - Derin bağlantılar: `MaterialApp.onGenerateRoute/onUnknownRoute` bağlıdır; iOS Associated Domains ve sunucuda `/.well-known/assetlinks.json` + `apple-app-site-association` YAYINLANMADI (dağıtım işi).
 
 **Gerçekleşme notları (WP-NET, 2026-10-02): Android'de pano kurulum ağına süreç bağlama (§3d ile birlikte oku; ayrıntı: `docs/FLUTTER_API_CHANGES.md` §8.4):**
@@ -956,6 +1161,30 @@ Maliyet: enerjileme yazımı başına +2 I2C okuması (~0,5 ms normal), KAPATMA 
 - *Tek seferlik sırlı sonuçlar (PF-44):* `claimDevice`, `emergencyResetDevice`, `replaceBoard` başarı sonrası ev/uç nokta yenilemesini en iyi çabayla ve en çok 3 sn bekler; sonuç (PIN, yerel anahtar, cihaz kimliği) hemen döner, yenileme arka planda sürer (`claimDevice` müşteri akışında sahiplenilen evin seçimi de bu en iyi çaba bloğundadır: sınır aşılırsa liste gelince arka planda seçilir). `dispose` sonrası zamanlayıcı, yoklama, MQTT ve istek kurulmaz (PF-34).
 - *Görünüm önbelleği (PF-20/25):* `relayItems`, `shutterItems`, `status`, `scheduledRules`, `capabilities` (ve `inventoryDevices`/`inventoryStats`/`serviceSubscribers`/`childLockOfflineDevices` salt-okunur görünümleri; liste görünümleri DEĞİŞTİRİLEMEZ) girdileri değişmedikçe AYNI nesneyi döndürür (`identical`); girdi değişince (MQTT/REST/LAN verisi, bekleyen komut ve geri alması, rol/ev/oturum, misafir penceresinin zamanla başlaması/bitmesi) yeni nesne. `...ForTesting` ayarlayıcıları senkron bildirir ve görünümü geçersiz kılar. `Capabilities ==`/`hashCode` bayrak bit maskesiyle karşılaştırır (anlamı `toMap()` eşitliğiyle aynı).
 
+**Gerçekleşme notları (2026-10-09 gece düzeltmeleri; uygulama).** Yeni sunucu alanlarının hepsi isteğe bağlıdır; alan yoksa eski davranış.
+- *Kapı görünümü (uygulama-ekranlar-2):* `AutomationState.isGated` = oturum doğrulanıyor / biyometrik kilitli ya da oturum açık ama zorunlu
+  parola değişimi veya sözleşme onayı bekleniyor. Bu sırada güvenlik bildirimi dokunuşu bekletilir (kritik alarm dahil; işletim sistemi
+  bildirimi zaten görünür), gece afişi gösterilmez ve "Hepsini kapat" çalışmaz, etiket bağlantısı (`/claim`) sahiplenme penceresini açmaz;
+  kapı geçilince bekletilen işlem sürer. Oturumsuzken dokunulan bildirim girişten sonra ev listesi en az bir kez yüklenince işlenir (ev
+  bulunamazsa bir yeni liste daha beklenir, sonra düşer).
+- *Misafir penceresi (cekirdek-1, C5):* saat farkı `server_clock_skew_ms` (SharedPreferences) ile misafir başlangıç/bitiş kararları sunucu
+  saatiyle verilir (`state.serverNow`); `valid_from` için de zamanlayıcı kurulur (zamanı gelince ev listesi çekilir); aktif evin erişimi
+  kapalıdan açığa geçince (başlangıç, uzatma, misafirden aileye) REST yenilenir ve canlı kanal başlatılır.
+- *Uç nokta listesi (cekirdek-2):* liste hiç yüklenemediyse ve planlı otomatik deneme ya da süren yenileme yoksa (ör. 4 deneme tükendiyse)
+  canlı kanal bağlanınca (her bağlanışta) ve canlı anlık görüntü gelince (en çok 60 sn'de bir) deneme sayacı sıfırlanıp liste yeniden istenir. "Yükleniyor" ve "Cihazlar yüklenemedi" görünümlerinde de aktif alarm
+  varsa kritik alarm kartı gösterilir.
+- *Arka plan alarm izleme (cekirdek-3):* güvenli depo okunamadığında (`storageError` + oturumsuz) izleme kapatılmaz; yalnız gerçek oturum
+  bitişinde (oturum süresi doldu olayı, çıkış / tüm cihazlardan çıkış kancası, başka kullanıcıyla giriş) durur.
+- *Pano çevrimiçiliği (C16):* §2.1. *Pano değişimi sonucu (C4):* `safety_restore` §1.5b. *Katılım / devir (C3):* §1.5c. *Yasal durum
+  (cekirdek-6):* §3h.
+- *Kurulum sihirbazı:* 5. adımda "Panoyu Hazırla" kurulum ağı (AP) parolasını iki kez ister ("Kurulum ağı parolaları eşleşmiyor."), etiket
+  karekodu okunduysa alanların üzerine yazar ve elle yazılan parola etiketten farklıysa engeller ("Yazdığınız parola etiketteki parolayla
+  eşleşmiyor."); iki durumda da `factory/init` çağrılmaz (uygulama-ekranlar-3). 7. adımda köprü sensörü kapısı (C1, §2.6). 9. adımda
+  güvenlik rolüne atanmış girişler (sensörler, vana geri bildirimi, yerel kumandalar; panodan okunur) buton sayılmaz ve listelenmez
+  ("Güvenlik girişleri (N) bu adımda gösterilmez."; uygulama-ekranlar-6).
+- *Zamanlı kural penceresi (uygulama-ekranlar-5):* güvenlik eylemcisi kanalları (vana / siren / fan / diğer eylemci) listelenmez; varsayılan
+  seçim ilk geçerli kanaldır.
+
 ## 6. Ortam değişkenleri (sunucu)
 
 | Değişken | Zorunlu | Kim okur |
@@ -995,6 +1224,9 @@ Ek (C paketi, altyapı): `docker-compose` `${VAR:?}` ile **zorunlu** kılar → 
 Yönetim betikleri (yalnız komut satırında): `MIGRATE_CONFIRM=<db adı>`, `ALLOW_DEV_SEEDS`, `DEV_SEED_*`, `SUPER_USER_*`, `LEGACY_MQTT_*`. Tam liste `server/.env.example`'dadır.
 
 **Migration sırası (gerçekleşen):** `001…017` (+`010b`) → A: `018`, `019` → B: `020`, `021` → C: `022`–`026` → B2 (servis paneli): `027` (hesap silme), `028` (Home Admin atama), `029` (etiket yeniden üretimi) → H: `030` → L: `031` (yerleşim eşitleme tabanı: `devices.reported_layout`) → akış denetimi: `032` (bekleyen yerel anahtar: `devices.local_key_pending_enc/_at` + tetikleyici `trg_devices_pending_key_superseded`; kod `032`'siz veritabanında acil sıfırlamada `42703` verir: önce migration) → güvenlik modülü (WP-S1): `033` (`alarms`, `device_events`, `device_configs`, `devices.caps/safety_state`, `endpoints.actuator_type/dimmable/dimmer_source`, mevcut cihaz kimliklerine `ev/{t}/event` yayın ACL'i; köprü v:3 state'te `devices.caps`'i yazdığı için **dağıtım sırası: 033 → sunucu kodu → firmware**). Güvenlik modülü yeni ortam değişkeni eklemez (push `FCM_*` ile ortaktır). Çalıştırıcı `server/scripts/migrate.js` (`schema_migrations`, hedef DB onayı `MIGRATE_CONFIRM`, `--baseline 17` mevcut canlı şema için).
+Sonrakiler: `034`–`038` (§3g) → `039` (yasal metin kabulleri, §3h) → `040` (`alarms.ack_requested_sid`, §1.5d C11) → `041`
+(`users.phone_verified` + OTP yer tutucu hesaplarda `TRUE`, §1.1b C9). Sıra her zaman önce migration, sonra sunucu kodu: `039` ve `041`
+kolonları okumada `to_jsonb` ile hoşgörülür ama yazım yolları kolonu ister; `040` kolonunu alarm sorguları doğrudan kullanır.
 Uygulanmış bir migration dosyası **yerinde değiştirilmez** (checksum hatası); düzeltme yeni bir migration'dır.
 
 \* ilgili özellik kullanılacaksa. `.env` git'te **takip edilmez**; `server/.env.example` yalnızca yer tutucu içerir.
@@ -1041,6 +1273,8 @@ uyumsuzluklar düzeltildi; her düzeltmenin testi en az bir tarafta vardır).
 | REST `…/arm`, `…/safety-config` (POST), `…/safety-config/pending` (DELETE) (Faz 2) | SRV `routes/safety_routes.js` + `services/safety_cfg_sync.js` | APP `ev_cloud_api_service.dart` `armCommand` / `patchSafetyConfig` / `clearSafetyConfigPending`, sihirbaz `logic/safety_config_transport.dart` |
 | LAN `POST /api/arm` (Faz 2) | FW `WebPortal.cpp` `handleApiArm` | APP `automation_api_service.dart` `postArm` |
 | `cfg_dump` `intrusion`, state `arm_key` (Faz 2) | FW `SafetyCfgJson.h` `writeCfgHead`, `SafetyView.h` | SRV `validateEventPayload` / `mergeCfgDumpParts` (`CFG_DUMP_KEYS`), `parseStateSafety` (`CONTROL_KINDS`); APP `relay_logic.dart` / `safety_assignment.dart` |
+| Köprü sensörü reddi `sensor_bridge_unsupported`, yetenek `bridge` (C1, 2026-10-09) | FW `safety/SafetyConfig.h` `validate(…, forWrite)` (`submitEdit`, `TemplateParse`, `TemplateApply`); sim `tools/qa_stack/sim/fw/safety_config.js` | SRV `utils/template_schema.js` `crossValidate`, `utils/safety_cfg_patch.js`; APP `safety_models.dart` (`supportsBridge`, ret metni), `safety_assignment.dart`, `relay_logic.dart`; servis yazılımı `template_model.py` |
+| `state.cfg.safety.id` (C6, 1.3.2) | FW `SafetyView.h` (`StateMeta.cfgId/cfgIdRev`) + `MqttManager.cpp`; sim `safety_view.js`, `mqtt_manager.js` | SRV `utils/safety_payload.js` (`cfgId`) → `mqtt_bridge` → `safety_cfg_sync._processQueue` |
 
 **Faz 2 birleştirme hizalaması (2026-10-07; üç ekibin dalları tek ağaçta).** Uçtan uca bağlayıcı test:
 `tools/qa_stack/test/f2_cross_layer_contract.test.js` (firmware simülatörünün gerçek yükleri sunucunun gerçek doğrulayıcılarından geçer; sunucunun
