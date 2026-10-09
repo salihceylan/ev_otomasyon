@@ -133,3 +133,12 @@ test('provisionIfEmpty: fabrika cihazinda (ap_pass hic yok) local_key yazilamazs
   again.begin();
   assert.deepEqual([again.config.local_key, again.config.ap_pass], ['', ''], 'yeniden acilis: provizyonsuz, ap_pass bos');
 });
+
+test('fabrika varsayilani (sahip karari 2026-10-09): hicbir rolenin sabit rolu yok -- roleler "Röle N" light/0, DI n -> role n TOGGLE', () => {
+  const { cm } = makeCm();
+  const c = cm.config;
+  for (let i = 0; i < 40; i++) {
+    assert.deepEqual([c.relays[i].name, c.relays[i].type, c.relays[i].runtime_sec], [i < 8 ? `Röle ${i + 1}` : `Ek Modül Röle ${i - 7}`, 0, 0]);
+    assert.deepEqual([c.dis[i].name, c.dis[i].target_relay, c.dis[i].mode], [i < 8 ? `Anahtar / Buton ${i + 1}` : `Ek Giriş / Buton ${i - 7}`, i + 1, 0]);
+  }
+});

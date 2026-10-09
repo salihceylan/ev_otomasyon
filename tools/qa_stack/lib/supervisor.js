@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import { DeviceFleet } from '../sim/run_devices.js';
+import { QA_MQTT_HOST_ALLOW } from '../sim/device_sim.js';
 import { ensureDeviceAccounts, DEVICE_PLAN } from './accounts.js';
 import { applyMigrations, buildServerEnv, quarantineMigrationUsers, startApiServer } from './api_server.js';
 import { startBroker } from './broker.js';
@@ -160,6 +161,10 @@ export async function runDaemon(options = {}) {
         homeWifi: { ssid: accounts.wifi.ssid, pass: accounts.wifi.password },
         wifiConnected: d.key === 'home1',
         localKey: d.key === 'home1' ? info.bootstrap_local_key : '',
+        // firmware sunucu kilidi (MqttHostPolicy.h): QA test sunuculari + istemciye bildirilen MQTT adresi (seed bunu /api/mqtt/config'e yazar)
+        mqttHostAllow: `${QA_MQTT_HOST_ALLOW},${o.publicHost}`,
+        // firmware >= 1.3.0 bootstrap'i (kimlik dondurulunce / yokken): istek yerel sunucuya gider
+        bootstrapApi: `http://127.0.0.1:${PORTS.api}`,
       });
     }
     await fleet.startAll();

@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { DeviceSimulator } from '../sim/device_sim.js';
 import { isLoopbackAddress, isAllowedHost, originMatchesHost, ROUTES } from '../sim/local_api.js';
 import { FW_VERSION_DEFAULT } from '../sim/fw/wifi_manager.js';
@@ -689,10 +690,10 @@ test('mqtt/config: dogrulama (host/port/user/pass) ve basari; kimlik kalicilasir
   try {
     const post = (body) => j('POST', '/api/mqtt/config', { body });
     for (const body of [{}, { server: 'bad host', port: 1883, user: 'u', pass: 'p' }, { server: '-x.com', port: 1883, user: 'u', pass: 'p' },
-      { server: 'ok.example', port: 0, user: 'u', pass: 'p' }, { server: 'ok.example', port: 70000, user: 'u', pass: 'p' }, { server: 'ok.example', port: '1883', user: 'u', pass: 'p' },
-      { server: 'ok.example', port: 1883, user: '', pass: 'p' }, { server: 'ok.example', port: 1883, user: 'u', pass: '' },
-      { server: 'ok.example', port: 1883, user: 'u'.repeat(48), pass: 'p' }, { server: 'ok.example', port: 1883, user: 'u u', pass: 'p' },
-      { server: 'ok.example', port: 1883, user: 'u', pass: 'p'.repeat(64) }]) {
+      { server: '10.0.2.2', port: 0, user: 'u', pass: 'p' }, { server: '10.0.2.2', port: 70000, user: 'u', pass: 'p' }, { server: '10.0.2.2', port: '1883', user: 'u', pass: 'p' },
+      { server: '10.0.2.2', port: 1883, user: '', pass: 'p' }, { server: '10.0.2.2', port: 1883, user: 'u', pass: '' },
+      { server: '10.0.2.2', port: 1883, user: 'u'.repeat(48), pass: 'p' }, { server: '10.0.2.2', port: 1883, user: 'u u', pass: 'p' },
+      { server: '10.0.2.2', port: 1883, user: 'u', pass: 'p'.repeat(64) }]) {
       const r = await post(body);
       assert.deepEqual([r.status, r.json], [400, { error: 'invalid_value' }], JSON.stringify(body));
     }
@@ -703,6 +704,102 @@ test('mqtt/config: dogrulama (host/port/user/pass) ve basari; kimlik kalicilasir
     assert.deepEqual(sim.mqttCfg, { server: '10.0.2.2', port: 1883, user: 'd_h_abc123' });
   } finally {
     await sim.stop();
+  }
+});
+
+// Sahip karari (2026-10-09) bulut sunucu kilidi (firmware MqttHostPolicy.h): yalniz DEFAULT_MQTT_SERVER + derleme izin listesi (simulatorde
+// `mqttHostAllow`); sozdizimi gecerli yabanci ad 400 host_not_allowed ve HICBIR sey degismez. Bos/verilmemis server mevcut sunucuyu korur.
+test('mqtt/config: sunucu kilidi -- yabanci broker host_not_allowed; bos/verilmemis server mevcut sunucuyu korur', async () => {
+  const { sim, j } = await startSim({ mqttHostAllow: 'qa.local, 10.0.2.2' });
+  try {
+    const post = (body) => j('POST', '/api/mqtt/config', { body });
+    for (const server of ['evil.example', 'evotomasyon.gudeteknoloji.com.tr.evil.example', 'xevotomasyon.gudeteknoloji.com.tr', '127.0.0.1', 'qa.loca']) {
+      const r = await post({ server, port: 8884, user: 'd_h_x', pass: 'sifre-1' });
+      assert.deepEqual([r.status, r.json], [400, { error: 'host_not_allowed' }], server);
+    }
+    // alan dogrulamasi once gelir: yabanci ad + bozuk port yine invalid_value
+    assert.deepEqual((await post({ server: 'evil.example', port: 0, user: 'u', pass: 'p' })).json, { error: 'invalid_value' });
+    assert.deepEqual((await post({ server: 7, port: 8884, user: 'u', pass: 'p' })).json, { error: 'invalid_value' });
+    assert.equal(sim.mqttCfg, null);
+    assert.equal((await j('GET', '/api/status')).json.mqtt_configured, false);
+    // varsayilan sunucu (buyuk/kucuk harf duyarsiz) ve listedeki test sunucusu kabul edilir
+    let r = await post({ server: 'EVOTOMASYON.gudeteknoloji.com.tr', port: 8884, user: 'd_h_a', pass: 'sifre-1' });
+    assert.deepEqual([r.status, r.json], [200, { status: 'ok' }]);
+    r = await post({ server: 'QA.local', port: 8884, user: 'd_h_b', pass: 'sifre-2' });
+    assert.deepEqual([r.status, r.json], [200, { status: 'ok' }]);
+    assert.deepEqual(sim.mqttCfg, { server: 'QA.local', port: 8884, user: 'd_h_b' });
+    // bos ya da verilmemis server: mevcut sunucu korunur, port/kullanici/parola degisir
+    r = await post({ port: 1883, user: 'd_h_c', pass: 'sifre-3' });
+    assert.deepEqual([r.status, r.json], [200, { status: 'ok' }]);
+    assert.deepEqual(sim.mqttCfg, { server: 'QA.local', port: 1883, user: 'd_h_c' });
+    r = await post({ server: '', port: 1884, user: 'd_h_d', pass: 'sifre-4' });
+    assert.deepEqual([r.status, r.json], [200, { status: 'ok' }]);
+    assert.deepEqual(sim.mqttCfg, { server: 'QA.local', port: 1884, user: 'd_h_d' });
+  } finally {
+    await sim.stop();
+  }
+});
+
+// Sahip karari (2026-10-09): fabrika varsayilaninda HICBIR rolenin sabit rolu yok. QA kurulum duzeni kapali (shutterPairs: []) iken
+// roleler genel ac-kapa "Röle N", panjur cifti yok; panjur yalniz yapilandirmayla (burada /api/config) gelir.
+test('fabrika varsayilani: sabit panjur yok (Röle N, light); panjur yalniz yapilandirmayla', async () => {
+  const { sim, j } = await startSim({ shutterPairs: [] });
+  try {
+    const full = (await j('GET', '/api/config')).json;
+    for (let i = 0; i < 8; i++) {
+      assert.equal(full.relays[i].name, `Röle ${i + 1}`);
+      assert.equal(full.relays[i].type, 0);
+    }
+    for (let i = 0; i < 8; i++) assert.deepEqual([full.dis[i].target_relay, full.dis[i].mode], [i + 1, 0]);
+    assert.equal(sim.qaState().relays.filter((r) => r.type !== 0).length, 0);
+  } finally {
+    await sim.stop();
+  }
+});
+
+// Firmware >= 1.3.0 bootstrap'i (BootstrapCore.h + MqttManager.cpp): provizyonlu, kimliksiz pano imzali istekle kimligini alir.
+// Simulatorde istek `bootstrapApi`ye gider. Yanittaki host sunucu kilidine tabidir (yabanci broker -> kimlik yazilmaz).
+async function bootstrapRig(respond) {
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (d) => { b += d; });
+    req.on('end', () => {
+      seen.push({ url: req.url, body: JSON.parse(b) });
+      const [code, body] = respond(seen.length);
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+    });
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  return { seen, srv, api: `http://127.0.0.1:${srv.address().port}` };
+}
+
+test('bootstrap: kimliksiz provizyonlu pano imzali istekle kimligini alir; yabanci host (sunucu kilidi) yazilmaz', async () => {
+  for (const [host, expectOk] of [['10.0.2.2', true], ['evil.example', false]]) {
+    const rig = await bootstrapRig(() => [200, { status: 'ok', mqtt: { host, port: 1883, username: 'd_h_boot01', password: 'sifre-boot' } }]);
+    const { sim, j } = await startSim({ bootstrapApi: rig.api });
+    try {
+      await waitFor(() => rig.seen.length >= 1 && (sim.mqttCfg !== null || sim.qaState().mqtt.bootstrap !== 'idle'), { timeoutMs: 5000, label: 'bootstrap istegi' });
+      const req = rig.seen[0];
+      assert.equal(req.url, '/api/v1/devices/bootstrap');
+      assert.deepEqual(Object.keys(req.body), ['device_uuid', 'ts', 'nonce', 'fw', 'sig']);
+      assert.equal(req.body.device_uuid, UID);
+      assert.match(req.body.nonce, /^[0-9a-f]{32}$/);
+      const msg = `ahbu-bootstrap/1|${UID}|${req.body.ts}|${req.body.nonce}`;
+      assert.equal(req.body.sig, crypto.createHmac('sha256', KEY).update(msg).digest('hex'));
+      if (expectOk) {
+        assert.deepEqual(sim.mqttCfg, { server: '10.0.2.2', port: 1883, user: 'd_h_boot01' });
+        assert.equal(sim.qaState().mqtt.bootstrap, 'ok');
+      } else {
+        assert.equal(sim.mqttCfg, null, 'yabanci broker kimligi yazilmamali');
+        assert.equal(sim.qaState().mqtt.bootstrap, 'error');
+        assert.equal((await j('GET', '/api/status')).json.mqtt_configured, false);
+      }
+    } finally {
+      await sim.stop();
+      rig.srv.close();
+    }
   }
 });
 
@@ -906,7 +1003,7 @@ test('WP-W1 yol tablosu: 26 rota, 3\'u AP_OR_KEYED; SoftAP istemcisi anahtarsiz 
     const probe = {
       '/api/auth/check': {},
       '/api/auth/rekey': { body: { local_key: 'yeni-anahtar-001' } },
-      '/api/mqtt/config': { body: { server: 'ok.example', port: 8884, user: 'd_h_x', pass: 'sifre-1' } },
+      '/api/mqtt/config': { body: { server: '10.0.2.2', port: 8884, user: 'd_h_x', pass: 'sifre-1' } },
       '/api/relay': { path: '/api/relay?ch=5&state=1' },
       '/api/all': { path: '/api/all?cmd=lightsoff' },
       '/api/child-lock': { body: { enabled: true } },

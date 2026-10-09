@@ -16,7 +16,9 @@
 // Yayin hatasinda istek korunur ve 1-2-4-8-16-30 sn ustel bekleme uygulanir (PublishPacer).
 //
 // Saat disaridan verilir: step(now) 50 ms'de bir cagrilir (gorev dongusu). Ag G/C mqtt.js ile asenkrondur.
+import crypto from 'node:crypto';
 import mqtt from 'mqtt';
+import { BootFsm, Result as BootResult, MAX_RESPONSE_BYTES, buildBody as bootBody, parseResponse as bootParse, sign as bootSign } from './bootstrap_core.js';
 import { isPrintableAsciiNoSpace, sanitizeInto } from './netutil.js';
 import { LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN } from './sysconfig.js';
 import { validateCommand, MAX_PAYLOAD_BYTES, isValidCommandId } from '../command_schema.js';
@@ -64,7 +66,9 @@ export class MqttManager {
    * @param {string} o.mac                          "AA:BB:CC:DD:EE:FF"
    * @param {string} o.fw
    * @param {(cmd:object)=>boolean} o.post          komut kuyruguna yaz (postDeviceCommand; QA yavas/dusur hook'u dahil)
-   * @param {{event?:Function, mapHost?:(h:string)=>string}} [o.hooks]
+   * @param {{event?:Function, mapHost?:(h:string)=>string, bootstrapUrl?:(host:string)=>string|null, hostAllow?:string}} [o.hooks]
+   *        bootstrapUrl: firmware'in https://<host>/api/v1/devices/bootstrap istegini QA'da gercekten gonderecegi URL; YOKSA
+   *        bootstrap modeli kapali (birim testleri sunucusuz). hostAllow: -DAHBU_MQTT_HOST_ALLOW karsiligi.
    * @param {object} [o.timing]
    */
   constructor({ config, wifi, automation, clock, uptimeSec, mac, fw, post, hooks = {}, timing = QA_TIMING }) {
@@ -104,6 +108,11 @@ export class MqttManager {
     this.sigCheck = new Wait();              // durum gozcusu: 100 ms'de bir
     this.lastError = '';
     this.authFailed = false;
+    // Bootstrap (MqttManager.cpp maybeBootstrap / runBootstrap; BootstrapCore.h): art arda CONNACK 4/5 sayaci + FSM
+    this.authRejects = 0;
+    this.boot = new BootFsm();
+    this.bootBusy = false;      // HTTP istegi suruyor (firmware'de gorevi bloklar: bu surede baglanti denenmez)
+    this.bootPending = null;    // tamamlanan istegin sonucu (bir sonraki step() uygular)
 
     this.haveCreds = false;
     this.enabled = true;
@@ -219,6 +228,12 @@ export class MqttManager {
     }
     if (this.qaHold) return;
 
+    this.boot.service(now);
+    if (this.bootPending) this.#finishBootstrap(now);
+    if (this.bootBusy) return;
+    this.#maybeBootstrap(now);
+    if (this.bootBusy) return;
+
     if (!this.haveCreds || !this.enabled) {
       if (this.connected || this.client) this.#dropConnection('MQTT devre disi', true);
       return;
@@ -296,7 +311,8 @@ export class MqttManager {
       if (this.attemptFailureHandled) return;
       this.attemptFailureHandled = true;
       if (this.authFailed) {
-        this.event('mqtt_auth_rejected', { code: this.lastError });
+        if (this.authRejects < 255) this.authRejects++;   // bootstrap tetigi (CONTRACTS 3f: art arda 3 "not authorized")
+        this.event('mqtt_auth_rejected', { code: this.lastError, count: this.authRejects });
         this.reconnect.scheduleAuthRejected(now2, rndU32());   // CONNACK 4/5: kimlik/yetki reddi -> uzun bekleme
       } else {
         this.#scheduleRetry(now2, false);
@@ -304,6 +320,69 @@ export class MqttManager {
     });
     return true;
   }
+
+  // ------------------------------------------------------------------ bootstrap (MqttManager.cpp maybeBootstrap / runBootstrap)
+  #maybeBootstrap(now) {
+    if (!this.hooks.bootstrapUrl) return;   // QA: bootstrap ucu tanimsiz -> model kapali
+    if (this.client) return;                 // firmware: _mqttClient.connected() iken denenmez
+    const c = this.cm.config;
+    const input = {
+      enabled: this.enabled,
+      provisioned: c.hasLocalKey(),
+      netUp: this.wifi.isConnected(),
+      timeSynced: this.wifi.isTimeSynced(),
+      haveCreds: this.haveCreds,
+      authRejects: this.authRejects,
+    };
+    if (!this.boot.due(now, input)) return;
+    this.#runBootstrap(c.local_key, c.mqtt_server);
+  }
+
+  #runBootstrap(localKey, host) {
+    const ts = Math.floor(Date.now() / 1000) >>> 0;
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const body = bootBody(this.uid, ts, nonce, this.fw, bootSign(localKey, this.uid, ts, nonce));
+    const url = this.hooks.bootstrapUrl(host);
+    this.event('bootstrap_request', { url: `https://${host}/api/v1/devices/bootstrap`, via: url || null });
+    this.bootBusy = true;
+    const done = (code, text) => { this.bootPending = { code, text }; };
+    if (!url) { done(-1, ''); return; }
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10000);
+    fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, signal: ac.signal })
+      .then(async (r) => {
+        let text = '';
+        if (r.status === 200) {
+          text = await r.text();
+          if (Buffer.byteLength(text) > MAX_RESPONSE_BYTES) text = '';
+        }
+        done(r.status, text);
+      })
+      .catch(() => done(-1, ''))
+      .finally(() => clearTimeout(timer));
+  }
+
+  #finishBootstrap(now) {
+    const { code, text } = this.bootPending;
+    this.bootPending = null;
+    this.bootBusy = false;
+    if (this.halted) return;
+    let { result, creds } = bootParse(code, text, this.hooks.hostAllow || '');
+    if (result === BootResult.OK) {
+      // /api/mqtt/config ile ayni yol: dogrulama + NVS + MQTT yeniden yapilandirma
+      if (this.cm.setMqttCredentials(creds.host, creds.port, creds.user, creds.pass)) {
+        this.authRejects = 0;
+        this.reconfigure();
+        this.event('bootstrap_ok', { host: creds.host, port: creds.port, user: creds.user });
+      } else {
+        result = BootResult.BAD_RESPONSE;
+      }
+    }
+    if (result !== BootResult.OK) this.event('bootstrap_result', { http: code, result });
+    this.boot.onResult(now, result);
+  }
+
+  bootstrapStatus() { return this.boot.status; }
 
   #onConnected() {
     const client = this.client;
@@ -322,6 +401,7 @@ export class MqttManager {
     this.connectedAt = now;   // olay tamponu bu pencere bitmeden bosaltilmaz [D4]
 
     this.connected = true;
+    this.authRejects = 0;
     this.reconnect.reset();
     this.recentIds = new Array(8).fill('');
     this.recentHead = 0;
@@ -715,6 +795,8 @@ export class MqttManager {
       next_attempt_in_ms: this.reconnect.wait.remaining(now),
       seq: this.seq,
       recent_ids: this.recentIds.filter((x) => x !== ''),
+      auth_rejects: this.authRejects,
+      bootstrap: this.boot.status,
     };
   }
 }

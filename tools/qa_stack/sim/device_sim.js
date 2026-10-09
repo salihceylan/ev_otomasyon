@@ -20,6 +20,7 @@ import { ConfigManager, NvsImage, ProvisionResult } from './fw/config_manager.js
 import { MqttManager, QA_TIMING, FIRMWARE_TIMING } from './fw/mqtt_manager.js';
 import { WifiManager, WifiWorld, AUTH_FAIL_REASONS, AP_IP, FW_VERSION_DEFAULT } from './fw/wifi_manager.js';
 import { MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, RelayType, DIMode } from './fw/sysconfig.js';
+import { QA_SHUTTER_PAIRS, applyQaShutterLayout } from './qa_layout.js';
 import { clientOnSoftAp, ipToU32, u32ToIp } from './fw/ap_access.js';
 import { ethUp, requestViaEth } from './fw/net_link.js';
 import { PhysicalObserver } from './fw/observer.js';
@@ -50,8 +51,17 @@ export function macFromUid(uid) {
   return [...h.subarray(0, 6)].map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
 }
 
+/**
+ * QA derlemesinin -DAHBU_MQTT_HOST_ALLOW karsiligi (firmware MqttHostPolicy.h): DEFAULT_MQTT_SERVER disinda POST /api/mqtt/config'in kabul
+ * ettigi test sunuculari (emulator 10.0.2.2, yerel 127.0.0.1/localhost). `up --public-host H` ise H'yi ekler (lib/supervisor.js).
+ */
+export const QA_MQTT_HOST_ALLOW = '10.0.2.2,127.0.0.1,localhost';
+
 const DEFAULTS = {
   relays: 8,
+  shutterPairs: QA_SHUTTER_PAIRS,   // QA kurulum duzeni (sim/qa_layout.js); [] = saf fabrika varsayilani (sabit rol yok)
+  mqttHostAllow: QA_MQTT_HOST_ALLOW,
+  bootstrapApi: null,   // ornek 'http://127.0.0.1:5000' (lib/supervisor.js); null = bootstrap modeli kapali
   httpHost: '127.0.0.1',
   httpPort: 0,
   mqtt: null,
@@ -204,6 +214,7 @@ export class DeviceSimulator {
     const o = this.opts;
     const c = cm.config;
     if (o.deviceName) c.device_name = String(o.deviceName).slice(0, 31);
+    applyQaShutterLayout(c, o.shutterPairs);
     if (Number(o.relays) > 8) {
       c.ext_module_enabled = true;
       c.ext_module_channels = Number(o.relays) - 8;
@@ -272,6 +283,9 @@ export class DeviceSimulator {
       hooks: {
         ...hooks,
         mapHost: (h) => this.opts.mqttHostMap[h] || h,
+        hostAllow: this.opts.mqttHostAllow,
+        // QA: firmware'in https://<host>/api/v1/devices/bootstrap istegi yerel API'ye gider (bootstrapApi yoksa model kapali)
+        ...(this.opts.bootstrapApi ? { bootstrapUrl: () => `${this.opts.bootstrapApi}/api/v1/devices/bootstrap` } : {}),
         counter: (name) => { this.counters[name] = (this.counters[name] || 0) + 1; },
       },
       timing: mqttTiming,

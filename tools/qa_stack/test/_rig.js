@@ -2,6 +2,7 @@
 // Gercek zamanlayici YOKTUR: run(ms) ana donguyu 10 ms adimlarla surer (firmware testlerindeki Sim ile ayni yaklasim).
 import { Automation, makeCommand, CmdSource } from '../sim/fw/automation.js';
 import { ConfigManager, NvsImage } from '../sim/fw/config_manager.js';
+import { QA_SHUTTER_PAIRS, applyQaShutterLayout } from '../sim/qa_layout.js';
 import { PhysicalObserver } from '../sim/fw/observer.js';
 import { CmdType } from '../sim/command_schema.js';
 
@@ -19,10 +20,12 @@ export class Rig {
    * @param {NvsImage} [o.nvs]       ayni NVS ile yeniden baslatma testleri icin
    * @param {object} [o.ext]
    * @param {(cm:ConfigManager)=>void} [o.configure]
+   * @param {number[]} [o.shutterPairs] bos NVS'te ACIKCA kurulan QA panjur ciftleri (sim/qa_layout.js; firmware fabrika
+   *        varsayilaninda sabit rol yok); [] = saf fabrika varsayilani
    * @param {boolean} [o.skipBootHold] baslangicta 500 ms bekleme penceresini gec
    * @param {object} [o.automation] Automation'a ek secenekler (ornek {safety:false} = guvenlik katmani HIC yok; esdegerlik testi)
    */
-  constructor({ t0 = 0, timeScale = 1, nvs = new NvsImage(null), ext = makeExt(0), configure = null, skipBootHold = true, automation = {} } = {}) {
+  constructor({ t0 = 0, timeScale = 1, nvs = new NvsImage(null), ext = makeExt(0), configure = null, skipBootHold = true, automation = {}, shutterPairs = QA_SHUTTER_PAIRS } = {}) {
     this.automationOpts = automation;
     this.t = u32(t0);
     this.nvs = nvs;
@@ -33,8 +36,13 @@ export class Rig {
     this.restarts = 0;
     this.preRestarts = 0;
     this.changed = 0;
+    const firstBoot = nvs.get('cfg') === null;
     this.cm = new ConfigManager(nvs);
     this.cm.begin();
+    if (firstBoot && shutterPairs.length) {   // servis sablonu yazmis gibi (bkz. sim/qa_layout.js)
+      applyQaShutterLayout(this.cm.config, shutterPairs);
+      this.cm.save();
+    }
     if (configure) configure(this.cm);
     this.a = this.#makeAutomation();
     this.a.begin(this.t);

@@ -229,3 +229,25 @@ export class SystemConfig {
     return ok;
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// SystemConfig.h applyFactoryRelayDefaults / applyFactoryDiDefaults. Sahip karari (2026-10-09): HICBIR rolenin sabit rolu YOK.
+// Yerel roleler "Röle N" genel ac-kapa (sure 0), ek modul roleleri "Ek Modül Röle N"; DI n -> role n TOGGLE. Panjur yalniz sablondan.
+export function applyFactoryRelayDefaults(c) {
+  for (let i = 0; i < MAX_TOTAL_RELAYS; i++) {
+    const r = c.relays[i];
+    r.name = cCopy(i < 8 ? `Röle ${i + 1}` : `Ek Modül Röle ${i - 7}`, CAP.relay_name);
+    r.type = RelayType.LIGHT;
+    r.runtime_sec = 0;
+  }
+}
+
+/** DI'lar [first, last) araliginda fabrika varsayilanina doner (aralik disindakilere dokunulmaz). */
+export function applyFactoryDiDefaults(c, first = 0, last = MAX_TOTAL_DIS) {
+  for (let i = Math.max(0, first); i < Math.min(last, MAX_TOTAL_DIS); i++) {
+    const d = c.dis[i];
+    d.name = cCopy(i < 8 ? `Anahtar / Buton ${i + 1}` : `Ek Giriş / Buton ${i - 7}`, CAP.di_name);
+    d.target_relay = i + 1;
+    d.mode = DIMode.TOGGLE;
+  }
+}

@@ -47,6 +47,7 @@ import { validateSystemChange, cfgErrText, CfgErr } from './fw/safety_config.js'
 import { VIA_LAN, VIA_CLI } from './fw/event_outbox.js';
 import { Rej } from './fw/safety_fsm.js';
 import { ACT_TO } from './command_schema.js';
+import * as mqttHostPolicy from './fw/mqtt_host_policy.js';
 import { ARM_MODE_BY_TEXT } from './fw/intrusion_fsm.js';
 
 export const MAX_BODY_BYTES = 24576;
@@ -302,15 +303,6 @@ function shutterRelevantChange(a, b) {
   if (a.ext_module_enabled !== b.ext_module_enabled || a.ext_module_channels !== b.ext_module_channels || a.ext_module_address !== b.ext_module_address) return true;
   for (let i = 0; i < MAX_TOTAL_RELAYS; i++) if (a.relays[i].type !== b.relays[i].type || a.relays[i].runtime_sec !== b.relays[i].runtime_sec) return true;
   return false;
-}
-
-/** Host adi: harf/rakam/'.'/'-', 1..63, '.' veya '-' ile baslamaz/bitmez */
-function validMqttHost(s) {
-  if (typeof s !== 'string') return false;
-  const n = Buffer.byteLength(s);
-  if (n < 1 || n > 63) return false;
-  if (s[0] === '.' || s[0] === '-' || s[s.length - 1] === '.' || s[s.length - 1] === '-') return false;
-  return /^[A-Za-z0-9.-]+$/.test(s);
 }
 
 // ====================================================================== WebPortal islemcileri
@@ -893,19 +885,25 @@ function makeHandlers(sim, fw, ctx) {
     return ok();
   };
 
+  // Sahip karari (2026-10-09) sunucu kilidi (MqttHostPolicy.h): "server" yalniz izin listesinden (DEFAULT_MQTT_SERVER + derleme bayragi;
+  // simulatorde `mqttHostAllow`), aksi 400 host_not_allowed. Bos/verilmemis "server" mevcut sunucuyu korur; port/kullanici/parola serbest.
   h.mqttConfig = () => {
     const j = readJson();
     if (j.e) return j.e;
     const s = fieldString(j.doc, 'server');
-    if (s.s !== 'ok' || !validMqttHost(s.v)) return err(400, 'invalid_value');
+    if (s.s === 'bad') return err(400, 'invalid_value');
+    const hostCheck = mqttHostPolicy.checkRequested(s.s === 'ok' ? s.v : null, sim.opts.mqttHostAllow);
+    if (hostCheck === mqttHostPolicy.Check.INVALID) return err(400, 'invalid_value');
     const p = fieldInt(j.doc, 'port');
     if (p.s !== 'ok' || p.v < 1 || p.v > 65535) return err(400, 'invalid_value');
     const u = fieldString(j.doc, 'user');
     if (u.s !== 'ok' || Buffer.byteLength(u.v) < 1) return err(400, 'invalid_value');
     const pw = fieldString(j.doc, 'pass');
     if (pw.s !== 'ok' || Buffer.byteLength(pw.v) < 1) return err(400, 'invalid_value');
-    if (!cm.setMqttCredentials(s.v, p.v, u.v, pw.v)) return err(400, 'invalid_value');
-    sim.event('mqtt_config_set', { server: s.v, port: p.v, user: u.v });
+    if (hostCheck === mqttHostPolicy.Check.NOT_ALLOWED) return err(400, 'host_not_allowed');
+    const server = hostCheck === mqttHostPolicy.Check.KEEP ? cfg().mqtt_server : s.v;
+    if (!cm.setMqttCredentials(server, p.v, u.v, pw.v)) return err(400, 'invalid_value');
+    sim.event('mqtt_config_set', { server, port: p.v, user: u.v });
     mqtt.reconfigure();
     return ok();
   };

@@ -122,6 +122,10 @@ export async function startBroker(opts) {
     if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
       return { ok: false, code: 4, reason: 'expired' };
     }
+    // Karar 17B (emqx.conf kimlik sorgusu ile ayni): client_id doluysa yalniz o MQTT istemci kimligi kabul edilir.
+    if (row.client_id && row.client_id !== client.id) {
+      return { ok: false, code: 4, reason: 'client_id_mismatch' };
+    }
     client.qa = {
       username,
       kind: row.kind || 'unknown',

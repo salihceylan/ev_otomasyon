@@ -19,6 +19,8 @@ export const SOURCES = {
   'src/NetUtil.h': 'sim/fw/netutil.js',
   'src/NetTime.h': 'sim/fw/net_time.js (+ wifi_manager.js, mqtt_manager.js, local_api.js zamanlayicilari)',
   'src/ApAccess.h': 'sim/fw/ap_access.js (+ sim/local_api.js authorizeApOrKeyed)',
+  'src/MqttHostPolicy.h': 'sim/fw/mqtt_host_policy.js (+ sim/local_api.js mqttConfig, sim/fw/bootstrap_core.js parseResponse)',
+  'src/BootstrapCore.h': 'sim/fw/bootstrap_core.js (+ sim/fw/mqtt_manager.js #maybeBootstrap/#runBootstrap; istek DeviceSimulator bootstrapApi)',
   'src/ConfigManager.cpp': 'sim/fw/config_manager.js',
   'src/ConfigManager.h': 'sim/fw/config_manager.js',
   'src/SmartAutomation.cpp': 'sim/fw/automation.js',
@@ -95,15 +97,15 @@ export const SOURCES = {
  *    Sayfanin API sozlesmesi (anahtarsiz /api/status + /api/wifi/status yoklamasi) simulatorun HTTP uclariyla dogrulanir (test/sim_http.test.js).
  *  * v1.3.0 (site/kurulum sablonu + Ethernet; 2026-10-08) simulatorde MODELLENMEYENLER: W5500 surucusu ve baglayici (EthLink / NetLink: Ethernet
  *    simulatorde tek bayraktir, bkz. DeviceSimulator.ethNet + /__sim/eth; MQTT ve SNTP Ethernet uzerinden calismaz, DNS secimi yok), kurulum sablonu
- *    (src/template/*: POST /api/template/apply, GET /api/template, seri TPL, NVS ahbu_tpl, durumdaki tpl / tpl_incomplete), panonun bulut kimligini
- *    kendisinin almasi (BootstrapCore.h + MqttManager bootstrap istemcisi; durumdaki "bootstrap"), MQTT state'teki eth_connected / eth_ip / net_if.
+ *    (src/template/*: POST /api/template/apply, GET /api/template, seri TPL, NVS ahbu_tpl, durumdaki tpl / tpl_incomplete), /api/status'taki
+ *    "bootstrap" alani (bootstrap'in kendisi 2026-10-09'dan beri modellenir: sim/fw/bootstrap_core.js; HTTPS/TLS yok, istek DeviceSimulator
+ *    bootstrapApi'ye gider), MQTT state'teki eth_connected / eth_ip / net_if.
  *    Modellenen v1.3.0/1.3.1 davranislari: Ethernet'ten anahtarsiz/provizyonsuz yerel API (pano-3 SoftAP dislamasi dahil), kisitli/tam durum
  *    eth_connected / net_if / eth_ip, kurtarma AP politikasinin Ethernet girdisi, Ethernet'ten guvenlik yapilandirmasi gevsetmesi (VIA_CLI).
  */
 export const NOT_PORTED = Object.freeze([
   'src/WebPortalPage.h',
   'src/EthLink.cpp', 'src/EthLink.h', 'src/NetLink.cpp', 'src/NetLink.h',
-  'src/BootstrapCore.h',
   'src/template/TemplateApply.cpp', 'src/template/TemplateApply.h', 'src/template/TemplateParse.cpp', 'src/template/TemplateParse.h',
   'src/template/TemplateRules.h', 'src/template/TemplateStore.cpp', 'src/template/TemplateStore.h', 'src/template/TplSerial.h',
 ]);

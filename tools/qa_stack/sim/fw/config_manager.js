@@ -10,8 +10,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  SystemConfig, RelayType, DIMode, MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, DEFAULT_MQTT_SERVER, DEFAULT_MQTT_PORT,
-  SHUTTER_RUNTIME_DEFAULT_SEC, CAP, isAsciiRange, LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN, AP_PASS_MIN_LEN, AP_PASS_MAX_LEN,
+  SystemConfig, MAX_TOTAL_RELAYS, MAX_TOTAL_DIS, DEFAULT_MQTT_SERVER, DEFAULT_MQTT_PORT,
+  CAP, isAsciiRange, applyFactoryRelayDefaults, applyFactoryDiDefaults, LOCAL_KEY_MIN_LEN, LOCAL_KEY_MAX_LEN, AP_PASS_MIN_LEN, AP_PASS_MAX_LEN,
 } from './sysconfig.js';
 import { cCopy } from './netutil.js';
 import { compute as computeLocalKeyFp } from './local_key_fp.js';
@@ -91,11 +91,6 @@ export class NvsImage {
   eraseAll() { this.data = { v: 2, cfg: null, auto: null, pos: null }; this.#flush(); }
 }
 
-const DEFAULT_RELAY_NAMES = [
-  'Salon Panjur (Yukari)', 'Salon Panjur (Asagi)', 'Oda Panjur (Yukari)', 'Oda Panjur (Asagi)',
-  'Salon Aydinlatma', 'Mutfak Aydinlatma', 'Koridor Aydinlatma', 'Balkon Aydinlatma',
-];
-
 export class ConfigManager {
   /** @param {NvsImage} nvs */
   constructor(nvs, { log = () => {} } = {}) {
@@ -140,29 +135,9 @@ export class ConfigManager {
     c.mqtt_server = cCopy(DEFAULT_MQTT_SERVER, CAP.mqtt_server);
     c.mqtt_port = DEFAULT_MQTT_PORT;
 
-    for (let i = 0; i < MAX_TOTAL_RELAYS; i++) {
-      const r = c.relays[i];
-      if (i < 8) {
-        r.name = DEFAULT_RELAY_NAMES[i];
-        if (i === 0 || i === 2) { r.type = RelayType.SHUTTER_UP; r.runtime_sec = SHUTTER_RUNTIME_DEFAULT_SEC; }
-        else if (i === 1 || i === 3) { r.type = RelayType.SHUTTER_DOWN; r.runtime_sec = SHUTTER_RUNTIME_DEFAULT_SEC; }
-        else { r.type = RelayType.LIGHT; r.runtime_sec = 0; }
-      } else {
-        r.name = cCopy(`Ek Modül Röle ${i - 7}`, CAP.relay_name);
-        r.type = RelayType.LIGHT;
-        r.runtime_sec = 0;
-      }
-    }
-    for (let i = 0; i < MAX_TOTAL_DIS; i++) {
-      const d = c.dis[i];
-      d.name = i < 8 ? `Anahtar / Buton ${i + 1}` : cCopy(`Ek Giriş / Buton ${i - 7}`, CAP.di_name);
-      d.target_relay = i + 1;
-      d.mode = DIMode.TOGGLE;
-    }
-    c.dis[0].name = 'Salon Panjur Butonu'; c.dis[0].target_relay = 1; c.dis[0].mode = DIMode.SHUTTER_STEP;
-    c.dis[1].name = cCopy('Giriş 2 (Boşta / Serbest)', CAP.di_name); c.dis[1].target_relay = 0; c.dis[1].mode = DIMode.TOGGLE;
-    c.dis[2].name = 'Oda Panjur Butonu'; c.dis[2].target_relay = 3; c.dis[2].mode = DIMode.SHUTTER_STEP;
-    c.dis[3].name = cCopy('Giriş 4 (Boşta / Serbest)', CAP.di_name); c.dis[3].target_relay = 0; c.dis[3].mode = DIMode.TOGGLE;
+    // Sahip karari (2026-10-09): HICBIR rolenin sabit rolu yok (eskiden role 1-4 Salon/Oda panjuru, DI 1/3 panjur butonuydu).
+    applyFactoryRelayDefaults(c);
+    applyFactoryDiDefaults(c);
     this.config = c;
   }
 

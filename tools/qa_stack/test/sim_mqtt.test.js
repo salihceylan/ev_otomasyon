@@ -104,7 +104,7 @@ test('baglanma: cihaz kimligiyle baglanir; status=online (QoS0 retained) ve stat
     assert.ok(!('last_id' in s), 'bos last_id gonderilmez (backend bos degeri atlandi sayar)');
     assert.equal(s.relays.length, 8);
     assert.deepEqual(s.relays[0], { id: 1, name: 'Salon Panjur (Yukari)', type: 'shutter_up', state: false });
-    assert.deepEqual(s.relays[4], { id: 5, name: 'Salon Aydinlatma', type: 'light', state: false });
+    assert.deepEqual(s.relays[4], { id: 5, name: 'Röle 5', type: 'light', state: false });   // fabrika varsayilani (sabit rol yok)
     assert.deepEqual(s.shutters, [
       { pair: 1, pos: 0, moving: false, dir: 0, target: 255 },
       { pair: 2, pos: 0, moving: false, dir: 0, target: 255 },
