@@ -8,6 +8,26 @@
 
 ## 0. Bu sürümde değişenler (2026-10-09)
 
+**Sahip kararlarıyla gelenler (2026-10-09 öğleden sonra; ayrıntı `docs/denetim/2026-10-09-kararlar.md`):**
+
+1. **"Evden Ayrıl":** aile üyesi ve misafir evden kendisi ayrılabilir (Bölüm 8.3). Ev sahibi ayrılamaz; önce evi devreder.
+2. **Telefon numarası tek biçimde:** telefon alanlarında "+90 " hazır gelir; numarayı 5 ile başlayarak yazarsınız (5XX XXX XX XX).
+   "0555…", "+90555…" ve "555…" artık aynı numara sayılır; kayıtlı numaralar da bu biçime çevrildi (Bölüm 2.1).
+3. **Kayıtta e-posta iki kez yazılır** ("E-posta (tekrar)"); iki yazım farklıysa "E-posta adresleri eşleşmiyor" görünür. E-posta
+   doğrulaması yine yoktur (Bölüm 2.1).
+4. **Devirden sonra alarm geçmişi:** yeni sahip yalnız kendi dönemindeki alarmları ve hâlâ açık alarmları görür (Bölüm 8.4).
+5. **Güvenlik ayarlı evde (su/gaz sensörü ya da vana) pano değişimini yalnız yetkili servis yapar;** ev sahibi denerse "Bu evde pano
+   değişimini yetkili servis personeli yapmalıdır." görünür. Servis PIN'i üretip servise verin (Bölüm 8.5).
+6. **Kablolu (Ethernet) panoya anahtarsız erişim:** pano modeme kabloyla bağlıysa yerel modda uygulama panoyu yerel anahtar sormadan
+   yönetir (kararınız; Bölüm 5.5).
+7. **Erişimi biten kişinin pano bağlantısı kesilir:** üye çıkarılınca ya da ayrılınca, devir kabul edilince ve her servis oturumu
+   bitince panonun bulut kimliği yenilenir; erişimi biten kişi eski kimlikle buluta bağlanamaz (Bölüm 8.3).
+8. **Firmware v1.3.2 (karta yazılınca geçerli):** pano yalnız kendi bulut sunucusuna bağlanır; fabrika ayarında rölelere sabit görev
+   yoktur (8 rölenin hepsi "Röle N" adlı lamba, 1-8. girişler aynı numaralı röleyi açıp kapatır). Yeni açılan evin varsayılan kanal
+   listesi de böyledir; panjur yalnız servis şablonunda seçilirse yanındaki röleyle çift olur.
+
+**Aynı gün sabah gelenler:**
+
 1. **Yasal metinler:** kayıtta "Kullanıcı Sözleşmesi'ni okudum ve kabul ediyorum." kutusu zorunlu; sözleşme kesinleşince (bugün
    taslak) güncel sürümü onaylamayan hesaba onay ekranı çıkar; metinler "Cihaz & Sistem Ayarları" → "Hakkında" → "Yasal Metinler"de
    (Bölüm 2.1, 2.2, 9).
@@ -53,7 +73,8 @@ Misafir erişimi en çok 72 saattir; süre bitince "Erişiminiz sona erdi" gör�
 
 ### 2.1 Kayıt
 1. Giriş ekranında "Hesabınız yok mu? Kayıt Olun".
-2. "Ad Soyad", "E-Posta Adresi", "Telefon" (isteğe bağlı), "Şifre" (en az 10 karakter), "Şifre Tekrar".
+2. "Ad Soyad", "E-Posta Adresi", "E-posta (tekrar)", "Telefon" (isteğe bağlı; "+90 " hazır gelir, 5XX XXX XX XX),
+   "Şifre" (en az 10 karakter), "Şifre Tekrar". İki e-posta farklıysa "E-posta adresleri eşleşmiyor".
 3. "Kullanıcı Sözleşmesi'ni okudum ve kabul ediyorum." kutusunu işaretleyin ("Kullanıcı Sözleşmesi" bağlantısı metni açar). Kutu
    işaretlenmeden "Kayıt Ol ve Giriş Yap" pasiftir; sözleşme yüklenemezse "Tekrar Dene". Altındaki "Kişisel verileriniz Gizlilik
    Politikası ve KVKK Aydınlatma Metni kapsamında işlenir." satırı yalnız bilgilendirmedir.
@@ -152,6 +173,8 @@ ya da basılı tutma ister.
 1. Mod elle seçilir ("Bulut Modu (yerel moda geç)" / "Yerel Ağ Modu (buluta geç)"); uygulama kendiliğinden geçmez.
 2. Bulut modu: her yerden kontrol. Yerel mod: panoya ev ağından doğrudan; panonun IP'si elle girilir.
 3. Misafir mod değiştiremez.
+4. Pano modeme kabloyla (Ethernet) bağlıysa yerel modda yerel anahtar sorulmaz: aynı ağdaki uygulama panoyu anahtarsız yönetir
+   (kararınız). Pano Wi-Fi'den yanıt verirse ya da anahtar isterse uygulama yeniden anahtar ister.
 
 ### 5.6 Gece huzur bildirimi
 Ayarlarda "Gece Huzur Bildirimi" saati (varsayılan 23:30): o saatte açık lamba/panjur varsa uygulamada "Gece hatırlatması"
@@ -233,12 +256,20 @@ Sahip ya da aile üyesi (misafir değil) evden çıkarılınca sunucu, **tek pan
 değiştirir: çıkarılan kişinin bildiği anahtar geçersiz olur. Pano çevrimiçiyken birkaç saniyede tamamlanır; yerel moddaki
 telefonlar yeni anahtarı buluttan kendiliğinden alır. Çok panolu evde bu değişim yapılmaz.
 
+Üye çıkarılınca ya da ayrılınca, devir kabul edilince ve her servis oturumu bitince **tek panolu evde** panonun bulut kimliği de
+yenilenir (v1.3.0+ pano yenisini kendisi alır); erişimi biten kişi eski kimlikle buluta bağlanamaz.
+
+**Evden ayrılma (aile üyesi, misafir):** profil penceresindeki "Evden Ayrıl" → onay. Evdeki cihazlara erişiminiz biter; yeniden
+katılmak için ev sahibinden yeni davet gerekir. Ev sahibi ayrılamaz: "Ev sahibi evden ayrılamaz; önce evi devredin.". Aile üyesi
+ayrılınca panonun yerel anahtarı ve bulut kimliği yukarıdaki gibi değişir.
+
 ### 8.4 Ev devri
 Sahip "48 Saatlik Devir Kodu & QR Üret" → yeni sahip kodu girip "DEVRAL" yazar → "Daireyi Devral". Eski sahip dahil tüm
 üyeler erişimini kaybeder. "Devir İşlemini İptal Et" ile vazgeçilebilir. Devir kabul edilince panonun yerel anahtarı da
 değişir (8.3'teki gibi). Kabul tamamlandığı hâlde yanıt kaybolduysa yeni sahip aynı kodu yeniden denediğinde
 "<ev adı> dairesinin sahipliği zaten size devredildi." görünür (ev adı tırnak içinde; önizlemede "Bu daireyi zaten devraldınız.")
-ve ev seçilir.
+ve ev seçilir. Devirden (ya da acil sıfırlama / Home Admin atamasından) sonra yeni sahip yalnız o andan sonraki ve hâlâ açık alarmları
+görür; önceki ailenin alarm geçmişi görünmez.
 
 ### 8.5 Servise geçici erişim
 "Yetkili Servis İçin Geçici PIN" → "6 Haneli Servis PIN'i Üret" (bir kez gösterilir, 2 saat, tek kullanım, yalnız bu ev).
@@ -262,38 +293,21 @@ atarsa) aynı anda istenen PIN ve davet kodu üretilmez: "Bu işlem için yetkin
 
 ## 10. Açık kalan konular
 
-> 2026-10-09 gece düzeltmelerinden sonra güncellendi (`docs/CONTRACTS.md` §3i). Önceki maddeler (1-4, dünden açık kararlar) hâlâ
-> açık; servis ve altyapı kararlarının tamamı `SERVIS_SORUMLUSU_AKISI.md` Bölüm 9'da.
+> 2026-10-09 sahip kararlarından sonra güncellendi (`docs/CONTRACTS.md` §3j; kararlar `docs/denetim/2026-10-09-kararlar.md`).
 
 1. **Provizyonsuz pano buluta kendiliğinden bağlanamaz;** pano atölyede provizyon görmediyse servis gerekir.
-2. **Pano modeme kabloyla bağlıysa** evin ağındaki herkes panoya anahtarsız erişebilir (kararınız; bilgi için). Bunun gaz
-   vanası, hırsız alarmı ve panonun bulut sunucu adresine etkisi aşağıdaki karar maddelerindedir (guvenlik-14,
-   karar-bulut-host-degisikligi).
+2. **Pano modeme kabloyla bağlıysa** evin ağındaki herkes panoyu anahtarsız, uygulamada girişsiz bile yönetebilir; gaz vanası ve
+   hırsız alarmı için de Ethernet'te sınır yoktur (kararınız, 2026-10-09). Panonun bulut sunucu adresi ise v1.3.2'de kilitlidir.
 3. **Gece hatırlatması ve alarm, iOS'ta** yalnız uygulama açılınca görünür.
 4. **Arka plan bildirimi cihazda denenmedi:** servisin başlaması, kaydırıp kapatınca sürmesi, yeniden başlatmada açılması,
    pil davranışı ve bildirim sesi ancak telefonda doğrulanır.
 5. **Yasal metinler taslak:** sözleşme ve gizlilik metni avukat incelemesi ve yer tutucuların doldurulmasını bekliyor; onay ekranı
-   ancak metin kesinleşince (ilk kesin sürüm 2) çıkar. Kayıtta verilen onay taslak sürüm 1 içindir.
-6. **Kararınızı bekleyen maddeler** (uygulanmadı; pano değişiminde güvenlik ayarlarının taşınmaması bunlardan biri):
-   - **guvenlik-14:** Ethernet'teki anahtarsız erişim gaz vanasının su vanasına çevrilip açılmasına ve hırsız alarmının
-     anahtarsız çözülmesine izin veriyor; süresi biten misafir ev ağındayken bunu yapabiliyor. Öneri: gaz vanası yalnız
-     seri konsoldan, alarm Ethernet'te de anahtarla.
-   - **karar-bulut-host-degisikligi (yüksek):** aynı anahtarsız erişimle panonun bulut sunucu adresi de değiştirilebiliyor (pano
-     başka bir sunucudan yönetilebilir). Öneri: firmware yalnız kendi sunucu adresini kabul etsin; guvenlik-14 ile birlikte karar.
-   - **karar-pano-degisimi-geri-yukleme:** güvenlik ayarlarının yeni panoya geri yüklenmesi. Öneri: kısa vadede güvenlik ayarlı
-     evde pano değişimini yalnız servis yapsın; sonraki sürümde buluttaki kopyadan geri yükleme.
-   - **karar-evden-ayrilma:** aile üyesi ve misafir evden kendisi ayrılamıyor (tek yol hesabı silmek). Öneri: sonraki sürümde
-     "Evden ayrıl".
-   - **karar-alarm-gecmisi-devir:** devir, acil sıfırlama ya da Home Admin atamasından sonra yeni sahip önceki ailenin alarm geçmişini
-     görebiliyor. Öneri: geçmiş, sahiplik değişiminden sonrası (ve açık alarmlar) ile sınırlansın.
-   - **karar-telefon-bicimi:** "+90555…" ile "0555…" farklı numara sayılıyor; telefonla başlatılan devir alıcının hesabındaki biçim
-     farklıysa kabul edilemiyor. Öneri: Türkiye varsayılanlı tek biçim (+90…) ve mevcut verinin dönüştürülmesi.
-   - **Yasal metinlerle ilgili kararlar:** personelin müşteri panosunun yerel anahtarını süresiz okuyabilmesi
-     (karar-yerel-anahtar-personel), kalıcı silmede onay kayıtlarının da silinmesi (karar-sozlesme-kaydi-saklama) ve onayın yalnız
-     uygulamada zorlanması (karar-sunucu-kapilari); öneriler `SERVIS_SORUMLUSU_AKISI.md` Bölüm 9'da.
-   - **kayit-dogrulama:** kayıtta e-posta/telefon doğrulaması zorunlu değil. Bu gece SMS girişi doğrulanmış telefonla sınırlandı;
-     telefonunuz başkasının doğrulanmamış hesabına yazılmışsa SMS ile giremezsiniz. Öneri: sonraki sürümde "bekleyen kayıt".
-   - **bireysel-9-yayin:** etiket karekodu telefon kamerasıyla okutulunca uygulama yerine tarayıcıda açılıyor (Android/iOS
-     bağlantı doğrulama dosyaları için imza bilgileri gerekli).
-   - **bireysel-5-eth:** girişsiz kullanıcıya Ethernet'teki anahtarsız erişim uygulamada açılmadı. Öneri: açılmasın (aynı
-     ağdaki herkes uygulamayı kurup panoyu yönetebilirdi).
+   ancak metin kesinleşince çıkar. Bugünkü metin taslak sürüm 2'dir (personelin yerel anahtar erişimi ve Ethernet gerçeği
+   yazıldı); şirket bilgileri ve hukuk kararları proje sonunda girilecek.
+6. **Kararlar verildi (2026-10-09);** ne yapıldığı `docs/denetim/2026-10-09-kararlar.md`'de. Sonraya kalanlar:
+   - **Karekodun uygulamayı doğrudan açması** (bireysel-9-yayin): imza sertifikası parmak izi, uygulama kimliği ve Apple Team ID
+     gelince eklenir; o zamana kadar etiket karekodu tarayıcıda açılır.
+   - **E-posta doğrulaması** sonraya bırakıldı (kararınız); kayıtta e-posta iki kez yazılır.
+   - **Firmware v1.3.2 karta yazılmadı ve kartta denenmedi;** bulut sunucu kilidi ve sabit görevsiz fabrika ayarı karta yazılınca
+     geçerli olur.
+   - **Çok panolu evde** erişim bitince bulut kimliği yenilenmez (yalnız tek panolu ev).

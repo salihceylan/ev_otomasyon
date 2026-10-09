@@ -173,8 +173,8 @@ Rol kaynakları: global `users.role` ∈ {`user`,`service_user`,`super_user`}; e
 
 \* staff = `home_users` kaydı olan kalıcı servis personeli (yalnız o evler). **İstisna (kullanıcı kararı 2026-10-08, K-Ş4):** `GET /admin/inventory/:uuid/local-key`
 (§3e) ev üyeliği aramaz: global rolü `service_user` ya da `super_user` olan her hesaba HER envanter kartının (müşterinin sahiplendiği kart dahil)
-yerel anahtarını döndürür (Ethernet şablon yazımı için; denetim kaydı + oran sınırı). Bu davranışın yasal metinlerle uyumu açık karar maddesidir
-(`karar-yerel-anahtar-personel`, §3i). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
+yerel anahtarını döndürür (Ethernet şablon yazımı için; denetim kaydı + oran sınırı). **Sahip kararı 6 (2026-10-09): davranış KORUNUR**
+(süresiz, müşteri kartları dahil); yasal metinler buna göre düzeltildi (§3j). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
 \*\*\* Gerekçe ≥ 15 karakter + cihaz UUID'sinin yazarak teyidi + denetim kaydı (IP dahil). Servis personeli kendisini yeni sahip yapamaz.
 Staff'in ev üyeliği claim/devirde 72 saatliğine verilir; istemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
 
@@ -1063,6 +1063,23 @@ migration'lar `040`, `041` (sıra: `040` → `041` → sunucu kodu). Yasal metin
 `karar-bulut-host-degisikligi` (yüksek), `karar-kilitliyken-fabrika-sifirlama`, `karar-sunucu-kapilari`; dünden açık `guvenlik-14`,
 `kayit-dogrulama`, `bireysel-9-yayin`, `bireysel-5-eth`. Ethernet şablon yazımında kart UID'sinin doğrulanması (sozlesme-2) önerildi; kullanıcı
 kararı K-Ş4'ü tersine çevireceği için uygulanmadı.
+
+## 3j. 2026-10-09 sahip kararları: sözleşme değişiklikleri (özet)
+
+Yeni migration'lar `042` → `043` → `044` (sıra: migration'lar → sunucu kodu → (ayrıca) EMQX kimlik sorgusu). Yasal metinler sürüm 2 (taslak).
+
+| Karar | Değişiklik |
+|---|---|
+| 5 | Bulut tohum şablonu (`device_service.js SEED_ENDPOINTS_SQL` = `endpoint_layout.js SEED_TABLE`): 1-8 `Röle N` lamba, oda `Genel`, çift/süre NULL; 9+ `Ek Modül Röle N` (firmware v1.3.2 fabrika varsayılanıyla aynı; sabit panjur yok). Eski tohum ad/odaları (1-2 Salon / 3-4 Oda panjuru, 5-8 aydınlatma) mevcut evlerde `isCloudAutoName` / `isBoardDefaultName` / `isAutoRoom` için otomatik sayılır; eski sürüm pano kendi eski fabrika adını bildirirse `defaultNameFor(c, type, reportedName)` eski tohum adını verir (mevcut evlerde ad değişmez). `isFactoryLayout` hem v1.3.2 (8 lamba, `Röle N`) hem eski fabrika yerleşimini tanır. |
+| 6 | `GET /admin/inventory/:uuid/local-key` davranışı korunur (super/service_user, her kart, süresiz). Gizlilik 5.2 / 8, Sözleşme 5.7 / 6 bunu ve Ethernet gerçeğini açıkça yazar: kablolu panoda ev ağına bağlanan herkes panoyu anahtarsız, uygulamada girişsiz bile yönetebilir. |
+| 11 | Telefon kanonik biçimi: TR cep `+905XXXXXXXXX` (`05…`, `905…`, `+905…`, `5…`, `0090…` aynı değere; TR dışı `+…` olduğu gibi). Kayıt, giriş, telefon-OTP, devir / sahiplenme / acil sıfırlama hedefi, Home Admin ataması aynı kuralı kullanır (`src/utils/phone.js`). `042` mevcut `users.phone` (çakışanlar DEĞİŞMEZ), kullanılmamış `phone_otp_codes`, bekleyen devir ve atama hedeflerini çevirir. Uygulama artık `+90…` gönderir. |
+| 13 | **Yeni uç** `DELETE /api/v1/homes/:homeId/members/me` (ve `/api`): JWT; servis oturumu `403`. Owner → `409 OWNER_CANNOT_LEAVE` "Ev sahibi evden ayrılamaz; önce evi devredin."; üye değil → `404 NOT_FOUND`; geçersiz ev kimliği → `400 VALIDATION`. Diğer roller (resident, guest, service_user; süresi bitmiş misafir dahil) → `200 {success:true, data:{left:true, home_id}}`. Üyelik silinir, kullanıcının bu evdeki uygulama MQTT kimlikleri silinir + atılır; resident → yerel anahtar bekleyen yolla döner (`member_left`); resident / service_user → cihaz MQTT kimliği dondurulur (17A); denetim `member_left`. |
+| 14 | `homes.ownership_epoch` (`043`): devir kabulü, acil sıfırlama, Home Admin ataması `NOW()` yazar. `GET /homes/:homeId/alarms` yalnız `raised_at >= ownership_epoch` OLAN ya da hâlâ açık (`cleared`/`lost` olmayan) alarmları döner (yanıt şekli aynı). |
+| 15 | `legal_acceptances.user_id` NULL olabilir, FK `ON DELETE SET NULL` (`043`): kalıcı silmede kabul satırı anonim kalır. |
+| 16 | Süper kalıcı silme (`DELETE /admin/users/:id?hard=true`): kullanıcı panolu bir evin tek sahibiyse `409 SOLE_OWNER_WITH_DEVICES` "Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama yapın." Başarı iletisi: "Kullanıcı kalıcı olarak silindi (üyesi ve panosu olmayan N daire kaydı da silindi)." |
+| 17A | Erişim bitince (owner/resident çıkarma, evden ayrılma, devir kabulü, Home Admin atamasının üyelik silmesi / servis oturumu iptali, kalan evin owner/resident'inin hesap silmesi, HER servis oturumunun bitişi — süpürücü, `service_sessions.device_cred_rotated_at`) evin cihaz kimliği `d_{t}` geçersiz kılınır (`expires_at = NOW()`) ve COMMIT sonrası aynı kullanıcı adının tüm bağlantıları atılır. Yalnız tek panolu ev ve pano `firmware_version >= 1.3.0`; aksi hâlde atlanır, log + denetim `device_credential_rotation_skipped` (`skip: old_firmware`); çok panolu ev log. Pano art arda "not authorized" alınca bootstrap (§3f) ile yeni kimlik alır (sunucu: `issueDeviceCredential` geçersiz satırı siler). Uzlaştırıcı, geçersiz cihaz satırı varken `set_local_key` YAYINLAMAZ (`cred_rotation_pending`); yeni kimlikle bağlanan panoya iletir. Denetim `device_credential_rotated` `{reason}`. |
+| 17B | `mqtt_credentials.client_id`: NULL = bağlama yok (uygulama kimlikleri); cihaz kimliği tek panolu evde `"ESP32S3_" + MAC` (12 hane, büyük harf, ayraçsız; firmware `MqttManager.cpp`, `esp_read_mac(WIFI_STA)`), çok panolu evde / bozuk MAC'te NULL. `044` mevcut satırları çevirir. EMQX kimlik sorgusu (`emqx_config/emqx.conf`) `AND (client_id IS NULL OR client_id = ${clientid})` ister; qa_stack aynı kuralı uygular. REST yanıtlarındaki `client_id` alanı değişmedi. |
+| 18 | `POST /devices/replace-board`: evde güvenlik yapılandırması (bulut kopyası `device_configs` `safety` gövdesinde sensör ya da eylemci/vana) varsa ev sahibi (personel / servis oturumu / süper OLMAYAN) → `403 REPLACE_REQUIRES_SERVICE` "Güvenlik ayarları olan evde pano değişimini yetkili servis yapmalıdır." (işlem geri alınır, PIN sayacı değişmez). Yalnız bölge adı tanımlı gövde sayılmaz (C4 `safety_restore` kuralı ile aynı). |
 
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 

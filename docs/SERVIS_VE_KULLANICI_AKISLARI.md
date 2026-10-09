@@ -69,8 +69,10 @@
 
 ### 3.1 İlk açılış (fabrika ayarı)
 1. Tüm röleler kapalı başlar, panjurlar hareket etmez.
-2. Röleler: 1-2 Salon panjur (yukarı/aşağı), 3-4 Oda panjur, 5-8 lamba (Salon, Mutfak, Koridor, Balkon). Panjur süresi 20 sn.
-3. Girişler: D1 → panjur 1 tek buton, D3 → panjur 2 tek buton, D2/D4 boşta, D5-D8 → röle 5-8 aç/kapa.
+2. Röleler (v1.3.2+, sahip kararı 2026-10-09): hiçbir röleye sabit görev yok; 8 rölenin hepsi "Röle N" adlı lamba. Panjur yalnız
+   servis şablonunda seçilirse yanındaki röleyle çift olur. (v1.3.1 ve öncesi: 1-2 Salon panjur, 3-4 Oda panjur, 5-8 lamba.)
+3. Girişler (v1.3.2+): D1-D8 → aynı numaralı röleyi aç/kapa ("Anahtar / Buton N"). (v1.3.1 ve öncesi: D1 → panjur 1 tek buton,
+   D3 → panjur 2 tek buton, D2/D4 boşta, D5-D8 → röle 5-8 aç/kapa.)
 4. Güvenlik: tepkiler açık, kuruluk bekleme 10 sn, tek bölge "Ev", sensör/vana tanımlı değil.
 5. MQTT sunucu adresi hazır ama **kimliği yok**: pano bu haliyle buluta bağlanmaz, yalnız yerelde çalışır.
 6. Yerel anahtar ve kurulum ağı parolası boş: **provizyonsuz**.

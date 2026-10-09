@@ -9,6 +9,33 @@
 
 ## 0. Bu sürümde değişenler (2026-10-09)
 
+**Sahip kararlarıyla gelenler (2026-10-09 öğleden sonra; ayrıntı `docs/denetim/2026-10-09-kararlar.md`):**
+
+1. **Güvenlik ayarlı evde pano değişimini yalnız servis yapar.** Evin bulut kopyasında sensör ya da vana varsa ev sahibinin denemesi
+   reddedilir ("Bu evde pano değişimini yetkili servis personeli yapmalıdır."); değişimi kendi hesabınızla, müşterinin servis
+   PIN'iyle ya da süper kullanıcı olarak yaparsınız (Bölüm 6.1).
+2. **Ethernet'te sınır yok (karar):** kablolu panoda yerel istekler anahtarsız tam yetkili kalır (gaz vanası ve alarm dahil), şablon
+   yazımında kart kimliği denetlenmez; müşteri uygulaması da kablolu panoyu anahtarsız yönetir.
+3. **Personel her kartın yerel anahtarını okuyabilir** (değişmedi); yasal metinler buna göre düzeltildi (taslak sürüm 2).
+4. **Erişim bitince panonun bulut kimliği yenilenir:** üye çıkarma/ayrılma, devir kabulü ve **her servis oturumunun bitişi**. Tek
+   panolu evde ve v1.3.0+ panoda; pano yeni kimliği kendisi alır (Bölüm 7, madde 3). EMQX'te cihaz kimliği panonun istemci
+   kimliğine (`ESP32S3_<MAC>`) bağlıdır: aynı kimlikle başka bir istemci bağlanamaz.
+5. **Telefon tek biçim:** telefon alanlarında "+90 " hazır gelir (5XX XXX XX XX); "0555…", "+90555…", "555…" aynı numara. Kayıtlı
+   numaralar dönüştürüldü (başka bir hesapla çakışan numaraya dokunulmadı).
+6. **Süper kullanıcının kalıcı silmesi:** kullanıcı panolu bir dairenin tek sahibiyse silinmez; önce devir ya da acil sıfırlama
+   (Bölüm 6.3). Silinen kullanıcının sözleşme onay kayıtları kimliksiz (anonim) saklanır.
+7. **Aile üyesi ve misafir "Evden Ayrıl"** ile evden kendisi ayrılabilir; aile üyesi ayrılınca yerel anahtar ve bulut kimliği değişir.
+8. **Devirden, acil sıfırlamadan ve Home Admin atamasından sonra** yeni sahip yalnız o andan sonraki ve hâlâ açık alarmları görür.
+9. **Rölelerde sabit görev yok:** firmware v1.3.2'nin fabrika ayarında 8 rölenin hepsi "Röle N" adlı lamba, 1-8. girişler aynı
+   numaralı röleyi açıp kapatır; yeni açılan evin buluttaki varsayılan kanal listesi de aynıdır. Panjur yalnız şablonda seçilirse
+   yanındaki röleyle çift olur; röle görevlerini yalnız şablon belirler. Eski (v1.3.1) panolu mevcut evlerde adlar değişmez.
+10. **Bulut sunucu kilidi (v1.3.2):** pano yalnız firmware'e gömülü sunucuya (`evotomasyon.gudeteknoloji.com.tr`) bağlanır; başka
+    adres `400 host_not_allowed`. v1.3.2 karta yazılmadı.
+11. **Değişmeyenler (kararlarınız):** kablosuz sensör "yakında" olarak kapalı kalır; e-postasız müşteri panosunu kendi karekoduyla
+    sahiplenir (e-posta/SMS sistemi gelene kadar); personel süper kullanıcının dondurduğu hesabı açabilir.
+
+**Aynı gün sabah gelenler:**
+
 1. **Pano değişiminde güvenlik ayarları aktarılmıyor; artık açıkça söyleniyor.** Su/gaz sensörü ya da vanası olan evde sonuç ekranı
    "Güvenlik ayarları (su/gaz sensörü, vana) yeni panoya aktarılmadı. Yetkili servisi çağırın." der. Değişimden sonra sihirbazın 7.
    adımında güvenlik ayarlarını yeniden yazıp bölge testini yapın (Bölüm 6.1).
@@ -210,6 +237,10 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 ## 6. Diğer servis işleri
 
 ### 6.1 Pano değişimi
+Evin bulut kopyasında güvenlik ayarı (sensör ya da vana) varsa değişimi yalnız servis yapar (personel hesabı, müşterinin servis
+PIN'i ya da süper kullanıcı); ev sahibi denerse "Bu evde pano değişimini yetkili servis personeli yapmalıdır." görür. Yalnız
+bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
+
 1. Seçili evde: eski pano → yeni panonun etiketi + PIN + neden → "Pano değişimi onayı".
 2. Kanal adları, kurallar ve panjur süreleri aktarılır; "Yeni Panoyu Şimdi Bağla" → sihirbaz 5. adım. Panjur süreleri yeni pano
    çevrimiçi olunca gönderilir; v1.2.1+ panoda yalnız panonun onayıyla "eşitlendi" sayılır.
@@ -227,7 +258,10 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 2. Dondurma: etkin hesap "askıda" olur; davet bekleyen hesap dondurulup çözülünce "davet bekliyor" kalır. Silinmiş hesapta
    dondurma, rol ve parola işlemi yapılamaz ("Silinmiş hesap üzerinde bu işlem yapılamaz.").
 3. Müşterinin telefonunu siz yazar ya da değiştirirseniz telefon "doğrulanmamış" sayılır: o numarayla SMS girişi bu hesaba açılmaz
-   (müşteri e-posta ve şifresiyle girer).
+   (müşteri e-posta ve şifresiyle girer). Telefon alanlarında "+90 " hazır gelir; numara tek biçimde (+905…) saklanır.
+4. Kalıcı silme (süper kullanıcı): kullanıcı panosu takılı bir dairenin tek sahibiyse "Kullanıcı, panosu olan bir dairenin tek
+   sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama yapın." görünür. Silinen kullanıcının sözleşme onay
+   kayıtları kimliksiz saklanır.
 
 ### 6.4 Wi-Fi değişikliği (modem/şifre değişince)
 "Wi-Fi Kurulum & Kurtarma Sihirbazı": kurulum ağına bağlan → yeni ağ bilgisini yükle. Giriş/internet gerekmez.
@@ -240,8 +274,10 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
    yeniden. **Provizyonlu ve Ethernet'i bağlı panoda açılmaz.**
 3. Bulut kimliği: provizyonlu + ağı var + saati doğru + kimliği yok (ya da sunucu 3 kez reddetti) ise sunucudan kendisi
    ister. Sahiplenilmemişse 10 dk sonra yeniden dener. Aynı modemin arkasındaki çok sayıda sahiplenilmemiş pano, sahiplenilen
-   panonun kimlik almasını artık engellemez (sunucunun ağ başına sınırını yalnız başarısız istekler harcar).
-4. Ethernet'ten gelen yerel istekler anahtarsız tam yetkili; Wi-Fi'den gelenler anahtarlı.
+   panonun kimlik almasını artık engellemez (sunucunun ağ başına sınırını yalnız başarısız istekler harcar). Erişim bitince
+   (üye çıkarma/ayrılma, devir, servis oturumunun bitişi) sunucu kimliği geçersiz kılar; pano reddedilince yenisini bu yolla alır.
+4. Ethernet'ten gelen yerel istekler anahtarsız tam yetkili (kararınız, sınırsız); Wi-Fi'den gelenler anahtarlı. Bulut sunucu
+   adresi v1.3.2'de kilitlidir: yalnız firmware'e gömülü sunucu kabul edilir.
 5. Uzaktan firmware güncellemesi yok; yalnız USB.
 
 ---
@@ -269,57 +305,25 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 
 ## 9. Açık kalan konular
 
-> 2026-10-09 gece düzeltmelerinden sonra güncellendi (7 tarayıcı, 50 bulgu, 42 madde; Ethernet yazımında kart kimliği denetimi
-> dışında hepsi uygulandı, o madde kararınız nedeniyle uygulanmadı). Sözleşme ayrıntısı `docs/CONTRACTS.md` §3i. Önceki listedeki maddeler (1-5 ve
-> dünden açık kararlar) hâlâ açık; bu gece eklenenler: v1.3.2'nin kartta denenmemesi, eski firmware'de uzun onay süresi, pano
-> değişiminde güvenlik ayarlarının aktarılmaması ve yeni karar maddeleri.
+> 2026-10-09 sahip kararlarından sonra güncellendi (`docs/CONTRACTS.md` §3j; kararlar `docs/denetim/2026-10-09-kararlar.md`).
 
 1. **Uzaktan güncelleme yok:** her firmware değişikliği için kart USB'ye takılmalı.
 2. **Provizyonsuz pano buluta kendiliğinden bağlanamaz** (kimlik isteğini imzalayacak anahtarı yok). Ethernet'te de sihirbaz
    önce ilk hazırlığı ister (pano v1.3.1'de gerçek `provisioned` değerini bildirir).
-3. **Ethernet yazımında kart kimliği denetlenmiyor** (kararınız; yanlış IP başka karta yazar). Bu gece yeniden önerildi
-   (sozlesme-2); kararınızı tersine çevireceği için uygulanmadı.
+3. **Ethernet'te sınır yok (kararınız):** şablon yazımında kart kimliği denetlenmez, yerel istekler anahtarsız tam yetkilidir.
+   Yazmadan önce IP'nin doğru dairenin kartı olduğunu kontrol edin.
 4. **Telefon alarm bildirimi** yalnız Android'de ve cihazda henüz denenmedi; iOS'ta yok.
 5. **Ethernet kablosu ve panonun kendi bulut kimliği (bootstrap)** gerçek kablo ve sunucuyla henüz denenmedi.
-6. **Firmware v1.3.2 kartta denenmedi;** servis yazılımında seçili sürüm v1.3.1 kalıyor (`version_info.json` değişmedi).
+6. **Firmware v1.3.2 karta yazılmadı ve kartta denenmedi;** servis yazılımında seçili sürüm v1.3.1 kalıyor (`version_info.json`
+   değişmedi). Bulut sunucu kilidi ve sabit görevsiz fabrika ayarı ancak v1.3.2 yazılınca geçerli olur.
 7. **v1.3.1 ve önceki panolarda uzun onay süresi hiç onaylanmaz** (gaz/duman 875 ms'den, su 2625 ms'den uzun): bu panolarda
    şablona bu değerlerden uzun onay süresi yazmayın. v1.3.2 pencereyi büyüterek düzeltir.
-8. **Pano değişiminde güvenlik ayarları aktarılmıyor;** yalnız uyarı var (Bölüm 6.1). Kalıcı çözüm aşağıdaki karar maddesinde.
-9. **Kararınızı bekleyen maddeler** (uygulanmadı):
-   - **karar-bulut-host-degisikligi (yüksek):** Ethernet'teki anahtarsız erişimle (ya da yerel anahtarla) panonun bulut sunucu
-     adresi değiştirilebiliyor; pano başka bir sunucuya taşınıp uzaktan yönetilebilir. Öneri: firmware yalnız kendi sunucu adresini
-     kabul etsin (başka adres yalnız seri/fabrika yolunda); önce canlıdaki MQTT adresinin firmware varsayılanıyla aynı olduğu
-     doğrulanmalı. guvenlik-14 ile birlikte karar verilmeli.
-   - **guvenlik-14:** Ethernet'teki anahtarsız erişim, gaz vanası ve hırsız alarmı kurallarını deliyor (Ethernet'ten güvenlik
-     yapılandırması yazılabiliyor, alarm anahtarsız çözülebiliyor). Öneri: gaz vanası yalnız gerçek seri konsoldan açılsın,
-     alarm Ethernet'te de anahtar istesin; Ethernet kolaylığı korunur.
-   - **karar-yerel-anahtar-personel:** servis yazılımının yerel anahtar ucu, personel ve süper kullanıcıya müşterinin sahiplendiği
-     kart dahil her kartın anahtarını süresiz veriyor; gizlilik politikası ve kullanıcı sözleşmesi aksini söylüyor. Öneri: servis
-     sorumlusu yalnız stoktaki karta ya da kurulum penceresi (72 saat) süren evdeki karta; süper kullanıcı korunur, metin düzeltilir.
-   - **karar-pano-degisimi-geri-yukleme:** güvenlik ayarlarının yeni panoya geri yüklenmesi. Öneri: kısa vadede güvenlik ayarlı
-     evde değişimi yalnız servis yapsın; sonraki sürümde buluttaki kopyadan geri yükleme.
-   - **karar-servis-pin-kaba-kuvvet:** 6 haneli servis PIN'i çok sayıda ağdan denenerek tahmin edilebilir. Öneri: PIN eve bağlansın
-     (PIN + ev sahibinin ekranındaki kısa ev kodu); kısa vadede 8-10 hane.
-   - **karar-cihaz-mqtt-kimligi:** erişimi biten kişinin (servis oturumu, çıkarılan üye) gördüğü pano bulut kimliği yenilenmiyor.
-     Öneri: erişim bitince kimlik yenilensin (v1.3.0+ pano yenisini kendisi alır) ve aynı kimlikle paralel bağlantı engellensin.
-   - **karar-kilitliyken-fabrika-sifirlama:** alarm kilitliyken ağdan zorla fabrika sıfırlaması 1-4. rölelerdeki vanayı panjur
-     gibi sürebilir. Öneri: kilitliyken ağdan zorla sıfırlama reddedilsin (yalnız seri).
-   - **karar-kablosuz-sensor-kapsami:** kablosuz sensör sürücüsü yok (bu gece yetenek kapısıyla güvenli hale getirildi). Öneri:
-     "yakında" olarak kapıyla kalsın.
-   - **karar-sahiplenme-sms:** e-postasız müşteriye sahiplenme kodu SMS ile gitsin mi? Öneri: SMS sağlayıcı bağlanana kadar bu
-     müşteriler panoyu kendi karekoduyla sahiplensin.
-   - **karar-telefon-bicimi:** "+90555…" ile "0555…" farklı numara sayılıyor; telefonla başlatılan devir ya da hedef müşteri
-     eşleşmeyebilir. Öneri: Türkiye varsayılanlı tek biçim ve mevcut verinin dönüştürülmesi.
-   - **karar-dondurma-yetkisi:** servis sorumlusu kendi açtığı müşteri hesabında süper kullanıcının dondurmasını kaldırabiliyor.
-     Öneri: dondurmayı yapan rol saklansın, personel süperin dondurmasını kaldıramasın.
-   - **karar-kalici-silme-panolu-ev:** süper kullanıcının kalıcı silmesi panosu takılı tek sahipli evi "boş daire" sayıp siliyor
-     (pano askıya düşer). Öneri: hesap silmedeki gibi engel; önce devir ya da acil sıfırlama.
-   - **karar-sozlesme-kaydi-saklama:** kalıcı silme sözleşme kabul kayıtlarını da siliyor; gizlilik politikası saklandığını
-     söylüyor. Öneri: kayıt anonim saklansın (hukuk onayıyla).
-   - **karar-sunucu-kapilari:** sözleşme onayı ve zorunlu şifre değişimi yalnız uygulamada; sunucu zorlamıyor. Öneri: yeni uygulama
-     yaygınlaşınca sunucuda da zorlansın.
-   - **kayit-dogrulama:** kayıtta e-posta/telefon doğrulaması zorunlu değil. Doğrulanmamış hesaba servis kurulumunda/atamada
-     güvenlik için parola sıfırlaması gider; bu gece telefonla (SMS) giriş yalnız doğrulanmış telefona açıldı. Öneri: sonraki
-     sürümde "bekleyen kayıt" modeli (hesap kod girilince açılır).
-   - **bireysel-9-yayin:** etiket karekodunun telefonda doğrudan uygulamayı açması için Android/iOS bağlantı doğrulama
-     dosyaları gerekiyor (imza sertifikası parmak izi, uygulama kimliği, Apple Team ID). Bilgiler gelince eklenir.
+8. **Pano değişiminde güvenlik ayarları aktarılmıyor;** güvenlik ayarlı evde değişimi yalnız servis yapar (Bölüm 6.1). Buluttaki
+   kopyadan geri yükleme sonraki sürümde.
+9. **Bulut kimliği yenileme yalnız tek panolu evde** (çok panolu evde ve v1.3.0 öncesi panoda atlanır, sunucu günlüğüne yazılır).
+10. **Kısa bir açık pencere:** erişimi biten kişi panonun eski yerel anahtarını biliyorsa, pano yeni bulut kimliğini alıp anahtar
+    değişimi tamamlanana kadar panonun yerine kimlik isteyebilir (teknik bilgi gerekir; pano çevrimiçiyse kısa sürer). İzleniyor.
+11. **Sonraya bırakılanlar (kararlarınız):** servis PIN'i ve giriş uçlarına toplu saldırıya karşı CAPTCHA; sözleşme onayı ve zorunlu
+    şifre değişiminin sunucuda da zorlanması (şimdilik izleniyor); e-posta sistemi kurulunca e-postasız müşteri sahiplenmesi; etiket
+    karekodunun uygulamayı doğrudan açması için imza sertifikası parmak izi, uygulama kimliği, Apple Team ID; yasal metinlerdeki
+    şirket bilgileri ve hukuk kararları (proje sonunda).
