@@ -505,3 +505,32 @@ test('C1 (Faz 2 F2.D.6): cfg_patch basarisinda last_id = id (otomasyon yeni komu
     await h.close();
   }
 });
+
+// v1.3.2 (CONTRACTS C6, sko-5): state.cfg.safety.id = guncel rev'i ureten bulut cfg_patch kimligi. Araya giren komut last_id'yi degistirse
+// de kalir (sunucu kuyruk ogesini bununla dogrular); rev baska yoldan (LAN) degisince ya da kimliksiz yamada yazilmaz.
+test('C6 (sko-5): cfg.safety.id kabul edilen cfg_patch kimligini rev baska yoldan degisene dek tasir', async () => {
+  const h = await startHome();
+  const [sim] = h.sims;
+  const uid = sim.uid;
+  try {
+    await h.ready(sim);
+    const rev = await configure(h, sim, WATER);
+    let s = await h.waitState(uid, (x) => x.cfg.safety.rev === rev, 'LAN yapilandirmasi');
+    assert.equal(s.cfg.safety.id, undefined, 'LAN yamasi kimlik yazmaz');
+    await h.sys({ cmd: 'cfg_patch', module: 'safety', uid, base_rev: rev, id: 'cfg-9', set: { zone: { id: 2, name: 'Mutfak' } } });
+    s = await h.waitState(uid, (x) => x.cfg.safety.rev === rev + 1, 'cfg_patch uygulandi');
+    assert.equal(s.cfg.safety.id, 'cfg-9');
+    await h.cmd({ relay: 1, state: true, id: 'r-9' });
+    s = await h.waitState(uid, (x) => x.last_id === 'r-9', 'role komutu last_id');
+    assert.equal(s.cfg.safety.id, 'cfg-9', 'araya giren komut cfg.safety.id yi silmez');
+    const r = await configure(h, sim, [{ set: { zone: { id: 3, name: 'Salon' } } }]);
+    s = await h.waitState(uid, (x) => x.cfg.safety.rev === r, 'LAN duzenlemesi (rev+1)');
+    assert.equal(s.cfg.safety.id, undefined, 'rev baska yoldan degisti: alan duser');
+    await h.sys({ cmd: 'cfg_patch', module: 'safety', uid, base_rev: r, set: { zone: { id: 4, name: 'Bahce' } } });
+    s = await h.waitState(uid, (x) => x.cfg.safety.rev === r + 1, 'kimliksiz yama');
+    assert.equal(s.cfg.safety.id, undefined);
+    assert.deepEqual(sim.violations, []);
+  } finally {
+    await h.close();
+  }
+});

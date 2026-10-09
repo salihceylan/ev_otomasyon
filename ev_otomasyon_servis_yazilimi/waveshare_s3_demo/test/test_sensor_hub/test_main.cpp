@@ -37,6 +37,63 @@ static uint32_t drive(SensorHub& h, uint8_t slot, bool level, bool ok, uint32_t 
   return t;
 }
 
+// Sürekli aktif tek tehlike sensörü: ilk örnekten onaya kadar geçen süre (ms; onaylanmazsa 0). NC (gaz/duman) kontak açıkken aktif.
+static uint32_t msUntilConfirmed(SensorKind kind, uint16_t confirmMs, uint32_t maxMs) {
+  SensorHub h;
+  SensorConfig c[1] = {mk((uint8_t)SensorSrc::DI, 1, kind, 1, (uint8_t)(hazardOf((uint8_t)kind) == HZ_WATER ? 0 : 1))};
+  c[0].confirm_ms = confirmMs;
+  h.configure(c, 1, 0);
+  const bool level = c[0].active_open ? false : true;
+  uint32_t t = 100;
+  h.update(0, level, true, t);
+  h.finish(t);
+  for (uint32_t d = 10; d <= maxMs; d += 10) {
+    t += 10;
+    h.update(0, level, true, t);
+    h.finish(t);
+    if (h.active(0)) return d;
+  }
+  return 0;
+}
+
+// fw-tarama-3: confirm_ms tür penceresinden (su 3 sn, gaz/duman 1 sn) uzunsa pencere büyür: max(tür penceresi, ceil(confirm_ms*8/7)
+// 8'in katına yuvarlanmış). Eskiden 8 kovalık toplam en çok pencere kadardı: gaz 1500 ms sürekli kaçakta bile hiç onaylanmazdı (vana
+// kapanmaz, siren çalmaz). Küçük değerlerde (varsayılanlar dahil) pencere ve zamanlama birebir aynı.
+void test_confirm_window_grows_for_long_confirm(void) {
+  TEST_ASSERT_EQUAL_UINT32(1000, SensorHub::windowMs((uint8_t)SensorKind::GAS, 300));
+  TEST_ASSERT_EQUAL_UINT32(1000, SensorHub::windowMs((uint8_t)SensorKind::GAS, 875));
+  TEST_ASSERT_EQUAL_UINT32(1008, SensorHub::windowMs((uint8_t)SensorKind::GAS, 876));
+  TEST_ASSERT_EQUAL_UINT32(1720, SensorHub::windowMs((uint8_t)SensorKind::GAS, 1500));
+  TEST_ASSERT_EQUAL_UINT32(3000, SensorHub::windowMs((uint8_t)SensorKind::WATER, 1000));
+  TEST_ASSERT_EQUAL_UINT32(5720, SensorHub::windowMs((uint8_t)SensorKind::WATER, 5000));
+  TEST_ASSERT_EQUAL_UINT32(11432, SensorHub::windowMs((uint8_t)SensorKind::WATER, 10000));
+  TEST_ASSERT_EQUAL_UINT32(0, SensorHub::windowMs((uint8_t)SensorKind::DOOR, 500));
+  const uint32_t gas = msUntilConfirmed(SensorKind::GAS, 1500, 10000);
+  TEST_ASSERT_TRUE_MESSAGE(gas >= 1500 && gas <= 1800, "gaz 1500 ms: ~1,5-1,8 sn icinde onay");
+  const uint32_t water = msUntilConfirmed(SensorKind::WATER, 5000, 12000);
+  TEST_ASSERT_TRUE_MESSAGE(water >= 5000 && water <= 6000, "su 5000 ms: 5-6 sn icinde onay");
+  TEST_ASSERT_EQUAL_UINT32(10000, msUntilConfirmed(SensorKind::WATER, 10000, 15000));
+  // regresyon: varsayılan değerlerde onay anı değişmez
+  TEST_ASSERT_EQUAL_UINT32(1000, msUntilConfirmed(SensorKind::WATER, 1000, 5000));
+  TEST_ASSERT_EQUAL_UINT32(300, msUntilConfirmed(SensorKind::GAS, 300, 5000));
+}
+
+// fw-tarama-3: pencerenin 7/8'inden büyük confirm_ms sürekli aktiflikte onaylı KALIR (eskiden gaz 950 ms her kova başında düşüp kalkıyordu).
+void test_long_confirm_stays_confirmed_while_active(void) {
+  SensorHub h;
+  SensorConfig c[1] = {mk((uint8_t)SensorSrc::DI, 1, SensorKind::GAS, 1, 1)};
+  c[0].confirm_ms = 950;
+  h.configure(c, 1, 0);
+  uint32_t t = drive(h, 0, false, true, 0, 1200);                  // NC gaz: kontak açık = aktif
+  TEST_ASSERT_TRUE(h.active(0));
+  for (uint32_t d = 0; d < 3000; d += 10) {
+    t += 10;
+    h.update(0, false, true, t);
+    h.finish(t);
+    TEST_ASSERT_TRUE_MESSAGE(h.active(0), "surekli aktifken onay dusmemeli");
+  }
+}
+
 void test_struct_sizes_are_fixed(void) {
   TEST_ASSERT_EQUAL_UINT32(28, sizeof(SensorConfig));
 }
@@ -449,5 +506,7 @@ int main(int, char**) {
   RUN_TEST(test_di_sensor_mask_and_momentary_cleanup);
   RUN_TEST(test_di_sensor_new_ext_channels_unknown_until_first_read);
   RUN_TEST(test_bridge_heartbeat);
+  RUN_TEST(test_confirm_window_grows_for_long_confirm);
+  RUN_TEST(test_long_confirm_stays_confirmed_while_active);
   return UNITY_END();
 }

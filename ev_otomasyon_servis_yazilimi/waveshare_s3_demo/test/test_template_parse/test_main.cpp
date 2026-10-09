@@ -320,6 +320,23 @@ void test_meta_rules() {
   TEST_ASSERT_EQUAL_STRING("invalid_site_id", e.err.code);
 }
 
+// v1.3.2 (CONTRACTS C1, fw-tarama-1): şablon bir yazım yoludur; köprü (kablosuz) sensörü sensor_bridge_unsupported ile reddedilir
+// (bu derlemede hub sürücüsü yok). Köprüde kumanda rolü sensor_src kalır (sunucu template_schema ve araç template_model ile aynı sıra).
+void test_bridge_sensor_in_template_is_rejected() {
+  Parsed a;
+  parseText(mutated("\"sensors\": []", "\"sensors\": [{\"id\": \"b1\", \"kind\": \"water\", \"zone\": 1}]"), false, a);
+  TEST_ASSERT_FALSE(a.ok);
+  TEST_ASSERT_EQUAL_STRING("sensor_bridge_unsupported", a.err.code);
+  TEST_ASSERT_EQUAL_STRING("safety.sensors", a.err.path);
+  Parsed b;
+  parseText(mutated("\"sensors\": []", "\"sensors\": [{\"id\": \"b2\", \"kind\": \"alarm_ack\", \"zone\": 0}]"), false, b);
+  TEST_ASSERT_FALSE(b.ok);
+  TEST_ASSERT_EQUAL_STRING("sensor_src", b.err.code);
+  Parsed c;                                                   // DI yolu değişmez
+  parseText(mutated("\"sensors\": []", "\"sensors\": [{\"id\": \"d8\", \"kind\": \"water\", \"zone\": 1}]"), false, c);
+  TEST_ASSERT_TRUE_MESSAGE(c.ok, c.err.code ? c.err.code : "?");
+}
+
 void test_shutter_dis_mode_must_target_up_relay_and_light_dimmer_rules() {
   // panjur kipi boşta (0) hedef -> invalid_target_relay
   Parsed a;
@@ -415,5 +432,6 @@ int main(int, char**) {
   RUN_TEST(test_shutter_dis_mode_must_target_up_relay_and_light_dimmer_rules);
   RUN_TEST(test_patch_parser_still_parses_items_after_refactor);
   RUN_TEST(test_error_path_is_sanitized);
+  RUN_TEST(test_bridge_sensor_in_template_is_rejected);
   return UNITY_END();
 }

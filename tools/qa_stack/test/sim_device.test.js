@@ -257,6 +257,23 @@ test('QA: setDi aralik/ek modul denetimi; slow(drop) komutu dusurur; dusuren kom
   }
 });
 
+// v1.3.2 (CONTRACTS C1, fw-tarama-1): firmware'de kopru (hub) surucusu yok ve durum caps'inde "bridge" yok: simulator de kopru raporu
+// URETMEZ (gercek pano gibi kopru sensoru okunamiyor kalir). Rapor beslemesi yalniz caps "bridge" bildiren surumde.
+test('QA: kopru sensoru beslemesi yalniz caps "bridge" iken; bugunku firmware aynasinda rapor uretilmez', async () => {
+  const { sim, clock } = await make();
+  try {
+    run(sim, clock, 700);
+    const r = sim.setSensor('b1', true);
+    assert.equal(r.changed, false);
+    assert.equal(sim.bridgeFeed.size, 0);
+    assert.equal(sim.fw.automation.safety.sensorQ.length, 0, 'postBridgeReport cagrilmadi');
+    run(sim, clock, 6000);
+    assert.equal(sim.fw.automation.safety.sensorQ.length, 0, '5 sn yinelemesi de yok');
+  } finally {
+    await sim.stop();
+  }
+});
+
 test('/__sim/state: acilis sirasinda en az alanlarla doner (booting=true), sonra tam durum', async () => {
   const { sim, clock } = await make({ bootMs: 30 });
   try {

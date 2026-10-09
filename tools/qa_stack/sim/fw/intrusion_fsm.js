@@ -152,6 +152,7 @@ export class IntrusionCore {
   }
   takeKeyError() { const k = this.keyError_; this.keyError_ = false; return k; }
   takeDirty() { const d = this.dirty_; this.dirty_ = false; return d; }
+  markDirty() { this.dirty_ = true; }   // NVS yazimi basarisiz: kayit yeniden denenecek (fw-tarama-5)
   record() {
     if (this.st_ === ArmSt.ALARM && this.aid_) return makeArmRecord({ mode: this.mode_, alarm: ARM_REC_ALARM, aid: this.aid_ });
     if (this.st_ === ArmSt.ENTRY && this.mode_ !== ArmMode.OFF) return makeArmRecord({ mode: this.mode_, alarm: ARM_REC_ENTRY, pend: this.pend_.slice(0, 8) });

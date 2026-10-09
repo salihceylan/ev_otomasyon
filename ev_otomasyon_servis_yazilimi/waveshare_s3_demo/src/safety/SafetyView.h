@@ -87,6 +87,8 @@ struct StateMeta {
   uint32_t epoch;
   char rejId[25];      // last_rej.id ("" = yazılmaz)
   uint8_t rej;         // Rej (OK = last_rej yok)
+  char cfgId[25];      // v1.3.2 (CONTRACTS C6): son kabul edilen bulut cfg_patch kimliği ("" = yok; yalnız MQTT görevi doldurur)
+  uint32_t cfgIdRev;   // ... o yamanın ürettiği rev: görünümün rev'iyle aynıysa cfg.safety.id yazılır
 };
 
 inline const char* sensorKindText(uint8_t kind) {
@@ -241,7 +243,15 @@ inline void writeStateExtras(const SafetyView& v, const StateMeta& m, ev_detail:
   w.u32(v.rev);
   w.raw(",\"crc\":\"");
   w.hex8(v.crc);
-  w.raw("\"}}");
+  w.raw("\"");
+  // v1.3.2 (CONTRACTS C6, sko-5): bu rev'i üreten bulut cfg_patch kimliği (desen [A-Za-z0-9_.:-]{1,24}, MQTT ayrıştırıcısı denetler). Rev başka
+  // yoldan değişince ya da yeniden başlatmada yazılmaz; sunucu kuyruk öğesinin uygulandığını last_id kaybolsa da bununla doğrular.
+  if (m.cfgId[0] && m.cfgIdRev == v.rev) {
+    w.raw(",\"id\":\"");
+    w.raw(m.cfgId);
+    w.raw("\"");
+  }
+  w.raw("}}");
   if (!v.configured) return;
 
   w.raw(",\"sensors\":[");

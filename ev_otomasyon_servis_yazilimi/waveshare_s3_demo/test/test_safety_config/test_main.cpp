@@ -239,6 +239,39 @@ void test_misc_bounds(void) {
   TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_SRC, (uint8_t)validate(s, c));
 }
 
+// v1.3.2 (CONTRACTS C1, fw-tarama-1): köprü (kablosuz) sensörünün hub sürücüsü bu derlemede yok (BridgeSensor.h yalnız arayüz). Yazım
+// yolları (forWrite) köprü sensörünü sensor_bridge_unsupported ile reddeder; açılıştaki kayıtlı yapılandırma (forWrite=false) geçerli kalır.
+// Sıra sunucu/araçla aynı: köprüde kumanda rolü -> sensor_src (değişmez), aksi halde aralık/dup denetiminden ÖNCE sensor_bridge_unsupported.
+void test_bridge_sensor_rejected_on_write_paths_only(void) {
+  SystemConfig s = sys8();
+  SafetyConfig c = base();
+  c.sens[1] = sensor(4, SensorKind::WATER, 1, 0);
+  c.sens[1].src = (uint8_t)SensorSrc::BRIDGE;
+  c.sens[1].index = 1;
+  c.nSens = 2;
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::OK, (uint8_t)validate(s, c));            // açılış: kayıtlı yapılandırma kullanılabilir
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::OK, (uint8_t)validate(s, c, false));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_BRIDGE_UNSUPPORTED, (uint8_t)validate(s, c, true));
+  TEST_ASSERT_EQUAL_STRING("sensor_bridge_unsupported", cfgErrText(CfgErr::SENSOR_BRIDGE_UNSUPPORTED));
+  c.sens[1].index = 0;                                                               // aralık dışı yuva: önce desteklenmiyor
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_BRIDGE_UNSUPPORTED, (uint8_t)validate(s, c, true));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_BRIDGE_RANGE, (uint8_t)validate(s, c, false));
+  c.sens[1] = sensor(4, SensorKind::ALARM_ACK, 0, 0);                               // köprüde kumanda rolü: sensor_src (değişmez)
+  c.sens[1].src = (uint8_t)SensorSrc::BRIDGE;
+  c.sens[1].index = 2;
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_SRC, (uint8_t)validate(s, c, true));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_SRC, (uint8_t)validate(s, c, false));
+  c = base();                                                                        // DI yolu değişmez
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::OK, (uint8_t)validate(s, c, true));
+  // Ana yapılandırma değişimi (/api/config, CLI) kayıtlı köprü sensörünü yazmaz: kabul; şablon yazımı (forWrite) reddeder.
+  c.sens[1] = sensor(4, SensorKind::GAS, 1, 1);
+  c.sens[1].src = (uint8_t)SensorSrc::BRIDGE;
+  c.sens[1].index = 3;
+  c.nSens = 2;
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::OK, (uint8_t)validateSystemChange(s, c, 0));
+  TEST_ASSERT_EQUAL_UINT8((uint8_t)CfgErr::SENSOR_BRIDGE_UNSUPPORTED, (uint8_t)validateSystemChange(s, c, 0, true));
+}
+
 void test_locked_zone_changes_rejected(void) {
   SafetyConfig a = base();
   SafetyConfig b = base();
@@ -530,5 +563,6 @@ int main(int, char**) {
   RUN_TEST(test_nvs_budget_excludes_gc_page);
   RUN_TEST(test_system_change_respects_relay_guard);
   RUN_TEST(test_intrusion_policy_layout_and_roles);
+  RUN_TEST(test_bridge_sensor_rejected_on_write_paths_only);
   return UNITY_END();
 }

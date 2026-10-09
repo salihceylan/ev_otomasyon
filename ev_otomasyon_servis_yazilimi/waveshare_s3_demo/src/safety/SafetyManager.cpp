@@ -21,7 +21,7 @@ SafetyManager::SafetyManager()
     : di_(nullptr), cfgMux_(nullptr), rejMux_(nullptr), viewMux_(nullptr), writeMux_(nullptr), sensorQ_(nullptr), actuatorMask_(0),
       sensorDiMask_(0), bootLevel_(0), safeMaskA_(0), safeMaskL_(0), relayGuard_(0), diHist_(0), diHistDirty_(false), bootAt_(0), bootCount_(0), bn_(0), lastSirenSave_(0), lastViewAt_(0), epoch_(0), viewSig_(0),
       rejSeq_(0), masksGen_(0), sirenSaved_(0), active_(false), localReady_(false), extOk_(false), extReady_(MAX_DI - 8), extActuator_(false),
-      posSaveForced_(false), cfgUsable_(false), cfgStored_(false), forceCorrupt_(false), scanBlocked_(false), safeMode_(false), latchedMask_(0), pendingState_(0), pendingOk_(0), pendingVia_(0),
+      posSaveForced_(false), nvsFailRep_(0), cfgUsable_(false), cfgStored_(false), forceCorrupt_(false), scanBlocked_(false), safeMode_(false), latchedMask_(0), pendingState_(0), pendingOk_(0), pendingVia_(0),
       pendingCfg_(nullptr), lastRej_(Rej::OK) {
   cfg_.setDefaults();
   crashClear(crash_);
@@ -314,26 +314,47 @@ void SafetyManager::emitCfgConflict(uint32_t rev, uint32_t crc) {
   outbox_.box().push(e, eid);
 }
 
+// fw-tarama-5: kirli bayraklar yazımdan önce tüketilir; yazım başarısızsa çağıran bayrağı geri kurar, burada geri çekilme kurulur (bayrak
+// süre dolana dek tüketilmez) ve NVS_FAIL ardışık başarısızlıkta anahtar başına bir kez üretilir. true: yazıldı.
+bool SafetyManager::nvsWriteResult(bool ok, uint8_t key, NetUtil::Wait& retry, uint32_t now_ms) {
+  const uint8_t bit = (uint8_t)(1u << key);
+  if (ok) {
+    nvsFailRep_ = (uint8_t)(nvsFailRep_ & ~bit);
+    return true;
+  }
+  retry.arm(now_ms, NVS_RETRY_MS);
+  if (!(nvsFailRep_ & bit)) {
+    nvsFailRep_ = (uint8_t)(nvsFailRep_ | bit);
+    emitNvsFail(key, now_ms);
+  }
+  return false;
+}
+
 void SafetyManager::persist(uint32_t now_ms) {
   if (!active_) return;
-  if (intr_.takeDirty()) {                                  // hırsız kipi/alarm belleği: yalnız kip değişiminde ve alarm geçişinde
+  // Başarısız yazım kaybolmaz (fw-tarama-5): kilit kaydı yazılamadan elektrik kesilirse bölge NORMAL başlar, kuru vana onaysız açılabilirdi.
+  if (!armRetry_.running(now_ms) && intr_.takeDirty()) {    // hırsız kipi/alarm belleği: yalnız kip değişiminde ve alarm geçişinde
     ArmRecord r;
     intr_.record(r);
-    if (!SafetyStore::saveArm(r)) emitNvsFail(NVSK_ARM, now_ms);
+    if (!nvsWriteResult(SafetyStore::saveArm(r), NVSK_ARM, armRetry_, now_ms)) intr_.markDirty();
   }
-  if (core_.takeLatchDirty()) {
+  if (!latchRetry_.running(now_ms) && core_.takeLatchDirty()) {
     static LatchRecord rec;
     core_.buildLatch(rec);
-    if (!SafetyStore::saveLatch(rec)) emitNvsFail(NVSK_LATCH, now_ms);
+    if (!nvsWriteResult(SafetyStore::saveLatch(rec), NVSK_LATCH, latchRetry_, now_ms)) core_.markLatchDirty();
     if (!latchAny(rec) && sirenSaved_ != 0) {
       if (SafetyStore::saveSirenS(0)) sirenSaved_ = 0;
     }
   }
   refreshKeep();                                            // her tur: kapanış kancası güncel kapalı vanaları korur [EM-1]
-  const bool posDirty = act_.takePosDirty() || posSaveForced_;
-  posSaveForced_ = false;
-  if (posDirty && !SafetyStore::saveActPos(act_.posOpenBits(), act_.posKnownBits())) emitNvsFail(NVSK_ACT_POS, now_ms);
-  if (posDirty) persistSafeMask(now_ms);
+  if (!posRetry_.running(now_ms)) {
+    const bool posDirty = act_.takePosDirty() || posSaveForced_;
+    posSaveForced_ = false;
+    if (posDirty && !nvsWriteResult(SafetyStore::saveActPos(act_.posOpenBits(), act_.posKnownBits()), NVSK_ACT_POS, posRetry_, now_ms)) {
+      posSaveForced_ = true;
+    }
+    if (posDirty) persistSafeMask(now_ms);
+  }
   // Siren birikimi: kilit sürerken 30 sn'de bir (yıpranma) [O-8].
   if (core_.latchedZoneMask() != 0 && (uint32_t)(now_ms - lastSirenSave_) >= 30000UL) {
     lastSirenSave_ = now_ms;
@@ -514,8 +535,11 @@ CfgOutcome SafetyManager::submitEdit(const CfgEdit& e, bool hasBase, uint32_t ba
   int8_t removed = -1;
   CfgErr err = applyEdit(cur, e, next, removed);
   if (err == CfgErr::OK) {
+    // Yazım yolu (v1.3.2, CONTRACTS C1): sürücüsüz köprü sensörü içeren tablo yazılmaz. Silme serbest: yalnız öğe kaldırır, köprü sensörü
+    // eklemez (kalan kayıtlı köprü sensörleri tek tek silinebilir).
+    const bool forWrite = e.op != EditOp::DEL_SENSOR && e.op != EditOp::DEL_ACTUATOR;
     ConfigManager::ConfigLock lk(ConfigManager::instance());
-    err = validate(ConfigManager::instance().config, next);
+    err = validate(ConfigManager::instance().config, next, forWrite);
   }
   if (err != CfgErr::OK) {
     o.r = CfgResult::INVALID;

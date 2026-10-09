@@ -149,6 +149,9 @@ private:
   // ---- sys cfg_patch kabul yankisi (WP-C1; yalniz MQTT gorevi): last_id, otomasyonun son kimligi degismedikce bu kimliktir ----
   char _acceptId[25];
   char _acceptBase[25];
+  // v1.3.2 (CONTRACTS C6, sko-5): son kabul edilen cfg_patch kimliği ve ürettiği güvenlik rev'i -> state.cfg.safety.id (rev aynıyken)
+  char _cfgPatchId[25];
+  uint32_t _cfgPatchRev;
 
   // ---- Bootstrap (CONTRACTS §3f; yalniz MQTT gorevi) ----
   boot::Fsm _boot;

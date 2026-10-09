@@ -220,6 +220,16 @@ static void cliPrintStatus() {
 }
 
 // ---- Güvenlik katmanı (seri CLI = fiziksel erişim; spec §5.1.6, karar 7.2b-7/10, WP-F5) ----------------------------------
+// Panjur hareket ediyor ya da ölü zaman bekliyor mu (WebPortal shutterBusyNow ile aynı; belirsizse meşgul). EXTMOD (fw-tarama-4).
+static bool cliShutterBusy() {
+  AutomationSnapshot snap;
+  if (!SmartAutomation::instance().getSnapshot(snap)) return true;
+  for (uint8_t p = 0; p < snap.totalPairs && p < (MAX_TOTAL_RELAYS / 2); p++) {
+    if (snap.shutters[p].moving || snap.shutters[p].waiting) return true;
+  }
+  return false;
+}
+
 // Ana yapılandırma değişiminin güvenlik yapılandırmasıyla çapraz doğrulaması [B3]: geçersizse kayıt YAPILMAZ.
 static bool cliSafetyAllows(const SystemConfig& next) {
   safety::SafetyConfig* sc = (safety::SafetyConfig*)malloc(sizeof(safety::SafetyConfig));
@@ -680,6 +690,8 @@ static void handleCliLine(String cmd) {
     int ch = c.isEmpty() ? 8 : c.toInt();
     if (a.isEmpty() || (en && !isValidExtChannelCount((uint8_t)ch)) || ch < 0 || ch > 255) {
       Serial.printf("[CLI-HATA] Kullanim: EXTMOD <0|1> [kanal: 2,4,8,12,16,24,32]\r\n");
+    } else if (cliparse::extModChangeBlocked(cfg, en, (uint8_t)ch, cliShutterBusy())) {
+      Serial.printf("[CLI-HATA] EXTMOD reddedildi: panjur hareket ediyor; degisiklik yapilmadi.\r\n");   // fw-tarama-4 (LAN ile ayni kural)
     } else {
       SystemConfig* next = (SystemConfig*)malloc(sizeof(SystemConfig));
       if (!next) return;

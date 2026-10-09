@@ -49,6 +49,7 @@ const SCAN_REPLY_MS = 15;
 
 const u32 = (x) => x >>> 0;
 const M64 = (1n << 64n) - 1n;
+const EXT_OFF_MAX_FAILS = 5;   // firmware SmartAutomation.cpp (fw-tarama-4): kapsam disi KAPAT ardisik bu kadar basarisizlikta birakilir
 const p2 = (n) => String(n).padStart(2, '0');
 
 /** SmartAutomation::ExtReadback */
@@ -336,6 +337,8 @@ export class Automation {
     this.extDiInit = false;
     this.extEnabledPrev = false;
     this.extChPrev = 0;          // syncConfig'in en son isledigi ek modul kanal sayisi (pano-4)
+    this.extOffPending = 0n;     // fw-tarama-4: kanal sayisi azalinca kapsam disina dusen, KAPAT yazilacak ek roleler (bit i = role i+1)
+    this.extOffFails = 0;        // ... ardisik basarisiz KAPAT (EXT_OFF_MAX_FAILS'te kume birakilir)
     this.extDiReadyCh = 0;       // ilk taze okumayla (kenarsiz) baslatilmis ek DI kanali sayisi (DiSensor.setExtReady)
     this.lastLocalPairMask = 0xFF;
     this.childLockEnabled = false;
@@ -578,10 +581,13 @@ export class Automation {
       this.extDiReadyCh = 0;
       this.extModuleResponding = false;
       this.extChPrev = cfg.ext_module_channels;   // gecisin kendisi: kanal degisimi ayrica islenmez
+      this.extOffPending = 0n;                    // acilis/kapanis butun ek roleleri zaten "bilinmiyor"a dondurdu (fw-tarama-4)
+      this.extOffFails = 0;
     } else if (cfg.ext_module_enabled && cfg.ext_module_channels !== this.extChPrev) {
       // pano-4: modul etkin kalirken kanal sayisi degisti. Yeni kanallarin DI kapilari bir sonraki basarili ayrik giris yoklamasinda kenarsiz
       // baslatilir; o zamana dek o kanallarin guvenlik sensorleri "okunamadi" (setExtReady). Toplu ext-ok DUSURULMEZ (bilinen gaz sensoru
-      // ariza -> SF_FAULT_CLOSE sahte alarm verirdi). Degisen araliktaki ek roleler "bilinmiyor" (KAPAT yeniden yazilir).
+      // ariza -> SF_FAULT_CLOSE sahte alarm verirdi). Degisen araliktaki ek roleler "bilinmiyor" (KAPAT yeniden yazilir). Azalmada kapsam
+      // disina dusen roleler stepExtOutputs'un olagan gecisine girmez (i < totalR): ayri bekleyen KAPAT kumesi (fw-tarama-4).
       const oldCh = this.extChPrev;
       const newCh = cfg.ext_module_channels;
       const lo = 8 + Math.min(oldCh, newCh);
@@ -597,6 +603,9 @@ export class Automation {
       }
       this.extGuard.forceHw((this.extGuard.hw() | changed) & M64);
       if (this.extDiReadyCh > lo - 8) this.extDiReadyCh = lo - 8;
+      if (newCh < oldCh) this.extOffPending |= changed;
+      else this.extOffPending &= ~changed & M64;   // yeniden kapsama giren roleyi olagan yol kapatir
+      this.extOffFails = 0;
       this.extChPrev = newCh;
       this.event('ext_channels_changed', { from: oldCh, to: newCh });
       this.markChanged();
@@ -1179,6 +1188,35 @@ export class Automation {
         this.markChanged();
       } else {
         this.hwKnown[i] = false;
+        this.extWriteFails++;
+        this.extRetryLast = now;
+        this.extRetryGap = Automation.#extBackoffMs(this.extWriteFails);
+        return;
+      }
+    }
+
+    // 1b. gecis (fw-tarama-4): kanal sayisi azalinca kapsam disina dusen ek roleler KAPAT ile kapatilir (artik komutla kapatilamazlar).
+    // En iyi caba: basarisizlik geri cekilmeyle sonraki turda yeniden denenir; ardisik EXT_OFF_MAX_FAILS basarisizlikta kume birakilir.
+    for (let i = totalR; i < MAX_TOTAL_RELAYS && budget > 0 && this.extOffPending !== 0n; i++) {
+      const bit = 1n << BigInt(i);
+      if (!(this.extOffPending & bit)) continue;
+      budget--;
+      if (this.extWriteCoil(slave, i - 8 + 1, false)) {
+        this.extOffPending &= ~bit & M64;
+        this.extOffFails = 0;
+        this.extWriteFails = 0;
+        this.extRetryGap = 0;
+        this.hw[i] = false;
+        this.hwKnown[i] = true;
+        this.extGuard.commit(InterlockGuard.withRelay(this.extGuard.hw(), i, false) & M64, now);
+        this.extGuard.noteOff(i, now);
+        this.markChanged();
+      } else {
+        if (++this.extOffFails >= EXT_OFF_MAX_FAILS) {
+          this.event('ext_off_dropped', { tries: this.extOffFails });
+          this.extOffPending = 0n;
+          this.extOffFails = 0;
+        }
         this.extWriteFails++;
         this.extRetryLast = now;
         this.extRetryGap = Automation.#extBackoffMs(this.extWriteFails);

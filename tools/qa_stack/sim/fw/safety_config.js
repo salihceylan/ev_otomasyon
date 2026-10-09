@@ -56,12 +56,14 @@ export const CfgErr = Object.freeze({
   FB_DI_RANGE: 24, FB_DI_CONFLICT: 25, FB_TIMEOUT_RANGE: 26,
   NOT_FOUND: 27, FULL: 28, BAD_EDIT: 29,
   ARM_KEY_NOT_NC: 30,   // anahtarli kontak NC olmali (Faz 2 incelemesi RV-E3)
+  SENSOR_BRIDGE_UNSUPPORTED: 31,   // v1.3.2: kopru sensorunun surucusu yok; yalniz yazim yollari (CONTRACTS C1)
 });
 const CFG_ERR_TEXT = [
   'ok', 'count', 'dry_hold', 'name', 'sensor_src', 'sensor_kind', 'sensor_zone', 'sensor_di_range', 'sensor_bridge_range',
   'sensor_dup', 'sensor_di_is_button', 'gas_smoke_not_nc', 'confirm_range', 'act_kind', 'act_relay_range', 'act_relay_dup',
   'act_relay_shutter', 'act_relay_impulse', 'act_zone', 'valve_medium', 'valve_mode', 'pulse_relay2', 'pulse_time',
   'siren_run_limit', 'fb_di_range', 'fb_di_conflict', 'fb_timeout_range', 'not_found', 'full', 'bad_edit', 'arm_key_not_nc',
+  'sensor_bridge_unsupported',
 ];
 export const cfgErrText = (e) => CFG_ERR_TEXT[e] ?? '?';
 
@@ -75,8 +77,15 @@ function relayUsable(sys, relay1) {
   return CfgErr.OK;
 }
 
-/** validate(system, safety): bos guvenlik yapilandirmasinda her zaman OK. */
-export function validate(sys, c) {
+/** Kopru (hub) surucusu derlemede var mi (firmware AHBU_BRIDGE_DRIVER; v1.3.2: yok). */
+export const BRIDGE_DRIVER = 0;
+
+/**
+ * validate(system, safety): bos guvenlik yapilandirmasinda her zaman OK. forWrite (v1.3.2, CONTRACTS C1): yapilandirmayi YAZAN yol (yama,
+ * CLI, sablon); surucusuz derlemede kopru sensoru sensor_bridge_unsupported (koprude kumanda rolu yine sensor_src; aralik/dup'tan once).
+ * Acilistaki kayitli yapilandirma ve ana yapilandirma degisimi forWrite=false.
+ */
+export function validate(sys, c, forWrite = false) {
   if (c.nSens > MAX_SENSORS || c.nAct > MAX_ACTUATORS) return CfgErr.COUNT;
   if (c.pol.dry_hold_ms < DRY_HOLD_MIN_MS || c.pol.dry_hold_ms > DRY_HOLD_MAX_MS) return CfgErr.DRY_HOLD;
   for (let z = 0; z < MAX_ZONES; z++) if (!nameOk(c.zones[z]?.name, ZONE_NAME_LEN)) return CfgErr.NAME;
@@ -96,6 +105,7 @@ export function validate(sys, c) {
       if (sys.dis[s.index - 1].target_relay !== 0) return CfgErr.SENSOR_DI_IS_BUTTON;
     } else if (s.src === SensorSrc.BRIDGE) {
       if (control) return CfgErr.SENSOR_SRC;
+      if (forWrite && !BRIDGE_DRIVER) return CfgErr.SENSOR_BRIDGE_UNSUPPORTED;
       if (s.index < 1 || s.index > MAX_BRIDGE) return CfgErr.SENSOR_BRIDGE_RANGE;
       if (bridgeSeen & (1 << (s.index - 1))) return CfgErr.SENSOR_DUP;
       bridgeSeen |= 1 << (s.index - 1);
@@ -250,9 +260,10 @@ export const nvsRoomForConfig = (freeEntries, c) => freeEntries >= configNvsEntr
  * Ana yapilandirma degisiminin capraz dogrulamasi (WebPortal /api/config, seri CLI; inceleme turu 2 FW2-1): validate() + koruma maskesindeki
  * (acilis guvenli maskesi | kilit maskesi) role panjur/darbe yapilamaz. Guvenlik tablosu bos (cfg_corrupt) olsa bile gecerlidir.
  * @param {bigint} relayGuard bit = role-1
+ * @param {boolean} [forWrite] guvenlik tablosunu da yazan cagiran (sablon); ana yapilandirma degisimi false
  */
-export function validateSystemChange(sys, c, relayGuard) {
-  const e = validate(sys, c);
+export function validateSystemChange(sys, c, relayGuard, forWrite = false) {
+  const e = validate(sys, c, forWrite);
   if (e !== CfgErr.OK) return e;
   const g = BigInt(relayGuard);
   const totalR = sys.totalRelays();

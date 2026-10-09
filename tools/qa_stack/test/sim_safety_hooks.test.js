@@ -7,12 +7,13 @@ import assert from 'node:assert/strict';
 import { Rig, CmdType, CmdSource, makeCommand, NvsImage, makeExt } from './_rig.js';
 import { DIMode, RelayType } from '../sim/fw/sysconfig.js';
 import { SafetyStore, SafetyCmdType } from '../sim/fw/safety_manager.js';
-import { defaultSafetyConfig, SAFETY_SCHEMA_VER, validateSystemChange, CfgErr } from '../sim/fw/safety_config.js';
+import { defaultSafetyConfig, SAFETY_SCHEMA_VER, validateSystemChange, CfgErr, cfgErrText, latchAny } from '../sim/fw/safety_config.js';
 import { SensorKind, SensorSrc, defaultFlags, defaultConfirmMs, makeSensorConfig } from '../sim/fw/sensor_hub.js';
 import { ActKind, CloseMode, Medium, makeActuatorConfig } from '../sim/fw/actuator_map.js';
 import { ZoneSt } from '../sim/fw/safety_fsm.js';
 import { EditOp, editInit } from '../sim/fw/safety_cfg_edit.js';
-import { VIA_CLI, VIA_LAN } from '../sim/fw/event_outbox.js';
+import { VIA_CLI, VIA_LAN, VIA_CLOUD, EvType, NVSK_LATCH, NVSK_ACT_POS, NVSK_ARM } from '../sim/fw/event_outbox.js';
+import { ArmMode } from '../sim/fw/intrusion_fsm.js';
 
 function boardConfig(cm) {
   const c = cm.config;
@@ -382,4 +383,83 @@ test('sim_safety_hooks: ek modul kanal sayisi artinca yeni kanaldaki NC gaz sens
   assert.equal(r.a.safety.hub.ok(1), true, 'ilk taze okumadan sonra hazir');
   assert.equal(r.a.safety.hub.rawActive(1), false);
   assert.equal(zone1(r), ZoneSt.NORMAL, 'sahte gaz alarmi yok');
+});
+
+// v1.3.2 (CONTRACTS C1, fw-tarama-1): hub surucusu yok. Yazim yollari (LAN/bulut yamasi, seri CLI) kopru sensoru iceren yapilandirmayi
+// sensor_bridge_unsupported ile reddeder; kopru sensorunu SILMEK serbesttir (biri silinirken digeri kalsa bile); eski surumden kalmis kayitli
+// kopru sensorlu yapilandirma acilista guvenli kipe dusmez.
+test('sim_safety_hooks: kopru sensoru yazimda reddedilir, silme serbest, kayitli yapilandirma acilista kullanilir (C1)', () => {
+  const nvs = safetyNvs();
+  const wsens = (src, index, kind = SensorKind.WATER) => makeSensorConfig({ src, index, kind, zone: 1, flags: defaultFlags(kind), confirm_ms: defaultConfirmMs(kind) });
+  const cfg = SafetyStore.loadConfig(nvs).cfg;
+  cfg.sens.push(wsens(SensorSrc.BRIDGE, 2), wsens(SensorSrc.BRIDGE, 3));
+  cfg.nSens = 3;
+  SafetyStore.saveConfig(nvs, cfg);
+  const r = rig(nvs);
+  r.run(50);
+  assert.equal(r.a.safety.mode, 'normal', 'kayitli yapilandirma guvenli kipe dusmez');
+  assert.equal(r.a.safety.copyConfig().nSens, 3);
+  const submit = (e, via = VIA_CLI) => r.a.safety.submitEdit({ ...editInit(), ...e }, false, 0, via, r.cm.config, { inLoop: true, curLevels: 0n, nowMs: r.t });
+  let o = submit({ op: EditOp.SET_SENSOR, sens: wsens(SensorSrc.BRIDGE, 1) }, VIA_CLOUD);
+  assert.equal(o.r, 'invalid');
+  assert.equal(cfgErrText(o.err), 'sensor_bridge_unsupported');
+  o = submit({ op: EditOp.SET_ZONE, zoneId: 1, zoneName: 'Mutfak' });
+  assert.equal(o.r, 'invalid', 'kayitli kopru sensoru kaldikca yazim reddedilir');
+  assert.equal(cfgErrText(o.err), 'sensor_bridge_unsupported');
+  o = submit({ op: EditOp.DEL_SENSOR, sens: wsens(SensorSrc.BRIDGE, 2) }, VIA_CLOUD);
+  assert.equal(o.r, 'ok', 'kopru sensorunu silmek serbest (b3 kalsa da)');
+  o = submit({ op: EditOp.DEL_SENSOR, sens: wsens(SensorSrc.BRIDGE, 3) });
+  assert.equal(o.r, 'ok');
+  o = submit({ op: EditOp.SET_ZONE, zoneId: 1, zoneName: 'Mutfak' });
+  assert.equal(o.r, 'ok', 'kopru sensoru kalmayinca yazim serbest');
+  assert.equal(r.a.safety.copyConfig().nSens, 1);
+});
+
+// fw-tarama-5: kilit kaydi / hirsiz kipi / vana konumu NVS yazimi basarisizsa kirli bayrak geri kurulur ve ~2 sn geri cekilmeyle yeniden
+// denenir (eskiden bayrak yazimdan ONCE tuketildigi icin bir daha denenmezdi: elektrik kesintisinden sonra bolge NORMAL baslar, kuru vana
+// onaysiz acilabilirdi). NVS_FAIL ardisik basarisizlikta anahtar basina bir kez uretilir; basari sifirlar.
+const nvsFails = (r, key) => r.a.safety.outbox.list().filter((x) => x.ev.type === EvType.NVS_FAIL && x.ev.sub === key).length;
+
+test('sim_safety_hooks: kilit kaydi NVS yazimi basarisizsa yeniden denenir ve yazilir; NVS_FAIL tek olay (fw-tarama-5)', () => {
+  const nvs = safetyNvs();
+  const r = rig(nvs);
+  r.run(50);
+  nvs.failKeys = new Set(['latch']);
+  r.a.setRawDi(2, true);
+  r.run(1300);
+  assert.equal(zone1(r), ZoneSt.LATCHED);
+  assert.equal(latchAny(SafetyStore.loadLatch(nvs)), false, 'kayit yazilamadi');
+  assert.equal(nvsFails(r, NVSK_LATCH), 1);
+  r.run(5000);
+  assert.equal(nvsFails(r, NVSK_LATCH), 1, 'ardisik basarisizlikta tek olay');
+  nvs.failKeys.clear();
+  r.run(2100);
+  assert.equal(latchAny(SafetyStore.loadLatch(nvs)), true, 'yeniden denendi ve yazildi');
+  assert.equal(nvsFails(r, NVSK_LATCH), 1);
+});
+
+test('sim_safety_hooks: vana konumu ve hirsiz kipi NVS yazimi da yeniden denenir (fw-tarama-5)', () => {
+  const nvs = safetyNvs();
+  const cfg = SafetyStore.loadConfig(nvs).cfg;
+  cfg.sens.push(makeSensorConfig({ src: SensorSrc.DI, index: 4, kind: SensorKind.DOOR, zone: 1, flags: defaultFlags(SensorKind.DOOR), confirm_ms: 0 }));
+  cfg.nSens = 2;
+  SafetyStore.saveConfig(nvs, cfg);
+  const r = rig(nvs);
+  r.run(50);
+  nvs.failKeys = new Set(['act_pos', 'arm']);
+  r.cmd(SafetyCmdType.ACTUATOR_SET, 1, 0, 'kapat');
+  r.cmd(SafetyCmdType.SAFETY_ARM, 0, ArmMode.AWAY, 'kur');
+  r.run(300);
+  assert.equal(r.a.safety.intr.mode(), ArmMode.AWAY);
+  assert.equal(SafetyStore.loadActPos(nvs).known & 1, 0, 'konum yazilamadi');
+  assert.notEqual(SafetyStore.loadArm(nvs)?.mode, ArmMode.AWAY, 'kip yazilamadi');
+  assert.equal(nvsFails(r, NVSK_ACT_POS), 1);
+  assert.equal(nvsFails(r, NVSK_ARM), 1);
+  r.run(4000);
+  assert.equal(nvsFails(r, NVSK_ACT_POS), 1, 'ardisik basarisizlikta tek olay');
+  assert.equal(nvsFails(r, NVSK_ARM), 1);
+  nvs.failKeys.clear();
+  r.run(2100);
+  assert.equal(SafetyStore.loadActPos(nvs).known & 1, 1, 'konum yeniden denendi ve yazildi');
+  assert.equal(SafetyStore.loadArm(nvs).mode, ArmMode.AWAY, 'kip yeniden denendi ve yazildi');
 });

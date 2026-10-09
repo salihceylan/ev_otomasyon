@@ -2,7 +2,8 @@
 //
 //  * Seviye tabanli: kacirilmis kenar ya da acilista zaten islak sensor ilk gecerli okumada yakalanir.
 //  * Pencereli birikim [O-1]: pencere (su 3 sn, gaz/duman 1 sn) BUCKETS kovaya bolunur; son pencerede toplam aktif sure
-//    >= confirm_ms ise sensor onayli aktiftir (damla deseni birikir, tek kisa sicrama dolduramaz).
+//    >= confirm_ms ise sensor onayli aktiftir (damla deseni birikir, tek kisa sicrama dolduramaz). confirm_ms tur penceresinden
+//    uzunsa pencere buyur (SensorHub.windowMs; v1.3.2 fw-tarama-3).
 //  * ok=false sensor BILINMEYENDIR [Y-3]: ne islak ne kuru; kuruluk sayacini durdurur. Ariza kenari yalniz once ok=true
 //    gorulmus sensorde uretilir. SF_FAULT_CLOSE: ariza, turunun tehlike sinifi icin "islak" sayilir (acilista 30 sn tolerans).
 //  * Kontrol rolleri (ALARM_ACK / VALVE_CLOSE / GAS_RESET / ARM_KEY): pasif->aktif kenari bir kez bildirilir; ilk okuma kenar degildir.
@@ -70,6 +71,17 @@ export function makeSensorConfig(o = {}) {
 
 export class SensorHub {
   static BUCKETS = 8;
+
+  /**
+   * Onay penceresi (firmware SensorHub::windowMs; v1.3.2 fw-tarama-3): tur penceresi ya da confirm_ms icin yeterli en kucuk pencere
+   * (ceil(confirm_ms / 7) * 8), hangisi buyukse. Tur penceresinin 7/8'ine kadar degismez. 0: pencere yok.
+   */
+  static windowMs(kind, confirmMs) {
+    const base = confirmWindowMs(kind);
+    if (base === 0) return 0;
+    const need = Math.floor((confirmMs + (SensorHub.BUCKETS - 2)) / (SensorHub.BUCKETS - 1)) * SensorHub.BUCKETS;
+    return need > base ? need : base;
+  }
   static BOOT_FAULT_GRACE_MS = 30000;
 
   constructor() {
@@ -133,7 +145,7 @@ export class SensorHub {
       r.pressed = logical;
       r.confirmed = logical;
     } else {
-      const window = confirmWindowMs(c.kind);
+      const window = SensorHub.windowMs(c.kind, c.confirm_ms);   // fw-tarama-3: uzun confirm_ms'de pencere buyur
       if (c.confirm_ms === 0 || window === 0) {
         r.confirmed = logical;
       } else {

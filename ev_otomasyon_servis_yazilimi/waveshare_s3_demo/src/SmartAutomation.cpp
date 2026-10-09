@@ -211,7 +211,7 @@ SmartAutomation& SmartAutomation::instance() {
 }
 
 SmartAutomation::SmartAutomation()
-    : _posDirty(false), _lastMotionMs(0), _extDiInit(false), _extEnabledPrev(false), _extChPrev(0), _extDiReadyCh(0),
+    : _posDirty(false), _lastMotionMs(0), _extDiInit(false), _extEnabledPrev(false), _extChPrev(0), _extOffPending(0), _extOffFails(0), _extDiReadyCh(0),
       _lastLocalPairMask(0xFF),
       _childLockEnabled(false), _seenResetCount(0), _localRetryLast(0), _localRetryGap(0), _localFails(0),
       _extRetryLast(0), _extRetryGap(0), _extWriteFails(0),
@@ -522,12 +522,15 @@ void SmartAutomation::syncConfig(uint32_t now) {
     _extDiReadyCh = 0;
     _extModuleResponding = false;
     _extChPrev = cfg.ext_module_channels;   // geçişin kendisi: kanal değişimi ayrıca işlenmez
+    _extOffPending = 0;                     // açılış/kapanış bütün ek röleleri zaten "bilinmiyor"a döndürdü (fw-tarama-4)
+    _extOffFails = 0;
   } else if (cfg.ext_module_enabled && cfg.ext_module_channels != _extChPrev) {
     // pano-4: modül etkin kalırken kanal sayısı değişti (CLI EXTMOD, POST /api/config, şablon). Yeni kanalların DI kapıları hiç başlatılmadı
     // (kararlı=false: NC gaz/duman sensörü "aktif" okunur, duvar butonunda ilk okuma sahte kenar üretirdi): bir sonraki başarılı ayrık giriş
     // yoklamasında kenarsız başlatılır ve o zamana dek o kanalların güvenlik sensörleri "okunamadı" sayılır (DiSensor::setExtReady). Toplu
     // ext-ok DÜŞÜRÜLMEZ: daha önce okunmuş (everOk) gaz sensörü arıza -> SF_FAULT_CLOSE ile sahte gaz alarmı ve vana kapatması olurdu.
-    // Değişen aralıktaki ek röleler "bilinmiyor"a döner: KAPALI olduğu doğrulanana dek KAPAT yeniden yazılır, eşi başlatılmaz.
+    // Değişen aralıktaki ek röleler "bilinmiyor"a döner: KAPALI olduğu doğrulanana dek KAPAT yeniden yazılır, eşi başlatılmaz. Azalmada
+    // kapsam dışına düşen röleler stepExtOutputs'un olağan geçişine girmez (i < totalR): ayrı bekleyen KAPAT kümesi (fw-tarama-4).
     const uint8_t oldCh = _extChPrev, newCh = cfg.ext_module_channels;
     const uint8_t lo = (uint8_t)(8 + (oldCh < newCh ? oldCh : newCh));
     const uint8_t hi = (uint8_t)(8 + (oldCh < newCh ? newCh : oldCh));
@@ -542,6 +545,9 @@ void SmartAutomation::syncConfig(uint32_t now) {
     }
     _extGuard.forceHw(_extGuard.hw() | changed);
     if (_extDiReadyCh > (uint8_t)(lo - 8)) _extDiReadyCh = (uint8_t)(lo - 8);
+    if (newCh < oldCh) _extOffPending |= changed;
+    else _extOffPending &= ~changed;        // yeniden kapsama giren röleyi olağan yol kapatır
+    _extOffFails = 0;
     _extChPrev = newCh;
     printf("[RS485] Ek modul kanal sayisi %u -> %u: yeni kanallar ilk okumaya kadar bilinmiyor.\r\n", (unsigned)oldCh, (unsigned)newCh);
     markChanged();
@@ -1140,6 +1146,9 @@ void SmartAutomation::stepLocalOutputs(uint32_t now) {
   syncLocalHw(after);
 }
 
+// fw-tarama-4: kanal sayısı azalınca kapsam dışına düşen rölelerin KAPAT yazımı ardışık bu kadar başarısızlıkta bırakılır (en iyi çaba).
+static constexpr uint8_t EXT_OFF_MAX_FAILS = 5;
+
 // Ardışık başarısız yazım sayısına göre geri çekilme: 100, 200, 400, 800, 1600 ms (en çok 1,6 sn).
 static uint32_t extBackoffMs(uint32_t fails) {
   return (fails > 5) ? 1600UL : (50UL << fails);
@@ -1183,6 +1192,37 @@ void SmartAutomation::stepExtOutputs(uint32_t now) {
       _hwKnown[i] = false;                                      // belirsiz: tekrar denenecek, eşin açılması engellenir
       _extWriteFails++;
       _extRetryLast = millis();                                 // geri çekilme başarısız işlemin BİTİŞİNDEN sayılır
+      _extRetryGap = extBackoffMs(_extWriteFails);
+      return;
+    }
+  }
+
+  // 1b. geçiş (fw-tarama-4): kanal sayısı azalınca kapsam dışına düşen ek röleler KAPAT ile kapatılır. Artık komutla kapatılamazlar; açık
+  // kalan röle (panjur motoru dahil) fiziksel olarak enerjili kalırdı. En iyi çaba: başarısızlık geri çekilmeyle sonraki turda yeniden
+  // denenir, ardışık EXT_OFF_MAX_FAILS başarısızlıkta (ör. modülde o kanal yok: istisna 0x02) küme bırakılır.
+  for (uint8_t i = totalR; i < MAX_TOTAL_RELAYS && budget > 0 && _extOffPending != 0; i++) {
+    if (!(_extOffPending & (1ULL << i))) continue;
+    budget--;
+    const uint8_t ch = (uint8_t)(i - 8 + 1);
+    if (extWriteCoil(slave, ch, modbus::COIL_OFF, 20, nullptr, attempts, tmo)) {
+      _extOffPending &= ~(1ULL << i);
+      _extOffFails = 0;
+      _extWriteFails = 0;
+      _extRetryGap = 0;
+      _hw[i] = false;
+      _hwKnown[i] = true;
+      const uint32_t tw = millis();
+      _extGuard.commit(InterlockGuard::withRelay(_extGuard.hw(), i, false), tw);
+      _extGuard.noteOff(i, tw);
+      markChanged();
+    } else {
+      if (++_extOffFails >= EXT_OFF_MAX_FAILS) {
+        printf("[RS485] Kapsam disi ek role KAPAT yazilamadi (%u deneme): birakildi.\r\n", (unsigned)_extOffFails);
+        _extOffPending = 0;
+        _extOffFails = 0;
+      }
+      _extWriteFails++;
+      _extRetryLast = millis();
       _extRetryGap = extBackoffMs(_extWriteFails);
       return;
     }

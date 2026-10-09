@@ -119,6 +119,36 @@ static void test_unconfigured_board_only_meta_keys(void) {
   TEST_ASSERT_TRUE(relayActText(v, 5) == nullptr);
 }
 
+// v1.3.2 (CONTRACTS C6, sko-5): cfg.safety.id = güncel rev'i üreten bulut cfg_patch kimliği (meta.cfgId, meta.cfgIdRev == görünüm rev'i
+// iken). Rev başka yoldan değişince (LAN/CLI/şablon) ya da kimlik yokken (yeniden başlatma) alan yazılmaz; {rev, crc} her zaman aynı.
+static void test_cfg_safety_id_echo(void) {
+  Bench b;
+  b.water();
+  b.start();
+  static SafetyView v;
+  buildView(b.cfg, b.hub, b.act, b.core, b.t, v);
+  StateMeta m = meta();
+  strcpy(m.cfgId, "cfgp-7");
+  m.cfgIdRev = 3;
+  char head[96];
+  ev_detail::Writer hw(head, sizeof(head));
+  hw.raw(",\"cfg\":{\"safety\":{\"rev\":3,\"crc\":\"");
+  hw.hex8(configCrc(b.cfg));
+  hw.raw("\"");
+  TEST_ASSERT_TRUE(hw.ok);
+  char withId[128], noId[128];
+  snprintf(withId, sizeof(withId), "%s,\"id\":\"cfgp-7\"}}", head);
+  snprintf(noId, sizeof(noId), "%s}}", head);
+  char buf[2048];
+  TEST_ASSERT_NOT_NULL(strstr(render(v, m, buf, sizeof(buf)), withId));
+  m.cfgIdRev = 4;                                   // rev başka yoldan değişti: kimlik bu rev'i üretmedi
+  TEST_ASSERT_NOT_NULL(strstr(render(v, m, buf, sizeof(buf)), noId));
+  TEST_ASSERT_NULL(strstr(buf, "cfgp-7"));
+  m.cfgIdRev = 3;
+  m.cfgId[0] = '\0';                                // kimlik yok (yeniden başlatma / kimliksiz yama)
+  TEST_ASSERT_NOT_NULL(strstr(render(v, m, buf, sizeof(buf)), noId));
+}
+
 static void test_configured_normal_rows_without_names(void) {
   Bench b;
   b.water();
@@ -298,5 +328,6 @@ int main(int, char**) {
   RUN_TEST(test_overflow_never_emits_partial_json);
   RUN_TEST(test_control_role_rows);
   RUN_TEST(test_arm_object);
+  RUN_TEST(test_cfg_safety_id_echo);
   return UNITY_END();
 }

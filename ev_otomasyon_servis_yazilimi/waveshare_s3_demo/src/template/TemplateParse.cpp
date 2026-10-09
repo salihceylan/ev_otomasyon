@@ -327,7 +327,7 @@ bool parseSafety(JsonVariant v, const SystemConfig& sys, uint8_t n, safety::Safe
   {
     const uint8_t nAct = c.nAct;
     c.nAct = 0;
-    const CfgErr ve = validate(sys, c);
+    const CfgErr ve = validate(sys, c, true);   // şablon yazım yoludur (v1.3.2: köprü sensörü sensor_bridge_unsupported)
     c.nAct = nAct;
     if (ve != CfgErr::OK) return fail(e, cfgErrText(ve), "safety.sensors");
   }
@@ -349,7 +349,7 @@ bool parseSafety(JsonVariant v, const SystemConfig& sys, uint8_t n, safety::Safe
     }
   }
   {
-    const CfgErr ve = validate(sys, c);
+    const CfgErr ve = validate(sys, c, true);
     if (ve != CfgErr::OK) return fail(e, cfgErrText(ve), "safety.actuators");
   }
   // lights: en çok N; röle 1..N, lamba tipi, benzersiz

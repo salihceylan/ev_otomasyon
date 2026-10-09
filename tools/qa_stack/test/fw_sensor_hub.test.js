@@ -277,3 +277,52 @@ test('fw_sensor_hub: BridgeSensor kalp atisi', () => {
   b.report({ slot: 3, active: false, ok: false, at_ms: 70000 });
   assert.equal(b.sample(mk(SensorSrc.BRIDGE, 3, SensorKind.WATER, 1, 0), 70000).ok, false);
 });
+
+// fw-tarama-3 (Unity: test_confirm_window_grows_for_long_confirm, test_long_confirm_stays_confirmed_while_active): confirm_ms tur
+// penceresinden uzunsa pencere buyur (max(tur penceresi, ceil(confirm_ms*8/7) 8'in katina)); kucuk degerlerde zamanlama birebir ayni.
+function msUntilConfirmed(kind, confirmMs, maxMs) {
+  const c = mk(SensorSrc.DI, 1, kind, 1, hazardOf(kind) === HZ_WATER ? 0 : 1);
+  c.confirm_ms = confirmMs;
+  const h = hub([c]);
+  const level = !c.active_open;
+  let t = 100;
+  h.update(0, level, true, t); h.finish(t);
+  for (let d = 10; d <= maxMs; d += 10) {
+    t += 10;
+    h.update(0, level, true, t); h.finish(t);
+    if (h.active(0)) return d;
+  }
+  return 0;
+}
+
+test('fw_sensor_hub: uzun onay suresi surekli aktiflikte onaylanir; varsayilan zamanlama degismez (fw-tarama-3)', () => {
+  const gas = msUntilConfirmed(SensorKind.GAS, 1500, 10000);
+  assert.ok(gas >= 1500 && gas <= 1800, `gaz 1500 ms: ~1,5-1,8 sn icinde onay (gelen ${gas})`);
+  const water = msUntilConfirmed(SensorKind.WATER, 5000, 12000);
+  assert.ok(water >= 5000 && water <= 6000, `su 5000 ms: 5-6 sn icinde onay (gelen ${water})`);
+  assert.equal(msUntilConfirmed(SensorKind.WATER, 10000, 15000), 10000);
+  assert.equal(msUntilConfirmed(SensorKind.WATER, 1000, 5000), 1000, 'regresyon: su varsayilani');
+  assert.equal(msUntilConfirmed(SensorKind.GAS, 300, 5000), 300, 'regresyon: gaz varsayilani');
+  // pencerenin 7/8'inden buyuk deger onayli KALIR (eskiden gaz 950 ms her kova basinda dusup kalkiyordu)
+  const c = mk(SensorSrc.DI, 1, SensorKind.GAS, 1, 1);
+  c.confirm_ms = 950;
+  const h = hub([c]);
+  let t = drive(h, 0, false, true, 0, 1200);
+  assert.equal(h.active(0), true);
+  for (let d = 0; d < 3000; d += 10) {
+    t += 10;
+    h.update(0, false, true, t); h.finish(t);
+    assert.equal(h.active(0), true, `surekli aktifken onay dusmemeli (t=${t})`);
+  }
+});
+
+test('fw_sensor_hub: onay penceresi hesabi (windowMs, fw-tarama-3)', () => {
+  assert.equal(SensorHub.windowMs(SensorKind.GAS, 300), 1000);
+  assert.equal(SensorHub.windowMs(SensorKind.GAS, 875), 1000);
+  assert.equal(SensorHub.windowMs(SensorKind.GAS, 876), 1008);
+  assert.equal(SensorHub.windowMs(SensorKind.GAS, 1500), 1720);
+  assert.equal(SensorHub.windowMs(SensorKind.WATER, 1000), 3000);
+  assert.equal(SensorHub.windowMs(SensorKind.WATER, 5000), 5720);
+  assert.equal(SensorHub.windowMs(SensorKind.WATER, 10000), 11432);
+  assert.equal(SensorHub.windowMs(SensorKind.DOOR, 500), 0);
+});

@@ -87,7 +87,8 @@ enum class CfgErr : uint8_t {
   VALVE_MEDIUM, VALVE_MODE, PULSE_RELAY2, PULSE_TIME, SIREN_RUN_LIMIT,
   FB_DI_RANGE, FB_DI_CONFLICT, FB_TIMEOUT_RANGE,
   NOT_FOUND, FULL, BAD_EDIT,         // tek öğeli yama (SafetyCfgEdit.h): öğe yok / tablo dolu / geçersiz yama
-  ARM_KEY_NOT_NC                     // anahtarlı kontak NC olmalı (Faz 2 incelemesi RV-E3)
+  ARM_KEY_NOT_NC,                    // anahtarlı kontak NC olmalı (Faz 2 incelemesi RV-E3)
+  SENSOR_BRIDGE_UNSUPPORTED          // v1.3.2: köprü (kablosuz) sensörünün sürücüsü bu derlemede yok; yalnız yazım yolları (CONTRACTS C1)
 };
 
 inline const char* cfgErrText(CfgErr e) {
@@ -123,6 +124,7 @@ inline const char* cfgErrText(CfgErr e) {
     case CfgErr::FULL: return "full";
     case CfgErr::BAD_EDIT: return "bad_edit";
     case CfgErr::ARM_KEY_NOT_NC: return "arm_key_not_nc";
+    case CfgErr::SENSOR_BRIDGE_UNSUPPORTED: return "sensor_bridge_unsupported";
   }
   return "?";
 }
@@ -154,9 +156,20 @@ inline uint64_t bootMaskForSystem(const SystemConfig& sys, uint64_t mask) {
   return out;
 }
 
+// Köprü (Zigbee/Thread hub) sürücüsü bu derlemede var mı? BridgeSensor.h yalnız arayüzdür (karar 7.2b-1): rapor üreten yok, köprü sensörü
+// hiç okunmaz (ok=false: vana yeniden açılamaz, gaz yuvasında sönmeyen arıza, hırsız kipi kurulamaz). 0 iken yazım yolları köprü sensörünü
+// reddeder (v1.3.2, CONTRACTS C1; durumdaki "bridge" yeteneği de yazılmaz). Sürücülü derleme -DAHBU_BRIDGE_DRIVER=1 ile.
+#ifndef AHBU_BRIDGE_DRIVER
+#define AHBU_BRIDGE_DRIVER 0
+#endif
+enum : uint8_t { BRIDGE_DRIVER = AHBU_BRIDGE_DRIVER };
+
 // Çapraz doğrulama (§2.4, §2.3 madde 5): hem güvenlik yapılandırması hem ana yapılandırma (/api/config) değişiminde çağrılır.
 // Boş güvenlik yapılandırmasında her zaman OK (lamba/panjur yolunu hiçbir zaman engellemez).
-inline CfgErr validate(const SystemConfig& sys, const SafetyConfig& c) {
+// forWrite (v1.3.2, CONTRACTS C1): yapılandırmayı YAZAN yol (LAN/bulut yaması, seri CLI, şablon). Sürücüsüz derlemede köprü sensörü
+// sensor_bridge_unsupported ile reddedilir (köprüde kumanda rolü yine sensor_src; aralık/dup denetiminden önce). Açılıştaki kayıtlı
+// yapılandırma ve ana yapılandırma değişimi forWrite=false ile doğrulanır: eski sürümden kalan köprü sensörü güvenli kipe düşürmez.
+inline CfgErr validate(const SystemConfig& sys, const SafetyConfig& c, bool forWrite = false) {
   using namespace cfg_detail;
   if (c.nSens > MAX_SENSORS || c.nAct > MAX_ACTUATORS) return CfgErr::COUNT;
   if (c.pol.dry_hold_ms < DRY_HOLD_MIN_MS || c.pol.dry_hold_ms > DRY_HOLD_MAX_MS) return CfgErr::DRY_HOLD;
@@ -177,6 +190,7 @@ inline CfgErr validate(const SystemConfig& sys, const SafetyConfig& c) {
       if (sys.dis[s.index - 1].target_relay != 0) return CfgErr::SENSOR_DI_IS_BUTTON;
     } else if (s.src == (uint8_t)SensorSrc::BRIDGE) {
       if (control) return CfgErr::SENSOR_SRC;          // yerel kumanda yalnız panodaki DI'den
+      if (forWrite && !BRIDGE_DRIVER) return CfgErr::SENSOR_BRIDGE_UNSUPPORTED;
       if (s.index < 1 || s.index > MAX_BRIDGE) return CfgErr::SENSOR_BRIDGE_RANGE;
       if (bridgeSeen & (1UL << (s.index - 1))) return CfgErr::SENSOR_DUP;
       bridgeSeen |= 1UL << (s.index - 1);
@@ -230,8 +244,9 @@ inline CfgErr validate(const SystemConfig& sys, const SafetyConfig& c) {
 // ile güvenlik çekirdeğinin kilit maskesinin birleşimi (bit = röle-1). Relay_Init bu bitleri ANA YAPILANDIRMA YÜKLENMEDEN önce uygular; bu
 // yüzden maskedeki bir röle panjur ya da darbe rölesine çevrilemez. Güvenlik tablosu boş olsa bile (cfg_corrupt güvenli kipi) geçerlidir
 // (inceleme turu 2 FW2-1). Var olmayan (kanal sayısı düşen) röle denetlenmez: bootMaskForSystem onu zaten dayatmaz.
-inline CfgErr validateSystemChange(const SystemConfig& sys, const SafetyConfig& c, uint64_t relayGuard) {
-  const CfgErr e = validate(sys, c);
+// forWrite: güvenlik yapılandırmasını da yazan çağıran (şablon uygulaması); ana yapılandırma değişimi kayıtlı tabloyu yazmaz (false).
+inline CfgErr validateSystemChange(const SystemConfig& sys, const SafetyConfig& c, uint64_t relayGuard, bool forWrite = false) {
+  const CfgErr e = validate(sys, c, forWrite);
   if (e != CfgErr::OK) return e;
   const uint8_t totalR = sys.totalRelays();
   for (uint8_t r = 1; r <= totalR && r <= MAX_RELAYS && r <= MAX_TOTAL_RELAYS; r++) {

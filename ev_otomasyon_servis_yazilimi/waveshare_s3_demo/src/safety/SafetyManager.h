@@ -28,6 +28,7 @@
 #include <freertos/semphr.h>
 #include "DeviceCommand.h"
 #include "DiGate.h"
+#include "NetTime.h"
 #include "safety/SafetyConfig.h"
 #include "safety/SafetyFsm.h"
 #include "safety/IntrusionFsm.h"
@@ -142,6 +143,7 @@ private:
   static uint8_t viaOf(CmdSource s);
   bool intrusionUsable() const;            // güvenli kipte sensör tablosu kullanılamıyorsa (cfg_corrupt / latch_orphan) false
   void emitNvsFail(uint8_t key, uint32_t now_ms);
+  bool nvsWriteResult(bool ok, uint8_t key, NetUtil::Wait& retry, uint32_t now_ms);   // fw-tarama-5: geri çekilme + tek NVS_FAIL
   void emitCfgConflict(uint32_t rev, uint32_t crc);
   void recomputeMasks();
   void refreshKeep();             // shutdownKeep* (kapalı vanalar + güvenli kip maskesi)
@@ -193,6 +195,13 @@ private:
   uint8_t extReady_;
   bool extActuator_;
   bool posSaveForced_;
+  // fw-tarama-5: kilit kaydı / hırsız kipi / vana konumu yazımı başarısızsa NVS_RETRY_MS geri çekilmeden sonra yeniden denenir; NVS_FAIL
+  // ardışık başarısızlıkta anahtar başına bir kez (nvsFailRep_ bit = NVSK_*; başarı sıfırlar).
+  enum : uint32_t { NVS_RETRY_MS = 2000 };
+  NetUtil::Wait armRetry_;
+  NetUtil::Wait latchRetry_;
+  NetUtil::Wait posRetry_;
+  uint8_t nvsFailRep_;
   volatile bool cfgUsable_;       // yapılandırma kullanılabilir (cfg_corrupt değil): açılış güvenli maskesi yalnız o zaman yazılır
   volatile bool cfgStored_;       // v1.3.0: güvenlik ad alanı yazılı (LAN şablon kuralı "fabrika durumu")
   bool forceCorrupt_;             // v1.3.0: yarım şablon işlemi -> açılışta cfg_corrupt

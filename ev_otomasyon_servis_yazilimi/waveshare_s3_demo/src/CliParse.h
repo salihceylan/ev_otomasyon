@@ -107,4 +107,13 @@ inline void applyDefaultShutterDis(SystemConfig& c) {
   c.dis[3].mode = DI_MODE_TOGGLE;
 }
 
+// Seri EXTMOD <0|1> [kanal] (fw-tarama-4): panjur hareket ederken ya da ölü zaman beklerken (shutterBusy) ek modül alanı değişiyorsa
+// reddedilir -- LAN POST /api/config (WebPortal shutterRelevantChange) ve şablon yolu ile aynı kural: hareket eden ek panjurun rölesi
+// sürücüsüz kalır, motor enerjili kalabilirdi. EXTMOD 0 kanal sayısını değiştirmez; değişmeyen istek serbest.
+inline bool extModChangeBlocked(const SystemConfig& cur, bool enable, uint8_t channels, bool shutterBusy) {
+  if (!shutterBusy) return false;
+  const uint8_t nextCh = enable ? channels : cur.ext_module_channels;
+  return cur.ext_module_enabled != enable || cur.ext_module_channels != nextCh;
+}
+
 }  // namespace cliparse

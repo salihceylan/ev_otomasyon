@@ -126,6 +126,8 @@ export class MqttManager {
     this.recentIds = new Array(8).fill('');
     this.acceptId = '';      // sys cfg_patch kabul yankisi (WP-C1): otomasyonun last_id'si degismedikce state.last_id
     this.acceptBase = '';
+    this.cfgPatchId = '';    // v1.3.2 (CONTRACTS C6): son kabul edilen cfg_patch kimligi + urettigi rev -> state.cfg.safety.id (rev ayniyken)
+    this.cfgPatchRev = 0;
     this.recentHead = 0;
     this.subscribed = { cmd: null, sys: null };   // SUBACK sonucu (QA gorunurlugu; firmware SUBACK'e bakmaz)
   }
@@ -410,7 +412,8 @@ export class MqttManager {
     const v = sm?.copyView() ?? { configured: 0, act: [] };
     const m = sm ? sm.stateMeta() : { boot: 0, bn: 0, rejId: '', rej: Rej.OK };
     const timeOk = this.wifi.isTimeSynced();
-    return { view: v, text: writeStateExtras(v, { ...m, timeOk, epoch: timeOk ? Math.floor(Date.now() / 1000) : 0 }) };
+    const meta = { ...m, cfgId: this.cfgPatchId, cfgIdRev: this.cfgPatchRev, timeOk, epoch: timeOk ? Math.floor(Date.now() / 1000) : 0 };
+    return { view: v, text: writeStateExtras(v, meta) };
   }
 
   /** MQTT `state` yuku (v:3 = v:2'nin kati ust kumesi). Yalniz gercekten panjur olarak tanimli ciftler raporlanir ("hayalet panjur" yok). */
@@ -651,7 +654,11 @@ export class MqttManager {
     const res = sm.submitEdit(p.edit, p.hasBase, p.baseRev, VIA_CLOUD, this.cm.config, { nowMs: now });
     const done = (o) => {
       this.event('cfg_patch', { result: o.r, rev: o.rev });
-      if (o.r === CfgResult.OK) this.#acceptCmd(rejId, now);
+      if (o.r === CfgResult.OK) {
+        this.cfgPatchId = rejId;   // C6: kimliksiz yamada bosalir
+        this.cfgPatchRev = o.rev >>> 0;
+        this.#acceptCmd(rejId, now);
+      }
       else if (o.r === CfgResult.CONFLICT) this.#rejectCmd(rejId, Rej.CFG_CONFLICT, now);
       else if (o.r === CfgResult.LATCHED) this.#rejectCmd(rejId, Rej.ZONE_LATCHED, now);
       else if (o.r === CfgResult.INVALID) this.#rejectCmd(rejId, Rej.CFG_INVALID, now);

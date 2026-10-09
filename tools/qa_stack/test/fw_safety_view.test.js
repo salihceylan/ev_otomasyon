@@ -169,3 +169,18 @@ test('fw_safety_view: safety.arm nesnesi', () => {
   intr.setUsable(false);
   assert.ok(writeStateExtras(buildView(c.cfg, c.hub, c.act, c.core, c.t, intr), meta()).includes('"st":"alarm","ok":false,'));
 });
+
+// v1.3.2 (CONTRACTS C6, sko-5; Unity: test_cfg_safety_id_echo): cfg.safety.id = guncel rev'i ureten bulut cfg_patch kimligi (cfgIdRev == rev).
+test('fw_safety_view: cfg.safety.id yalniz kimligin urettigi rev ile ayniyken yazilir (C6)', () => {
+  const b = new Bench();
+  b.water();
+  b.start();
+  const v = b.view();
+  const head = `,"cfg":{"safety":{"rev":3,"crc":"${hex8(configCrc(b.cfg))}"`;
+  assert.ok(writeStateExtras(v, { ...meta(), cfgId: 'cfgp-7', cfgIdRev: 3 }).includes(`${head},"id":"cfgp-7"}}`));
+  const other = writeStateExtras(v, { ...meta(), cfgId: 'cfgp-7', cfgIdRev: 4 });
+  assert.ok(other.includes(`${head}}}`), 'rev baska yoldan degisti');
+  assert.equal(other.includes('cfgp-7'), false);
+  assert.ok(writeStateExtras(v, { ...meta(), cfgId: '', cfgIdRev: 3 }).includes(`${head}}}`), 'kimlik yok');
+  assert.ok(writeStateExtras(v, meta()).includes(`${head}}}`), 'alan verilmezse (LAN) yazilmaz');
+});

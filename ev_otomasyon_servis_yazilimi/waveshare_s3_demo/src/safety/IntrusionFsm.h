@@ -200,6 +200,7 @@ public:
   }
   bool takeKeyError() { const bool k = keyError_; keyError_ = false; return k; }
   bool takeDirty() { const bool d = dirty_; dirty_ = false; return d; }
+  void markDirty() { dirty_ = true; }        // NVS yazımı başarısız: kayıt yeniden denenecek (fw-tarama-5)
   void record(ArmRecord& r) const {
     memset(&r, 0, sizeof(r));
     r.ver = ARM_REC_VER;

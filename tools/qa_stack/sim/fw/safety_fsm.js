@@ -340,6 +340,7 @@ export class SafetyCore {
     return latchSeal(r);
   }
   takeLatchDirty() { const d = this.latchDirty_; this.latchDirty_ = false; return d; }
+  markLatchDirty() { this.latchDirty_ = true; }   // NVS yazimi basarisiz: kilit kaydi yeniden denenecek (fw-tarama-5)
 
   /** Sensor/eylemci, kilit, test ya da guvenli kip yoksa cekirdek bostadir (tick O(1)). */
   active() {

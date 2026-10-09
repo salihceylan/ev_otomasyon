@@ -450,6 +450,7 @@ public:
     latchSeal(r);
   }
   bool takeLatchDirty() { bool d = latchDirty_; latchDirty_ = false; return d; }
+  void markLatchDirty() { latchDirty_ = true; }   // NVS yazımı başarısız: kilit kaydı yeniden denenecek (fw-tarama-5)
 
   // ---- durum ----
   // Sensör/eylemci, kilit, test ya da güvenli kip yoksa çekirdek boştadır (tick O(1)).

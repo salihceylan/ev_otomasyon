@@ -280,6 +280,8 @@ private:
   bool _extDiInit;
   bool _extEnabledPrev;
   uint8_t _extChPrev;                     // syncConfig'in en son işlediği ek modül kanal sayısı (pano-4: etkinken değişim)
+  uint64_t _extOffPending;                // fw-tarama-4: kanal sayısı azalınca kapsam dışına düşen, KAPAT yazılacak ek röleler (bit i = röle i+1)
+  uint8_t _extOffFails;                   // ... ardışık başarısız KAPAT yazımı (EXT_OFF_MAX_FAILS'te küme bırakılır)
   uint8_t _extDiReadyCh;                  // ilk taze okumayla (kenarsız) başlatılmış ek DI kanalı sayısı (DiSensor::setExtReady)
   uint8_t _lastLocalPairMask;
   volatile bool _childLockEnabled;       // canlı bayrak (yalnız Core 1 yazar, her çekirdek okuyabilir)

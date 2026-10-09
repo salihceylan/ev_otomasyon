@@ -25,6 +25,7 @@ import { ethUp, requestViaEth } from './fw/net_link.js';
 import { PhysicalObserver } from './fw/observer.js';
 import { parseSensorId, parseActuatorId } from './fw/safety_cfg_api.js';
 import { SensorSrc } from './fw/sensor_hub.js';
+import { SAFETY_CAPS } from './fw/safety_view.js';
 import { relayLevelFor } from './fw/actuator_map.js';
 
 export const UID_RE = /^AHBU-[A-Z0-9-]{3,32}$/;
@@ -756,13 +757,17 @@ export class DeviceSimulator {
     return { sid, cfg: s || null };
   }
 
-  /** Sensoru islak/kuru yapar (DI: NC sensorde kontak ACILIR; kopru: rapor). Kopru raporu her 5 sn tekrarlanir (bridgeSilence durdurur). */
+  /**
+   * Sensoru islak/kuru yapar (DI: NC sensorde kontak ACILIR; kopru: rapor). Kopru raporu her 5 sn tekrarlanir (bridgeSilence durdurur).
+   * Kopru beslemesi yalniz caps "bridge" bildiren (hub surucusuyle derlenen) firmware aynasinda: v1.3.2'de surucu yok, rapor uretilmez (C1).
+   */
   setSensor(id, wet) {
     const { sid, cfg } = this.#sensorCfg(id);
     if (sid.src === SensorSrc.DI) {
       const nc = cfg ? cfg.active_open === 1 : false;
       return this.setDi(sid.index, nc ? !wet : !!wet);
     }
+    if (!SAFETY_CAPS.includes('bridge')) return { changed: false };
     this.bridgeFeed.set(sid.index, !!wet);
     this.#bridgeReport(sid.index);
     return { changed: true };

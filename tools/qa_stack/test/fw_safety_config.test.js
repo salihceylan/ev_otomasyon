@@ -361,3 +361,28 @@ test('fw_safety_config: hirsiz gecikme baytlari ve ARM_KEY rolu', () => {
   k.sens[1] = { ...k.sens[1], active_open: 1, src: SensorSrc.BRIDGE, index: 2 };
   assert.equal(validate(s, k), CfgErr.SENSOR_SRC);
 });
+
+// v1.3.2 (CONTRACTS C1, fw-tarama-1; Unity: test_bridge_sensor_rejected_on_write_paths_only): hub surucusu yok; yazim yollari (forWrite) kopru
+// sensorunu reddeder, acilistaki kayitli yapilandirma gecerli kalir. Sira: koprude kumanda rolu sensor_src, aksi halde aralik/dup'tan ONCE.
+test('fw_safety_config: kopru sensoru yalniz yazim yollarinda sensor_bridge_unsupported (C1)', () => {
+  const s = sys8();
+  let c = base();
+  c.sens[1] = { ...sensor(4, SensorKind.WATER, 1, 0), src: SensorSrc.BRIDGE, index: 1 };
+  c.nSens = 2;
+  assert.equal(validate(s, c), CfgErr.OK, 'acilis: kayitli yapilandirma kullanilabilir');
+  assert.equal(validate(s, c, false), CfgErr.OK);
+  assert.equal(validate(s, c, true), CfgErr.SENSOR_BRIDGE_UNSUPPORTED);
+  assert.equal(cfgErrText(CfgErr.SENSOR_BRIDGE_UNSUPPORTED), 'sensor_bridge_unsupported');
+  c.sens[1].index = 0;
+  assert.equal(validate(s, c, true), CfgErr.SENSOR_BRIDGE_UNSUPPORTED, 'aralik disi yuva: once desteklenmiyor');
+  assert.equal(validate(s, c, false), CfgErr.SENSOR_BRIDGE_RANGE);
+  c.sens[1] = { ...sensor(4, SensorKind.ALARM_ACK, 0, 0), src: SensorSrc.BRIDGE, index: 2 };
+  assert.equal(validate(s, c, true), CfgErr.SENSOR_SRC, 'koprude kumanda rolu: sensor_src (degismez)');
+  assert.equal(validate(s, c, false), CfgErr.SENSOR_SRC);
+  c = base();
+  assert.equal(validate(s, c, true), CfgErr.OK, 'DI yolu degismez');
+  c.sens[1] = { ...sensor(4, SensorKind.GAS, 1, 1), src: SensorSrc.BRIDGE, index: 3 };
+  c.nSens = 2;
+  assert.equal(validateSystemChange(s, c, 0n), CfgErr.OK, 'ana yapilandirma degisimi kayitli kopru sensorunu yazmaz');
+  assert.equal(validateSystemChange(s, c, 0n, true), CfgErr.SENSOR_BRIDGE_UNSUPPORTED);
+});

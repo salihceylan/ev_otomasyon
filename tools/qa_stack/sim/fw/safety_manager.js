@@ -15,6 +15,7 @@
 // QA'ya ozgu: bootNonce (bn) ve resetReason disaridan verilebilir (deterministik testler). intrusion=false hirsiz katmanini HIC kurmaz
 // (v1.2.0 davranisi; esdegerlik testi: hirsiz sensoru olmayan panoda katman varken iz bit bit ayni).
 import { DiSensor, BridgeSensor, SensorHub, MAX_DI } from './sensor_hub.js';
+import { Wait } from './net_time.js';
 import { ActKind, ActuatorCore, applyLatchMask, bootLevelMask, bootSafeMasks, rawCommand, RawDecision, relayBit, isValve } from './actuator_map.js';
 import {
   SAFETY_SCHEMA_VER, defaultSafetyConfig, validate, CfgErr, cfgErrText, configCrc, decideBootMode, SafeReason, safeReasonText,
@@ -27,7 +28,7 @@ import { IntrusionCore, ArmMode, ARM_REC_VER, makeArmRecord } from './intrusion_
 import { ContactBus, feedContacts } from './contact_bus.js';
 import { safeHoldMasks } from './valve_guard.js';
 import { buildView, viewSignature } from './safety_view.js';
-import { applyEdit, isLoosening, isGasRelease, isIntrusionLoosening, remapActPos, actuatorIdentityMap, diUseMask } from './safety_cfg_edit.js';
+import { applyEdit, isLoosening, isGasRelease, isIntrusionLoosening, remapActPos, actuatorIdentityMap, diUseMask, EditOp } from './safety_cfg_edit.js';
 import { touchesLockedZones } from './safety_config.js';
 import { VIA_LAN, VIA_LOCAL_WEB, VIA_CLOUD, NVSK_CFG } from './event_outbox.js';
 import { isValve as isValveCfg } from './actuator_map.js';
@@ -41,6 +42,7 @@ export const CfgResult = Object.freeze({
 
 const u32 = (x) => x >>> 0;
 const clone = (o) => JSON.parse(JSON.stringify(o));
+const NVS_RETRY_MS = 2000;   // firmware SafetyManager::NVS_RETRY_MS (fw-tarama-5)
 
 /** firmware CmdType (DeviceCommand.h) guvenlik eki; sim komut sozlesmesi (command_schema.js) WP-F4/Q1'de genisler. */
 export const SafetyCmdType = Object.freeze({
@@ -169,6 +171,11 @@ export class SafetyManager {
     this.masksGen = 0;
     this.latchedMask = 0;
     this.posSaveForced = false;
+    // fw-tarama-5: basarisiz kilit/kip/konum yazimi NVS_RETRY_MS sonra yeniden denenir; NVS_FAIL ardisik basarisizlikta anahtar basina bir kez
+    this.armRetry = new Wait();
+    this.latchRetry = new Wait();
+    this.posRetry = new Wait();
+    this.nvsFailRep = 0;
     this.view = null;
     this.viewSig_ = '';
     this.lastViewAt = 0;
@@ -348,20 +355,33 @@ export class SafetyManager {
     this.outbox.push(makeEvent({ type: EvType.NVS_FAIL, sub: key, atUp: Math.floor(u32(u32(nowMs) - this.bootAt) / 1000) }));
   }
 
+  /** firmware nvsWriteResult (fw-tarama-5): basarisizsa geri cekilme kurulur, NVS_FAIL ardisik basarisizlikta anahtar basina bir kez. */
+  #nvsWriteResult(ok, key, retry, nowMs) {
+    const bit = 1 << key;
+    if (ok) { this.nvsFailRep &= ~bit; return true; }
+    retry.arm(nowMs, NVS_RETRY_MS);
+    if (!(this.nvsFailRep & bit)) { this.nvsFailRep |= bit; this.#nvsFail(key, nowMs); }
+    return false;
+  }
+
   persist(nowMs) {
     if (!this.active_) return;
     nowMs = u32(nowMs);
-    if (this.intrusionOn && this.intr.takeDirty() && !SafetyStore.saveArm(this.nvs, this.intr.record())) this.#nvsFail(NVSK_ARM, nowMs);
-    if (this.core.takeLatchDirty()) {
+    if (this.intrusionOn && !this.armRetry.running(nowMs) && this.intr.takeDirty()) {
+      if (!this.#nvsWriteResult(SafetyStore.saveArm(this.nvs, this.intr.record()), NVSK_ARM, this.armRetry, nowMs)) this.intr.markDirty();
+    }
+    if (!this.latchRetry.running(nowMs) && this.core.takeLatchDirty()) {
       const rec = this.core.buildLatch();
-      if (!SafetyStore.saveLatch(this.nvs, rec)) this.#nvsFail(NVSK_LATCH, nowMs);
+      if (!this.#nvsWriteResult(SafetyStore.saveLatch(this.nvs, rec), NVSK_LATCH, this.latchRetry, nowMs)) this.core.markLatchDirty();
       if (!latchAny(rec) && this.sirenSaved !== 0 && SafetyStore.saveSirenS(this.nvs, 0)) this.sirenSaved = 0;
     }
     this.#refreshKeep();
-    const posDirty = this.act.takePosDirty() || this.posSaveForced;
-    this.posSaveForced = false;
-    if (posDirty && !SafetyStore.saveActPos(this.nvs, this.act.posOpenBits(), this.act.posKnownBits())) this.#nvsFail(NVSK_ACT_POS, nowMs);
-    if (posDirty) this.#persistSafeMask(nowMs);
+    if (!this.posRetry.running(nowMs)) {
+      const posDirty = this.act.takePosDirty() || this.posSaveForced;
+      this.posSaveForced = false;
+      if (posDirty && !this.#nvsWriteResult(SafetyStore.saveActPos(this.nvs, this.act.posOpenBits(), this.act.posKnownBits()), NVSK_ACT_POS, this.posRetry, nowMs)) this.posSaveForced = true;
+      if (posDirty) this.#persistSafeMask(nowMs);
+    }
     if (this.core.latchedZoneMask() !== 0 && u32(nowMs - this.lastSirenSave) >= 30000) {
       this.lastSirenSave = nowMs;
       let maxMs = 0;
@@ -459,7 +479,8 @@ export class SafetyManager {
     }
     const ed = applyEdit(cur, e);
     let err = ed.err;
-    if (err === CfgErr.OK) err = validate(sys, ed.out);
+    // Yazim yolu (v1.3.2, CONTRACTS C1): surucusuz kopru sensoru iceren tablo yazilmaz; silme serbest (yalniz oge kaldirir)
+    if (err === CfgErr.OK) err = validate(sys, ed.out, e.op !== EditOp.DEL_SENSOR && e.op !== EditOp.DEL_ACTUATOR);
     if (err !== CfgErr.OK) { o.r = CfgResult.INVALID; o.err = err; return o; }
     if (touchesLockedZones(cur, ed.out, this.latchedMask)) { o.r = CfgResult.LATCHED; return o; }
     if ((via === VIA_LAN || via === VIA_LOCAL_WEB) && isLoosening(cur, ed.out, this.diHist)) { o.r = CfgResult.LOOSEN; return o; }   // FW2-2

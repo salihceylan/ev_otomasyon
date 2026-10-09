@@ -142,7 +142,7 @@ ApplyOutcome applyWorker(const TplCandidate& cand, bool viaLan) {
     in.latched = sm.latchedMask() != 0;
     in.armed = sm.intrusionArmed();
     in.shutterMoving = shutterMovingNow();
-    in.sysErr = safety::validateSystemChange(w->next, w->nextSafety, guard);
+    in.sysErr = safety::validateSystemChange(w->next, w->nextSafety, guard, true);   // güvenlik tablosunu da yazar (v1.3.2 C1)
     const uint16_t sysE = sysConfigNvsEntries(w->live, w->next);
     const uint16_t tplE = tplNvsEntries(newRec.label);
     nvs_stats_t ns;

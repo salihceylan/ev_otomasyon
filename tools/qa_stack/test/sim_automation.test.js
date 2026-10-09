@@ -1420,3 +1420,53 @@ test('automation: ek modul kanal sayisi artinca yeni kanal DI kapisi ilk okumada
   r.run(300);
   assert.equal(r.relay(5), true, 'gercek basis TOGGLE yapar');
 });
+
+// fw-tarama-4: ek modul ETKINKEN kanal sayisi AZALINCA kapsam disina dusen ek roleler (8+yeni .. 8+eski) KAPAT ile kapatilir (en iyi caba;
+// basarisizsa geri cekilmeyle sonraki turda yeniden, ardisik 5 basarisizlikta birakilir). Eskiden stepExtOutputs yalniz yeni aralikta
+// yazdigi icin acik role fiziksel olarak acik kaliyor ve artik komutla da kapatilamiyordu.
+test('automation: ek modul kanal sayisi azalinca kapsam disi acik role KAPAT ile kapatilir (fw-tarama-4)', () => {
+  const ext = makeExt(16);
+  const r = new Rig({ ext, configure: (cm) => { cm.config.ext_module_enabled = true; cm.config.ext_module_channels = 16; } });
+  r.run(2000);
+  r.cmd(T.RELAY_SET, 21, 1);
+  r.run(500);
+  assert.equal(ext.coils[12], true, 'role 21 (kanal 13) acik');
+  r.cm.config.ext_module_channels = 8;                   // 16 -> 8 kanal
+  r.run(500);
+  assert.equal(ext.coils[12], false, 'kapsam disi role KAPAT yazildi');
+  r.cmd(T.RELAY_SET, 9, 1);                              // kapsamdaki role olagan yoldan
+  r.run(500);
+  assert.equal(ext.coils[0], true);
+  assert.deepEqual(r.violations, []);
+});
+
+test('automation: kapsam disi KAPAT yazimi basarisizsa yeniden denenir; modulde olmayan kanal 5 denemede birakilir (fw-tarama-4)', () => {
+  const ext = makeExt(16);
+  const r = new Rig({ ext, configure: (cm) => { cm.config.ext_module_enabled = true; cm.config.ext_module_channels = 16; } });
+  r.run(2000);
+  r.cmd(T.RELAY_SET, 21, 1);
+  r.run(500);
+  assert.equal(ext.coils[12], true);
+  ext.failWrites = true;                                 // modul gecici olarak yanit vermiyor
+  r.cm.config.ext_module_channels = 8;
+  r.run(300);
+  assert.equal(ext.coils[12], true, 'yazilamadi');
+  ext.failWrites = false;
+  r.run(3000);
+  assert.equal(ext.coils[12], false, 'sonraki turda yeniden denendi');
+  // Fiziksel 8 kanalli modul yanlislikla 16 kanal yapilandirilmis, sonra 8'e duzeltilmis: kanal 9..16 yazimi istisna (0x02) doner.
+  const ext8 = makeExt(8);
+  const q = new Rig({ ext: ext8, configure: (cm) => { cm.config.ext_module_enabled = true; cm.config.ext_module_channels = 16; } });
+  q.run(2000);
+  let outOfRange = 0;
+  const write = q.a.extWriteCoil.bind(q.a);
+  q.a.extWriteCoil = (slave, ch, value) => { if (ch >= 9 && ch <= 16) outOfRange++; return write(slave, ch, value); };
+  q.cm.config.ext_module_channels = 8;
+  q.run(12000);
+  assert.equal(outOfRange, 5, 'kapsam disi KAPAT ardisik 5 basarisizlikta birakildi');
+  q.cmd(T.RELAY_SET, 9, 1);
+  q.run(1500);
+  assert.equal(ext8.coils[0], true, 'kapsamdaki role calisir');
+  q.run(5000);
+  assert.equal(outOfRange, 5, 'birakildiktan sonra deneme yok');
+});

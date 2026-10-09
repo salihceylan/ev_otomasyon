@@ -6,6 +6,7 @@
 //  * Seviye tabanlıdır (kenar değil): kaçırılmış kenar ya da açılışta zaten ıslak sensör ilk geçerli okumada yakalanır.
 //  * Pencereli birikim [O-1]: pencere (su 3 sn, gaz/duman 1 sn) BUCKETS kovaya bölünür; son pencerede toplam aktif süre
 //    >= confirm_ms ise sensör onaylı aktiftir. Kesintisiz süre aranmaz (damla deseni birikir), tek kısa sıçrama dolduramaz.
+//    confirm_ms tür penceresinden uzunsa pencere büyür (windowMs; v1.3.2 fw-tarama-3): yoksa toplam hiç confirm_ms'e ulaşmazdı.
 //  * ok=false sensör BİLİNMEYENDİR [Y-3]: ne ıslak ne kuru. Islaklığa girmez (SF_FAULT_CLOSE hariç), bölgenin kuruluk
 //    sayacını durdurur. Arıza kenarı yalnız daha önce ok=true görülmüş sensörde üretilir (açılıştaki "henüz okunmadı"
 //    hali arıza değildir).
@@ -45,6 +46,16 @@ public:
     faultEdges_ = clearedEdges_ = pressEdges_ = 0;
   }
 
+  // Onay penceresi (ms): tür penceresi, ya da confirm_ms için yeterli en küçük pencere (hangisi büyükse). Baş ilerleyince yeni kova boş
+  // başlar ve toplam yalnız 7 tam kovayı tutar: 7 * (pencere / 8) >= confirm_ms olmalı -> ceil(confirm_ms / 7) * 8 (8'in katı). Tür
+  // penceresinin 7/8'ine kadar (su 2625, gaz/duman 875 ms; varsayılanlar dahil) pencere ve zamanlama değişmez. 0: pencere yok (anında).
+  static uint32_t windowMs(uint8_t kind, uint16_t confirmMs) {
+    const uint32_t base = confirmWindowMs(kind);
+    if (base == 0) return 0;
+    const uint32_t need = ((uint32_t)confirmMs + (BUCKETS - 2)) / (BUCKETS - 1) * BUCKETS;
+    return need > base ? need : base;
+  }
+
   uint8_t count() const { return n_; }
   const SensorConfig* config(uint8_t slot) const { return (cfg_ && slot < n_) ? &cfg_[slot] : nullptr; }
 
@@ -82,7 +93,7 @@ public:
       r.pressed = logical;
       r.confirmed = logical;
     } else {
-      const uint16_t window = confirmWindowMs(c.kind);
+      const uint32_t window = windowMs(c.kind, c.confirm_ms);
       if (c.confirm_ms == 0 || window == 0) {
         r.confirmed = logical;
       } else {

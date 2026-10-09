@@ -370,6 +370,8 @@ MqttManager::MqttManager()
   _clientId[0] = _uid[0] = '\0';
   memset(_recentIds, 0, sizeof(_recentIds));
   _acceptId[0] = _acceptBase[0] = '\0';
+  _cfgPatchId[0] = '\0';
+  _cfgPatchRev = 0;
   memset(&_publishedSig, 0, sizeof(_publishedSig));
 }
 
@@ -1016,6 +1018,10 @@ bool MqttManager::publishState() {
   }
   safety::StateMeta meta;
   sm.stateMeta(meta);
+  // v1.3.2 (CONTRACTS C6): cfg.safety.id -- güncel rev'i bu kimlikli bulut yaması ürettiyse (writeStateExtras rev'i karşılaştırır).
+  // Araya giren komut last_id'yi değiştirse de kalır; LAN/CLI/şablon rev'i değiştirince ve yeniden başlatmada (RAM) yazılmaz.
+  memcpy(meta.cfgId, _cfgPatchId, sizeof(meta.cfgId));
+  meta.cfgIdRev = _cfgPatchRev;
   meta.timeOk = NetUtil::isTimeSynced() ? 1 : 0;
   meta.epoch = meta.timeOk ? (uint32_t)time(nullptr) : 0;
   char* extra = (char*)malloc(STATE_EXTRA_MAX);
@@ -1443,6 +1449,9 @@ void MqttManager::handleSys(uint8_t* payload, unsigned int length) {
   switch (o.r) {
     case safety::CfgResult::OK:
       printf("[MQTTS] cfg_patch uygulandi (rev %lu).\r\n", (unsigned long)o.rev);
+      strncpy(_cfgPatchId, rejId, sizeof(_cfgPatchId) - 1);   // v1.3.2 (C6): kimliksiz yamada boşalır (yeni rev'i kimlikli yama üretmedi)
+      _cfgPatchId[sizeof(_cfgPatchId) - 1] = '\0';
+      _cfgPatchRev = o.rev;
       acceptCmd(rejId);                                 // state.last_id = id (sunucunun expectOutcome'u; WP-C1)
       break;
     case safety::CfgResult::CONFLICT:

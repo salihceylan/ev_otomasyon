@@ -25,8 +25,11 @@
 // 1.3.1 (2026-10-08 mantik denetimi): yerel anahtar parmak izi lk_fp (tam durum, MQTT state, seri "Anahtar izi:"), ev/{t}/status JSON
 // {"status","uid"} (LWT dahil), tam durumda gercek "provisioned", provizyonsuz panoda set_local_key/rekey yok sayilir, genel komut
 // retlerinde last_rej, latch_orphan kurtarma, ek modul DI baslatma, DEFAULT_DI guvenlik denetimi, cfg{rev,crc} her zaman.
+// 1.3.2 (2026-10-09 gece duzeltmeleri): kopru (kablosuz) sensoru yazim yollarinda sensor_bridge_unsupported (kayitli yapilandirma acilista
+// gecerli), uzun confirm_ms'de onay penceresi buyur, kilit/kip/vana konumu NVS yazimi yeniden denenir, ek modul kanal sayisi azalinca kapsam
+// disi roleler KAPAT, seri EXTMOD panjur hareketindeyken reddedilir, state cfg.safety.id (bulut cfg_patch kimligi).
 #ifndef FW_VERSION
-#define FW_VERSION "1.3.1"
+#define FW_VERSION "1.3.2"
 #endif
 
 // ============================================================================

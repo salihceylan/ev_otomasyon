@@ -273,6 +273,23 @@ void test_default_shutter_dis_layout_and_safety_cross_check(void) {
   TEST_ASSERT_EQUAL_UINT8((uint8_t)safety::CfgErr::OK, (uint8_t)safety::validateSystemChange(next, sc, 0));
 }
 
+// fw-tarama-4: seri EXTMOD, panjur hareket ederken ya da ölü zaman beklerken ek modül alanlarını değiştiremez (LAN POST /api/config
+// shutterRelevantChange ile aynı kural): ek panjur rölesi sürücüsüz kalır, motor enerjili kalabilirdi. Değişmeyen istek serbest.
+void test_extmod_change_blocked_while_shutter_busy(void) {
+  SystemConfig c;
+  memset(&c, 0, sizeof(c));
+  c.ext_module_enabled = true;
+  c.ext_module_channels = 16;
+  TEST_ASSERT_TRUE(extModChangeBlocked(c, true, 8, true));     // kanal sayısı değişimi
+  TEST_ASSERT_TRUE(extModChangeBlocked(c, false, 8, true));    // kapatma
+  TEST_ASSERT_FALSE(extModChangeBlocked(c, true, 16, true));   // aynı değerler
+  TEST_ASSERT_FALSE(extModChangeBlocked(c, true, 8, false));   // hareket yok
+  TEST_ASSERT_FALSE(extModChangeBlocked(c, false, 8, false));
+  c.ext_module_enabled = false;
+  TEST_ASSERT_TRUE(extModChangeBlocked(c, true, 16, true));    // açma
+  TEST_ASSERT_FALSE(extModChangeBlocked(c, false, 4, true));   // zaten kapalı: EXTMOD 0 kanal sayısını değiştirmez
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_valid_line_is_parsed);
@@ -290,5 +307,6 @@ int main(int, char**) {
   RUN_TEST(test_error_texts_match_the_serial_protocol);
   RUN_TEST(test_parsed_values_satisfy_system_config_setters);
   RUN_TEST(test_default_shutter_dis_layout_and_safety_cross_check);
+  RUN_TEST(test_extmod_change_blocked_while_shutter_busy);
   return UNITY_END();
 }
