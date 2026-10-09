@@ -196,6 +196,9 @@ class AutomationState extends ChangeNotifier {
   static const _prefsInstallId = 'ahbu_install_id';
   static const _prefsTheme = 'saved_theme_mode';
   static const _prefsMode = 'saved_app_mode';
+
+  /// Sunucu saati - yerel saat (ms; cekirdek-1). Cihaza ait bir ölçümdür: kullanıcı verisi değildir.
+  static const _prefsServerSkew = 'server_clock_skew_ms';
   static const _prefsHost = 'saved_esp_host';
   static const _prefsSvcUuid = 'saved_service_device_uuid';
   static const _prefsSvcIp = 'saved_service_device_ip';
@@ -282,6 +285,10 @@ class AutomationState extends ChangeNotifier {
 
   List<DeviceInfo> _devices = const [];
   DevicePresence _presence = DevicePresence.unknown;
+
+  /// Pano başına çevrimiçilik (`ev/{t}/status` `{status, uid}`; sözleşme C16, sozlesme-6): ev çevrimiçi = en az bir
+  /// pano çevrimiçi. uid'siz (eski) ileti bu haritaya girmez, eski davranışla tek değeri yazar. Ev değişince temizlenir.
+  final Map<String, bool> _presenceByUid = <String, bool>{};
   MqttLinkState _mqttLink = MqttLinkState.disconnected;
   final Map<int, ShutterRuntime> _shutterRuntime = <int, ShutterRuntime>{};
 
@@ -498,9 +505,46 @@ class AutomationState extends ChangeNotifier {
     return null;
   }
 
+  /// Sunucu saati - yerel saat (sözleşme C5, cekirdek-1): son `GET /homes` yanıtının `access_starts_in` /
+  /// `access_expires_in` alanlarından hesaplanır; alan gelmediyse (eski sunucu) önceki değer, hiç yoksa sıfır.
+  Duration _serverSkew = Duration.zero;
+
+  /// Misafir / süreli erişim kararlarında kullanılan, sunucu saatine göre düzeltilmiş "şimdi". Telefon saati ileri ya
+  /// da geri olsa da pencere sunucunun saatine göre açılır/kapanır; eski sunucuda yerel saattir.
+  DateTime get serverNow => clock.now().add(_serverSkew);
+
+  /// Yanıttaki göreli pencere alanlarından sunucu saati farkını günceller (alınış anındaki yerel saate göre).
+  void _updateServerSkew(List<HomeModel> homes) {
+    final local = clock.now();
+    DateTime? server;
+    for (final h in homes) {
+      final until = h.guestValidUntil;
+      final expiresIn = h.accessExpiresIn;
+      if (until != null && expiresIn != null && expiresIn > 0) {
+        server = until.subtract(Duration(seconds: expiresIn));
+        break;
+      }
+      final from = h.guestValidFrom;
+      final startsIn = h.accessStartsIn;
+      if (from != null && startsIn != null && startsIn > 0) {
+        server = from.subtract(Duration(seconds: startsIn));
+        break;
+      }
+    }
+    if (server == null) return;
+    final skew = server.difference(local);
+    if (skew == _serverSkew) return;
+    _serverSkew = skew;
+    unawaited(() async {
+      try {
+        await (await SharedPreferences.getInstance()).setInt(_prefsServerSkew, skew.inMilliseconds);
+      } catch (_) {}
+    }());
+  }
+
   /// Misafir süresi dolmuş evler (sunucu işaretledi veya pencere geçti).
   List<HomeModel> get expiredHomes {
-    final now = clock.now();
+    final now = serverNow;
     return _homes.where((h) => h.isGuestExpiredAt(now)).toList(growable: false);
   }
 
@@ -566,7 +610,7 @@ class AutomationState extends ChangeNotifier {
       return _anonymousLocalKey ? const Capabilities.localKeyHolder() : const Capabilities.none();
     }
     final home = _activeHome;
-    final now = clock.now();
+    final now = serverNow;
     final guestExpired = home != null && home.isGuestRole && home.isGuestExpiredAt(now);
     final cached = _capsMemo;
     if (cached != null &&
@@ -786,6 +830,7 @@ class AutomationState extends ChangeNotifier {
 
     // Bulut-öncelikli: kayıt yoksa bulut.
     _mode = prefs.getString(_prefsMode) == 'direct' ? AppMode.direct : AppMode.cloud;
+    _serverSkew = Duration(milliseconds: prefs.getInt(_prefsServerSkew) ?? 0);
 
     _selectedDeviceUuid = prefs.getString(_prefsSvcUuid) ?? '';
     _selectedDeviceIp = prefs.getString(_prefsSvcIp) ?? '';
@@ -1109,6 +1154,7 @@ class AutomationState extends ChangeNotifier {
   /// bekleyen komutları sıfırlar. [clearApiSession] `false` ise API istemcisinin (yeni açılan)
   /// oturumu korunur (giriş sırasında önceki kullanıcının artıklarını silmek için).
   void _resetSessionState({bool clearApiSession = true}) {
+    _legalSyncedAt = null;
     _sessionEpoch++;
     _homeEpoch++;
     _cancelAllTimers();
@@ -1166,6 +1212,7 @@ class AutomationState extends ChangeNotifier {
   /// Ev kapsamlı **tüm** önbellekleri sıfırlar (ev değişiminde ve oturum sıfırlamada).
   void _resetHomeScopedState() {
     _pipeline.cancelAll();
+    _presenceByUid.clear();
     _cloudEndpoints = const [];
     _invalidateViews();
     _endpointsLoading = false;
@@ -1201,6 +1248,7 @@ class AutomationState extends ChangeNotifier {
     _loadRetryTimer?.cancel();
     _loadRetryTimer = null;
     _loadRetryCount = 0;
+    _snapshotRetryAt = null;
     _resetLayoutRefresh(); // eski evin yerleşim izlemesi ve bekleyen yenilemesi yeni eve taşınmaz
     _devicesFailed = false;
     _status = null;
@@ -1366,6 +1414,9 @@ class AutomationState extends ChangeNotifier {
       return;
     }
     if (!isAuthenticated) return;
+    // Yasal durum en çok 12 saatte bir eşitlenir (cekirdek-6): uygulama uzun süre arka planda kaldıysa yeni sözleşme
+    // sürümü sorulur. Hiç eşitlenmemiş oturum burada eşitlenmez (açılış / giriş / buluta geçiş eşitler).
+    if (_legalSyncedAt != null && _legalSyncDue) unawaited(_syncLegalStatus(_sessionEpoch));
     // Ev listesi (roller) + tek snapshot + canlı kanal EŞZAMANLI (PF-03): ardışık beklemek 3 tur x 10 sn olabilir. Servis
     // PIN oturumu da kapsanır (kullanim-6): ev listesi orada erken döner, canlı kanal (MQTT) yeniden kurulur.
     await Future.wait<void>(<Future<void>>[
@@ -1377,6 +1428,10 @@ class AutomationState extends ChangeNotifier {
 
   @visibleForTesting
   bool get isInBackground => _inBackground;
+
+  /// Oturum sürüyor ama biyometrik kilit açılmayı bekliyor (yeniden kilit ya da kilitli açılış): oturum bitmiş
+  /// SAYILMAZ (ör. kurulum sihirbazı kilit altında korunur; uygulama-ekranlar-1).
+  bool get isBiometricLocked => _authStatus == AuthStatus.checking && _awaitingUnlock;
 
   // ---------------------------------------------------------------------------
   // Biyometrik güvenlik
@@ -1824,6 +1879,7 @@ class AutomationState extends ChangeNotifier {
     final epoch = _sessionEpoch;
     _sessionNotice = null;
     _currentUser = user;
+    _legalSyncedAt = clock.now(); // giriş yanıtındaki kullanıcı yasal durumu taşır
     _authStatus = AuthStatus.authenticated;
     _mode = AppMode.cloud;
 
@@ -2025,6 +2081,7 @@ class AutomationState extends ChangeNotifier {
     try {
       final list = await cloudApi.fetchHomes();
       if (epoch != _sessionEpoch) return;
+      _updateServerSkew(list);
       _homes = list;
       _homesLoaded = true;
       _homesFromCache = false;
@@ -2098,21 +2155,27 @@ class AutomationState extends ChangeNotifier {
         // Beklenmez: bulut kipine geçiş ev listesini yeniler ve o yenileme şu an uçuştaki bu yenilemedir.
         if (_mode == AppMode.direct) unawaited(setMode(AppMode.cloud));
       } else if (match.role != active.role ||
+          match.guestValidFrom != active.guestValidFrom ||
           match.guestValidUntil != active.guestValidUntil ||
           match.serverMarkedExpired != active.serverMarkedExpired) {
         _activeHome = match;
         _scheduleGuestExpiry();
-        if (match.isGuestExpiredAt(clock.now())) {
+        if (match.isGuestExpiredAt(serverNow)) {
           // Misafir süresi doldu: yerel veri ve canlı bağlantı kapatılır (sızıntı yok).
           _homeEpoch++;
           unawaited(mqttService.stop());
           _mqttLink = MqttLinkState.disconnected;
           _resetHomeScopedState();
         } else if (!_inBackground) {
-          unawaited(refresh(silent: true));
+          if (_accessOpenedWithoutRealtime(active)) {
+            unawaited(selectHome(match)); // erişim açıldı / uzatıldı: seçimdeki yol (REST + canlı kanal)
+          } else {
+            unawaited(refresh(silent: true));
+          }
         }
       } else {
         _activeHome = match;
+        if (!_inBackground && _accessOpenedWithoutRealtime(active)) unawaited(selectHome(match));
       }
     }
     if (epoch != _sessionEpoch) return;
@@ -2123,8 +2186,21 @@ class AutomationState extends ChangeNotifier {
     }
   }
 
+  /// Misafir penceresi (yeniden) açık ama bu ev bağlamında canlı kanal hiç başlamadı (pencere başlamamış / süresi
+  /// dolmuşken seçildi ya da uzatıldı; misafirden sakinliğe geçiş): seçimdeki yol yeniden işletilmeli (cekirdek-1).
+  bool _accessOpenedWithoutRealtime(HomeModel previous) {
+    final home = _activeHome;
+    return home != null &&
+        (previous.isGuestRole || home.isGuestRole) &&
+        !home.isGuestExpiredAt(serverNow) &&
+        _mode == AppMode.cloud &&
+        isAuthenticated &&
+        !_awaitingUnlock &&
+        _realtimeEpoch != _homeEpoch;
+  }
+
   Future<HomeModel?> _pickInitialHome() async {
-    final now = clock.now();
+    final now = serverNow;
     final usable = _homes.where((h) => !h.isGuestExpiredAt(now)).toList();
     // Yalnızca süresi dolmuş misafir evleri varsa biri seçilir: veri/ağ yüklenmez, ancak
     // `capabilities.isGuestExpired` ile "süre doldu" ekranı gösterilebilir.
@@ -2163,7 +2239,7 @@ class AutomationState extends ChangeNotifier {
     unawaited(_saveActiveHomeId(home.id));
     notifyListeners();
 
-    if (home.isGuestExpiredAt(clock.now())) return; // süresi dolmuş misafir: veri/ağ yok
+    if (home.isGuestExpiredAt(serverNow)) return; // süresi dolmuş misafir: veri/ağ yok
 
     if (_mode == AppMode.cloud) {
       // REST yenilemesi ve canlı kanal EŞZAMANLI (PF-03): MQTT REST yığınının (3 ardışık tur olabilir) arkasında
@@ -2197,9 +2273,20 @@ class AutomationState extends ChangeNotifier {
     if (_isDisposed) return; // dispose sırasında süren zincir sonradan zamanlayıcı kurmasın (PF-34)
     final home = _activeHome;
     if (home == null || !home.isGuestRole) return;
+    final now = serverNow;
+    final from = home.guestValidFrom;
+    if (from != null && now.isBefore(from)) {
+      // Pencere henüz başlamadı (cekirdek-1): başlangıçta ev listesi sunucudan tazelenir; erişim açılınca uzlaştırma
+      // REST + canlı kanalı başlatır.
+      _guestExpiryTimer = clock.timer(from.difference(now) + const Duration(milliseconds: 500), () {
+        _guestExpiryTimer = null;
+        if (!_isDisposed && isAuthenticated) unawaited(fetchHomes(autoSelect: false));
+      });
+      return;
+    }
     final until = home.guestValidUntil;
     if (until == null) return;
-    final remaining = until.difference(clock.now());
+    final remaining = until.difference(now);
     if (remaining.isNegative) return;
     final id = home.id;
     // Pencere `valid_until` DAHİL geçerlidir (CONTRACTS §1.4): zamanlayıcı sınırı biraz aşınca
@@ -2268,6 +2355,8 @@ class AutomationState extends ChangeNotifier {
       _status = null;
       _invalidateViews();
       if (isAuthenticated) {
+        // LAN kipinde yasal durum eşitlenmez; buluta geçişte bayatsa eşitlenir (cekirdek-6).
+        if (_legalSyncDue) unawaited(_syncLegalStatus(_sessionEpoch));
         if (_activeHome != null) {
           // Buluta dönüş: snapshot + canlı kanal EŞZAMANLI (PF-03). Ev listesi burada YENİLENMEZ (eskiden de değildi;
           // sabitlenmiş test harness'ı boş sahte ev listesiyle çalışır: yenileme aktif evi düşürürdü).
@@ -2611,7 +2700,7 @@ class AutomationState extends ChangeNotifier {
       await fetchHomes();
       return;
     }
-    if (home.isGuestExpiredAt(clock.now())) return;
+    if (home.isGuestExpiredAt(serverNow)) return;
     final caps = capabilities;
     if (!caps.canViewState) return;
     final epoch = _homeEpoch;
@@ -2643,6 +2732,27 @@ class AutomationState extends ChangeNotifier {
 
   /// Cihaz listesi son denemede alınamadı (PF-11): yeniden denenir; çevrimiçilik uç noktalardan türetilebilir.
   bool _devicesFailed = false;
+
+  /// Anlık görüntünün tetiklediği son uç nokta yeniden denemesi (cekirdek-2; kalp atışı her iletide istek üretmesin).
+  DateTime? _snapshotRetryAt;
+  static const Duration _snapshotRetryEvery = Duration(seconds: 60);
+
+  /// Uç nokta listesi hiç yüklenemediyse (otomatik denemeler tükenmiş olabilir) canlı kanal bağlanınca ([onConnect])
+  /// ya da canlı anlık görüntü gelince yeniden denenir (cekirdek-2): ağ dönmüş demektir. Tek uçuş: süren yenileme ya
+  /// da planlı otomatik deneme varsa atlanır; anlık görüntü yolu en çok [_snapshotRetryEvery]'de bir dener.
+  void _retryFailedEndpointLoad({required bool onConnect}) {
+    if (_isDisposed || _inBackground || _mode != AppMode.cloud || _activeHome == null) return;
+    if (_endpointsLoaded || _endpointsError == null) return;
+    if (_cloudRefreshFlight != null || _loadRetryTimer != null) return;
+    final now = clock.now();
+    if (!onConnect) {
+      final last = _snapshotRetryAt;
+      if (last != null && now.difference(last) < _snapshotRetryEvery) return;
+    }
+    _snapshotRetryAt = now;
+    _loadRetryCount = 0;
+    unawaited(refresh(silent: true));
+  }
 
   /// Uç nokta listesi hiç yüklenemediyse ([endpointsError] ve [endpointsLoaded] false) ya da cihaz listesi
   /// alınamadıysa [_loadRetryDelays] kadar sonra sessiz yenileme planlar. Ev değişiminde, arka plana geçişte,
@@ -2815,8 +2925,10 @@ class AutomationState extends ChangeNotifier {
 
   void _bindMqtt() {
     _mqttLinkSub = mqttService.linkStates.listen((state) {
+      final connected = state == MqttLinkState.connected && _mqttLink != MqttLinkState.connected;
       _mqttLink = state;
       notifyListeners();
+      if (connected) _retryFailedEndpointLoad(onConnect: true);
     });
     _mqttStateSub = mqttService.stateMessages.listen(_onDeviceState);
     _mqttStatusSub = mqttService.statusMessages.listen(_onDevicePresence);
@@ -2888,7 +3000,14 @@ class AutomationState extends ChangeNotifier {
   void _onDevicePresence(DevicePresenceMessage message) {
     if (_isDisposed || _realtimeEpoch != _homeEpoch || _activeHome == null) return;
     if (!message.online && message.retained && _hasFreshLiveState()) return;
-    _presence = message.online ? DevicePresence.online : DevicePresence.offline;
+    final uid = message.uid;
+    if (uid == null || uid.isEmpty) {
+      _presence = message.online ? DevicePresence.online : DevicePresence.offline;
+    } else {
+      // Bir panonun LWT'si (ör. elektriği giden B) diğer panosu çevrimiçi olan evi çevrimdışı göstermez.
+      _presenceByUid[uid.toUpperCase()] = message.online;
+      _presence = _presenceByUid.values.any((online) => online) ? DevicePresence.online : DevicePresence.offline;
+    }
     notifyListeners();
   }
 
@@ -2948,6 +3067,8 @@ class AutomationState extends ChangeNotifier {
     if (!retained) {
       // Canlı ileti = cihaz yaşıyor (retained "offline" status'u da düzeltilir). Saklı/retained
       // `state` çevrimiçiliği KANITLAMAZ.
+      final liveUid = snapshot.uid?.toUpperCase();
+      if (liveUid != null && liveUid.isNotEmpty) _presenceByUid[liveUid] = true;
       if (_presence != DevicePresence.online) {
         _presence = DevicePresence.online;
         changed = true;
@@ -2962,6 +3083,7 @@ class AutomationState extends ChangeNotifier {
       notifyListeners();
     }
     if (!retained) _watchEndpointLayout(snapshot); // bayat (retained) ileti yerleşim kararına esas olmaz
+    _retryFailedEndpointLoad(onConnect: false);
     if (_snapshotWaiters.isNotEmpty) {
       final waiters = List<Completer<void>>.of(_snapshotWaiters);
       _snapshotWaiters.clear();
@@ -3130,7 +3252,7 @@ class AutomationState extends ChangeNotifier {
     final home = _activeHome;
     if (_isDisposed || _inBackground || epoch != _homeEpoch || _mode != AppMode.cloud || home == null) return;
     // Oturum/yetki arada kaybolduysa REST yapılmaz (canlı iletiler koşullar dönünce izlemeyi yeniden kurar).
-    if (!isAuthenticated || home.isGuestExpiredAt(clock.now()) || !capabilities.canViewState) return;
+    if (!isAuthenticated || home.isGuestExpiredAt(serverNow) || !capabilities.canViewState) return;
     _pruneLayoutWatches();
     if (_layoutWatches.isEmpty) return; // artık uyuşuyor: istek yok
     if (_pipeline.hasPending && _layoutRefreshBusyDeferrals < _layoutRefreshMaxBusyDeferrals) {
@@ -4800,9 +4922,17 @@ class AutomationState extends ChangeNotifier {
     return ok;
   }
 
-  /// Davet koduyla eve katıl; ev listesi (rol) yenilenir ve katılınan ev seçilir.
+  /// Davet koduyla eve katıl; ev listesi (rol) yenilenir ve katılınan ev seçilir (zaten üye yanıtında da; sözleşme C3).
+  /// Hata yolunda da (ağ, zaman aşımı, 410) ev listesi tazelenir: yanıt kaybolmuş olabilir, üyelik sunucuda tamamlanmış
+  /// olabilir (hesap-uyelik-5).
   Future<JoinHomeResult> joinHome(String code) async {
-    final result = await cloudApi.joinHome(code);
+    final JoinHomeResult result;
+    try {
+      result = await cloudApi.joinHome(code);
+    } catch (_) {
+      unawaited(fetchHomes(autoSelect: false));
+      rethrow;
+    }
     await fetchHomes(autoSelect: false);
     final id = result.homeId;
     final joined = id == null ? null : homeById(id);
@@ -4821,9 +4951,16 @@ class AutomationState extends ChangeNotifier {
     return cloudApi.initiateTransfer(_homeIdOrActive(homeId), targetIdentifier: targetIdentifier);
   }
 
-  /// Devir kodunu kabul eder; ev listesi (rol) yenilenir ve devralınan ev seçilir.
+  /// Devir kodunu kabul eder; ev listesi (rol) yenilenir ve devralınan ev seçilir (zaten devralındı yanıtında da;
+  /// sözleşme C3). Hata yolunda da ev listesi tazelenir (hesap-uyelik-5).
   Future<TransferAcceptResult> acceptHomeTransfer(String transferCode) async {
-    final result = await cloudApi.acceptTransfer(transferCode);
+    final TransferAcceptResult result;
+    try {
+      result = await cloudApi.acceptTransfer(transferCode);
+    } catch (_) {
+      unawaited(fetchHomes(autoSelect: false));
+      rethrow;
+    }
     await fetchHomes(autoSelect: false);
     final id = result.homeId;
     final home = id == null ? null : homeById(id);
@@ -5219,6 +5356,12 @@ class AutomationState extends ChangeNotifier {
     return user.legal.needsAcceptance;
   }
 
+  /// Kapı görünümü (uygulama-ekranlar-2): oturum doğrulanıyor / biyometrik kilitli ya da oturum açık ama zorunlu parola
+  /// değişimi veya Kullanıcı Sözleşmesi onayı bekleniyor. Bu sırada oturum verisi gösteren yönlendirme (bildirim
+  /// dokunuşu, etiket bağlantısı) ve afiş/istem açılmaz; kapı geçilince bekletilen işlem sürer.
+  bool get isGated =>
+      _authStatus == AuthStatus.checking || (isAuthenticated && (mustChangePassword || needsTermsAcceptance));
+
   /// Yasal metin listesi (herkese açık; kayıt ekranı güncel sözleşme sürümünü buradan alır).
   Future<List<LegalDocumentInfo>> fetchLegalDocuments() => cloudApi.fetchLegalDocuments();
 
@@ -5260,6 +5403,16 @@ class AutomationState extends ChangeNotifier {
     return true;
   }
 
+  /// Yasal durumun sunucuyla son eşitlendiği an (cekirdek-6; yalnız bellekte). Buluta geçişte (hiç eşitlenmediyse ya da
+  /// [_legalSyncEvery] geçtiyse) ve ön plana dönüşte ([_legalSyncEvery] geçtiyse) yeniden eşitlenir.
+  DateTime? _legalSyncedAt;
+  static const Duration _legalSyncEvery = Duration(hours: 12);
+
+  bool get _legalSyncDue {
+    final last = _legalSyncedAt;
+    return last == null || clock.now().difference(last) >= _legalSyncEvery;
+  }
+
   /// Geri yüklenen bulut oturumunda yasal durumu sunucuyla eşitler (arka planda, sessiz): saklı kullanıcı kaydı eski
   /// olabilir (ör. sözleşme bu arada kesinleşti ya da yeni sürümü yayımlandı). YALNIZ `legal` alanı güncellenir (ad,
   /// rol gibi alanlar oturum açılışındaki davranışıyla kalır); ağ hatası yutulur ve saklı durum korunur (onay bekleyen
@@ -5268,6 +5421,7 @@ class AutomationState extends ChangeNotifier {
   Future<void> _syncLegalStatus(int epoch) async {
     final user = _currentUser;
     if (user == null || user.id.isEmpty || _mode != AppMode.cloud || isServiceSession || _isStaleSession(epoch)) return;
+    _legalSyncedAt = clock.now();
     try {
       final payload = await cloudApi.fetchMe();
       if (_isStaleSession(epoch) || !identical(_currentUser, user)) return;

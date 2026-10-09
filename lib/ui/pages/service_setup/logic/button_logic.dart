@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../../../models/automation_models.dart';
+import '../../../../models/json_utils.dart';
 import '../../../../services/automation_api_service.dart';
 import '../setup_context.dart';
 import '../setup_problem.dart';
 import '../setup_steps.dart';
+import 'safety_assignment.dart';
 
 enum ButtonVerdict { untested, detected, none }
 
@@ -45,6 +47,10 @@ class ButtonCheck {
 /// bildirilince "algılandı" işaretlenir. (Çocuk kilidi açıkken röleler tetiklenmez ama giriş durumu
 /// yine okunur; kilit uyarısı gösterilir.) Butonu bağlı olmayan giriş "Buton yok" işaretlenebilir.
 /// Geçiş koşulu: her giriş algılandı veya "buton yok".
+///
+/// Panonun güvenlik planında bir role atanmış girişler (sensörler, vana geri bildirimi, alarm onay / vana kapat / gaz
+/// vanası açma düğmeleri, alarm anahtarı) duvar butonu değildir: listede gösterilmez ve tamamlanmaya katılmaz
+/// (uygulama-ekranlar-6). Plan panodan okunur: `state.sensors[]` + yapılandırma kopyası (`fb_di` dahil; en iyi çaba).
 class ButtonLogic extends SetupLogic {
   ButtonLogic(super.ctx);
 
@@ -64,7 +70,13 @@ class ButtonLogic extends SetupLogic {
   int _failures = 0;
   Map<int, String> _saved = const <int, String>{};
 
+  /// Güvenlik rolüne atanmış DI numaraları (panonun planı; buton listesine girmez).
+  Set<int> _safetyDis = const <int>{};
+
   List<ButtonCheck> get buttons => _buttons;
+
+  /// Bu adımda gösterilmeyen güvenlik girişi sayısı.
+  int get safetyInputCount => _safetyDis.length;
   bool get loaded => _loaded;
 
   /// Şablon panoya uygulandı (İP-4.3): giriş listesi ve kayıttaki algılama ilerlemesi bırakılır; adıma girilince
@@ -74,6 +86,7 @@ class ButtonLogic extends SetupLogic {
     _buttons = const <ButtonCheck>[];
     _loaded = false;
     _saved = const <int, String>{};
+    _safetyDis = const <int>{};
     clearProblem();
   }
   bool get listening => _listening;
@@ -112,9 +125,40 @@ class ButtonLogic extends SetupLogic {
   /// Panodan giriş listesini okur (ilerleme korunur).
   Future<bool> load() => run('Girişler panodan okunuyor', () async {
         final status = await ctx.deviceCall((api) => api.fetchStatus());
+        _safetyDis = await _readSafetyDis(status);
         _applyStatus(status, initial: true);
         _loaded = true;
       });
+
+  /// Panonun güvenlik planındaki DI'ler: `state.sensors[]` (sensör + yerel kumanda) ve yapılandırma kopyasındaki
+  /// sensörler ile vanaların geri bildirim girişleri (`fb_di`). Kopya okunamazsa durumdaki sensörlerle yetinilir.
+  Future<Set<int>> _readSafetyDis(DeviceStatus status) async {
+    final out = <int>{};
+    if (!status.safety.supported) return out;
+    void addInput(InputAssignment? input) {
+      if (input == null || input.isBridge) return;
+      final role = input.role;
+      if (role.isSensor || role.isSafetyControl || role == InputRole.valveFeedback) out.add(input.index);
+    }
+
+    for (final s in status.safety.sensors) {
+      addInput(InputAssignment.fromBoard(<String, dynamic>{'id': s.id, 'src': s.src, 'kind': s.kind, 'zone': s.zone}));
+    }
+    try {
+      final cfg = await ctx.deviceCall((api) => api.fetchSafetyConfig());
+      for (final raw in asList(cfg['sensors']) ?? const <dynamic>[]) {
+        final map = asMap(raw);
+        if (map != null) addInput(InputAssignment.fromBoard(map));
+      }
+      for (final raw in asList(cfg['actuators']) ?? const <dynamic>[]) {
+        final fb = asInt(asMap(raw)?['fb_di']);
+        if (fb != null && fb > 0) out.add(fb);
+      }
+    } on LocalApiException {
+      // Yapılandırma kopyası okunamadı: durumdaki sensörlerle sürdürülür.
+    }
+    return out;
+  }
 
   /// Pano durumunu girişlere işler. Arayüzü ilgilendiren bir şey (basılı göstergesi, karar, giriş listesi, çocuk kilidi
   /// uyarısı) **değiştiyse** `true` döner; hiçbir şey değişmediyse mevcut liste olduğu gibi kalır (yeni liste üretilmez).
@@ -123,6 +167,7 @@ class ButtonLogic extends SetupLogic {
     final now = ctx.clock.now();
     final next = <ButtonCheck>[
       for (final item in status.dis)
+        if (!_safetyDis.contains(item.id))
         () {
           final old = existing[item.id];
           if (old == null) return _fromDevice(item);

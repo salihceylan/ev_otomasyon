@@ -67,6 +67,44 @@ void main() {
     expect(tester.widget<WifiRecoveryDialog>(find.byType(WifiRecoveryDialog)).deviceUuid, newUid);
   });
 
+  const safetyWarning = 'Eski panonun güvenlik ayarları (sensörler, vanalar, bölgeler) yeni panoya aktarılmadı. Servis bu '
+      'ayarları yeniden yazana kadar su/gaz koruması ÇALIŞMAZ. Yetkili servisi çağırın.';
+
+  ReplaceBoardResult resultWith(String safetyRestore) => ReplaceBoardResult.fromJson(<String, dynamic>{
+        'message': 'Pano değişimi tamamlandı. Kanal adları, kurallar ve panjur süreleri yeni panoya taşındı.',
+        'old_device_uuid': oldUid,
+        'new_device_uuid': newUid,
+        'home_id': kHomeA,
+        'migrated_endpoints_count': 6,
+        'safety_restore': safetyRestore,
+        'warnings': <String>[if (safetyRestore == 'required') safetyWarning],
+      });
+
+  testWidgets('C4: güvenlik ayarları aktarılmadıysa vurgulu uyarı; ev sahibine "bir şey yapmanız gerekmez" denmez', (tester) async {
+    final e = await env(tester, harnessRole: 'staff', userRole: 'user', homeRole: 'owner');
+    addTearDown(e.dispose);
+    e.cloud.replaceBoardToReturn = resultWith('required');
+    await replaceToResult(tester, e);
+
+    expect(exists('replace_safety_restore_warning'), isTrue);
+    expect(find.textContaining('bir şey yapmanız gerekmez'), findsNothing);
+    expect(
+      find.textContaining('Güvenlik ayarları (su/gaz sensörü, vana) yeni panoya aktarılmadı. Yetkili servisi çağırın.'),
+      findsOneWidget,
+    );
+    expect(find.text(safetyWarning), findsOneWidget, reason: 'sunucu uyarısı listede kalır');
+  });
+
+  testWidgets('C4: safety_restore not_required ya da alan yok: bugünkü metin, uyarı kartı yok', (tester) async {
+    final e = await env(tester, harnessRole: 'staff', userRole: 'user', homeRole: 'owner');
+    addTearDown(e.dispose);
+    e.cloud.replaceBoardToReturn = resultWith('not_required');
+    await replaceToResult(tester, e);
+
+    expect(exists('replace_safety_restore_warning'), isFalse);
+    expect(find.textContaining('Yeni pano Ethernet ile bağlıysa bir şey yapmanız gerekmez.'), findsOneWidget);
+  });
+
   testWidgets('süper yönetici: sihirbaz düğmesi yok, anahtar yolu notu var', (tester) async {
     final e = await env(tester, harnessRole: 'super', homeRole: 'service_user');
     addTearDown(e.dispose);

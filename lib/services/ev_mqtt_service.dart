@@ -67,12 +67,17 @@ class DevicePresenceMessage {
     required this.online,
     required this.retained,
     required this.receivedAt,
+    this.uid,
   });
 
   final String topicId;
   final bool online;
   final bool retained;
   final DateTime receivedAt;
+
+  /// İletiyi yayımlayan panonun kimliği (`{status, uid}` yükü; CONTRACTS `ev/{t}/status`, sözleşme C16). Düz metin ya
+  /// da uid'siz JSON (eski firmware): `null` (ev tek değerle izlenir).
+  final String? uid;
 }
 
 /// Bağlantı denemesi sonucu.
@@ -682,8 +687,8 @@ class EvMqttService {
         }
         _emitSafetyEvents(status, retained: message.retained);
       case 'status':
-        final online = _parsePresence(message.payload);
-        if (online == null) {
+        final presence = _parsePresence(message.payload);
+        if (presence == null) {
           _dropped++;
           return;
         }
@@ -691,9 +696,10 @@ class EvMqttService {
           _statusController.add(
             DevicePresenceMessage(
               topicId: expected,
-              online: online,
+              online: presence.online,
               retained: message.retained,
               receivedAt: now,
+              uid: presence.uid,
             ),
           );
         }
@@ -716,17 +722,19 @@ class EvMqttService {
   }
 
   /// `online` / `offline` düz metni veya `{"status":"online"}` JSON'u.
-  static bool? _parsePresence(String payload) {
+  static ({bool online, String? uid})? _parsePresence(String payload) {
     var text = payload.trim();
+    String? uid;
     if (text.startsWith('{')) {
       final map = asMap(jsonDecode(text));
       text = asString(map?['status'] ?? map?['state']) ?? '';
+      uid = asNonEmptyString(map?['uid'])?.toUpperCase();
     }
     switch (text.trim().toLowerCase()) {
       case 'online':
-        return true;
+        return (online: true, uid: uid);
       case 'offline':
-        return false;
+        return (online: false, uid: uid);
     }
     return null;
   }

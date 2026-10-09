@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/services/api_exception.dart';
 import 'package:ev_otomasyon/services/ev_cloud_api_service.dart';
 import 'package:ev_otomasyon/ui/common/date_format.dart';
 import 'package:ev_otomasyon/ui/pages/family/invite_family_dialog.dart';
@@ -201,6 +202,46 @@ void main() {
     });
   });
 
+  group('hesap-uyelik-5: katılım/devir yinelemesi (sözleşme C3)', () {
+    test('katılım ağ hatası ya da 410 ile biterse ev listesi yine sunucudan tazelenir', () async {
+      final env = e2Env();
+      final before = env.cloud.count('fetchHomes');
+      env.cloud.joinError = ApiException.network();
+      await expectLater(env.state.joinHome('AHBU-AB12CD34EF'), throwsA(isA<ApiException>()));
+      await pumpEventQueue();
+      expect(env.cloud.count('fetchHomes'), before + 1, reason: 'yanıt kaybolmuş olabilir: üyelik sunucuda tamamlanmış olabilir');
+
+      env.cloud.joinError = const ApiException(statusCode: 410, code: 'GONE', message: 'Kod kullanılmış.');
+      await expectLater(env.state.joinHome('AHBU-AB12CD34EF'), throwsA(isA<ApiException>()));
+      await pumpEventQueue();
+      expect(env.cloud.count('fetchHomes'), before + 2);
+    });
+
+    test('devir kabulü hata ile biterse ev listesi tazelenir', () async {
+      final env = e2Env();
+      final before = env.cloud.count('fetchHomes');
+      env.cloud.acceptError = const ApiException(statusCode: 410, code: 'GONE', message: 'Kod kullanılmış.');
+      await expectLater(env.state.acceptHomeTransfer('AHBU-TR-ABCDEF123456'), throwsA(isA<ApiException>()));
+      await pumpEventQueue();
+      expect(env.cloud.count('fetchHomes'), before + 1);
+    });
+
+    test('devir kabulü already_member: sonuç okunur, ev listesi tazelenir ve devralınan ev seçilir', () async {
+      final env = e2Env(role: null);
+      env.cloud.homes = <HomeModel>[testHome(role: 'owner', name: 'Ev A')];
+      env.cloud.acceptResult = TransferAcceptResult.fromJson(<String, dynamic>{
+        'message': '"Ev A" dairesinin sahipliği zaten size devredildi.',
+        'home': <String, dynamic>{'id': kHomeA, 'name': 'Ev A', 'address': null, 'role': 'owner'},
+        'already_member': true,
+      });
+      final res = await env.state.acceptHomeTransfer('AHBU-TR-ABCDEF123456');
+      expect(res.alreadyMember, isTrue);
+      expect(res.message, '"Ev A" dairesinin sahipliği zaten size devredildi.');
+      expect(env.state.activeHome?.id, kHomeA);
+      expect(env.state.activeHome?.role, 'owner');
+    });
+  });
+
   group('parseJoinCode (kod normalleştirme)', () {
     test('davet kodları: kırpma, büyük harf, boşluk atma, önek tamamlama', () {
       for (final raw in <String>['ahbu-ab12cd34ef', '  AHBU-AB12CD34EF ', 'ab12cd34ef', 'AHBU-INVITE:AHBU-AB12CD34EF', 'ahbu-invite:ab12cd34ef', 'ahbu - ab12 cd34 ef']) {
@@ -295,6 +336,18 @@ void main() {
       await tapKey(tester, 'btn_join_continue');
 
       expect(find.byKey(const Key('join_already_member')), findsOneWidget);
+    });
+
+    testWidgets('hesap-uyelik-5: devir kodu önizlemesinde already_member "Bu daireyi zaten devraldınız." der', (tester) async {
+      final env = e2Env(role: null);
+      env.cloud.previewToReturn = const JoinCodePreview(isTransfer: true, homeName: 'Kadıköy Daire 4', role: 'owner', alreadyMember: true);
+      await open(tester, env);
+
+      await typeInto(tester, 'field_join_code', 'AHBU-TR-ABCDEF123456');
+      await tapKey(tester, 'btn_join_continue');
+
+      expect(find.byKey(const Key('join_already_member')), findsOneWidget);
+      expect(find.text('Bu daireyi zaten devraldınız.'), findsOneWidget);
     });
 
     test('sunucunun gerçek önizleme gövdesi (home_name, resident_count, already_member, guest_valid_*) doğru okunur', () {

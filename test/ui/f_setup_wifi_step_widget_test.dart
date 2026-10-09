@@ -169,10 +169,50 @@ void main() {
       await pumpUntil(tester, env, () => buttonEnabled(tester, 'btn_factory_init'));
       expect(present('wifi_provision_nokey'), isFalse);
       await typeKey(tester, 'field_ap_pass', kApPass);
+      await typeKey(tester, 'field_ap_pass_confirm', kApPass);
       await tapKey(tester, 'btn_factory_init');
       await pumpUntil(tester, env, () => present('wifi_reconnect_card'));
       expect(env.device.factoryInitCount, 1);
       expect(find.textContaining(kApPass), findsNothing, reason: 'kurulum ağı parolası ekranda açık yazılmaz');
+    });
+
+    testWidgets('uygulama-ekranlar-3: kurulum ağı parolası iki kez yazılır; uyuşmazsa hazırlanmaz, etiket karekodu dolu alanın üstüne yazar',
+        (tester) async {
+      final env = await wifiEnv(provisioned: false);
+      addTearDown(env.dispose);
+      await openAtStep(
+        tester,
+        env,
+        scanner: (context, {required title, required hint}) async => 'WIFI:T:WPA;S:AHBU-A1B2C3;P:$kApPass;;',
+      );
+      await tapKey(tester, 'btn_check_device');
+      await pumpUntil(tester, env, () => present('wifi_provision_card'));
+      await typeKey(tester, 'field_local_key', kLocalKey);
+      await typeKey(tester, 'field_local_key_confirm', kLocalKey);
+      await tapKey(tester, 'btn_use_key');
+      await pumpUntil(tester, env, () => buttonEnabled(tester, 'btn_factory_init'));
+
+      String fieldText(String key) => tester
+          .widget<TextField>(find.descendant(of: find.byKey(Key(key)), matching: find.byType(TextField)))
+          .controller!
+          .text;
+
+      await typeKey(tester, 'field_ap_pass', 'yanlis-parola-1');
+      await typeKey(tester, 'field_ap_pass_confirm', 'yanlis-parola-2');
+      await tapKey(tester, 'btn_factory_init');
+      await tester.pump();
+      expect(env.device.factoryInitCount, 0, reason: 'uyuşmayan parola panoya yazılmaz');
+      expect(find.textContaining('Kurulum ağı parolaları eşleşmiyor.'), findsWidgets);
+
+      // Elle yazılmış (yanlış) parola varken etiket karekodu okunur: alanlar etiketteki parolayla değişir.
+      await tapKey(tester, 'btn_scan_ap_qr');
+      await pumpUntil(tester, env, () => present('ap_label_password'));
+      expect(fieldText('field_ap_pass'), kApPass);
+      expect(fieldText('field_ap_pass_confirm'), kApPass);
+
+      await tapKey(tester, 'btn_factory_init');
+      await pumpUntil(tester, env, () => present('wifi_reconnect_card'));
+      expect(env.device.factoryInitCount, 1);
     });
 
     testWidgets('etiketteki 2. karekod (kurulum ağı) uygulamayla okununca parola gizli gösterilir, kopyalanamaz; başka panonun karekodu reddedilir',

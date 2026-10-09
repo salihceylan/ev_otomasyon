@@ -74,6 +74,14 @@ void main() {
       expect(s.alarms, isEmpty);
     });
 
+    test('fw-tarama-1 (C1): kablosuz (köprü) sensör yalnız caps "bridge" iken destekli; ret kodu Türkçe metne çevrilir', () {
+      final json = specV3State()..['caps'] = <String>['safety', 'actuator', 'event', 'cfg', 'intrusion'];
+      expect(SafetyState.fromStateJson(json).supportsBridge, isFalse);
+      json['caps'] = <String>['safety', 'actuator', 'event', 'cfg', 'bridge'];
+      expect(SafetyState.fromStateJson(json).supportsBridge, isTrue);
+      expect(safetyRejectMessage('sensor_bridge_unsupported'), 'Kablosuz (köprü) sensör bu panoda desteklenmiyor.');
+    });
+
     test('bozuk tipler fırlatmaz: caps metin, safety liste, sensors nesne', () {
       final json = specV3State()
         ..['caps'] = 'safety'

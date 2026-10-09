@@ -101,6 +101,35 @@ void main() {
     });
   });
 
+  group('sozlesme-6 (C16): status yükündeki uid ile pano başına çevrimiçilik', () {
+    test('iki panolu evde B çevrimdışı olunca ev çevrimiçi kalır (A çevrimiçi); ikisi de düşünce çevrimdışı', () async {
+      final h = await readyHarness();
+      addTearDown(h.dispose);
+      h.mqtt.emitPresence(true, uid: 'AHBU-S3-00000A');
+      h.mqtt.emitPresence(true, uid: 'AHBU-S3-00000B');
+      await settle();
+      expect(h.state.devicePresence, DevicePresence.online);
+
+      h.mqtt.emitPresence(false, uid: 'AHBU-S3-00000B'); // B'nin LWT'si
+      await settle();
+      expect(h.state.devicePresence, DevicePresence.online, reason: 'bir panonun LWT\'si tüm evi çevrimdışı göstermez');
+
+      h.mqtt.emitPresence(false, uid: 'AHBU-S3-00000A');
+      await settle();
+      expect(h.state.devicePresence, DevicePresence.offline);
+    });
+
+    test('uid\'siz (eski biçim) offline: bugünkü gibi ev çevrimdışı', () async {
+      final h = await readyHarness();
+      addTearDown(h.dispose);
+      h.mqtt.emitPresence(true, uid: 'AHBU-S3-00000A');
+      await settle();
+      h.mqtt.emitPresence(false);
+      await settle();
+      expect(h.state.devicePresence, DevicePresence.offline);
+    });
+  });
+
   group('canlı status kesindir', () {
     test('canlı (retained olmayan) offline: taze canlı state olsa bile çevrimdışı; sonraki canlı state düzeltir', () async {
       final h = await readyHarness();

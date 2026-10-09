@@ -458,6 +458,8 @@ class AutomationApiService {
       message = 'Cihaz anahtarı geçersiz. Cihaz anahtarını yeniden alın.';
     } else if (status == 423) {
       message = 'Cihaz çok fazla hatalı deneme nedeniyle kilitlendi. Biraz bekleyin.';
+    } else if (error == 'cfg_invalid' && isSafetyRejectCode(asNonEmptyString(body['detail']))) {
+      message = safetyRejectMessage(asNonEmptyString(body['detail'])); // bilinen doğrulama ayrıntısı (sensor_bridge_unsupported)
     } else if (error != null && _errorMessages.containsKey(error)) {
       message = _errorMessages[error]!;
     } else if (isSafetyRejectCode(error)) {

@@ -17,7 +17,7 @@ import '../widgets/settings/accent_button.dart';
 import 'service_setup/panel/assign_admin_dialog.dart';
 import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/subscriber_models.dart';
-import 'service_setup/service_setup_wizard_page.dart';
+import 'service_setup/open_wizard.dart';
 import 'service_setup/service_target.dart';
 import 'service_setup/session_banner.dart';
 import 'service_setup/setup_steps.dart';
@@ -622,13 +622,11 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
             ),
           );
     if (uid == null || !mounted) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => ServiceSetupWizardPage(
-          existingTarget: ServiceTarget(homeId: s.homeId, deviceUuid: uid, homeName: s.homeName),
-          startStep: SetupSteps.wifi,
-        ),
-      ),
+    // Tek açıcı (uygulama-ekranlar-1/-4): aynı panonun yarım kaydı varsa önce sorulur; sessizce 5. adıma ezilmez.
+    await openServiceSetupWizard(
+      context,
+      existingTarget: ServiceTarget(homeId: s.homeId, deviceUuid: uid, homeName: s.homeName),
+      startStep: SetupSteps.wifi,
     );
   }
 

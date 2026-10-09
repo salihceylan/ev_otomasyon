@@ -107,6 +107,35 @@ void main() {
       expect(suggests('UNCLAIMED'), isFalse);
     });
 
+    test('sko-6 (C15): bulut köprüsü kesikken ağ/güç UNKNOWN nötrdür; Wi-Fi kurtarma önerilmez', () {
+      final r = DoctorReport.parse(<String, dynamic>{
+        'cloud': <String, dynamic>{'status': 'DEGRADED', 'db_connected': true, 'mqtt_bridge_connected': false},
+        'home_network': <String, dynamic>{'status': 'UNKNOWN'},
+        'hardware_power': <String, dynamic>{'status': 'UNKNOWN'},
+        'diagnosis_title': 'Bulut Bağlantısında Geçici Sorun',
+        'diagnosis_summary': 'Sunucumuzun cihazlarla bağlantısında geçici bir sorun var; panonuz büyük olasılıkla '
+            'çalışıyor. Birkaç dakika sonra yeniden deneyin.',
+        'diagnosis_level': 'warning',
+        'action_recommendation': null,
+      });
+      expect(r.networkLevel, DoctorLevel.unknown);
+      expect(r.powerLevel, DoctorLevel.unknown);
+      expect(r.suggestsWifiRecovery, isFalse, reason: 'durum bilinmiyor çünkü bulut köprüsü kesik; ev ağı arızası değil');
+    });
+
+    test('sko-6 (C15): köprü yeni bağlandıysa (bulut OK, 120 sn dolmadı) UNKNOWN yine nötr; Wi-Fi kurtarma önerilmez', () {
+      // Sunucu köprü yeniden bağlandıktan sonraki 120 sn içinde de C15 metnini ve UNKNOWN'u verir; bulut katmanı o an OK'tur.
+      final r = DoctorReport.parse(<String, dynamic>{
+        'cloud': <String, dynamic>{'status': 'OK', 'db_connected': true, 'mqtt_bridge_connected': true},
+        'home_network': <String, dynamic>{'status': 'UNKNOWN'},
+        'hardware_power': <String, dynamic>{'status': 'UNKNOWN'},
+        'diagnosis_title': 'Bulut Bağlantısında Geçici Sorun',
+        'diagnosis_level': 'warning',
+        'action_recommendation': null,
+      });
+      expect(r.suggestsWifiRecovery, isFalse);
+    });
+
     test('bulut DEGRADED uyarı, bilinmeyen değer hata sayılır; sunucu seviyesi yalnızca ok/warning/error', () {
       expect(DoctorReport.parse(<String, dynamic>{'cloud': <String, dynamic>{'status': 'degraded'}}).cloudLevel, DoctorLevel.warning);
       expect(DoctorReport.parse(<String, dynamic>{'cloud': <String, dynamic>{'status': 'PATLADI'}}).cloudLevel, DoctorLevel.error);

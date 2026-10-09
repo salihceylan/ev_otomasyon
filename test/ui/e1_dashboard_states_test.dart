@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 
+import '../support/safety_fixtures.dart';
 import '../support/support.dart';
 import 'e1_helpers.dart';
 
@@ -180,6 +181,20 @@ void main() {
       await flush(tester);
       expect(byKeyName('card_relay_1'), findsOneWidget);
     });
+  });
+
+  testWidgets('cekirdek-2: cihaz listesi alınamadı ama canlı durumda aktif alarm var: kritik alarm kartı görünür', (tester) async {
+    final h = await pumpReady(
+      tester,
+      body(),
+      role: 'owner',
+      endpoints: safetyUiEndpoints(),
+      configure: (h) => h.e1.fetchEndpointsError = kServerError,
+    );
+    expect(find.text('Cihazlar yüklenemedi'), findsOneWidget);
+    h.mqtt.emitStateJson(safetyStateJson(zoneSt: 'latched', sensorActive: true));
+    await flush(tester);
+    expect(byKeyName('card_critical_alarm_${kSafetyUid}_1'), findsOneWidget);
   });
 
   group('Çevrimdışı açılış (önbellekten daireler)', () {

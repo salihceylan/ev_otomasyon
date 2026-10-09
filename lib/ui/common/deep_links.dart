@@ -145,7 +145,7 @@ class _InvalidLinkPage extends StatelessWidget {
 }
 
 /// Cihaz etiketi sayfasının durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skaler).
-typedef _ClaimLinkView = ({bool isAuthenticated, bool canClaim, bool checking, bool biometricFailed});
+typedef _ClaimLinkView = ({bool isAuthenticated, bool canClaim, bool checking, bool biometricFailed, bool gated});
 
 /// Cihaz etiketi bağlantısı (`/claim?uid=&pin=`): oturum açıksa eşleştirme diyaloğunu açar.
 ///
@@ -170,12 +170,14 @@ class _ClaimLinkPageState extends State<_ClaimLinkPage> {
         canClaim: s.capabilities.canClaimDevice,
         checking: s.authStatus == AuthStatus.checking,
         biometricFailed: s.biometricFailed,
+        gated: s.isGated,
       );
 
   /// Oturum açık ve yetkiliyse (bir kez) eşleştirme diyaloğunu açar; değilse durum değişince yeniden denenir.
   /// (Yan etki `build` içindedir ama yalnız seçilen değerler değişince çalışır: `context.select`.)
   void _maybeStart(_ClaimLinkView view) {
-    if (_started || !view.isAuthenticated || !view.canClaim) return;
+    // Kapı görünümünde (zorunlu parola / sözleşme onayı) eşleştirme açılmaz; kapı geçilince açılır (uygulama-ekranlar-2).
+    if (_started || !view.isAuthenticated || !view.canClaim || view.gated) return;
     _started = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
@@ -186,6 +188,10 @@ class _ClaimLinkPageState extends State<_ClaimLinkPage> {
   }
 
   String _statusText(_ClaimLinkView view) {
+    if (view.isAuthenticated && view.gated) {
+      return 'Önce ana ekrandaki zorunlu adımı (parola değişimi ya da sözleşme onayı) tamamlayın; ardından etiketteki '
+          'karekodu yeniden okutun.';
+    }
     if (view.isAuthenticated) {
       return view.canClaim
           ? 'Eşleştirme penceresi açılıyor...'

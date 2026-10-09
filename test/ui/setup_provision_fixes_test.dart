@@ -61,10 +61,10 @@ void main() {
       env.phoneOnHomeNetwork();
       c.wifi.setEthernetMode(true);
       expect(await drive(env, c.wifi.confirmEthernet(ethIp)), isFalse);
-      expect(await c.wifi.provisionViaEthernet(ip: ethIp, apPass: 'kisa'), isFalse);
+      expect(await c.wifi.provisionViaEthernet(ip: ethIp, apPass: 'kisa', apPassConfirm: 'kisa'), isFalse);
       expect(c.wifi.problem!.title, 'Kurulum ağı parolası geçersiz');
 
-      expect(await drive(env, c.wifi.provisionViaEthernet(ip: ethIp, apPass: kApPass)), isTrue);
+      expect(await drive(env, c.wifi.provisionViaEthernet(ip: ethIp, apPass: kApPass, apPassConfirm: kApPass)), isTrue);
       expect(env.device.factoryInitCount, 1);
       expect(env.device.factoryInitHosts.single, ethIp);
       expect(env.device.provisioned, isTrue);
@@ -169,7 +169,7 @@ void main() {
       env.phoneOnSetupNetwork();
       expect(await drive(env, c.wifi.checkDevice()), isTrue);
       expect(c.wifi.useManualKey(manualKey, confirm: manualKey), isTrue);
-      expect(await drive(env, c.wifi.provision(apPass: kApPass)), isTrue);
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass)), isTrue);
       expect(env.device.localKey, manualKey);
       env.device.apSecured = true;
       expect(await drive(env, c.wifi.checkDevice()), isTrue);
@@ -208,7 +208,7 @@ void main() {
       expect(c.target!.ip, IdentifyLogic.apHost);
 
       c.ctx.target = c.ctx.target!.copyWith(ip: kLanIp); // eski adres yeniden yazılsa bile
-      expect(await drive(env, c.wifi.provision(apPass: kApPass)), isTrue);
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass)), isTrue);
       expect(env.device.factoryInitHosts.single, IdentifyLogic.apHost);
     });
 

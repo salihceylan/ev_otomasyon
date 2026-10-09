@@ -56,7 +56,7 @@ ApartmentPhase apartmentPhaseOf(AutomationState s) {
 
   final home = s.activeHome;
   if (s.capabilities.isGuestExpired ||
-      (home != null && home.isGuestExpiredAt(s.clock.now()))) {
+      (home != null && home.isGuestExpiredAt(s.serverNow))) {
     return ApartmentPhase.guestExpired;
   }
   if (home == null) {
@@ -134,6 +134,8 @@ class _PhaseBody extends StatelessWidget {
         body = Column(
           children: [
             const OfflineBanner(),
+            // Liste gelmeden de canlı durumdaki kritik alarm (vanayı kapat) görünür (cekirdek-2).
+            const SafetyAlertsPanel(),
             TimedLoadingView(
               message: 'Cihazlarınız yükleniyor…',
               onRetry: () => unawaited(state.refresh()),
@@ -228,6 +230,8 @@ class _DevicesFailedView extends StatelessWidget {
     return Column(
       children: [
         const OfflineBanner(),
+        // Liste alınamasa da canlı durumdaki kritik alarm (vanayı kapat) görünür (cekirdek-2).
+        const SafetyAlertsPanel(),
         ErrorRetryCard(
           title: 'Cihazlar yüklenemedi',
           message: vm.message ?? 'Lütfen tekrar deneyin.',

@@ -36,6 +36,9 @@ class Step5Wifi extends StatefulWidget {
 
 class _Step5WifiState extends State<Step5Wifi> {
   final TextEditingController _apPass = TextEditingController();
+
+  /// Kurulum ağı parolasının ikinci yazımı (uygulama-ekranlar-3).
+  final TextEditingController _apPassConfirm = TextEditingController();
   final TextEditingController _lanIp = TextEditingController();
   final TextEditingController _key = TextEditingController();
 
@@ -61,6 +64,7 @@ class _Step5WifiState extends State<Step5Wifi> {
   @override
   void dispose() {
     _apPass.dispose();
+    _apPassConfirm.dispose();
     _lanIp.dispose();
     _key.dispose();
     _keyConfirm.dispose();
@@ -114,7 +118,9 @@ class _Step5WifiState extends State<Step5Wifi> {
       _labelScanError = null;
       _labelPassword = creds.password;
       _labelPasswordVisible = false;
-      if (_apPass.text.isEmpty) _apPass.text = creds.password;
+      // Etiketteki parola esastır: elle yazılmış (belki yanlış) değerin üstüne yazılır (uygulama-ekranlar-3).
+      _apPass.text = creds.password;
+      _apPassConfirm.text = creds.password;
     });
   }
 
@@ -257,7 +263,7 @@ class _Step5WifiState extends State<Step5Wifi> {
             label: 'Bağlandım: Panoyu Kontrol Et',
             icon: Icons.network_check_rounded,
             busy: w.busy && w.busyLabel == WifiLogic.checkLabel,
-            onPressed: w.busy ? null : () => w.checkDevice(),
+            onPressed: w.busy ? null : _checkDevice,
           ),
         ],
       ),
@@ -337,9 +343,15 @@ class _Step5WifiState extends State<Step5Wifi> {
     final canProvision = hasKey || keyFetchedOnTheFly;
     Future<void> provision() async {
       final ok = ethernet
-          ? await w.provisionViaEthernet(ip: w.ethProvisionIp ?? _lanIp.text, apPass: _apPass.text)
-          : await w.provision(apPass: _apPass.text);
-      if (ok && mounted) _apPass.clear();
+          ? await w.provisionViaEthernet(
+              ip: w.ethProvisionIp ?? _lanIp.text,
+              apPass: _apPass.text,
+              apPassConfirm: _apPassConfirm.text,
+              labelPassword: _labelPassword,
+            )
+          : await w.provision(apPass: _apPass.text, apPassConfirm: _apPassConfirm.text, labelPassword: _labelPassword);
+      // Ethernet yolunda hazırlık yanıtla doğrulanır; kurulum ağı yolunda alanlar yeniden bağlantı doğrulanınca temizlenir.
+      if (ok && mounted && ethernet) _clearApPass();
     }
 
     return SetupCard(
@@ -404,6 +416,15 @@ class _Step5WifiState extends State<Step5Wifi> {
             controller: _apPass,
             label: 'Kurulum ağı parolası',
             prefixIcon: Icons.wifi_password_rounded,
+            textInputAction: TextInputAction.next,
+          ),
+          const SizedBox(height: 8),
+          // İkinci yazım (uygulama-ekranlar-3): ilk hazırlık geri alınamaz; uyuşmazsa panoya yazılmaz.
+          SecretField(
+            key: const Key('field_ap_pass_confirm'),
+            controller: _apPassConfirm,
+            label: 'Kurulum ağı parolası (tekrar)',
+            prefixIcon: Icons.wifi_password_rounded,
             textInputAction: TextInputAction.done,
             onSubmitted: (_) {
               if (!w.busy && canProvision) provision();
@@ -420,6 +441,18 @@ class _Step5WifiState extends State<Step5Wifi> {
         ],
       ),
     );
+  }
+
+  void _clearApPass() {
+    _apPass.clear();
+    _apPassConfirm.clear();
+  }
+
+  /// "Bağlandım: Panoyu Kontrol Et": hazırlıktan sonra yeniden bağlantı doğrulanınca kurulum ağı parolası alanları
+  /// temizlenir (uygulama-ekranlar-3).
+  Future<void> _checkDevice() async {
+    final ok = await _w.checkDevice();
+    if (ok && mounted && !_w.needsProvision) _clearApPass();
   }
 
   Widget _manualKeyFields(BuildContext context) {

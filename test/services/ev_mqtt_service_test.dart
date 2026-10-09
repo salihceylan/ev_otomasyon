@@ -196,6 +196,16 @@ void main() {
       expect(presences.map((p) => p.online), <bool>[true, false]);
     });
 
+    test('sozlesme-6: status yükü {status, uid} pano kimliğini taşır; düz metin uid\'siz', () async {
+      transports.single.deliver(<MqttInboundMessage>[
+        const MqttInboundMessage(topic: 'ev/h_abc/status', payload: '{"status":"offline","uid":"AHBU-S3-00000B"}'),
+        const MqttInboundMessage(topic: 'ev/h_abc/status', payload: 'online'),
+      ]);
+      await settle();
+      expect(presences.map((p) => p.online), <bool>[false, true]);
+      expect(presences.map((p) => p.uid), <String?>['AHBU-S3-00000B', null]);
+    });
+
     test('state: moving/dir/target/child_lock/last_id güvenle çözülür; retained bayrağı taşınır', () async {
       transports.single.deliver(<MqttInboundMessage>[
         MqttInboundMessage(

@@ -38,6 +38,9 @@ import 'steps/step_common.dart';
 /// * Mevcut cihazda kurulum (ör. pano değişimi sonrası): [existingTarget] (2-4. adımlar atlanır).
 ///
 /// Testler için [store], [deviceApiFactory] ve [scanner] enjekte edilebilir.
+///
+/// Sihirbaz yalnız `openServiceSetupWizard` (open_wizard.dart) ile, [routeName] adlı rotayla açılır. Biyometrik yeniden
+/// kilitte (uygulama-ekranlar-1) sihirbaz açıksa ([isOpen]) kapı itilmiş rotaları kapatmaz; kilit ekranını üstüne koyar.
 class ServiceSetupWizardPage extends StatefulWidget {
   const ServiceSetupWizardPage({
     super.key,
@@ -61,6 +64,14 @@ class ServiceSetupWizardPage extends StatefulWidget {
   final DeviceApiFactory? deviceApiFactory;
   final SetupScanner scanner;
 
+  /// Sihirbaz rotasının adı.
+  static const String routeName = '/service-setup';
+
+  static int _mounted = 0;
+
+  /// Bir sihirbaz sayfası ağaçta (rota yığınında) mı.
+  static bool get isOpen => _mounted > 0;
+
   @override
   State<ServiceSetupWizardPage> createState() => _ServiceSetupWizardPageState();
 }
@@ -76,6 +87,7 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
   @override
   void initState() {
     super.initState();
+    ServiceSetupWizardPage._mounted++;
     final state = context.read<AutomationState>();
     final access = ServiceSetupAccess.fromState(state);
     if (access == null) {
@@ -110,6 +122,7 @@ class _ServiceSetupWizardPageState extends State<ServiceSetupWizardPage> {
 
   @override
   void dispose() {
+    ServiceSetupWizardPage._mounted--;
     _controller?.dispose();
     super.dispose();
   }

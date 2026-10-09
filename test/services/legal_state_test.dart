@@ -5,6 +5,7 @@ import 'package:ev_otomasyon/models/api_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/models/legal_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -181,8 +182,12 @@ void main() {
   });
 
   group('geri yüklenen oturumda yasal durum sunucuyla eşitlenir', () {
-    Future<StateHarness> restore({UserModel? stored, required void Function(FakeCloudApi cloud) configure}) async {
-      SharedPreferences.setMockInitialValues(<String, Object>{});
+    Future<StateHarness> restore({
+      UserModel? stored,
+      required void Function(FakeCloudApi cloud) configure,
+      Map<String, Object> prefs = const <String, Object>{},
+    }) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{...prefs});
       final storage = FakeStorage();
       storage.memory.data
         ..['ahbu_auth_token'] = 'stored-access'
@@ -216,6 +221,48 @@ void main() {
       await pumpEventQueue();
       final stored = UserModel.fromJson(jsonDecode(h.storage.memory.data['ahbu_current_user']!) as Map<String, dynamic>);
       expect(stored.legal.needsAcceptance, isTrue);
+    });
+
+    const finalTermsPending = UserModel(id: 'user-1', email: 'a@b.c', fullName: 'Ayşe', legal: UserLegalStatus(
+      termsCurrentVersion: 2,
+      termsStatus: 'final',
+      needsAcceptance: true,
+    ));
+
+    test('cekirdek-6: yerel ağ (LAN) kipinde açılan oturum buluta geçince yasal durum eşitlenir', () async {
+      final h = await restore(
+        prefs: const <String, Object>{'saved_app_mode': 'direct'},
+        configure: (cloud) => cloud.meUser = finalTermsPending,
+      );
+      expect(h.state.mode, AppMode.direct);
+      expect(h.cloud.meCalls, 0, reason: 'LAN kipinde eşitleme yok');
+      expect(h.state.needsTermsAcceptance, isFalse);
+
+      await h.state.setMode(AppMode.cloud);
+      await pumpEventQueue();
+
+      expect(h.cloud.meCalls, 1);
+      expect(h.state.needsTermsAcceptance, isTrue, reason: 'v2 sözleşme buluta geçişte sorulur');
+    });
+
+    test('cekirdek-6: ön plana dönüşte son eşitlemeden 12 sa geçtiyse bir kez eşitlenir; daha kısa sürede eşitlenmez', () async {
+      final h = await restore(configure: (cloud) => cloud.meUser = const UserModel(id: 'user-1', email: 'a@b.c', fullName: 'Ayşe'));
+      expect(h.cloud.meCalls, 1, reason: 'açılış eşitlemesi');
+      h.cloud.meUser = finalTermsPending;
+
+      Future<void> backgroundFor(Duration away) async {
+        h.state.handleLifecycleState(AppLifecycleState.paused);
+        h.clock.advance(away);
+        h.state.handleLifecycleState(AppLifecycleState.resumed);
+        await pumpEventQueue(times: 40);
+      }
+
+      await backgroundFor(const Duration(hours: 13));
+      expect(h.cloud.meCalls, 2);
+      expect(h.state.needsTermsAcceptance, isTrue);
+
+      await backgroundFor(const Duration(hours: 1));
+      expect(h.cloud.meCalls, 2, reason: '12 sa dolmadı: yeni istek yok');
     });
 
     test('yalnız yasal durum değişir: ad / rol gibi alanlar saklı kayıttan kalır', () async {

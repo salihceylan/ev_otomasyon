@@ -90,6 +90,17 @@ void main() {
       expect(blocking(validateSafetyPlan(const {}, const <InputAssignment>[bad])).single, contains('yalnız sensör'));
       expect(const InputAssignment(src: 'bridge', index: 2, role: InputRole.water).id, 'b2');
     });
+
+    test('fw-tarama-1 (C1): caps "bridge" bildirmeyen panoda kablosuz sensör kayıt engelidir; destekleyen panoda değil', () {
+      const wireless = InputAssignment(src: 'bridge', index: 1, role: InputRole.water, normallyClosed: true);
+      const di = InputAssignment(src: 'di', index: 2, role: InputRole.water, normallyClosed: true);
+      final unsupported = validateSafetyPlan(const {}, const <InputAssignment>[wireless, di], bridgeSupported: false);
+      expect(blocking(unsupported), <String>['Bu panoda kablosuz sensör desteklenmiyor; kaldırın.']);
+      expect(unsupported.where((i) => i.blocking).single.target, 'input:b1');
+      expect(blocking(validateSafetyPlan(const {}, const <InputAssignment>[wireless, di], bridgeSupported: true)), isEmpty);
+      expect(blocking(validateSafetyPlan(const {}, const <InputAssignment>[di], bridgeSupported: false)), isEmpty,
+          reason: 'DI sensörleri etkilenmez');
+    });
   });
 
   group('panoya yazılacak yamalar (buildSafetyPatches; firmware F5 tek öğe, CONTRACTS §2.6)', () {
@@ -217,6 +228,29 @@ void main() {
       ]);
     });
 
+    test('fw-tarama-1 (C1): plandan kaldırılan kablosuz sensör panodan da silinir; silme diğer yamalardan önce', () {
+      // v1.3.2 firmware'i köprü sensörü içeren tabloya silme dışındaki her yamayı sensor_bridge_unsupported ile reddeder:
+      // "Kaldır" düğmesiyle plandan çıkan kayıtlı kablosuz sensör silinmezse plan panoya hiç yazılamaz.
+      final patches = buildSafetyPatches(
+        current: const <String, dynamic>{
+          'rev': 4,
+          'sensors': <Object?>[
+            <String, dynamic>{'id': 'b1', 'kind': 'water', 'zone': 1, 'nc': 0, 'confirm_ms': 2000, 'flags': 0},
+          ],
+          'actuators': <Object?>[],
+          'lights': <Object?>[],
+        },
+        channels: const <int, ChannelAssignment>{},
+        inputs: const <InputAssignment>[
+          InputAssignment(src: 'di', index: 1, role: InputRole.water, normallyClosed: true),
+        ],
+      );
+      expect(patches.first, <String, dynamic>{
+        'del': <String, dynamic>{'sensor': 'b1'},
+      });
+      expect(patches.where((p) => p.containsKey('set')).map((p) => (p['set'] as Map)['sensor']?['id']), contains('d1'));
+    });
+
     test('panonun yapılandırma satırı (firmware alanları) atamaya döner: pulse, relay2, fb_di 0 = yok, exproof', () {
       final dual = ChannelAssignment.fromBoard(const <String, dynamic>{
         'id': 'a1', 'relay': 5, 'relay2': 6, 'kind': 'valve', 'close_mode': 'pulse', 'medium': 'water', 'zones': <int>[2],
@@ -287,10 +321,11 @@ void main() {
     late ServiceHarness env;
     late ServiceSetupController c;
 
-    Future<void> start({bool safety = true, bool ext = false}) async {
+    Future<void> start({bool safety = true, bool ext = false, bool bridge = false}) async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       env = await serviceHarness();
       env.device.safetyCaps = safety;
+      env.device.bridgeCaps = bridge;
       env.device.extEnabled = ext;
       env.device.extAddress = 4;
       c = await reachStep(env, SetupSteps.relays);
@@ -332,8 +367,16 @@ void main() {
       expect(env.device.savedSafetyConfig, isNull);
     });
 
-    test('kayıt: eksik bilgi panoya gitmez; tam plan yazılır, bölge testi çalışır, sonuç metni gösterilir', () async {
+    test('fw-tarama-1 (C1): caps "bridge" bildirmeyen panoda kablosuz sensör eklenemez', () async {
       await start();
+      expect(c.relays.bridgeSupported, isFalse);
+      c.relays.addBridgeSensor();
+      expect(c.relays.inputs.where((i) => i.isBridge), isEmpty);
+      expect(c.relays.safetyDirty, isFalse);
+    });
+
+    test('kayıt: eksik bilgi panoya gitmez; tam plan yazılır, bölge testi çalışır, sonuç metni gösterilir', () async {
+      await start(bridge: true);
       await verifyRelays();
       c.relays.setAssignment(5, const ChannelAssignment(use: ChannelUse.valve));
       expect(await drive(env, c.relays.saveSafety()), isFalse);

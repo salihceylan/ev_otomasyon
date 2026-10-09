@@ -297,6 +297,8 @@ const Map<String, String> _rejectMessages = <String, String>{
   'local_loosen_forbidden':
       'Bu değişiklik güvenliği gevşettiği için yerel bağlantıdan yapılamaz. Seri kablo (CLI) ya da bulut (ev sahibi / servis) gerekir.',
   'safety_active': 'Güvenlik modülü etkinken bu işlem yapılamaz.',
+  // Yapılandırma doğrulama kodu (LAN `cfg_invalid` `detail`; sözleşme C1): kablosuz sensör sürücüsü olmayan pano.
+  'sensor_bridge_unsupported': 'Kablosuz (köprü) sensör bu panoda desteklenmiyor.',
   // İstemci tarafı engel gerekçesi (firmware kodu değil): sensör "bağlantı yok" iken kuru sayılmaz [Y-3].
   'sensor_unknown': 'Sensörlerden biri yanıt vermiyor; kuru olduğu doğrulanamadığı için vana açılamaz.',
   'sensor_wet': 'Sensör hâlâ ıslak; vana açılamaz.',
@@ -713,6 +715,10 @@ class SafetyState {
 
   /// Pano hırsız alarmı kipini destekliyor (`caps` içinde `intrusion`; firmware v1.2.1+).
   bool get supportsIntrusion => caps.contains('intrusion');
+
+  /// Pano kablosuz (köprü) sensör sürücüsünü ilan ediyor (`caps` içinde `bridge`; sözleşme C1). Yoksa kablosuz sensör
+  /// eklenmez ve panoya yazılamaz (`sensor_bridge_unsupported`); kayıtlı olanı silmek serbesttir.
+  bool get supportsBridge => caps.contains('bridge');
 
   /// Hırsız alarmı sürüyor (`arm.st == alarm`).
   bool get intrusionAlarmActive => arm?.isAlarm ?? false;

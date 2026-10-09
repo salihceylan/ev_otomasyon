@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:ev_otomasyon/models/api_models.dart';
+import 'package:ev_otomasyon/models/legal_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/services/peace_notice_controller.dart';
@@ -2031,6 +2032,33 @@ void main() {
       await r.pump();
       expect(r.state.mustChangePassword, isTrue);
       expect(r.c.isLocked, isFalse);
+      r.dispose();
+    });
+
+    test('uygulama-ekranlar-2: sözleşme onayı bekleyen oturum kilit sayılır; afiş korunur ama "Hepsini kapat" çalışmaz',
+        () async {
+      final r = await _Rig.create();
+      r.cloud.closeResult = <String, dynamic>{'closed_count': 2, 'resolved': true, 'notice_id': 41, 'message': ''};
+      r.push.emitNotice(r.notice(id: 41));
+      await r.pump();
+      expect(r.c.pending?.noticeId, 41);
+      expect(r.c.isLocked, isFalse);
+
+      r.state.setCurrentUserForTesting(const UserModel(
+        id: 'user-1',
+        email: 'a@b.c',
+        fullName: 'Ayşe',
+        role: 'user',
+        legal: UserLegalStatus(termsCurrentVersion: 2, termsStatus: 'final', needsAcceptance: true),
+      ));
+      await r.pump();
+      expect(r.state.needsTermsAcceptance, isTrue);
+      expect(r.c.isLocked, isTrue, reason: 'sözleşme kapısı da oturum verisi göstermeyen bir görünümdür');
+
+      await r.c.closeAll();
+      await r.pump();
+      expect(r.cloud.closeCalls, isEmpty, reason: 'kapı geçilmeden "Hepsini kapat" çalışmaz');
+      expect(r.c.pending?.noticeId, 41, reason: 'afiş korunur');
       r.dispose();
     });
 

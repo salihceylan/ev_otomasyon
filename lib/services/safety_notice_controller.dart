@@ -115,6 +115,9 @@ class SafetyNoticeController extends ChangeNotifier {
   int _generation = 0;
 
   SafetyPushNotice? _held;
+
+  /// Bekletilen dokunuşun evi bu ev listesinde yoktu: bir sonraki (yeni) liste beklenir; orada da yoksa bırakılır.
+  List<HomeModel>? _heldMissingIn;
   SafetyNoticeTarget? _target;
   SafetyNoticeBanner? _banner;
 
@@ -174,10 +177,15 @@ class SafetyNoticeController extends ChangeNotifier {
   }
 
   /// Bildirime dokunuş (`opened` / `initial`): F2.C.6 adımları. Asla fırlatmaz.
+  ///
+  /// Oturum yokken, kapı görünümünde ([AutomationState.isGated]: kilit, zorunlu parola, sözleşme onayı; kritik alarm
+  /// dahil) ya da ev listesi henüz hiç yüklenmemişken dokunuş bekletilir; kapı geçilip ev listesi gelince bir kez işlenir
+  /// (uygulama-ekranlar-2).
   Future<void> open(SafetyPushNotice notice) async {
     if (_disposed) return;
-    if (!state.isAuthenticated) {
-      _held = notice; // oturum açılınca bir kez işlenir
+    if (!state.isAuthenticated || state.isGated || !_homesKnown) {
+      _held = notice;
+      _heldMissingIn = null;
       return;
     }
     final generation = ++_generation;
@@ -244,6 +252,9 @@ class SafetyNoticeController extends ChangeNotifier {
 
   bool _current(int generation) => !_disposed && generation == _generation && state.isAuthenticated;
 
+  /// Ev listesi en az bir kez alındı (sunucudan ya da çevrimdışı önbellekten).
+  bool get _homesKnown => state.homesLoaded || (state.homesFromCache && state.homes.isNotEmpty);
+
   SafetyNoticeTarget _resolve(SafetyPushNotice notice) {
     final uid = notice.deviceUuid?.toUpperCase();
     if (notice.isAlarm) {
@@ -298,18 +309,42 @@ class SafetyNoticeController extends ChangeNotifier {
   void _onStateChanged() {
     if (_disposed) return;
     final auth = state.isAuthenticated;
-    if (auth == _authenticated) return;
-    _authenticated = auth;
-    _generation++; // oturum değişti: uçuştaki yönlendirme çekilir
-    if (!auth) {
-      _target = null;
-      _banner = null;
-      _notify();
+    if (auth != _authenticated) {
+      _authenticated = auth;
+      _generation++; // oturum değişti: uçuştaki yönlendirme çekilir
+      if (!auth) {
+        _target = null;
+        _banner = null;
+        _notify();
+        return;
+      }
+    }
+    _consumeHeld();
+  }
+
+  /// Bekletilen dokunuş: oturum açık, kapı geçilmiş ve ev listesi yüklenmişken bir kez işlenir. Evi listede yoksa bir
+  /// sonraki liste beklenir (önbellek -> sunucu); orada da yoksa bırakılır.
+  void _consumeHeld() {
+    final held = _held;
+    if (held == null || !state.isAuthenticated || state.isGated || !_homesKnown) return;
+    if (_now().difference(held.receivedAt) >= holdMaxAge) {
+      _held = null;
+      _heldMissingIn = null;
       return;
     }
-    final held = _held;
+    final homes = state.homes;
+    if (!homes.any((h) => h.id == held.homeId)) {
+      if (_heldMissingIn == null) {
+        _heldMissingIn = homes;
+      } else if (!identical(_heldMissingIn, homes)) {
+        _held = null;
+        _heldMissingIn = null;
+      }
+      return;
+    }
     _held = null;
-    if (held != null && _now().difference(held.receivedAt) < holdMaxAge) unawaited(open(held));
+    _heldMissingIn = null;
+    unawaited(open(held));
   }
 
   void _notify() {

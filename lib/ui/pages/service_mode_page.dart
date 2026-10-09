@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
-import '../common/app_dialogs.dart';
 import '../common/confirm_dialogs.dart';
 import '../motion/motion.dart';
 import '../theme/feature_accent.dart';
@@ -21,8 +20,8 @@ import 'service_setup/panel/service_pin_login_card.dart';
 import 'service_setup/panel/service_tool_cards.dart';
 import 'service_setup/panel/setup_resume_list.dart';
 import 'service_setup/panel/wifi_setup_card.dart';
-import 'service_setup/service_setup_wizard_page.dart';
 import 'service_setup/service_target.dart';
+import 'service_setup/open_wizard.dart';
 import 'service_setup/session_banner.dart';
 import 'service_setup/setup_store.dart';
 import 'service_setup/setup_style.dart';
@@ -119,76 +118,20 @@ class _ServiceModePageState extends State<ServiceModePage> {
     if (_opening) return;
     _opening = true;
     try {
-      // Mevcut cihaz kipi ("Testleri yap / Bağlantıyı yeniden kur") aynı panonun yarım kaydını sessizce ezmesin
-      // (servis_kurulum-8): kayıt varsa devam / baştan başla / vazgeç sorulur.
-      if (existing != null && resume == null) {
-        final access = ServiceSetupAccess.fromState(context.read<AutomationState>());
-        if (access != null) {
-          final store = widget.store ?? SetupStore();
-          final record = await store.load(access.ownerKey, existing.deviceUuid);
-          if (!mounted) return;
-          if (record != null) {
-            final choice = await _askHalfRecord(record);
-            if (!mounted || choice == null) return; // Vazgeç: kayıt aynen kalır
-            if (choice) {
-              resume = record;
-              existing = null;
-              startStep = null;
-            } else {
-              await store.delete(access.ownerKey, record.deviceUuid);
-              if (!mounted) return;
-            }
-          }
-        }
-      }
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(
-          builder: (_) => ServiceSetupWizardPage(
-            resume: resume,
-            existingTarget: existing,
-            startStep: startStep,
-            store: widget.store,
-            deviceApiFactory: widget.deviceApiFactory,
-            scanner: widget.scanner,
-          ),
-        ),
+      // Tek açıcı (uygulama-ekranlar-1): adlandırılmış rota + aynı panonun yarım kaydı sorusu (servis_kurulum-8).
+      await openServiceSetupWizard(
+        context,
+        resume: resume,
+        existingTarget: existing,
+        startStep: startStep,
+        store: widget.store,
+        deviceApiFactory: widget.deviceApiFactory,
+        scanner: widget.scanner,
       );
     } finally {
       _opening = false;
     }
     if (mounted) setState(() => _reload++);
-  }
-
-  /// Yarım kayıt sorusu: `true` = kaldığı yerden devam, `false` = baştan başla (kayıt silinir), `null` = vazgeç.
-  Future<bool?> _askHalfRecord(SetupProgressRecord record) {
-    return showAppDialog<bool>(
-      context,
-      builder: (ctx) => AlertDialog(
-        scrollable: true,
-        title: Text('Bu panonun yarım kalmış kurulumu var (Adım ${record.currentStep})'),
-        content: const Text(
-          'Kaldığınız yerden devam edebilir ya da baştan başlayabilirsiniz. Baştan başlarsanız yarım kalan kurulum kaydı '
-          'silinir.',
-        ),
-        actions: [
-          TextButton(
-            key: const Key('btn_half_cancel'),
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Vazgeç'),
-          ),
-          TextButton(
-            key: const Key('btn_half_restart'),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Baştan Başla (kayıt silinir)'),
-          ),
-          ElevatedButton(
-            key: const Key('btn_half_resume'),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Kaldığınız Yerden Devam'),
-          ),
-        ],
-      ),
-    );
   }
 
   void _backToLogin() {

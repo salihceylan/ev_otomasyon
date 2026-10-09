@@ -31,6 +31,7 @@ void main() {
     expect(buttonEnabled(tester, 'btn_factory_init'), isTrue);
 
     await typeKey(tester, 'field_ap_pass', kApPass);
+    await typeKey(tester, 'field_ap_pass_confirm', kApPass);
     await tapKey(tester, 'btn_factory_init');
     await pumpUntil(tester, env, () => present('wifi_connected_ethernet'));
     expect(env.device.factoryInitHosts.single, ethIp);

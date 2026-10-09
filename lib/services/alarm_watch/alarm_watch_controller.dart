@@ -30,6 +30,12 @@ class AlarmWatchController extends ChangeNotifier {
   })  : platform = platform ?? createAlarmWatchPlatform(),
         _repo = AlarmWatchSettingsRepository(store ?? (_defaultStore())) {
     state.addListener(_onStateChanged);
+    // Kesin oturum bitişleri (cekirdek-3): çıkış (logout / logoutAll) ve sunucunun oturumu sonlandırması. Güvenli depo
+    // okunamadığı için "oturumsuz" görünen açılış bunlardan biri DEĞİLDİR.
+    _removeLogoutHook = state.addBeforeLogoutHook(_disableForSessionEnd);
+    _sessionSub = state.sessionEvents.listen((event) {
+      if (event is SessionExpiredEvent) unawaited(_disableForSessionEnd());
+    }, onError: (Object _) {});
     try {
       _lifecycle = AppLifecycleListener(onResume: handleResume);
     } catch (_) {
@@ -38,6 +44,8 @@ class AlarmWatchController extends ChangeNotifier {
   }
 
   AppLifecycleListener? _lifecycle;
+  void Function()? _removeLogoutHook;
+  StreamSubscription<SessionEvent>? _sessionSub;
 
   /// Durum değişimlerinde servisin gerçekten çalışıp çalışmadığının en sık sorulma aralığı (uyelik-4).
   static const Duration _runningCheckEvery = Duration(seconds: 60);
@@ -193,6 +201,12 @@ class AlarmWatchController extends ChangeNotifier {
 
   AuthStatus? _lastStatus;
 
+  /// Kesin oturum bitişi: ayar açıksa kapanır ve servis durur.
+  Future<void> _disableForSessionEnd() async {
+    if (_disposed || !_loaded || !platform.isSupported || !_settings.enabled) return;
+    await disable();
+  }
+
   void _onStateChanged() {
     if (_disposed || !_loaded || !platform.isSupported || _busy) return;
     final status = state.authStatus;
@@ -201,6 +215,9 @@ class AlarmWatchController extends ChangeNotifier {
     if (status == AuthStatus.checking) return;
     if (!_settings.enabled) return;
     final user = state.currentUser;
+    // Güvenli depo okunamadı (soğuk Keystore, zaman aşımı): oturum bilinmiyor, bitmiş değil; ayar ve servis korunur.
+    // Kesin çıkış [_disableForSessionEnd] ile kapatır (cekirdek-3).
+    if (status == AuthStatus.unauthenticated && state.storageError != null) return;
     if (status == AuthStatus.unauthenticated || user == null || (_settings.userId != null && _settings.userId != user.id)) {
       // Çıkış / başka kullanıcı: arka planda başkasının (ya da çıkış yapılmış) evleri izlenmez.
       unawaited(disable());
@@ -279,6 +296,8 @@ class AlarmWatchController extends ChangeNotifier {
     _disposed = true;
     _lifecycle?.dispose();
     state.removeListener(_onStateChanged);
+    _removeLogoutHook?.call();
+    _sessionSub?.cancel();
     _tapSub?.cancel();
     _opened.close();
     super.dispose();

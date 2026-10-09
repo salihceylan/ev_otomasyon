@@ -18,7 +18,7 @@ import '../widgets/settings/accent_button.dart';
 import 'claim/claim_manual_dialog.dart' show claimCloudBootstrapNote;
 import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/uncertain_outcome_card.dart';
-import 'service_setup/service_setup_wizard_page.dart';
+import 'service_setup/open_wizard.dart';
 import 'service_setup/service_target.dart';
 import 'service_setup/setup_fields.dart';
 import 'service_setup/setup_steps.dart';
@@ -338,17 +338,15 @@ class _ReplaceBoardDialogState extends State<ReplaceBoardDialog> {
     final navigator = Navigator.of(context);
     final scanner = widget.scanner;
     navigator.pop();
-    navigator.push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => ServiceSetupWizardPage(
-          existingTarget: ServiceTarget(homeId: homeId, deviceUuid: result.newDeviceUuid, homeName: _homeName),
-          startStep: SetupSteps.wifi,
-          // Yanıttaki tek seferlik bulut kimliği sihirbaza (yalnızca bellek) aktarılır: 6. adım yeniden üretmez.
-          initialCredential: result.deviceCredential,
-          scanner: scanner,
-        ),
-      ),
-    );
+    // Tek açıcı (uygulama-ekranlar-1): adlandırılmış rota + aynı panonun yarım kaydı sorusu.
+    unawaited(openServiceSetupWizard(
+      navigator.context,
+      existingTarget: ServiceTarget(homeId: homeId, deviceUuid: result.newDeviceUuid, homeName: _homeName),
+      startStep: SetupSteps.wifi,
+      // Yanıttaki tek seferlik bulut kimliği sihirbaza (yalnızca bellek) aktarılır: 6. adım yeniden üretmez.
+      initialCredential: result.deviceCredential,
+      scanner: scanner,
+    ));
   }
 
   /// Ev sahibi (sihirbazsız) yolu: diyalog kapanır ve yeni pano için Wi-Fi Kurulum & Kurtarma sihirbazı açılır (bireysel-4).
@@ -838,6 +836,10 @@ class _ResultView extends StatelessWidget {
 
   /// Ev sahibine sonraki adım (bireysel-4): Ethernet'te iş yok; Wi-Fi'de ev ağı yüklenir; hazırlanmamış / bağlanmayan pano
   /// için servis PIN'i.
+  /// Güvenlik ayarları aktarılmadığında (sözleşme C4) ev sahibine sonraki adım: [ownerNextStep] yerine.
+  static const String ownerSafetyRestoreStep =
+      'Güvenlik ayarları (su/gaz sensörü, vana) yeni panoya aktarılmadı. Yetkili servisi çağırın.';
+
   static const String ownerNextStep = 'Yeni pano Ethernet ile bağlıysa bir şey yapmanız gerekmez. Wi-Fi ile bağlanacaksa '
       'ev ağını yükleyin; hazırlanmış pano (v1.3.0+) internete çıkınca bulut kimliğini kendisi alır. Pano hazırlanmamışsa '
       "ya da 10 dk içinde çevrimiçi olmazsa Servis PIN'i oluşturup yetkili servise verin.";
@@ -913,6 +915,19 @@ class _ResultView extends StatelessWidget {
         ),
         if (!fromStatusCheck && r.oldDeviceUuid != null) _idRow(context, 'Eski pano', r.oldDeviceUuid!),
         _idRow(context, 'Yeni pano', r.newDeviceUuid),
+        // Güvenlik yapılandırması aktarılmadı (sözleşme C4): su/gaz koruması servis yeniden yazana kadar çalışmaz.
+        if (r.safetyRestoreRequired)
+          const ServiceCard(
+            key: Key('replace_safety_restore_warning'),
+            accent: SetupColors.error,
+            child: SetupInfoRow(
+              icon: Icons.gpp_maybe_rounded,
+              color: SetupColors.error,
+              bold: true,
+              text: 'Su/gaz koruması şu an çalışmıyor: eski panonun güvenlik ayarları (sensörler, vanalar, bölgeler) yeni '
+                  'panoya aktarılmadı. Servis bu ayarları yeniden yazmalı.',
+            ),
+          ),
         if (r.partial)
           const ServiceCard(
             key: Key('replace_partial'),
@@ -989,13 +1004,17 @@ class _ResultView extends StatelessWidget {
             child: SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.info, text: superNextStep),
           )
         else ...[
-          const ServiceCard(
-            key: Key('replace_owner_next'),
+          ServiceCard(
+            key: const Key('replace_owner_next'),
             accent: SetupColors.primary,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SetupInfoRow(icon: Icons.arrow_forward_rounded, color: SetupColors.primary, text: ownerNextStep),
+                SetupInfoRow(
+                  icon: Icons.arrow_forward_rounded,
+                  color: SetupColors.primary,
+                  text: r.safetyRestoreRequired ? ownerSafetyRestoreStep : ownerNextStep,
+                ),
                 SizedBox(height: 6),
                 SetupInfoRow(icon: Icons.cloud_sync_outlined, color: SetupColors.info, text: claimCloudBootstrapNote),
               ],

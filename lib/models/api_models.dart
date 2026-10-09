@@ -499,11 +499,14 @@ class TransferInfo {
 
 /// Daire devri kabul yanıtı.
 class TransferAcceptResult {
-  const TransferAcceptResult({this.homeId, this.homeName = '', this.message = ''});
+  const TransferAcceptResult({this.homeId, this.homeName = '', this.message = '', this.alreadyMember = false});
 
   final String? homeId;
   final String homeName;
   final String message;
+
+  /// Aynı kullanıcı aynı devir kodunu yeniden gönderdi; devir zaten tamamlanmıştı (sözleşme C3, yazım yok).
+  final bool alreadyMember;
 
   factory TransferAcceptResult.fromJson(Map<String, dynamic> json) {
     final home = asMap(json['home']) ?? const <String, dynamic>{};
@@ -511,6 +514,7 @@ class TransferAcceptResult {
       homeId: asNonEmptyString(home['id'] ?? json['home_id']),
       homeName: asString(home['name'] ?? json['home_name']) ?? '',
       message: asString(json['message']) ?? '',
+      alreadyMember: asBool(json['already_member'] ?? json['alreadyMember']) ?? false,
     );
   }
 }
@@ -1046,11 +1050,17 @@ class ReplaceBoardResult {
     this.childLockSync,
     this.warnings = const <String>[],
     this.partial = false,
+    this.safetyRestore,
   });
 
   final String message;
   final String? oldDeviceUuid;
   final String newDeviceUuid;
+
+  /// Eski panonun güvenlik yapılandırması yeni panoya aktarılmadı ve yeniden yazılmalı mı (`safety_restore`:
+  /// `required` | `not_required`; sözleşme C4). Eski sunucu alanı vermez: `null`.
+  final String? safetyRestore;
+  bool get safetyRestoreRequired => safetyRestore == 'required';
 
   /// Yeni panoya taşınan kanal (uç nokta) sayısı.
   final int migratedEndpointsCount;
@@ -1090,6 +1100,7 @@ class ReplaceBoardResult {
       childLockSync: asNonEmptyString(lock?['sync']),
       warnings: _asStringList(json['warnings']),
       partial: asBool(json['partial']) ?? false,
+      safetyRestore: asNonEmptyString(json['safety_restore']),
     );
   }
 

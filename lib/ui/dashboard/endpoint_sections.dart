@@ -49,10 +49,17 @@ class RoomOptions {
 
 /// Bulutta oda çipleri **uç noktalardan türetilir** (`yatak_odasi` -> `Yatak Odası`; yinelenen
 /// yazımlar tek odada birleşir). Doğrudan (LAN) modda oda bilgisi yoktur: liste boştur.
+///
+/// Yalnız gösterilen satırlar sayılır (uygulama-ekranlar-7, sözleşme C14): panjurun ikincil satırı (çiftin birincil
+/// satırı dışındaki) listede yoktur ve [itemsForRoom] panjuru birincil satırın odasıyla süzer; eski veride odası farklı
+/// kalmışsa seçilince boş liste gösteren bir çip üretmez.
 RoomOptions roomOptionsOf(AutomationState s) {
   if (s.mode == AppMode.direct) return const RoomOptions(<RoomOption>[]);
+  final endpoints = s.cloudEndpoints;
+  final primaryShutters = primaryShutterEndpoints(endpoints);
   final byKey = <String, String>{};
-  for (final endpoint in s.cloudEndpoints) {
+  for (final endpoint in endpoints) {
+    if (endpoint.isShutter && !primaryShutters.any((p) => identical(p, endpoint))) continue;
     byKey.putIfAbsent(roomKey(endpoint.room), () => roomLabel(endpoint.room));
   }
   final entries = byKey.entries.toList()

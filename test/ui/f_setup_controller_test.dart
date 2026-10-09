@@ -244,6 +244,23 @@ void main() {
       expect(c.canContinue, isFalse);
     });
 
+    test('C8 (CUSTOMER_EMAIL_REQUIRED): e-postasız (telefonla giren) müşteri: sunucu iletisi gösterilir, yol tarif edilir',
+        () async {
+      const message = 'Bu müşteri uygulamaya telefonla giriş yapıyor; hesabında e-posta olmadığı için onay kodu '
+          'gönderilemez. Müşteri panoyu kendi uygulamasından etiketteki karekodla sahiplenmeli.';
+      env.cloud.otpError = const ApiException(
+        statusCode: 400,
+        code: 'VALIDATION',
+        message: message,
+        details: <String, dynamic>{'reason': 'CUSTOMER_EMAIL_REQUIRED'},
+      );
+      expect(await c.customer.sendCode('05551234567'), isFalse);
+      expect(c.customer.problem!.why, message);
+      expect(c.customer.problem!.todo, isNot(contains('kontrol edip tekrar deneyin')),
+          reason: 'numarayı yeniden yazmak sorunu çözmez');
+      expect(c.customer.problem!.todo, contains('servis PIN'));
+    });
+
     test('hız sınırı: bekleme süresi saklanır ve kullanıcıya söylenir', () async {
       env.cloud.otpError = const ApiException(
         statusCode: 429,

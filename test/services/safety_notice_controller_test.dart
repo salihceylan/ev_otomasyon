@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:ev_otomasyon/models/automation_models.dart';
 import 'package:ev_otomasyon/models/cloud_models.dart';
+import 'package:ev_otomasyon/models/legal_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
 import 'package:ev_otomasyon/services/push/peace_notice.dart';
 import 'package:ev_otomasyon/services/push/safety_notice.dart';
@@ -210,6 +211,55 @@ void main() {
     h.state.setAuthStatusForTesting(AuthStatus.authenticated);
     await pumpEventQueue(times: 40);
     expect(c.takeTarget(), isNull, reason: 'bir kez işlenir');
+  });
+
+  test('uygulama-ekranlar-2: sözleşme onayı beklerken dokunuş bekletilir; onaylanınca işlenir', () async {
+    await setUpRig();
+    h.mqtt.emitStateJson(safetyStateJson());
+    await pumpEventQueue();
+    const base = UserModel(id: 'user-1', email: 'ayse@example.test', fullName: 'Ayşe Yılmaz', role: 'user');
+    h.state.setCurrentUserForTesting(base.copyWith(
+      legal: const UserLegalStatus(termsCurrentVersion: 2, termsStatus: 'final', needsAcceptance: true),
+    ));
+    expect(h.state.needsTermsAcceptance, isTrue);
+    expect(await deliver(notice(type: 'safety_info', reason: 'policy_off')), isNull,
+        reason: 'kapı (sözleşme onayı) geçilmeden yönlendirme yok');
+
+    h.state.setCurrentUserForTesting(base);
+    await pumpEventQueue(times: 40);
+    expect(c.takeTarget()?.kind, SafetyNoticeTargetKind.deviceSettings, reason: 'kapı geçilince bekletilen dokunuş işlenir');
+  });
+
+  test('uygulama-ekranlar-2: zorunlu parola değişimi sürerken dokunuş bekletilir; parola değişince işlenir', () async {
+    await setUpRig();
+    h.mqtt.emitStateJson(safetyStateJson());
+    await pumpEventQueue();
+    const base = UserModel(id: 'user-1', email: 'ayse@example.test', fullName: 'Ayşe Yılmaz', role: 'user');
+    h.state.setCurrentUserForTesting(base.copyWith(mustChangePassword: true));
+    expect(await deliver(notice(type: 'safety_info', reason: 'policy_off')), isNull);
+
+    h.state.setCurrentUserForTesting(base);
+    await pumpEventQueue(times: 40);
+    expect(c.takeTarget()?.kind, SafetyNoticeTargetKind.deviceSettings);
+  });
+
+  test('uygulama-ekranlar-2: oturumsuz dokunuş, girişten sonra ev listesi gelince işlenir (boş listeyle kaybolmaz)', () async {
+    await setUpRig();
+    h.state.setAuthStatusForTesting(AuthStatus.unauthenticated);
+    expect(await deliver(notice(type: 'safety_info', reason: 'policy_off')), isNull, reason: 'oturum yok: bekletilir');
+
+    h.cloud.fetchHomesGate = Completer<void>();
+    unawaited(h.state.login('ayse@example.test', 'Parola123!'));
+    await pumpEventQueue(times: 40);
+    expect(h.state.isAuthenticated, isTrue);
+    expect(c.takeTarget(), isNull, reason: 'ev listesi gelmeden karar verilmez');
+
+    h.cloud.fetchHomesGate!.complete();
+    await pumpEventQueue(times: 40);
+    h.mqtt.emitStateJson(safetyStateJson());
+    h.clock.advance(const Duration(seconds: 6));
+    await pumpEventQueue(times: 40);
+    expect(c.takeTarget()?.kind, SafetyNoticeTargetKind.deviceSettings);
   });
 
   test('uçuştayken oturum biterse yönlendirme iptal (nesil)', () async {

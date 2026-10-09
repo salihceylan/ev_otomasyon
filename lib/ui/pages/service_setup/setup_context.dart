@@ -106,7 +106,8 @@ class SetupContext {
 
   /// Oturum (servis PIN süresi veya hesap oturumu) bitti mi.
   bool get isSessionOver {
-    if (sessionEnded || !state.isAuthenticated) return true;
+    // Biyometrik yeniden kilit oturum bitişi değildir: kilit açılınca sihirbaz aynı denetleyiciyle sürer.
+    if (sessionEnded || (!state.isAuthenticated && !state.isBiometricLocked)) return true;
     final expires = access.sessionExpiresAt;
     return expires != null && !clock.now().isBefore(expires);
   }

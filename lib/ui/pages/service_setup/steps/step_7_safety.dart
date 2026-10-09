@@ -411,17 +411,20 @@ class SafetyInputsCard extends StatelessWidget {
           ),
           for (final input in logic.inputs) _InputRow(logic: logic, input: input),
           if (logic.intrusionSupported) _IntrusionDelays(logic: logic),
-          const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: OutlinedButton.icon(
-              key: const Key('btn_add_bridge'),
-              style: accentOutlinedButtonStyle(context, AppFamilies.cyan, minimumSize: const Size(48, 48)),
-              onPressed: busy || bridges >= kMaxBridgeSlots ? null : logic.addBridgeSensor,
-              icon: const Icon(Icons.sensors_rounded, size: 18),
-              label: const Text('Kablosuz sensör ekle'),
+          // Kablosuz sensör yalnız sürücüsünü ilan eden panoda eklenir (`caps` `bridge`; sözleşme C1).
+          if (logic.bridgeSupported) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                key: const Key('btn_add_bridge'),
+                style: accentOutlinedButtonStyle(context, AppFamilies.cyan, minimumSize: const Size(48, 48)),
+                onPressed: busy || bridges >= kMaxBridgeSlots ? null : logic.addBridgeSensor,
+                icon: const Icon(Icons.sensors_rounded, size: 18),
+                label: const Text('Kablosuz sensör ekle'),
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

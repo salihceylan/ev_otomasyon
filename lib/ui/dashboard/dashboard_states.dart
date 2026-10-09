@@ -605,7 +605,7 @@ class HomePickerList extends StatelessWidget {
       (s) => s.activeHome?.id,
     );
     final state = context.read<AutomationState>();
-    final now = state.clock.now();
+    final now = state.serverNow; // misafir penceresi sunucu saatine göre (cekirdek-1)
 
     return Column(
       children: [
@@ -768,7 +768,7 @@ class GuestExpiredView extends StatelessWidget {
           AutomationState,
           ({String name, DateTime? until, bool hasOther, bool canClaim})
         >((s) {
-          final now = s.clock.now();
+          final now = s.serverNow;
           return (
             name: s.activeHome?.name ?? 'Bu daire',
             until: s.activeHome?.guestValidUntil,

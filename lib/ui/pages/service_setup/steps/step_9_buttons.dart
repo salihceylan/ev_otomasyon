@@ -41,6 +41,13 @@ class Step9Buttons extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           DeviceConnectionPanel(controller: c),
+          if (b.loaded && b.safetyInputCount > 0)
+            SetupInfoRow(
+              key: const Key('button_safety_inputs_note'),
+              icon: Icons.shield_outlined,
+              color: SetupColors.info,
+              text: 'Güvenlik girişleri (${b.safetyInputCount}) bu adımda gösterilmez.',
+            ),
           if (b.childLockOn)
             const SetupCard(
               key: Key('button_childlock_card'),

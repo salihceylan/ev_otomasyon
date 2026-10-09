@@ -141,7 +141,7 @@ ConnectionBadge connectionBadgeOf(AutomationState s) {
   // Misafir erişimi sona ermişse cihaz durumu anlamsızdır: gövdede "Erişim süreniz doldu" yazar; "Bağlanıyor…" çelişirdi.
   // (Seviye: `locked` = zaman kilidi simgesi; yeni seviye eklenmez, çünkü seviyeler üzerinde tüketiciler tam eşleştirme yapar.)
   final activeHome = s.activeHome;
-  if (s.capabilities.isGuestExpired || (activeHome != null && activeHome.isGuestExpiredAt(s.clock.now()))) {
+  if (s.capabilities.isGuestExpired || (activeHome != null && activeHome.isGuestExpiredAt(s.serverNow))) {
     return const ConnectionBadge(
       level: ConnectionLevel.locked,
       label: 'Erişim süresi doldu',

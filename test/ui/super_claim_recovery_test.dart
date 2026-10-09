@@ -3,6 +3,7 @@ import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_controller.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/service_setup_wizard_page.dart';
 import 'package:ev_otomasyon/ui/pages/service_setup/setup_steps.dart';
+import 'package:ev_otomasyon/ui/pages/service_setup/setup_store.dart';
 import 'package:ev_otomasyon/ui/pages/service_subscribers_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -101,6 +102,37 @@ void main() {
       expect(page.existingTarget?.homeId, kClaimedHome);
       expect(page.existingTarget?.deviceUuid, kDeviceUid);
       expect(page.startStep, SetupSteps.wifi);
+    });
+
+    testWidgets('uygulama-ekranlar-4: yarım kayıt (Adım 7) varken önce sorulur; Vazgeç kaydı 7. adımda bırakır', (tester) async {
+      final env = await serviceHarness(role: 'super', flush: () async {});
+      addTearDown(env.dispose);
+      env.cloud
+        ..subscribers = <Map<String, dynamic>>[sub()]
+        ..devicesByHome[kClaimedHome] = <DeviceInfo>[const DeviceInfo(deviceUuid: kDeviceUid)];
+      final now = env.clock.now();
+      await env.store.save(SetupProgressRecord(
+        ownerKey: env.access.ownerKey,
+        deviceUuid: kDeviceUid,
+        homeId: kClaimedHome,
+        homeName: 'Daire 5',
+        currentStep: SetupSteps.relays,
+        createdAt: now,
+        updatedAt: now,
+      ));
+      await pumpPage(tester, env, const ServiceSubscribersPage(), size: const Size(900, 3000));
+      await settle(tester);
+
+      await tapKey(tester, 'btn_resume_setup_$kClaimedHome');
+      await settle(tester, frames: 10);
+      expect(find.text('Bu panonun yarım kalmış kurulumu var (Adım ${SetupSteps.relays})'), findsOneWidget);
+      expect(find.byType(ServiceSetupWizardPage), findsNothing, reason: 'soru yanıtlanmadan sihirbaz açılmaz');
+
+      await tapKey(tester, 'btn_half_cancel');
+      await settle(tester, frames: 10);
+      expect(find.byType(ServiceSetupWizardPage), findsNothing);
+      final kept = await env.store.load(env.access.ownerKey, kDeviceUid);
+      expect(kept?.currentStep, SetupSteps.relays, reason: 'Vazgeç: yarım kayıt ezilmez');
     });
 
     testWidgets('servis personelinde düğme yok', (tester) async {

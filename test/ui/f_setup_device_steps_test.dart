@@ -88,9 +88,9 @@ void main() {
       expect(c.wifi.needsProvision, isTrue);
       expect(c.wifi.deviceReady, isFalse, reason: 'hazırlanmamış panoya Wi-Fi bilgisi gönderilmez');
 
-      expect(await c.wifi.provision(apPass: 'kisa'), isFalse, reason: 'parola 8-32 karakter olmalı');
+      expect(await c.wifi.provision(apPass: 'kisa', apPassConfirm: 'kisa'), isFalse, reason: 'parola 8-32 karakter olmalı');
       expect(c.wifi.problem!.title, 'Kurulum ağı parolası geçersiz');
-      expect(await drive(env, c.wifi.provision(apPass: kApPass)), isTrue);
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass)), isTrue);
       expect(env.device.factoryInitCount, 1);
       expect(env.device.provisioned, isTrue);
       expect(c.wifi.awaitingReconnect, isTrue);
@@ -102,13 +102,34 @@ void main() {
       expect((await connectHomeWifi(env, c)).isSuccess, isTrue);
     });
 
+    test('uygulama-ekranlar-3: kurulum ağı parolası iki kez yazılır; uyuşmazsa ya da etiketten farklıysa panoya yazılmaz', () async {
+      await setUpEnv(provisioned: false);
+      expect(await drive(env, c.wifi.checkDevice()), isTrue);
+      expect(c.wifi.needsProvision, isTrue);
+
+      expect(await drive(env, c.wifi.provision(apPass: 'abcd1234', apPassConfirm: 'abcd1243')), isFalse);
+      expect(c.wifi.problem!.kind, SetupProblemKind.validation);
+      expect(c.wifi.problem!.why, 'Kurulum ağı parolaları eşleşmiyor.');
+      expect(env.device.factoryInitCount, 0, reason: 'uyuşmayan parola panoya gitmez');
+
+      expect(
+        await drive(env, c.wifi.provision(apPass: 'abcd1234', apPassConfirm: 'abcd1234', labelPassword: kApPass)),
+        isFalse,
+      );
+      expect(c.wifi.problem!.why, 'Yazdığınız parola etiketteki parolayla eşleşmiyor.');
+      expect(env.device.factoryInitCount, 0, reason: 'etiketten farklı parola panoya gitmez');
+
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass, labelPassword: kApPass)), isTrue);
+      expect(env.device.factoryInitCount, 1);
+    });
+
     test('hazırlanmamış pano ve bellekte anahtar yok: internetsiz kurulum ağında anahtar alınamaz, açıklama gelir; internetle alınınca hazırlık yapılır',
         () async {
       await setUpEnv(provisioned: false, keyAtClaim: false);
       expect(await drive(env, c.wifi.checkDevice()), isTrue);
       expect(c.wifi.hasProvisionKey, isFalse);
 
-      expect(await drive(env, c.wifi.provision(apPass: kApPass)), isFalse);
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass)), isFalse);
       expect(c.wifi.problem!.title, 'Cihaz anahtarı yok');
       expect(env.device.factoryInitCount, 0);
 
@@ -123,7 +144,7 @@ void main() {
       expect(env.dumpSecureStore(), isNot(contains(kLocalKey)), reason: 'anahtar güvenli depoya YAZILMAZ');
 
       env.phoneOnSetupNetwork();
-      expect(await drive(env, c.wifi.provision(apPass: kApPass)), isTrue);
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass)), isTrue);
       expect(env.device.factoryInitCount, 1);
     });
 
@@ -134,7 +155,7 @@ void main() {
       expect(c.wifi.problem!.title, 'Cihaz anahtarı geçersiz');
       expect(c.wifi.useManualKey(kLocalKey), isTrue);
       expect(c.wifi.hasProvisionKey, isTrue);
-      expect(await drive(env, c.wifi.provision(apPass: kApPass)), isTrue);
+      expect(await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass)), isTrue);
     });
 
     test('yanlış Wi-Fi şifresi: neden ve çözüm yazılır; doğru şifreyle tekrar denenince bağlanır', () async {
@@ -214,7 +235,7 @@ void main() {
     test('Wi-Fi şifresi, kurulum ağı parolası ve cihaz anahtarı hiçbir kayıtta/anlık görüntüde (kalıcı depo ve güvenli depo) saklanmaz', () async {
       await setUpEnv(provisioned: false);
       await drive(env, c.wifi.checkDevice());
-      await drive(env, c.wifi.provision(apPass: kApPass));
+      await drive(env, c.wifi.provision(apPass: kApPass, apPassConfirm: kApPass));
       env.device.apSecured = true;
       await drive(env, c.wifi.checkDevice());
       await connectHomeWifi(env, c);
@@ -794,6 +815,33 @@ void main() {
       expect(c.buttons.isComplete, isTrue);
       expect(c.buttons.noneCount, 1);
       expect(c.canContinue, isTrue);
+    });
+
+    test('uygulama-ekranlar-6: güvenlik rolündeki girişler (su sensörü, vana geri bildirimi) buton sayılmaz', () async {
+      env.device
+        ..safetyCaps = true
+        ..boardSensors.add(<String, dynamic>{'id': 'd3', 'src': 'di', 'kind': 'water', 'zone': 1, 'active': false, 'ok': true})
+        ..savedSafetyConfig = <String, dynamic>{
+          'sensors': <Map<String, dynamic>>[
+            <String, dynamic>{'id': 'd3', 'src': 'di', 'index': 3, 'kind': 'water', 'zone': 1, 'active_open': 1},
+          ],
+          'actuators': <Map<String, dynamic>>[
+            <String, dynamic>{'id': 'a1', 'relay': 5, 'kind': 'valve', 'medium': 'water', 'zones': <int>[1], 'fb_di': 2},
+          ],
+          'lights': <Map<String, dynamic>>[],
+        };
+      expect(await drive(env, c.buttons.load()), isTrue);
+
+      expect(c.buttons.buttons.map((b) => b.id), <int>[1, 4], reason: 'giriş 2 (vana geri bildirimi) ve 3 (su sensörü) buton değil');
+      expect(c.buttons.safetyInputCount, 2);
+      expect(await drive(env, c.buttons.startListening()), isTrue);
+      c.buttons.markNone(4, true);
+      env.device.setDi(1, true);
+      await env.clock.elapse(const Duration(milliseconds: 400));
+      env.device.setDi(1, false);
+      await env.clock.elapse(const Duration(milliseconds: 400));
+      expect(c.buttons.isComplete, isTrue, reason: 'tamamlanma yalnız gerçek butonlara bağlı');
+      expect(c.buttons.detectedCount, 1);
     });
 
     test('adımdan çıkınca dinleme durur ve yoklama zamanlayıcısı kalmaz', () async {

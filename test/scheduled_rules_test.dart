@@ -79,6 +79,29 @@ void main() {
       expect(gate.actionLabel('on'), 'Tetikle');
     });
 
+    test('uygulama-ekranlar-5: güvenlik eylemcisi (vana/siren/fan) kanalları listelenmez; ilk seçenek geçerli kanal', () {
+      EndpointModel ep(int ch, String name, {String? actuator}) => EndpointModel(
+            id: 'e$ch',
+            homeId: kHomeA,
+            deviceId: 'dev-internal',
+            deviceUuid: 'AHBU-S3-TEST01',
+            channel: ch,
+            name: name,
+            room: 'Mutfak',
+            endpointType: 'light',
+            currentState: false,
+            actuatorType: actuator,
+          );
+      final options = ruleChannelOptions(<EndpointModel>[
+        ep(1, 'Su Vanası', actuator: 'valve'),
+        ep(2, 'Mutfak Lambası'),
+        ep(3, 'Siren', actuator: 'siren'),
+        ep(4, 'Fan', actuator: 'fan'),
+      ]);
+      expect(options.map((o) => o.id), <String>['relay_2'], reason: 'sunucu eylemci kanalında kuralı 400 ile reddeder');
+      expect(options.first.channel, 2, reason: 'diyaloğun varsayılan (ilk) seçeneği eylemci değil');
+    });
+
     test('uç nokta yoksa seçenek listesi boştur (uydurma kanal üretilmez)', () {
       expect(ruleChannelOptions(const <EndpointModel>[]), isEmpty);
     });

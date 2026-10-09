@@ -1218,12 +1218,13 @@ class FakeMqtt implements EvMqttService {
       emitState(DeviceStatus.fromJson(json, filterPhantomShutters: false), retained: retained);
 
   /// `status` (online/offline) iletisi üretir.
-  void emitPresence(bool online, {bool retained = false}) {
+  void emitPresence(bool online, {bool retained = false, String? uid}) {
     _status.add(DevicePresenceMessage(
       topicId: _topic ?? 'h_test',
       online: online,
       retained: retained,
       receivedAt: DateTime.now(),
+      uid: uid,
     ));
   }
 }

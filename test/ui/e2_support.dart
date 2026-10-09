@@ -334,6 +334,7 @@ class E2Cloud extends FakeCloudApi {
 
   Object? acceptError;
   final List<String> acceptCodes = <String>[];
+  TransferAcceptResult acceptResult = const TransferAcceptResult(homeId: kHomeA, homeName: 'Ev A', message: 'Sahiplik devredildi.');
 
   @override
   Future<TransferAcceptResult> acceptTransfer(String transferCode) async {
@@ -341,7 +342,7 @@ class E2Cloud extends FakeCloudApi {
     acceptCodes.add(transferCode);
     final error = acceptError;
     if (error != null) throw error;
-    return const TransferAcceptResult(homeId: kHomeA, homeName: 'Ev A', message: 'Sahiplik devredildi.');
+    return acceptResult;
   }
 
   JoinCodePreview? previewToReturn;

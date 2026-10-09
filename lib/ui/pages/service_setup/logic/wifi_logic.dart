@@ -202,9 +202,10 @@ class WifiLogic extends SetupLogic {
         ctx.useManualKey(key, manual: false); // sunucudan alındı: elle girilmiş sayılmaz (servis_kurulum-5)
       });
 
-  /// Panonun ilk hazırlığı: yerel anahtar + kurulum ağı parolası panoya yazılır (`factory/init`).
-  /// Pano kurulum ağını bu parolayla (WPA2) yeniden başlatır: telefon yeniden bağlanmalıdır.
-  Future<bool> provision({required String apPass}) {
+  /// Kurulum ağı parolası denetimi (uygulama-ekranlar-3): 8-32 bayt, ikinci yazımla aynı ve etiket karekodu okunduysa
+  /// ([labelPassword]) etiketteki parolayla aynı. Panonun ilk hazırlığı geri alınamaz (sonraki `factory/init` 403
+  /// `already_provisioned`): yanlış parola etiketi kalıcı geçersiz kılar, kurtarma USB ister. Geçersizse sorun yazılır.
+  bool _apPassValid(String apPass, String apPassConfirm, String? labelPassword) {
     final bytes = utf8.encode(apPass).length;
     if (bytes < 8 || bytes > 32) {
       fail(const SetupProblem(
@@ -214,8 +215,38 @@ class WifiLogic extends SetupLogic {
         todo: 'Pano etiketindeki "AĞ PAROLASI (AP)" değerini aynen yazın.',
         retryable: false,
       ));
-      return Future<bool>.value(false);
+      return false;
     }
+    if (apPass != apPassConfirm) {
+      fail(const SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Kurulum ağı parolası doğrulanamadı',
+        why: 'Kurulum ağı parolaları eşleşmiyor.',
+        todo: 'Etiketteki "AĞ PAROLASI (AP)" değerini iki alana da aynen yazın ya da etiketteki kurulum ağı karekodunu '
+            'okutun.',
+        retryable: false,
+      ));
+      return false;
+    }
+    if (labelPassword != null && apPass != labelPassword) {
+      fail(const SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Kurulum ağı parolası doğrulanamadı',
+        why: 'Yazdığınız parola etiketteki parolayla eşleşmiyor.',
+        todo: 'Parolayı etiketteki gibi yazın ya da etiketteki kurulum ağı karekodunu yeniden okutun; pano başka bir '
+            'parolayla hazırlanırsa etiketteki parola geçersiz kalır.',
+        retryable: false,
+      ));
+      return false;
+    }
+    return true;
+  }
+
+  /// Panonun ilk hazırlığı: yerel anahtar + kurulum ağı parolası panoya yazılır (`factory/init`).
+  /// Pano kurulum ağını bu parolayla (WPA2) yeniden başlatır: telefon yeniden bağlanmalıdır. [apPassConfirm] parolanın
+  /// ikinci yazımı, [labelPassword] etiket karekodundan okunan parola (okunduysa); uyuşmazsa panoya yazılmaz.
+  Future<bool> provision({required String apPass, required String apPassConfirm, String? labelPassword}) {
+    if (!_apPassValid(apPass, apPassConfirm, labelPassword)) return Future<bool>.value(false);
     return run(provisionLabel, () async {
       final t = ctx.requireTarget;
       final key = t.localKey ?? ctx.link.key;
@@ -264,18 +295,13 @@ class WifiLogic extends SetupLogic {
   /// adresine gider (karar 2: her arayüzden kabul edilir). Telefon ev ağındadır (internet var): anahtar bellekte yoksa
   /// sunucudan alınır (süper yöneticide elle girilir). Hazırlıktan sonra pano yeniden okunur; `provisioned` doğrulanmadan
   /// adım tamamlanmaz.
-  Future<bool> provisionViaEthernet({required String ip, required String apPass}) {
-    final bytes = utf8.encode(apPass).length;
-    if (bytes < 8 || bytes > 32) {
-      fail(const SetupProblem(
-        kind: SetupProblemKind.validation,
-        title: 'Kurulum ağı parolası geçersiz',
-        why: 'Parola 8-32 karakter olmalı.',
-        todo: 'Pano etiketindeki "AĞ PAROLASI (AP)" değerini aynen yazın.',
-        retryable: false,
-      ));
-      return Future<bool>.value(false);
-    }
+  Future<bool> provisionViaEthernet({
+    required String ip,
+    required String apPass,
+    required String apPassConfirm,
+    String? labelPassword,
+  }) {
+    if (!_apPassValid(apPass, apPassConfirm, labelPassword)) return Future<bool>.value(false);
     final error = validateHost(ip);
     if (error != null) {
       fail(SetupProblem(

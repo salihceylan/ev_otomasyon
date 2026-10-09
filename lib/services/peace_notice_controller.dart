@@ -174,7 +174,7 @@ class PeaceNoticeController extends ChangeNotifier with WidgetsBindingObserver {
   /// bu görünümde pano/oturum verisi göstermez). Afiş, istem ve sonuç iletisi bu ekranlarda GÖSTERİLMEMELİDİR (ev adı
   /// ve oda/lamba özeti görünür kalırdı; "Hepsini kapat" parola değişmeden çalışırdı); durum, kilit açılınca / parola
   /// değişince kaldığı yerden gösterilir. Bekleyen afiş KORUNUR (bunlar oturum bitişi değildir).
-  bool get isLocked => _eligible && (state.authStatus == AuthStatus.checking || state.mustChangePassword);
+  bool get isLocked => _eligible && (state.isGated || state.mustChangePassword);
 
   // ---------------------------------------------------------------------------
   // Varsayılan koordinatör
@@ -506,7 +506,8 @@ class PeaceNoticeController extends ChangeNotifier with WidgetsBindingObserver {
   /// Sonuç [closeMessage]'a yazılır; hiçbir koşulda istisna fırlatmaz.
   Future<void> closeAll() async {
     final notice = _pending;
-    if (_disposed || notice == null || _closing) return;
+    // Kapı görünümünde (kilit, zorunlu parola, sözleşme onayı) çalışmaz (uygulama-ekranlar-2).
+    if (_disposed || notice == null || _closing || isLocked) return;
 
     final epoch = _sessionEpoch;
     _closeMessage = null;

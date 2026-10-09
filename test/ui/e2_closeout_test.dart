@@ -357,6 +357,23 @@ void main() {
       expect(fieldText(tester, 'field_claim_pin'), '482916');
     });
 
+    testWidgets('uygulama-ekranlar-2: zorunlu parola değişimi sürerken eşleştirme penceresi açılmaz; parola değişince açılır',
+        (tester) async {
+      final env = e2Env(role: null);
+      const base = UserModel(id: kUserId, email: kUserEmail, fullName: 'Ayşe Yılmaz', phone: kUserPhone);
+      env.state.setCurrentUserForTesting(base.copyWith(mustChangePassword: true));
+      final navKey = await pumpShell(tester, env);
+
+      unawaited(navKey.currentState!.pushNamed('/claim?uid=AHBU-S3-000001&pin=123456'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('field_claim_uid')), findsNothing, reason: 'kapı (zorunlu parola) geçilmeden açılmaz');
+      expect(textOf(tester, 'deep_link_claim_text'), isNot(contains('açılıyor')));
+
+      env.state.setCurrentUserForTesting(base);
+      await settle(tester, frames: 6);
+      expect(fieldText(tester, 'field_claim_uid'), 'AHBU-S3-000001');
+    });
+
     testWidgets('biyometrik kilit: kilit açıklaması gösterilir; "açılıyor" metni takılı kalmaz', (tester) async {
       final env = e2Env(role: null);
       env.state.setBiometricForTesting(isSupported: true, isEnabled: true, failed: true, authStatus: AuthStatus.checking);

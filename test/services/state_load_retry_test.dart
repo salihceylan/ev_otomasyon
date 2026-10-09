@@ -1,8 +1,10 @@
 import 'package:ev_otomasyon/models/cloud_models.dart';
 import 'package:ev_otomasyon/services/automation_state.dart';
+import 'package:ev_otomasyon/services/ev_mqtt_service.dart' show MqttLinkState;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../support/safety_fixtures.dart';
 import '../support/support.dart';
 
 /// PF-11 (WP-STATE, S4): ilk uç nokta / cihaz listesi yüklemesi başarısız kalırsa sınırlı otomatik yeniden deneme
@@ -53,6 +55,42 @@ void main() {
       expect(h.cloud.count('fetchEndpoints'), 5, reason: 'ilk + 4 deneme = 5 istek; sonra elle "Yeniden dene"');
       expect(h.state.endpointsError, isNotNull);
       expect(h.state.endpointsLoaded, isFalse);
+    });
+
+    test('cekirdek-2: denemeler tükendikten sonra canlı kanal BAĞLANINCA uç nokta listesi yeniden denenir', () async {
+      final h = await readyHarness(configure: (h) => h.cloud.fetchEndpointsError = ApiException.network());
+      addTearDown(h.dispose);
+      await h.clock.elapse(const Duration(minutes: 2));
+      final before = h.cloud.count('fetchEndpoints');
+      expect(before, 5, reason: 'otomatik denemeler tükendi');
+
+      h.cloud.fetchEndpointsError = null; // ağ geldi
+      h.mqtt.setLink(MqttLinkState.disconnected);
+      await settle();
+      h.mqtt.setLink(MqttLinkState.connected);
+      await settle();
+
+      expect(h.cloud.count('fetchEndpoints'), before + 1, reason: 'bağlantı geçişinde tek sessiz yenileme');
+      expect(h.state.endpointsLoaded, isTrue);
+      expect(h.state.endpointsError, isNull);
+    });
+
+    test('cekirdek-2: bağlı kanalda gelen anlık görüntü de (denemeler bittiyse) yeniden yüklemeyi tetikler', () async {
+      final h = await readyHarness(configure: (h) => h.cloud.fetchEndpointsError = ApiException.network());
+      addTearDown(h.dispose);
+      await h.clock.elapse(const Duration(minutes: 2));
+      final before = h.cloud.count('fetchEndpoints');
+      expect(before, 5);
+
+      h.mqtt.emitStateJson(safetyStateJson(zoneSt: 'latched', sensorActive: true));
+      await settle();
+      expect(h.cloud.count('fetchEndpoints'), before + 1, reason: 'alarm taşıyan canlı durum geldi: liste yeniden istenir');
+      expect(h.state.alarmItems.where((a) => a.isActive), isNotEmpty);
+
+      // Hata sürerken her anlık görüntü yeni istek üretmez (kalp atışı ~30 sn).
+      h.mqtt.emitStateJson(safetyStateJson(zoneSt: 'latched', sensorActive: true, lights: const <int, bool>{1: true}));
+      await settle();
+      expect(h.cloud.count('fetchEndpoints'), lessThanOrEqualTo(before + 2));
     });
 
     test('elle "Yeniden dene" (refresh) yeni bir otomatik deneme zinciri başlatır', () async {

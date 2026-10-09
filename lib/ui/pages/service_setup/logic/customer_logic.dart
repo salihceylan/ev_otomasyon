@@ -202,6 +202,17 @@ class CustomerLogic extends SetupLogic {
         todo: 'Müşterinin e-posta adresinin doğru olduğundan emin olup birkaç dakika sonra tekrar deneyin.',
       ));
     }
+    if (error.reason == 'CUSTOMER_EMAIL_REQUIRED') {
+      // Telefonla giren müşterinin hesabında e-posta yok: onay kodu gönderilemez (sözleşme C8); ileti sunucudandır.
+      return SetupProblemException(SetupProblem(
+        kind: SetupProblemKind.validation,
+        title: 'Müşteriye onay kodu gönderilemiyor',
+        why: error.message,
+        todo: 'Müşteriden panoyu kendi uygulamasında etiketteki karekodla sahiplenmesini isteyin; ardından ev sahibinin '
+            "oluşturduğu servis PIN'iyle kuruluma devam edin.",
+        retryable: false,
+      ));
+    }
     if (error.isForbidden && error.message.contains('kendi adına')) {
       return SetupProblemException(SetupProblem(
         kind: SetupProblemKind.forbidden,

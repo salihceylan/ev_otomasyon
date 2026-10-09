@@ -242,6 +242,10 @@ class FakeDevice {
   /// davranışı (sensör `flags` > 0x07 `bad_value` ile reddedilir, `intrusion` öğesi bilinmez).
   bool intrusionCaps = false;
 
+  /// Pano kablosuz (köprü) sensör sürücüsünü ilan ediyor mu (`caps` `bridge`; sözleşme C1, fw-tarama-1). `false`: köprü
+  /// sensörü yazımı `400 cfg_invalid` (`detail: sensor_bridge_unsupported`) ile reddedilir; silmek serbesttir.
+  bool bridgeCaps = false;
+
   /// `true`: yerel anahtarla yapılandırma yazımı gevşetme sayılır ve reddedilir (`403 local_loosen_forbidden`, karar
   /// 7.2b-7; Faz 2 F2.D.5 bulut önerisi testleri).
   bool loosenForbidden = false;
@@ -520,7 +524,8 @@ class FakeDevice {
         'eth_ip': ethConnected! ? ethIp : '',
         'net_if': ethConnected! ? 'eth' : (wifiConnected ? 'wifi' : 'none'),
       },
-      if (safetyCaps) 'caps': <String>['safety', 'actuator', 'event', 'cfg', if (intrusionCaps) 'intrusion'],
+      if (safetyCaps)
+        'caps': <String>['safety', 'actuator', 'event', 'cfg', if (intrusionCaps) 'intrusion', if (bridgeCaps) 'bridge'],
       'relays': <Map<String, dynamic>>[
         for (final r in relays)
           <String, dynamic>{'id': r.id, 'name': r.name, 'type': r.type, 'state': r.state, 'act': ?relayAct[r.id]},
@@ -808,6 +813,14 @@ class FakeDevice {
     } else {
       final item = Map<String, dynamic>.from(value as Map);
       final flags = item['flags'];
+      if (what == 'sensor' && !bridgeCaps && '${item['id'] ?? ''}'.startsWith('b')) {
+        return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'sensor_bridge_unsupported'}, status: 400);
+      }
+      // Firmware v1.3.2 `validate(forWrite)` TÜM tabloyu denetler: kayıtlı köprü sensörü varken silme dışındaki her yama
+      // reddedilir (silme serbest).
+      if (!bridgeCaps && sensors.any((s) => '${s['id'] ?? ''}'.startsWith('b'))) {
+        return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'sensor_bridge_unsupported'}, status: 400);
+      }
       if (what == 'sensor' && !intrusionCaps && flags is int && flags > 0x07) {
         return _json(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'bad_value'}, status: 400);
       }

@@ -180,6 +180,10 @@ class DoctorReport {
 
   /// Wi-Fi kurtarma önerilir: ev ağı kapalı / bilinmiyor / hatalı (ya da bilgi hiç gelmedi).
   bool get suggestsWifiRecovery {
+    // Sunucu ağ durumunu yalnız bulut-MQTT köprüsü kesikken ya da yeni bağlanmışken (120 sn dolmadan; bulut o an OK
+    // olabilir) "UNKNOWN" bildirir (sözleşme C15, sko-6): panonun durumu bilinmez, ev ağı arızası değildir, Wi-Fi kurtarma
+    // önerilmez. Bulut bilgisi olmayan (eksik) raporda "UNKNOWN" eskisi gibi kurtarma önerir.
+    if (networkStatus == 'UNKNOWN' && cloudStatus != null) return false;
     final level = networkLevel;
     // Hiç bağlanmamış pano: çoğunlukla ev ağı (Wi-Fi) kurulumu eksiktir.
     return level == DoctorLevel.error || level == DoctorLevel.unknown || neverSeen;

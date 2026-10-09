@@ -227,6 +227,22 @@ void main() {
       );
     });
 
+    test('fw-tarama-1 (C1): 400 cfg_invalid detail sensor_bridge_unsupported Türkçe metinle döner', () async {
+      mock.on('POST', '/api/safety/config',
+          (r) => jsonResponse(<String, dynamic>{'error': 'cfg_invalid', 'detail': 'sensor_bridge_unsupported'}, status: 400));
+      await expectLater(
+        api.saveSafetyConfig(<String, dynamic>{
+          'base_rev': 3,
+          'set': <String, dynamic>{
+            'sensor': <String, dynamic>{'id': 'b1', 'kind': 'water', 'zone': 1},
+          },
+        }),
+        throwsA(isA<LocalApiException>()
+            .having((e) => e.code, 'code', 'cfg_invalid')
+            .having((e) => e.message, 'message', 'Kablosuz (köprü) sensör bu panoda desteklenmiyor.')),
+      );
+    });
+
     test('504 timeout ve unknown_field Türkçe metne çevrilir', () async {
       mock.on('POST', '/api/alarm/test', (r) => jsonResponse(<String, dynamic>{'error': 'timeout', 'id': 'lan-1'}, status: 504));
       await expectLater(

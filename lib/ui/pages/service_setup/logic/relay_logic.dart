@@ -158,6 +158,7 @@ class RelayLogic extends SetupLogic {
   bool _boardHasDevices = false;
   bool _safetySupported = false;
   bool _intrusionSupported = false;
+  bool _bridgeSupported = false;
 
   // Buluttan yapılandırma yazımı (Faz 2 WP-C3; tasarım F2.D.5).
   bool _boardCfgCap = false;
@@ -241,6 +242,10 @@ class RelayLogic extends SetupLogic {
   /// Pano hırsız alarmı katmanını destekliyor mu (`caps` `intrusion`; v1.2.1+). Değilse kapı/pencere bayrakları,
   /// alarm anahtarı rolü ve gecikmeler gösterilmez ve panoya yazılmaz (F2.B.7).
   bool get intrusionSupported => _intrusionSupported;
+
+  /// Pano kablosuz (köprü) sensör sürücüsünü ilan ediyor mu (`caps` `bridge`; sözleşme C1). Değilse kablosuz sensör
+  /// eklenmez; kayıtlı olan uyarıyla gösterilir ve kaldırılana dek plan yazılamaz.
+  bool get bridgeSupported => _bridgeSupported;
   /// Pano `caps` `cfg` ilan ediyor ve hedef (ev + pano) belli: bulut yazımı mümkün. Sihirbaz erişimi (servis
   /// personeli, servis oturumu, süper kullanıcı) sunucu `safety_config` yeteneğinin içindedir (F2.D.4).
   bool get cloudConfigAllowed => _boardCfgCap && ctx.target != null;
@@ -428,7 +433,7 @@ class RelayLogic extends SetupLogic {
 
   Map<int, ChannelAssignment> get assignments => <int, ChannelAssignment>{for (final r in _relays) r.id: r.assign};
 
-  List<SafetyIssue> get safetyIssues => validateSafetyPlan(assignments, _inputs);
+  List<SafetyIssue> get safetyIssues => validateSafetyPlan(assignments, _inputs, bridgeSupported: _bridgeSupported);
   List<SafetyIssue> get blockingIssues => <SafetyIssue>[for (final i in safetyIssues) if (i.blocking) i];
 
   /// Panoya yazılmamış değişiklik var (dimmer dahil).
@@ -540,6 +545,7 @@ class RelayLogic extends SetupLogic {
   ) async {
     _safetySupported = status.safety.supported;
     _intrusionSupported = status.safety.supportsIntrusion;
+    _bridgeSupported = status.safety.supportsBridge;
     _boardCfgCap = status.safety.caps.contains('cfg');
     _extEnabled = status.extModuleEnabled ?? false;
     if (_extEnabled) {
@@ -673,8 +679,10 @@ class RelayLogic extends SetupLogic {
     if (changed) _changedSafety();
   }
 
-  /// Boş ilk köprü (Zigbee/Thread hub) yuvasına kablosuz su sensörü ekler (K2). Yuvalar doluysa bir şey yapmaz.
+  /// Boş ilk köprü (Zigbee/Thread hub) yuvasına kablosuz su sensörü ekler (K2). Yuvalar doluysa ya da pano kablosuz
+  /// sensörü desteklemiyorsa (`caps` `bridge` yok; sözleşme C1) bir şey yapmaz.
   void addBridgeSensor() {
+    if (!_bridgeSupported) return;
     final used = <int>{
       for (final i in _inputs)
         if (i.isBridge) i.index,
@@ -738,6 +746,7 @@ class RelayLogic extends SetupLogic {
             final status = await ctx.deviceCall((api) => api.fetchStatus());
             _safetySupported = status.safety.supported;
             _intrusionSupported = status.safety.supportsIntrusion;
+            _bridgeSupported = status.safety.supportsBridge;
             _boardCfgCap = status.safety.caps.contains('cfg');
           } on LocalApiException catch (e) {
             if (!e.isNetwork) rethrow;

@@ -13,6 +13,7 @@ import '../../widgets/orb/orb.dart';
 import '../../widgets/surface_card.dart' show SurfaceRimPainter;
 import '../dashboard_page.dart';
 import '../legal/terms_acceptance_page.dart';
+import '../service_setup/service_setup_wizard_page.dart';
 import '../wifi_recovery_dialog.dart';
 import 'auth_brand.dart';
 import 'change_password_page.dart';
@@ -71,8 +72,17 @@ bool _isSignedInView(AuthGateView? view) => view == AuthGateView.dashboard || vi
 /// (arka plandan >= 30 sn sonra biyometrik yeniden kilit), girişe (oturum kapandı), zorunlu parola ya da sözleşme onay
 /// ekranına geçilirken Navigator'a itilmiş tüm sayfa ve diyaloglar kapanır; aksi halde kilit ekranının
 /// üstünde (ör. üye listesi) oturumun verisi görünür kalırdı. Kök rota (bu kapı) kalır.
+///
+/// **İstisna: servis kurulum sihirbazı** (uygulama-ekranlar-1). Biyometrik yeniden kilitte sihirbaz açıksa
+/// ([ServiceSetupWizardPage.isOpen]) rotalar kapatılmaz: kök gezgine opak, geri tuşuyla kapanmayan bir kilit rotası
+/// ([biometricLockRouteName], içerik açılış/kilit ekranı) itilir. Kilit açılınca yalnız bu rota kalkar ve sihirbaz aynı
+/// denetleyiciyle (bellekteki cihaz anahtarı) sürer; giriş, zorunlu parola ya da sözleşme görünümüne geçilirse tüm
+/// itilmiş rotalar bugünkü gibi kapanır.
 class AuthGate extends StatefulWidget {
   const AuthGate({super.key});
+
+  /// Sihirbaz açıkken itilen biyometrik kilit rotasının adı.
+  static const String biometricLockRouteName = '/biometric-lock';
 
   @override
   State<AuthGate> createState() => _AuthGateState();
@@ -86,6 +96,10 @@ class _AuthGateState extends State<AuthGate> {
   /// (Sihirbazın doğası gereği kullanıcı telefonun Wi-Fi ayarlarına gidip panonun kurulum ağına bağlanır ve
   /// uygulamaya >= 30 sn sonra döner; sihirbaz hassas veri göstermez ve girişsiz de açılabilir.)
   bool _resumeWifiWizard = false;
+
+  /// Biyometrik kilit sihirbazın üstünde: itilmiş rotalar korunuyor (kilit rotası itildi ya da itilmek üzere).
+  bool _lockOverWizard = false;
+  Route<void>? _lockRoute;
 
   @override
   void initState() {
@@ -109,7 +123,20 @@ class _AuthGateState extends State<AuthGate> {
     final previous = _lastView;
     _lastView = view;
     if (_isSignedInView(previous) && !_isSignedInView(view)) {
-      _closePushedRoutes(lockedByBiometrics: view == AuthGateView.splash);
+      final relock = view == AuthGateView.splash;
+      if (relock && previous == AuthGateView.dashboard && ServiceSetupWizardPage.isOpen) {
+        _lockOverWizard = true;
+        _pushLockRoute();
+      } else {
+        _closePushedRoutes(lockedByBiometrics: relock);
+      }
+    } else if (_lockOverWizard && view != AuthGateView.splash) {
+      _lockOverWizard = false;
+      if (view == AuthGateView.dashboard) {
+        _removeLockRoute(); // kilit açıldı: sihirbaz kaldığı yerden sürer
+      } else {
+        _closePushedRoutes(lockedByBiometrics: false); // çıkış / zorunlu parola / sözleşme: sihirbaz da kapanır
+      }
     }
     if (_resumeWifiWizard) {
       if (view == AuthGateView.dashboard) {
@@ -125,6 +152,7 @@ class _AuthGateState extends State<AuthGate> {
   /// arasında Wi-Fi sihirbazı varsa ve kilit biyometrik kilitse, kilit açılınca sihirbaz yeniden açılır.
   void _closePushedRoutes({required bool lockedByBiometrics}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _lockRoute = null; // kilit rotası (varsa) da kapanır
       if (!mounted) return;
       var wizardWasOpen = false;
       Navigator.of(context).popUntil((route) {
@@ -138,6 +166,33 @@ class _AuthGateState extends State<AuthGate> {
       } else {
         _resumeWifiWizard = true;
       }
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Sihirbaz açıkken biyometrik kilit: kilit ekranı opak ve geri tuşuyla kapanmayan bir rota olarak en üste itilir.
+  /// Çerçeve sonunda kilit hâlâ sürüyorsa itilir (hızlı doğrulamada gerek kalmaz).
+  void _pushLockRoute() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_lockOverWizard || _lockRoute != null) return;
+      final route = PageRouteBuilder<void>(
+        settings: const RouteSettings(name: AuthGate.biometricLockRouteName),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (_, _, _) => const PopScope(canPop: false, child: _AuthSplashScreen()),
+      );
+      _lockRoute = route;
+      unawaited(Navigator.of(context).push<void>(route));
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _removeLockRoute() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final route = _lockRoute;
+      _lockRoute = null;
+      if (!mounted || route == null || !route.isActive) return;
+      Navigator.of(context).removeRoute(route);
     });
     WidgetsBinding.instance.ensureVisualUpdate();
   }

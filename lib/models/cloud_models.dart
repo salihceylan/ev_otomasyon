@@ -225,6 +225,8 @@ class HomeModel {
     this.guestValidUntil,
     this.serverMarkedExpired = false,
     this.accessState = HomeAccessState.unknown,
+    this.accessStartsIn,
+    this.accessExpiresIn,
   });
 
   /// Ev UUID'si (**String**; `int` ev kimliği yoktur).
@@ -252,6 +254,12 @@ class HomeModel {
 
   /// Sunucunun bildirdiği erişim durumu (`access_state`); bildirmediyse [HomeAccessState.unknown].
   final HomeAccessState accessState;
+
+  /// Yanıt anındaki SUNUCU saatine göre pencerenin başlamasına / bitmesine kalan saniye (`access_starts_in`,
+  /// `access_expires_in`; sözleşme C5, >= 0). Eski sunucu ya da pencere yoksa `null`. Göreli değerlerdir: önbelleğe
+  /// yazılmaz; uygulama bunlardan sunucu-yerel saat farkını hesaplar (cekirdek-1).
+  final int? accessStartsIn;
+  final int? accessExpiresIn;
 
   HomeRole get homeRole => HomeRole.parse(role);
   bool get isOwnerRole => homeRole == HomeRole.owner;
@@ -292,7 +300,14 @@ class HomeModel {
       // `is_expired` ile engelleyici `access_state` çelişirse güvenli taraf: erişim kapalı.
       serverMarkedExpired: (asBool(json['is_expired']) ?? false) || accessState.isBlocked,
       accessState: accessState,
+      accessStartsIn: _nonNegative(json['access_starts_in']),
+      accessExpiresIn: _nonNegative(json['access_expires_in']),
     );
+  }
+
+  static int? _nonNegative(Object? raw) {
+    final value = asInt(raw);
+    return value == null || value < 0 ? null : value;
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -320,6 +335,8 @@ class HomeModel {
         guestValidUntil: guestValidUntil,
         serverMarkedExpired: serverMarkedExpired ?? this.serverMarkedExpired,
         accessState: accessState ?? this.accessState,
+        accessStartsIn: accessStartsIn,
+        accessExpiresIn: accessExpiresIn,
       );
 }
 

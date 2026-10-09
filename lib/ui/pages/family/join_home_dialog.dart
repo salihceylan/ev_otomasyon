@@ -498,9 +498,11 @@ class _JoinHomeDialogState extends State<JoinHomeDialog> {
         ),
         if (preview?.alreadyMember ?? false) ...[
           const SizedBox(height: 10),
-          const InlineMessage.info(
-            'Bu dairenin zaten üyesisiniz. Devam etmeniz yeni bir üyelik oluşturmaz ve davet kodu kullanılmaz.',
-            key: Key('join_already_member'),
+          InlineMessage.info(
+            input.isTransfer
+                ? 'Bu daireyi zaten devraldınız.'
+                : 'Bu dairenin zaten üyesisiniz. Devam etmeniz yeni bir üyelik oluşturmaz ve davet kodu kullanılmaz.',
+            key: const Key('join_already_member'),
           ),
         ],
         if (_previewUnavailable) ...[

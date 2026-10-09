@@ -14,7 +14,7 @@ import '../../../common/confirm_dialogs.dart';
 import '../logic/customer_logic.dart';
 import '../secret_clipboard.dart';
 import '../secret_value_row.dart';
-import '../service_setup_wizard_page.dart';
+import '../open_wizard.dart';
 import '../service_target.dart';
 import '../setup_fields.dart';
 import '../setup_steps.dart';
@@ -188,16 +188,14 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
       if (openWizard == true && mounted) {
         final homeId = result.homeId;
         if (homeId != null) {
-          await Navigator.of(context).push<void>(
-            MaterialPageRoute<void>(
-              builder: (_) => ServiceSetupWizardPage(
-                existingTarget: ServiceTarget(homeId: homeId, deviceUuid: result.deviceUuid.isEmpty ? uid : result.deviceUuid),
-                startStep: SetupSteps.wifi,
-                // Yanıttaki tek seferlik bulut kimliği sihirbaza (yalnızca bellek) aktarılır: 6. adım yeniden üretmez.
-                initialCredential: result.deviceCredential,
-                scanner: widget.scanner,
-              ),
-            ),
+          // Tek açıcı (uygulama-ekranlar-1): adlandırılmış rota + aynı panonun yarım kaydı sorusu.
+          await openServiceSetupWizard(
+            context,
+            existingTarget: ServiceTarget(homeId: homeId, deviceUuid: result.deviceUuid.isEmpty ? uid : result.deviceUuid),
+            startStep: SetupSteps.wifi,
+            // Yanıttaki tek seferlik bulut kimliği sihirbaza (yalnızca bellek) aktarılır: 6. adım yeniden üretmez.
+            initialCredential: result.deviceCredential,
+            scanner: widget.scanner,
           );
         }
       }

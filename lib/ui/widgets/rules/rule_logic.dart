@@ -52,12 +52,14 @@ class RuleChannelOption {
 /// Evin uç noktalarından kanal seçeneklerini üretir:
 ///
 /// * röle seçenekleri **panjur satırlarını içermez** (panjur çifti röleleri "röle" listesinde yoktur),
+/// * **güvenlik eylemcisi** (vana / siren / fan) kanalları listelenmez: sunucu bu kanallarda zamanlı kuralı reddeder
+///   (uygulama-ekranlar-5); eski kuralın kanalı düzenlemede geri dönüş etiketiyle gösterilir,
 /// * her panjur çifti tek bir "panjur" seçeneğidir (`channel` = çift numarası, 1 tabanlı),
 /// * aynı kanal bir kez listelenir ve kanala göre sıralanır.
 List<RuleChannelOption> ruleChannelOptions(List<EndpointModel> endpoints) {
   final relays = <int, RuleChannelOption>{};
   for (final endpoint in endpoints) {
-    if (endpoint.isShutter) continue;
+    if (endpoint.isShutter || endpoint.isActuator) continue;
     relays.putIfAbsent(
       endpoint.channel,
       () => RuleChannelOption(

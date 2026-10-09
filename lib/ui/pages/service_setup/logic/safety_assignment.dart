@@ -460,7 +460,12 @@ Map<int, int> openRelayOwnersOf(Map<int, ChannelAssignment> channels) => <int, i
     };
 
 /// Plan emniyet kuralları (§2.4 `validate`, §4.4). Sıra: röleler (numara sırasıyla), girişler, genel.
-List<SafetyIssue> validateSafetyPlan(Map<int, ChannelAssignment> channels, List<InputAssignment> inputs) {
+/// [bridgeSupported] `false` (pano `caps` `bridge` bildirmiyor; sözleşme C1): her kablosuz sensör kayıt engelidir.
+List<SafetyIssue> validateSafetyPlan(
+  Map<int, ChannelAssignment> channels,
+  List<InputAssignment> inputs, {
+  bool bridgeSupported = true,
+}) {
   final issues = <SafetyIssue>[];
   final owners = <int, int>{};
   final relayIds = channels.keys.toList()..sort();
@@ -539,6 +544,9 @@ List<SafetyIssue> validateSafetyPlan(Map<int, ChannelAssignment> channels, List<
         blocking: false,
       ));
     }
+    if (input.isBridge && !bridgeSupported) {
+      issues.add(SafetyIssue(target, kBridgeUnsupportedMessage));
+    }
     if (input.isBridge && !InputRole.bridgeRoles.contains(input.role)) {
       issues.add(SafetyIssue(target, '${_inputName(input)}: kablosuz yuvaya yalnız sensör atanabilir.'));
     }
@@ -573,6 +581,9 @@ List<SafetyIssue> validateSafetyPlan(Map<int, ChannelAssignment> channels, List<
   }
   return issues;
 }
+
+/// Kablosuz sensör sürücüsü olmayan panoda kayıtlı kablosuz sensör satırının uyarısı (sözleşme C1).
+const String kBridgeUnsupportedMessage = 'Bu panoda kablosuz sensör desteklenmiyor; kaldırın.';
 
 bool _zoneHasGas(int zone, Map<int, ChannelAssignment> channels, List<InputAssignment> inputs) =>
     inputs.any((i) => i.role == InputRole.gas && i.zone == zone) ||
@@ -675,7 +686,7 @@ int _actIndex(String? id) => int.tryParse((id ?? '').replaceFirst('a', '')) ?? 0
 /// Planı panoya yazacak TEK öğelik yamalar (`POST /api/safety/config {base_rev?, set|del}`; CONTRACTS §2.6, firmware
 /// F5). [current]: panonun güncel yapılandırması (`GET /api/safety/config`). Yalnız DEĞİŞEN öğe yazılır (gereksiz `rev`
 /// artışı ve yerel anahtarla "gevşetme" retleri olmaz). Planın bilmediği pano öğelerine dokunulmaz: yalnız planda başka
-/// bir role çevrilen kanalın eylemcisi / girişin sensörü silinir.
+/// bir role çevrilen kanalın eylemcisi / girişin sensörü silinir; plandan kaldırılan kablosuz (köprü) sensörü de silinir.
 ///
 /// Sıra (her adım panoda `validate`'ten geçmeli): sensör silme (ör. geri bildirime dönen giriş) -> eylemci silme (büyük
 /// kimlikten küçüğe; silme sonraki kimlikleri bir kaydırır) -> mevcut eylemci güncelleme (kaydırılmış kimlikle) -> yeni
@@ -705,7 +716,10 @@ List<Map<String, dynamic>> buildSafetyPatches({
   final planInputIds = <String>{for (final i in inputs) i.id};
   for (final cur in curSens) {
     final id = asNonEmptyString(cur['id']);
-    if (id == null || wantSensors.containsKey(id) || !planInputIds.contains(id)) continue;
+    // Kablosuz (köprü) yuvalarının tümü plana panodan yüklenir: planda olmayan köprü sensörü "Kaldır" ile çıkarılmıştır ve
+    // panodan da silinir (fw-tarama-1, sözleşme C1: v1.3.2 köprü sensörlü tabloya silme dışındaki yamaları reddeder).
+    final removedBridge = id != null && id.startsWith('b') && !planInputIds.contains(id);
+    if (id == null || wantSensors.containsKey(id) || (!planInputIds.contains(id) && !removedBridge)) continue;
     patches.add(<String, dynamic>{
       'del': <String, dynamic>{'sensor': id},
     });

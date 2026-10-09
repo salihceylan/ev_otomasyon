@@ -12,6 +12,7 @@ import 'package:ev_otomasyon/ui/widgets/settings/alarm_watch_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../support/support.dart';
 
@@ -203,6 +204,33 @@ void main() {
       await pumpEventQueue();
       expect(c.enabled, isFalse);
       expect(platform.stops, 2);
+    });
+
+    test('cekirdek-3: güvenli depo okunamadı (soğuk açılış): ayar ve servis korunur; gerçek çıkışta kapanır', () async {
+      await AlarmWatchSettingsRepository(store).save(const AlarmWatchSettings(enabled: true, userId: 'u1'));
+      h.dispose();
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final storage = FakeStorage();
+      storage.memory.failReads = true; // soğuk Keystore okuması başarısız / zaman aşımı
+      h = StateHarness(storage: storage, autoInit: true);
+      await h.state.ready;
+      expect(h.state.authStatus, AuthStatus.unauthenticated);
+      expect(h.state.storageError, isNotNull);
+
+      final c = controller();
+      await c.init();
+      await pumpEventQueue();
+      expect(platform.stops, 0, reason: 'depo hatası çıkış değildir: arka plan izleme durmaz');
+      expect(c.enabled, isTrue);
+      expect((await AlarmWatchSettingsRepository(store).load()).enabled, isTrue, reason: 'ayar kalıcı kapanmaz');
+
+      storage.memory.failReads = false;
+      signIn();
+      await pumpEventQueue();
+      await h.state.logout();
+      await pumpEventQueue();
+      expect(platform.stops, 1, reason: 'gerçek çıkış: servis durur');
+      expect(c.enabled, isFalse);
     });
 
     test('açılışta oturum denetlenirken (checking) ayar kapanmaz; ev listesi değişince kayıt güncellenir', () async {
