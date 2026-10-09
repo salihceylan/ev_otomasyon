@@ -2301,16 +2301,29 @@
     },
     {
      "id": "S14.09",
-     "baslik": "\"Kurulumu sürdür\" düğmesi servis sorumlusuna görünüyor mu (sihirbaz onu buraya yönlendiriyor)",
+     "baslik": "\"Kurulumu sürdür\" servis sorumlusuna da görünür ve sihirbazı açar",
      "adimlar": [
-      "Servis sorumlusu hesabıyla kurulum sihirbazında zaten bir daireye bağlı bir kartı seçin; sihirbaz \"Aboneler > Kurulumu sürdür ile devam edin\" der",
-      "\"Abonelerim & Cihaz Atama\" ekranını açıp o abonenin satırına bakın"
+      "Servis sorumlusu hesabıyla \"Abonelerim & Cihaz Atama\" ekranını açın",
+      "Son 72 saatte sizin sahiplendirdiğiniz, kurulumu yarım kalmış (devreye alınmamış) dairenin satırında \"Kurulumu sürdür\"e basın"
      ],
-     "beklenen": "Bugünkü kodda \"Kurulumu sürdür\" düğmesi yalnız süper kullanıcıya görünüyor; servis sorumlusu göremiyor, yani sihirbazın yönlendirmesi ona boşa çıkıyor. Servis sorumlusunun da görmesini istiyorsanız \"Böyle istemiyorum\" işaretleyip not yazın.",
+     "beklenen": "Kurulum sihirbazı o dairenin panosuyla 5. adımdan (Wi-Fi) açılır; dairede birden çok pano varsa önce \"Hangi pano?\" sorulur. Devreye alınmış dairede ya da müşteri hesabında düğme görünmez.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "kurulumu yarım kalmış bir daire",
-     "yeni": false,
-     "kaynak": "lib/ui/pages/service_subscribers_page.dart:575; lib/ui/pages/service_setup/logic/claim_logic.dart:406"
+     "on_kosul": "son 72 saatte sizin sahiplendirdiğiniz, devreye alınmamış daire",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:591"
+    },
+    {
+     "id": "S14.10",
+     "baslik": "Kurulum süresi dolmuş dairede \"Kurulumu sürdür\" yetki iletisi verir",
+     "adimlar": [
+      "\"Abonelerim & Cihaz Atama\" ekranı açıkken dairenin 72 saatlik kurulum süresi dolsun (ya da başka servisin dairesini deneyin)",
+      "\"Kurulumu sürdür\"e basın"
+     ],
+     "beklenen": "\"Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin.\" iletisi çıkar, sihirbaz açılmaz. Liste yenilenince süresi dolan daire listeden düşer; o dairede çalışmak için müşterinin Servis PIN'iyle girilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "kurulum süresi (72 saat) dolmuş daire",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:65"
     }
    ]
   },

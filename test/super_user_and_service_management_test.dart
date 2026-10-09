@@ -114,6 +114,74 @@ void main() {
       final c = a('c', role: GlobalRole.user);
       expect(AccountRules.freezeBlock(target: c, currentUserId: 'me', loaded: [c], allSupersLoaded: true), isNull);
     });
+
+    AdminAccount acc(String id, {required GlobalRole role, AccountStatus status = AccountStatus.active, bool active = true}) =>
+        AdminAccount(id: id, fullName: id, email: '$id@x.y', role: role, isActive: active, status: status);
+
+    group('roleChangeBlock / hardDeleteBlock', () {
+      test('kendi hesabı: ikisi de engellenir', () {
+        final me = acc('me', role: GlobalRole.superUser);
+        final other = acc('o', role: GlobalRole.superUser);
+        for (final block in [AccountRules.roleChangeBlock, AccountRules.hardDeleteBlock]) {
+          expect(block(target: me, currentUserId: 'me', loaded: [me, other], allSupersLoaded: true), AccountBlock.self);
+        }
+      });
+
+      test('silinmiş hesap: rol değiştirilemez (sunucu 409) ama kalıcı silinebilir', () {
+        final gone = acc('gone', role: GlobalRole.user, status: AccountStatus.deleted, active: false);
+        expect(
+          AccountRules.roleChangeBlock(target: gone, currentUserId: 'me', loaded: [gone], allSupersLoaded: true),
+          AccountBlock.deleted,
+        );
+        expect(AccountRules.hardDeleteBlock(target: gone, currentUserId: 'me', loaded: [gone], allSupersLoaded: true), isNull);
+      });
+
+      test('son aktif süper: rol düşürme ve kalıcı silme engellenir (donuk olsa bile); davet bekleyen süper "aktif" sayılmaz', () {
+        final last = acc('last', role: GlobalRole.superUser);
+        final frozenLast = acc('frozen-last', role: GlobalRole.superUser, active: false, status: AccountStatus.suspended);
+        final pending = acc('pending', role: GlobalRole.superUser, status: AccountStatus.pendingInvite);
+        final loaded = [last, frozenLast, pending];
+        for (final block in [AccountRules.roleChangeBlock, AccountRules.hardDeleteBlock]) {
+          expect(block(target: last, currentUserId: 'me', loaded: loaded, allSupersLoaded: true), AccountBlock.lastSuper);
+          // Donuk süper de "başka aktif süper var mı" kuralına tabidir (sunucu hedefin durumuna bakmaz).
+          expect(block(target: frozenLast, currentUserId: 'me', loaded: [frozenLast, pending], allSupersLoaded: true),
+              AccountBlock.lastSuper);
+          expect(block(target: frozenLast, currentUserId: 'me', loaded: loaded, allSupersLoaded: true), isNull,
+              reason: 'başka aktif süper (last) var');
+          // Tüm süperler yüklü değilse karar sunucuya bırakılır.
+          expect(block(target: last, currentUserId: 'me', loaded: loaded, allSupersLoaded: false), isNull);
+        }
+      });
+
+      test('başka aktif süper varsa ya da hedef süper değilse engel yok', () {
+        final s1 = acc('s1', role: GlobalRole.superUser);
+        final s2 = acc('s2', role: GlobalRole.superUser);
+        final c = acc('c', role: GlobalRole.user);
+        for (final block in [AccountRules.roleChangeBlock, AccountRules.hardDeleteBlock]) {
+          expect(block(target: s1, currentUserId: 'me', loaded: [s1, s2], allSupersLoaded: true), isNull);
+          expect(block(target: c, currentUserId: 'me', loaded: [c], allSupersLoaded: true), isNull);
+        }
+      });
+
+      test('engel metinleri', () {
+        expect(AccountRules.blockText(AccountBlock.deleted), 'Silinmiş hesabın rolü değiştirilemez.');
+        expect(AccountRules.blockText(AccountBlock.lastSuper), contains('Son aktif süper yönetici'));
+        expect(AccountRules.blockText(AccountBlock.self), contains('Kendi hesabınız'));
+      });
+    });
+
+    test('assignableRoles: mevcut rol hariç, sunucunun kabul ettiği üç rolden', () {
+      expect(AccountRules.assignableRoles(acc('c', role: GlobalRole.user)), [GlobalRole.superUser, GlobalRole.serviceUser]);
+      expect(AccountRules.assignableRoles(acc('s', role: GlobalRole.serviceUser)), [GlobalRole.superUser, GlobalRole.user]);
+      expect(AccountRules.assignableRoles(acc('u', role: GlobalRole.superUser)), [GlobalRole.serviceUser, GlobalRole.user]);
+      expect(AccountRules.assignableRoles(acc('x', role: GlobalRole.unknown)), hasLength(3));
+    });
+
+    test('roleName: ekran adları sunucudaki üç rolle eşleşir', () {
+      expect(AccountRules.roleName(GlobalRole.user), 'Müşteri');
+      expect(AccountRules.roleName(GlobalRole.serviceUser), 'Servis sorumlusu');
+      expect(AccountRules.roleName(GlobalRole.superUser), 'Süper yönetici');
+    });
   });
 
   group('AdminAccount ayrıştırma', () {
@@ -133,6 +201,14 @@ void main() {
       expect(AdminAccount.tryParse(acct('1', 'A', active: false))!.statusLabel, 'Donduruldu');
       expect(AdminAccount.tryParse(acct('2', 'B', status: 'pending_invite'))!.statusLabel, 'Davet bekliyor');
       expect(AdminAccount.tryParse(acct('3', 'C'))!.statusLabel, 'Aktif');
+    });
+
+    test('silinmiş (anonimleştirilmiş) hesap ayrı durumdur: isDeleted ve "Silinmiş" etiketi', () {
+      final gone = AdminAccount.tryParse(<String, dynamic>{...acct('9', 'Z'), 'is_active': false, 'account_status': 'deleted'})!;
+      expect(gone.status, AccountStatus.deleted);
+      expect(gone.isDeleted, isTrue);
+      expect(gone.statusLabel, 'Silinmiş');
+      expect(AdminAccount.tryParse(acct('8', 'Y'))!.isDeleted, isFalse);
     });
   });
 
@@ -668,6 +744,361 @@ void main() {
     });
   });
 
+  group('rol değiştirme (yalnız süper)', () {
+    Map<String, dynamic> deletedAcct(String id) =>
+        <String, dynamic>{...acct(id, 'Silinmiş Kişi'), 'is_active': false, 'account_status': 'deleted'};
+
+    testWidgets('süper başka hesaplarda düğmeyi görür; kendi hesabında yoktur', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      expect(exists('btn_change_role_cust-2'), isTrue);
+      expect(exists('btn_change_role_staff-1'), isTrue);
+      expect(exists('btn_change_role_super-2'), isTrue);
+      expect(exists('btn_change_role_super-1'), isFalse, reason: 'kendi rolünü değiştiremez (sunucu 400)');
+    });
+
+    testWidgets('servis sorumlusu hiçbir hesapta Rol Değiştir görmez', (tester) async {
+      final env = await mgmtEnv(role: 'staff', users: <Map<String, dynamic>>[
+        acct('staff-1', 'Servis Ali', role: 'service_user'),
+        acct('cust-1', 'Müşteri Mehmet'),
+      ]);
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      expect(exists('btn_edit_cust-1'), isTrue, reason: 'sayfa açık, müşteriyi yönetiyor');
+      expect(exists('btn_change_role_cust-1'), isFalse);
+      expect(exists('btn_change_role_staff-1'), isFalse);
+    });
+
+    testWidgets('mevcut rol seçenek değildir; rol seçilmeden Devam pasif; onay adımı istek atmadan önce gelir', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+
+      await tapKey(tester, 'btn_change_role_cust-2');
+      await settle(tester);
+      expect(exists('dialog_change_role'), isTrue);
+      expect(exists('chip_new_role_service_user'), isTrue);
+      expect(exists('chip_new_role_super_user'), isTrue);
+      expect(exists('chip_new_role_user'), isFalse, reason: 'müşteri zaten müşteri');
+      expect(buttonEnabled(tester, 'btn_role_next'), isFalse);
+
+      await tapKey(tester, 'chip_new_role_service_user');
+      expect(buttonEnabled(tester, 'btn_role_next'), isTrue);
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      // Onay adımı: ne değişeceği yazılı, henüz istek yok.
+      expect(exists('role_confirm_text'), isTrue);
+      expect(find.textContaining('"Müşteri" iken "Servis sorumlusu" olarak değiştirilecek'), findsOneWidget);
+      expect(find.textContaining('oturumları kapanır'), findsOneWidget);
+      expect(env.cloud.adminUpdates, isEmpty);
+    });
+
+    testWidgets('onayla: PATCH rolü gönderir, başarı iletisi çıkar, liste yenilenir ve rozet güncellenir', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+
+      await tapKey(tester, 'btn_change_role_cust-2');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_service_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      await tapKey(tester, 'btn_role_confirm');
+      await settle(tester);
+
+      expect(env.cloud.adminUpdates, hasLength(1));
+      expect(env.cloud.adminUpdates.single['id'], 'cust-2');
+      expect(env.cloud.adminUpdates.single['role'], 'service_user');
+      expect(exists('dialog_change_role'), isFalse);
+      expect(find.text('Müşteri Zeynep hesabının rolü "Servis sorumlusu" olarak değiştirildi.'), findsOneWidget);
+      expect(env.cloud.calls.where((c) => c.startsWith('listAdminUsers')).length, greaterThanOrEqualTo(2),
+          reason: 'başarıdan sonra liste yenilenir');
+      expect(find.descendant(of: find.byKey(const Key('role_cust-2')), matching: find.text('SERVİS SORUMLUSU')), findsOneWidget);
+    });
+
+    testWidgets('servis sorumlusundan müşteriye düşürmede evlerdeki servis üyeliklerinin kalkacağı yazılır', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      await tapKey(tester, 'btn_change_role_staff-1');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      expect(find.textContaining('servis üyelikleri kaldırılır'), findsOneWidget);
+    });
+
+    testWidgets('onay adımında Geri seçime döner; Vazgeç hiçbir istek atmaz', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+
+      await tapKey(tester, 'btn_change_role_cust-2');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_super_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      expect(find.textContaining('tüm hesap ve dairelere erişebilir'), findsOneWidget);
+      await tapKey(tester, 'btn_role_back');
+      await settle(tester);
+      expect(exists('chip_new_role_service_user'), isTrue);
+      await tapKey(tester, 'btn_role_cancel');
+      await settle(tester);
+      expect(exists('dialog_change_role'), isFalse);
+      expect(env.cloud.adminUpdates, isEmpty);
+    });
+
+    testWidgets('sunucu reddederse (409 son süper) hata diyalogda görünür; rol değişmez, diyalog açık kalır', (tester) async {
+      // pageSize 1: yalnızca ilk kayıt yüklü -> istemci kesin konuşamaz, karar sunucudadır.
+      final env = await mgmtEnv(users: <Map<String, dynamic>>[
+        acct('super-2', 'Diğer Süper', role: 'super_user'),
+        acct('super-1', 'Yönetici', role: 'super_user', active: false),
+      ]);
+      addTearDown(env.dispose);
+      await openManagement(tester, env, pageSize: 1);
+      expect(buttonEnabled(tester, 'btn_change_role_super-2'), isTrue);
+
+      await tapKey(tester, 'btn_change_role_super-2');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      await tapKey(tester, 'btn_role_confirm');
+      await settle(tester);
+
+      expect(exists('dialog_change_role'), isTrue);
+      expect(exists('role_change_error'), isTrue);
+      expect(find.text('Son aktif Süper Yönetici dondurulamaz veya rolü düşürülemez.'), findsOneWidget);
+      expect(env.cloud.adminUpdates, isEmpty);
+      expect(buttonEnabled(tester, 'btn_role_confirm'), isTrue, reason: 'hata sonrası yeniden denenebilir');
+    });
+
+    testWidgets('ağ/sunucu hatasında dostça ileti gösterilir ve ham istisna metni sızmaz', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      env.cloud.adminWriteError = Exception('SELECT * FROM users -- ham');
+      await tapKey(tester, 'btn_change_role_cust-2');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_service_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      await tapKey(tester, 'btn_role_confirm');
+      await settle(tester);
+      expect(exists('role_change_error'), isTrue);
+      expect(find.textContaining('SELECT'), findsNothing);
+      expect(find.textContaining('Rol değiştirilemedi'), findsOneWidget);
+    });
+
+    testWidgets('çift dokunuş tek istek atar; gönderim sürerken düğme pasiftir', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      env.cloud.adminWriteGate = Completer<void>();
+      await openManagement(tester, env);
+      await tapKey(tester, 'btn_change_role_cust-2');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_service_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      await tapKey(tester, 'btn_role_confirm');
+      expect(buttonEnabled(tester, 'btn_role_confirm'), isFalse);
+      await tester.tap(find.byKey(const Key('btn_role_confirm')), warnIfMissed: false);
+      await tester.pump();
+      env.cloud.adminWriteGate!.complete();
+      await settle(tester);
+      expect(env.cloud.adminUpdates, hasLength(1));
+    });
+
+    testWidgets('tüm süperler yüklüyken son aktif süper için düğmeler pasif ve neden yazılı', (tester) async {
+      final env = await mgmtEnv(users: <Map<String, dynamic>>[
+        acct('super-2', 'Tek Aktif Süper', role: 'super_user'),
+        acct('super-3', 'Donuk Süper', role: 'super_user', active: false),
+      ]);
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      expect(buttonEnabled(tester, 'btn_change_role_super-2'), isFalse);
+      expect(buttonEnabled(tester, 'btn_hard_delete_super-2'), isFalse);
+      expect(find.byKey(const Key('note_action_block_super-2')), findsOneWidget);
+      expect(find.textContaining('Son aktif süper yönetici silinemez ve rolü değiştirilemez'), findsOneWidget);
+    });
+
+    testWidgets('silinmiş hesapta Rol Değiştir pasif, Kalıcı Sil açık', (tester) async {
+      final env = await mgmtEnv(users: <Map<String, dynamic>>[
+        acct('super-1', 'Yönetici', role: 'super_user'),
+        deletedAcct('gone-1'),
+      ]);
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      expect(buttonEnabled(tester, 'btn_change_role_gone-1'), isFalse);
+      expect(buttonEnabled(tester, 'btn_hard_delete_gone-1'), isTrue);
+      expect(find.text('Silinmiş hesabın rolü değiştirilemez.'), findsOneWidget);
+    });
+  });
+
+  group('kalıcı silme (yalnız süper)', () {
+    Future<void> openDialog(WidgetTester tester, String id) async {
+      await tapKey(tester, 'btn_hard_delete_$id');
+      await settle(tester);
+      expect(exists('dialog_hard_delete'), isTrue);
+    }
+
+    testWidgets('süper başka hesaplarda düğmeyi görür; kendi hesabında yoktur', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      expect(exists('btn_hard_delete_cust-2'), isTrue);
+      expect(exists('btn_hard_delete_staff-1'), isTrue);
+      expect(exists('btn_hard_delete_super-2'), isTrue);
+      expect(exists('btn_hard_delete_super-1'), isFalse, reason: 'kendi hesabını silemez (sunucu 400)');
+    });
+
+    testWidgets('servis sorumlusu hiçbir hesapta Kalıcı Sil görmez', (tester) async {
+      final env = await mgmtEnv(role: 'staff', users: <Map<String, dynamic>>[
+        acct('staff-1', 'Servis Ali', role: 'service_user'),
+        acct('cust-1', 'Müşteri Mehmet'),
+      ]);
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      expect(exists('btn_freeze_cust-1'), isTrue, reason: 'sayfa açık, müşteriyi yönetiyor');
+      expect(exists('btn_hard_delete_cust-1'), isFalse);
+      expect(exists('btn_hard_delete_staff-1'), isFalse);
+    });
+
+    testWidgets('onaysız silinmez: onay düğmesi pasif; yanlış e-posta pasif bırakır; Vazgeç istek atmaz', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-2');
+
+      expect(find.textContaining('Bu işlem geri alınamaz'), findsOneWidget);
+      expect(tester.widget<Text>(find.byKey(const Key('hard_delete_phrase'))).data, 'cust-2@ornek.test',
+          reason: 'yazılacak ifade gösterilir');
+      expect(buttonEnabled(tester, 'btn_hard_delete_confirm'), isFalse);
+
+      await typeKey(tester, 'field_hard_delete_confirm', 'baska@ornek.test');
+      expect(buttonEnabled(tester, 'btn_hard_delete_confirm'), isFalse);
+      await typeKey(tester, 'field_hard_delete_confirm', 'cust-2@ornek');
+      expect(buttonEnabled(tester, 'btn_hard_delete_confirm'), isFalse, reason: 'eksik yazım');
+
+      await tapKey(tester, 'btn_hard_delete_confirm'); // pasif düğme: dokunuş etkisiz
+      await settle(tester);
+      expect(env.cloud.adminDeletes, isEmpty);
+
+      await tapKey(tester, 'btn_hard_delete_cancel');
+      await settle(tester);
+      expect(exists('dialog_hard_delete'), isFalse);
+      expect(env.cloud.adminDeletes, isEmpty);
+      expect(env.cloud.calls.where((c) => c.startsWith('deleteAdminUser')), isEmpty);
+    });
+
+    testWidgets('doğru e-posta (büyük/küçük harf fark etmez) yazılınca silinir; sunucu iletisi snackbar ile gösterilir, liste yenilenir',
+        (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-2');
+
+      await typeKey(tester, 'field_hard_delete_confirm', ' CUST-2@Ornek.TEST ');
+      expect(buttonEnabled(tester, 'btn_hard_delete_confirm'), isTrue);
+      await tapKey(tester, 'btn_hard_delete_confirm');
+      await settle(tester);
+
+      expect(env.cloud.adminDeletes, <Map<String, dynamic>>[
+        <String, dynamic>{'id': 'cust-2', 'hard': true},
+      ]);
+      expect(exists('dialog_hard_delete'), isFalse);
+      expect(find.text('Kullanıcı kalıcı olarak silindi.'), findsOneWidget);
+      expect(exists('card_account_cust-2'), isFalse, reason: 'liste yenilenir');
+      expect(exists('card_account_cust-1'), isTrue);
+    });
+
+    testWidgets('sunucunun "N daire kaydı da silindi" iletisi aynen gösterilir', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      env.cloud.adminHardDeleteHomes = 2;
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-2');
+      await typeKey(tester, 'field_hard_delete_confirm', 'cust-2@ornek.test');
+      await tapKey(tester, 'btn_hard_delete_confirm');
+      await settle(tester);
+      expect(find.text('Kullanıcı kalıcı olarak silindi (üyesi ve panosu olmayan 2 daire kaydı da silindi).'), findsOneWidget);
+    });
+
+    testWidgets('409 SOLE_OWNER_WITH_DEVICES iletisi olduğu gibi gösterilir; diyalog açık kalır, hesap silinmez', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      env.cloud.soleOwnerWithDevices.add('cust-2');
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-2');
+      await typeKey(tester, 'field_hard_delete_confirm', 'cust-2@ornek.test');
+      await tapKey(tester, 'btn_hard_delete_confirm');
+      await settle(tester);
+
+      expect(exists('dialog_hard_delete'), isTrue);
+      expect(exists('hard_delete_error'), isTrue);
+      expect(
+        find.text(
+          'Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil '
+          'sıfırlama yapın.',
+        ),
+        findsOneWidget,
+      );
+      expect(env.cloud.adminDeletes, isEmpty);
+      expect(find.text('Kullanıcı kalıcı olarak silindi.'), findsNothing);
+
+      await tapKey(tester, 'btn_hard_delete_cancel');
+      await settle(tester);
+      expect(exists('card_account_cust-2'), isTrue);
+    });
+
+    testWidgets('e-postası olmayan hesapta ad yazdırılır', (tester) async {
+      final env = await mgmtEnv(users: <Map<String, dynamic>>[
+        acct('super-1', 'Yönetici', role: 'super_user'),
+        acct('cust-9', 'Ayşe Yılmaz', email: ''),
+      ]);
+      addTearDown(env.dispose);
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-9');
+      expect(find.textContaining('hesabın adını yazın'), findsOneWidget);
+      await typeKey(tester, 'field_hard_delete_confirm', 'ayşe yılmaz');
+      expect(buttonEnabled(tester, 'btn_hard_delete_confirm'), isTrue);
+      await tapKey(tester, 'btn_hard_delete_confirm');
+      await settle(tester);
+      expect(env.cloud.adminDeletes.single['id'], 'cust-9');
+    });
+
+    testWidgets('çift dokunuş tek istek atar; gönderim sürerken düğme pasiftir', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      env.cloud.adminWriteGate = Completer<void>();
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-2');
+      await typeKey(tester, 'field_hard_delete_confirm', 'cust-2@ornek.test');
+      await tapKey(tester, 'btn_hard_delete_confirm');
+      expect(buttonEnabled(tester, 'btn_hard_delete_confirm'), isFalse);
+      await tester.tap(find.byKey(const Key('btn_hard_delete_confirm')), warnIfMissed: false);
+      await tester.pump();
+      env.cloud.adminWriteGate!.complete();
+      await settle(tester);
+      expect(env.cloud.adminDeletes, hasLength(1));
+    });
+
+    testWidgets('beklenmeyen hatada dostça ileti gösterilir; ham metin sızmaz', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      env.cloud.adminDeleteError = Exception('FATAL: kötü sorgu');
+      await openManagement(tester, env);
+      await openDialog(tester, 'cust-2');
+      await typeKey(tester, 'field_hard_delete_confirm', 'cust-2@ornek.test');
+      await tapKey(tester, 'btn_hard_delete_confirm');
+      await settle(tester);
+      expect(exists('hard_delete_error'), isTrue);
+      expect(find.textContaining('FATAL'), findsNothing);
+      expect(find.textContaining('Hesap silinemedi'), findsOneWidget);
+    });
+  });
+
   group('yerleşim', () {
     testWidgets('dar ekranda ve büyük yazıda taşma olmadan çalışır', (tester) async {
       final env = await mgmtEnv();
@@ -677,6 +1108,33 @@ void main() {
       expect(exists('card_account_super-1'), isTrue);
       await openCreate(tester);
       expect(exists('dialog_create_account'), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('rol değiştirme ve kalıcı silme pencereleri dar ekranda ve büyük yazıda taşmaz', (tester) async {
+      final env = await mgmtEnv();
+      addTearDown(env.dispose);
+      await openManagement(tester, env, size: const Size(360, 800), textScale: 1.5);
+      // Liste tembeldir: alt kart ekrana gelene dek kaydır.
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('btn_change_role_cust-2')),
+        300,
+        scrollable: find.descendant(of: find.byKey(const Key('accounts_list')), matching: find.byType(Scrollable)).first,
+      );
+
+      await tapKey(tester, 'btn_change_role_cust-2');
+      await settle(tester);
+      await tapKey(tester, 'chip_new_role_service_user');
+      await tapKey(tester, 'btn_role_next');
+      await settle(tester);
+      expect(exists('role_confirm_text'), isTrue);
+      expect(tester.takeException(), isNull);
+      await tapKey(tester, 'btn_role_cancel');
+      await settle(tester);
+
+      await tapKey(tester, 'btn_hard_delete_cust-2');
+      await settle(tester);
+      expect(exists('dialog_hard_delete'), isTrue);
       expect(tester.takeException(), isNull);
     });
   });

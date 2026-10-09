@@ -719,6 +719,49 @@ void main() {
       );
     });
 
+    test('updateAdminUser: rol PATCH gövdesinde role olarak gider; sunucu reddi iletisiyle aynen eşlenir', () async {
+      signedIn();
+      api.on('PATCH', '/api/v1/admin/users/u9', (r) => okResponse(<String, dynamic>{'id': 'u9', 'role': 'service_user'}));
+      final result = await service.updateAdminUser('u9', role: 'service_user');
+      expect(api.requests.single.json, <String, dynamic>{'role': 'service_user'});
+      expect(result['role'], 'service_user');
+
+      api.on('PATCH', '/api/v1/admin/users/u9',
+          (r) => errorResponse(409, 'Son aktif Süper Yönetici dondurulamaz veya rolü düşürülemez.', code: 'CONFLICT'));
+      await expectLater(
+        service.updateAdminUser('u9', role: 'user'),
+        throwsA(isA<ApiException>()
+            .having((e) => e.statusCode, 'status', 409)
+            .having((e) => e.message, 'message', 'Son aktif Süper Yönetici dondurulamaz veya rolü düşürülemez.')),
+      );
+    });
+
+    test('deleteAdminUser: kalıcı silme ?hard=true ile gider, sunucu iletisi döner; 409 SOLE_OWNER_WITH_DEVICES aynen taşınır', () async {
+      signedIn();
+      api.on('DELETE', '/api/v1/admin/users/u9',
+          (r) => okResponse(null, message: 'Kullanıcı kalıcı olarak silindi (üyesi ve panosu olmayan 1 daire kaydı da silindi).'));
+      final body = await service.deleteAdminUser('u9', hard: true);
+      expect(api.requests.single.method, 'DELETE');
+      expect(api.requests.single.url.queryParameters['hard'], 'true');
+      expect(body['message'], 'Kullanıcı kalıcı olarak silindi (üyesi ve panosu olmayan 1 daire kaydı da silindi).');
+
+      api.on(
+        'DELETE',
+        '/api/v1/admin/users/u9',
+        (r) => errorResponse(
+          409,
+          'Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama yapın.',
+          code: 'SOLE_OWNER_WITH_DEVICES',
+        ),
+      );
+      await expectLater(
+        service.deleteAdminUser('u9', hard: true),
+        throwsA(isA<ApiException>()
+            .having((e) => e.code, 'code', 'SOLE_OWNER_WITH_DEVICES')
+            .having((e) => e.message, 'message', startsWith('Kullanıcı, panosu olan bir dairenin tek sahibi.'))),
+      );
+    });
+
     test('sendAdminUserReset: POST /admin/users/:id/send-reset; sonuç alanları', () async {
       signedIn();
       api.on('POST', '/api/v1/admin/users/u9/send-reset',

@@ -9,6 +9,7 @@ import '../../../../services/automation_state.dart';
 import '../../../../utils/friendly_error.dart';
 import '../../../common/app_dialogs.dart';
 import '../../../common/arc_spinner.dart';
+import '../../../common/confirm_dialogs.dart' show confirmPhraseMatches, destructiveButtonStyle;
 import '../../../common/validators.dart';
 import '../setup_fields.dart';
 import '../setup_style.dart';
@@ -533,6 +534,336 @@ class _EditAccountDialogState extends State<EditAccountDialog> {
             child: _busy
                 ? const ArcSpinner(size: 18, color: Colors.white, strokeWidth: 2.4)
                 : const Text('Güncelle'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Rol değiştirme penceresi (**yalnız süper yönetici**; sunucu `PATCH /admin/users/:id` + `role`).
+///
+/// İki adım: (1) yeni rol seçimi (mevcut rol seçenek değildir; sunucunun atanabilir saydığı üç rolden), (2) onay — ne
+/// değişeceği ve sonuçları yazılır. İstek yalnızca onaydan sonra gider; pencere yalnızca **API başarısından sonra**
+/// kapanır, hata (ör. `409` son aktif süper yönetici) pencerede kalır ve yeniden denenebilir. Kendi hesabı, silinmiş
+/// hesap ve son aktif süper için çağıran taraf düğmeyi kapatır ([AccountRules.roleChangeBlock]).
+class ChangeRoleDialog extends StatefulWidget {
+  const ChangeRoleDialog({super.key, required this.account});
+
+  final AdminAccount account;
+
+  /// Başarıda atanan yeni rol; vazgeçilirse `null`.
+  static Future<GlobalRole?> show(BuildContext context, {required AdminAccount account}) {
+    return showAppDialog<GlobalRole>(
+      context,
+      barrierDismissible: false,
+      builder: (_) => ChangeRoleDialog(account: account),
+    );
+  }
+
+  @override
+  State<ChangeRoleDialog> createState() => _ChangeRoleDialogState();
+}
+
+class _ChangeRoleDialogState extends State<ChangeRoleDialog> {
+  static const Duration _timeout = Duration(seconds: 30);
+
+  GlobalRole? _picked;
+  bool _confirming = false;
+  bool _busy = false;
+  String? _error;
+
+  Future<void> _submit() async {
+    final role = _picked;
+    if (_busy || role == null) return;
+    final api = context.read<AutomationState>().cloudApi;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await api.updateAdminUser(widget.account.id, role: role.wire).timeout(_timeout);
+      if (!mounted) return;
+      Navigator.of(context).pop(role);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = friendlyError(e, fallback: 'Rol değiştirilemedi. Bağlantınızı kontrol edip tekrar deneyin.');
+      });
+    }
+  }
+
+  /// Onay adımında kullanıcıya yazılan sonuçlar (sunucu davranışı: `admin_user_service.updateUser`).
+  List<String> _consequences(GlobalRole next) {
+    final old = widget.account.role;
+    return <String>[
+      'Hesabın tüm oturumları kapanır; kullanıcı yeniden giriş yapmak zorunda kalır.',
+      if (next == GlobalRole.superUser) 'Süper yönetici tüm hesap ve dairelere erişebilir.',
+      if (next == GlobalRole.user && (old == GlobalRole.serviceUser || old == GlobalRole.superUser))
+        'Dairelerdeki servis üyelikleri kaldırılır.',
+    ];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = SetupColors.muted(context);
+    final account = widget.account;
+    final picked = _picked;
+    final confirming = _confirming && picked != null;
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        key: const Key('dialog_change_role'),
+        title: Row(
+          children: [
+            OrbIconBadge(icon: Icons.admin_panel_settings_rounded, family: AppFamilies.violet, pending: _busy),
+            const SizedBox(width: 12),
+            Expanded(child: Text('${account.fullName} - Rol Değiştir')),
+          ],
+        ),
+        content: SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(account.email, style: TextStyle(fontSize: AppText.caption, color: muted)),
+                const SizedBox(height: 8),
+                if (!confirming) ...[
+                  Text('Mevcut rol: ${AccountRules.roleName(account.role)}', key: const Key('role_current')),
+                  const SizedBox(height: 10),
+                  Text('Yeni rol', style: TextStyle(fontSize: AppText.caption, color: muted)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    // Çip dokunma hedefi 48 dp'ye genişlediğinden satır arası görünür boşluk zaten yeterli: ek aralık YOK.
+                    runSpacing: 0,
+                    children: [
+                      for (final role in AccountRules.assignableRoles(account))
+                        AppChip(
+                          key: Key('chip_new_role_${role.wire}'),
+                          label: AccountRules.roleName(role),
+                          selected: _picked == role,
+                          onTap: _busy ? null : () => setState(() => _picked = role),
+                        ),
+                    ],
+                  ),
+                ] else ...[
+                  Text(
+                    '${account.fullName} (${account.email}) hesabının rolü "${AccountRules.roleName(account.role)}" iken '
+                    '"${AccountRules.roleName(picked)}" olarak değiştirilecek.',
+                    key: const Key('role_confirm_text'),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  for (final line in _consequences(picked))
+                    SetupInfoRow(icon: Icons.info_outline_rounded, color: SetupColors.warn, text: line),
+                ],
+                if (_error != null)
+                  ServiceCard(
+                    key: const Key('role_change_error'),
+                    accent: SetupColors.error,
+                    child: SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('btn_role_cancel'),
+            style: AppTheme.quietTextButtonStyle(context),
+            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+            child: const Text('Vazgeç'),
+          ),
+          if (confirming) ...[
+            TextButton(
+              key: const Key('btn_role_back'),
+              style: AppTheme.quietTextButtonStyle(context),
+              onPressed: _busy ? null : () => setState(() {
+                    _confirming = false;
+                    _error = null;
+                  }),
+              child: const Text('Geri'),
+            ),
+            ElevatedButton(
+              key: const Key('btn_role_confirm'),
+              onPressed: _busy ? null : _submit,
+              child: _busy
+                  ? const ArcSpinner(size: 18, color: Colors.white, strokeWidth: 2.4)
+                  : const Text('Rolü Değiştir'),
+            ),
+          ] else
+            ElevatedButton(
+              key: const Key('btn_role_next'),
+              onPressed: picked == null ? null : () => setState(() => _confirming = true),
+              child: const Text('Devam'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Kalıcı silme penceresi (**yalnız süper yönetici**; sunucu `DELETE /admin/users/:id?hard=true`).
+///
+/// Geri alınamaz uyarısı + hesabın **e-postasını** (yoksa adını) yazarak onay (büyük/küçük harf ve Türkçe i/ı farkı
+/// gözetilmez); onay düğmesi ifade tam eşleşene kadar pasiftir. Pencere yalnızca API başarısından sonra kapanır ve
+/// sunucunun başarı iletisini döndürür. Sunucu reddederse (ör. `409 SOLE_OWNER_WITH_DEVICES`: panolu dairenin tek sahibi)
+/// ileti **olduğu gibi** pencerede kalır. Kendi hesabı ve son aktif süper için çağıran taraf düğmeyi gizler/kapatır
+/// ([AccountRules.hardDeleteBlock]).
+class HardDeleteAccountDialog extends StatefulWidget {
+  const HardDeleteAccountDialog({super.key, required this.account});
+
+  final AdminAccount account;
+
+  /// Başarıda sunucunun iletisi; vazgeçilirse `null`.
+  static Future<String?> show(BuildContext context, {required AdminAccount account}) {
+    return showAppDialog<String>(
+      context,
+      barrierDismissible: false,
+      builder: (_) => HardDeleteAccountDialog(account: account),
+    );
+  }
+
+  @override
+  State<HardDeleteAccountDialog> createState() => _HardDeleteAccountDialogState();
+}
+
+class _HardDeleteAccountDialogState extends State<HardDeleteAccountDialog> {
+  static const Duration _timeout = Duration(seconds: 30);
+  static const String _fallbackDone = 'Kullanıcı kalıcı olarak silindi.';
+
+  final TextEditingController _confirm = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  /// Yazılacak ifade: e-posta; e-posta yoksa ad.
+  bool get _byEmail => widget.account.email.trim().isNotEmpty;
+  String get _phrase => _byEmail ? widget.account.email.trim() : widget.account.fullName.trim();
+  bool get _matches => confirmPhraseMatches(_confirm.text, _phrase);
+
+  @override
+  void initState() {
+    super.initState();
+    _confirm.addListener(_onChanged);
+  }
+
+  void _onChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _confirm.removeListener(_onChanged);
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy || !_matches) return;
+    final api = context.read<AutomationState>().cloudApi;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final body = await api.deleteAdminUser(widget.account.id, hard: true).timeout(_timeout);
+      if (!mounted) return;
+      Navigator.of(context).pop(asNonEmptyString(body['message']) ?? _fallbackDone);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = friendlyError(e, fallback: 'Hesap silinemedi. Bağlantınızı kontrol edip tekrar deneyin.');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final account = widget.account;
+    final muted = SetupColors.muted(context);
+    final primary = SetupColors.text(context);
+    return PopScope(
+      canPop: !_busy,
+      child: AlertDialog(
+        key: const Key('dialog_hard_delete'),
+        title: Row(
+          children: [
+            OrbIconBadge(icon: Icons.delete_forever_rounded, family: AppFamilies.rose, pending: _busy),
+            const SizedBox(width: 12),
+            Expanded(child: Text('${account.fullName} - Kalıcı Sil')),
+          ],
+        ),
+        content: SizedBox(
+          width: 460,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(account.email, style: TextStyle(fontSize: AppText.caption, color: muted)),
+                const SizedBox(height: 8),
+                const SetupInfoRow(
+                  icon: Icons.warning_amber_rounded,
+                  color: SetupColors.error,
+                  bold: true,
+                  text: 'Bu işlem geri alınamaz.',
+                ),
+                const SetupInfoRow(
+                  icon: Icons.info_outline_rounded,
+                  color: SetupColors.warn,
+                  text: 'Hesap ve ona bağlı kayıtlar kalıcı olarak silinir; tüm oturumları kapanır. Yalnızca bu hesabın '
+                      'sahibi olduğu, başka üyesi ve panosu olmayan daire kayıtları da silinir. Panolu bir dairenin tek '
+                      'sahibiyse sunucu silmeyi reddeder.',
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  _byEmail ? 'Onaylamak için hesabın e-posta adresini yazın:' : 'Onaylamak için hesabın adını yazın:',
+                  style: TextStyle(color: primary, fontSize: 13),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _phrase,
+                  key: const Key('hard_delete_phrase'),
+                  style: TextStyle(fontWeight: FontWeight.bold, color: SetupColors.readable(context, SetupColors.error)),
+                ),
+                SetupTextField(
+                  key: const Key('field_hard_delete_confirm'),
+                  controller: _confirm,
+                  label: _byEmail ? 'E-posta adresi' : 'Hesap adı',
+                  prefixIcon: _byEmail ? Icons.email_rounded : Icons.person_rounded,
+                  keyboardType: _byEmail ? TextInputType.emailAddress : TextInputType.name,
+                  enabled: !_busy,
+                  onSubmitted: (_) => _submit(),
+                ),
+                if (_error != null)
+                  ServiceCard(
+                    key: const Key('hard_delete_error'),
+                    accent: SetupColors.error,
+                    child: SetupInfoRow(icon: Icons.error_outline_rounded, color: SetupColors.error, bold: true, text: _error!),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('btn_hard_delete_cancel'),
+            style: AppTheme.quietTextButtonStyle(context),
+            onPressed: _busy ? null : () => Navigator.of(context).pop(),
+            child: const Text('Vazgeç'),
+          ),
+          ElevatedButton(
+            key: const Key('btn_hard_delete_confirm'),
+            style: destructiveButtonStyle(),
+            onPressed: (_busy || !_matches) ? null : _submit,
+            child: _busy
+                ? const ArcSpinner(size: 18, color: Colors.white, strokeWidth: 2.4)
+                : const Text('Kalıcı Olarak Sil'),
           ),
         ],
       ),

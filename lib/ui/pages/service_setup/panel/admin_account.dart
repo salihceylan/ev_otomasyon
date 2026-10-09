@@ -3,8 +3,9 @@ import 'package:flutter/foundation.dart';
 import '../../../../models/capabilities.dart';
 import '../../../../models/json_utils.dart';
 
-/// Hesabın yaşam durumu (`users.account_status`).
-enum AccountStatus { active, pendingInvite, suspended, unknown }
+/// Hesabın yaşam durumu (`users.account_status`). `deleted`: kendi isteğiyle silinmiş (anonimleştirilmiş) hesap; sunucu
+/// bu hesapta rol/dondurma/parola işlemi yaptırmaz (409).
+enum AccountStatus { active, pendingInvite, suspended, deleted, unknown }
 
 /// Servis yönetimi listesindeki bir hesap (süper yönetici, servis sorumlusu ya da müşteri).
 ///
@@ -43,6 +44,9 @@ class AdminAccount {
   /// Hesap donduruldu (pasif ya da `suspended`).
   bool get isFrozen => !isActive || status == AccountStatus.suspended;
 
+  /// Silinmiş (anonimleştirilmiş) hesap.
+  bool get isDeleted => status == AccountStatus.deleted;
+
   /// Davet e-postası bekliyor (henüz parola belirlenmedi).
   bool get isPendingInvite => status == AccountStatus.pendingInvite;
 
@@ -54,6 +58,8 @@ class AdminAccount {
         return AccountStatus.pendingInvite;
       case 'suspended':
         return AccountStatus.suspended;
+      case 'deleted':
+        return AccountStatus.deleted;
     }
     return AccountStatus.unknown;
   }
@@ -78,12 +84,12 @@ class AdminAccount {
     );
   }
 
-  AdminAccount copyWith({bool? isActive, AccountStatus? status}) => AdminAccount(
+  AdminAccount copyWith({bool? isActive, AccountStatus? status, GlobalRole? role}) => AdminAccount(
         id: id,
         fullName: fullName,
         email: email,
         phone: phone,
-        role: role,
+        role: role ?? this.role,
         isActive: isActive ?? this.isActive,
         status: status ?? this.status,
         notes: notes,
@@ -109,6 +115,7 @@ class AdminAccount {
 
   /// Durum etiketi (kart rozeti).
   String get statusLabel {
+    if (isDeleted) return 'Silinmiş';
     if (isFrozen) return 'Donduruldu';
     if (isPendingInvite) return 'Davet bekliyor';
     return 'Aktif';
@@ -117,6 +124,9 @@ class AdminAccount {
 
 /// Dondurma engelinin nedeni.
 enum FreezeBlock { self, lastSuper }
+
+/// "Rol Değiştir" / "Kalıcı Sil" eyleminin engel nedeni (sunucu kurallarının istemci ön denetimi).
+enum AccountBlock { self, deleted, lastSuper }
 
 /// Hesap yönetimi kuralları (istemci tarafı ön denetim; **karar sunucudadır**).
 class AccountRules {
@@ -140,6 +150,75 @@ class AccountRules {
       if (otherActiveSupers == 0) return FreezeBlock.lastSuper;
     }
     return null;
+  }
+
+  /// Sunucunun atanabilir saydığı üç rol (`admin_user_service.VALID_ROLES`), ekran sırasıyla.
+  static const List<GlobalRole> _assignable = <GlobalRole>[GlobalRole.superUser, GlobalRole.serviceUser, GlobalRole.user];
+
+  /// Ekranda gösterilen rol adı (hesap ekleme penceresindeki çip adlarıyla aynı).
+  static String roleName(GlobalRole role) {
+    switch (role) {
+      case GlobalRole.superUser:
+        return 'Süper yönetici';
+      case GlobalRole.serviceUser:
+        return 'Servis sorumlusu';
+      case GlobalRole.user:
+        return 'Müşteri';
+      case GlobalRole.serviceSession:
+        return 'Servis oturumu';
+      case GlobalRole.unknown:
+        return 'Bilinmeyen rol';
+    }
+  }
+
+  /// [target]'a atanabilecek roller: mevcut rolü hariç, sunucunun kabul ettiği üç rol.
+  static List<GlobalRole> assignableRoles(AdminAccount target) =>
+      <GlobalRole>[for (final r in _assignable) if (r != target.role) r];
+
+  /// [target] **son aktif süper yönetici** mi? Sunucu (`countOtherActiveSupers`) başka bir `super_user` + `is_active` +
+  /// `account_status = active` hesap arar; hedef donuk olsa bile aynı kural geçerlidir. Yalnızca tüm süperler yüklüyse
+  /// ([allSupersLoaded]) kesin konuşulur.
+  static bool _isLastActiveSuper(AdminAccount target, List<AdminAccount> loaded, bool allSupersLoaded) {
+    if (!target.isSuper || !allSupersLoaded) return false;
+    return !loaded.any((a) => a.isSuper && a.id != target.id && a.isActive && a.status == AccountStatus.active);
+  }
+
+  /// "Rol Değiştir" engeli (yoksa `null`): kendi hesabı (sunucu 400), silinmiş hesap (409), son aktif süperin rolü
+  /// düşürülemez (409). Kalan her durumda karar sunucudadır.
+  static AccountBlock? roleChangeBlock({
+    required AdminAccount target,
+    required String? currentUserId,
+    required List<AdminAccount> loaded,
+    required bool allSupersLoaded,
+  }) {
+    if (currentUserId != null && target.id == currentUserId) return AccountBlock.self;
+    if (target.isDeleted) return AccountBlock.deleted;
+    if (_isLastActiveSuper(target, loaded, allSupersLoaded)) return AccountBlock.lastSuper;
+    return null;
+  }
+
+  /// "Kalıcı Sil" engeli (yoksa `null`): kendi hesabı (400) ve son aktif süper (409). Silinmiş hesap kalıcı silinebilir.
+  static AccountBlock? hardDeleteBlock({
+    required AdminAccount target,
+    required String? currentUserId,
+    required List<AdminAccount> loaded,
+    required bool allSupersLoaded,
+  }) {
+    if (currentUserId != null && target.id == currentUserId) return AccountBlock.self;
+    if (_isLastActiveSuper(target, loaded, allSupersLoaded)) return AccountBlock.lastSuper;
+    return null;
+  }
+
+  /// [roleChangeBlock] / [hardDeleteBlock] engelinin açıklaması.
+  static String blockText(AccountBlock block) {
+    switch (block) {
+      case AccountBlock.self:
+        return 'Kendi hesabınız üzerinde bu işlem yapılamaz.';
+      case AccountBlock.deleted:
+        return 'Silinmiş hesabın rolü değiştirilemez.';
+      case AccountBlock.lastSuper:
+        return 'Son aktif süper yönetici silinemez ve rolü değiştirilemez; önce başka bir süper yönetici ekleyin.';
+    }
   }
 
   /// Dondurma engelinin açıklaması.

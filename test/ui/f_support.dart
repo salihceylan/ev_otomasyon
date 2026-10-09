@@ -1703,6 +1703,18 @@ class ServiceFakeCloud extends FakeCloudApi {
   final List<String> adminResets = <String>[];
   Object? adminResetError;
 
+  /// `DELETE /admin/users/:id` istekleri (`{id, hard}`); yalnızca sunucunun KABUL ettikleri yazılır.
+  final List<Map<String, dynamic>> adminDeletes = <Map<String, dynamic>>[];
+
+  /// Doluysa `deleteAdminUser` bunu fırlatır (yazma kapısından önce kontrol edilir).
+  Object? adminDeleteError;
+
+  /// Panolu bir dairenin TEK sahibi olan hesapların kimlikleri: kalıcı silme `409 SOLE_OWNER_WITH_DEVICES` döner.
+  final Set<String> soleOwnerWithDevices = <String>{};
+
+  /// Kalıcı silmede sunucunun "üyesi ve panosu olmayan N daire kaydı da silindi" dediği sayı.
+  int adminHardDeleteHomes = 0;
+
   /// İşlemi yapan hesabın sunucudaki kimliği ve süper yönetici olup olmadığı.
   String actorId = 'super-1';
   bool actorIsSuper = true;
@@ -1861,7 +1873,31 @@ class ServiceFakeCloud extends FakeCloudApi {
         throw const ApiException(statusCode: 403, code: 'REAUTH_REQUIRED', message: 'Mevcut parolanız doğrulanamadı.');
       }
     }
-    if (isActive == false && target['role'] == 'super_user' && _activeSupers(except: userId) == 0) {
+    if (role != null && role.isNotEmpty) {
+      // Sunucu kuralları (admin_user_service.updateUser): rol atama yalnız süper; geçerli rol; kendi rolü; silinmiş hesap.
+      if (!actorIsSuper) {
+        throw const ApiException(
+          statusCode: 403,
+          code: 'FORBIDDEN',
+          message: 'Rol atama yetkisi yalnızca Süper Yöneticilere aittir.',
+        );
+      }
+      if (!const <String>['super_user', 'service_user', 'user'].contains(role)) {
+        throw const ApiException(statusCode: 400, code: 'VALIDATION', message: 'Geçersiz rol.');
+      }
+      if (userId == actorId && role != target['role']) {
+        throw const ApiException(statusCode: 400, code: 'VALIDATION', message: 'Kendi rolünüzü değiştiremezsiniz.');
+      }
+      if (target['account_status'] == 'deleted') {
+        throw const ApiException(
+          statusCode: 409,
+          code: 'CONFLICT',
+          message: 'Silinmiş hesap üzerinde bu işlem yapılamaz.',
+        );
+      }
+    }
+    final demotingSuper = target['role'] == 'super_user' && role != null && role.isNotEmpty && role != 'super_user';
+    if (((isActive == false && target['role'] == 'super_user') || demotingSuper) && _activeSupers(except: userId) == 0) {
       throw const ApiException(
         statusCode: 409,
         code: 'CONFLICT',
@@ -1870,6 +1906,7 @@ class ServiceFakeCloud extends FakeCloudApi {
     }
     adminUpdates.add(<String, dynamic>{
       'id': userId,
+      'role': role,
       'full_name': fullName,
       'phone': phone,
       'notes': adminNotes,
@@ -1881,11 +1918,65 @@ class ServiceFakeCloud extends FakeCloudApi {
     if (fullName != null) target['full_name'] = fullName;
     if (phone != null) target['phone'] = phone.isEmpty ? null : phone;
     if (adminNotes != null) target['admin_notes'] = adminNotes;
+    if (role != null && role.isNotEmpty) target['role'] = role;
     if (isActive != null) {
       target['is_active'] = isActive;
       target['account_status'] = isActive ? 'active' : 'suspended';
     }
     return Map<String, dynamic>.of(target);
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteAdminUser(String userId, {bool hard = false}) async {
+    calls.add('deleteAdminUser:$userId:${hard ? 'hard' : 'soft'}');
+    final gate = adminWriteGate;
+    if (gate != null) await gate.future;
+    final error = adminDeleteError;
+    if (error != null) throw error;
+    // Sunucu kuralları (admin_user_service.deleteUser).
+    if (userId == actorId) {
+      throw const ApiException(
+        statusCode: 400,
+        code: 'VALIDATION',
+        message: 'Kendi hesabınızı bu menüden silemez veya donduramazsınız.',
+      );
+    }
+    if (hard && !actorIsSuper) {
+      throw const ApiException(statusCode: 403, code: 'FORBIDDEN', message: 'Kalıcı silme yalnızca Süper Yöneticilere aittir.');
+    }
+    final target = _adminById(userId);
+    if (target == null) throw const ApiException(statusCode: 404, code: 'NOT_FOUND', message: 'Kullanıcı bulunamadı.');
+    if (target['role'] == 'super_user' && _activeSupers(except: userId) == 0) {
+      throw const ApiException(
+        statusCode: 409,
+        code: 'CONFLICT',
+        message: 'Son aktif Süper Yönetici silinemez veya dondurulamaz.',
+      );
+    }
+    if (hard && soleOwnerWithDevices.contains(userId)) {
+      throw const ApiException(
+        statusCode: 409,
+        code: 'SOLE_OWNER_WITH_DEVICES',
+        message: 'Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil '
+            'sıfırlama yapın.',
+      );
+    }
+    adminDeletes.add(<String, dynamic>{'id': userId, 'hard': hard});
+    if (!hard) {
+      target['is_active'] = false;
+      target['account_status'] = 'suspended';
+      return <String, dynamic>{'success': true, 'message': 'Kullanıcı pasife alındı; tüm oturumları sonlandırıldı.'};
+    }
+    adminUsers = <Map<String, dynamic>>[
+      for (final u in adminUsers)
+        if ('${u['id']}' != userId) u,
+    ];
+    return <String, dynamic>{
+      'success': true,
+      'message': adminHardDeleteHomes > 0
+          ? 'Kullanıcı kalıcı olarak silindi (üyesi ve panosu olmayan $adminHardDeleteHomes daire kaydı da silindi).'
+          : 'Kullanıcı kalıcı olarak silindi.',
+    };
   }
 
   @override

@@ -33,6 +33,9 @@
     adres `400 host_not_allowed`. v1.3.2 kartta denendi ve servis yazılımında seçili sürüm.
 11. **Değişmeyenler (kararlarınız):** kablosuz sensör "yakında" olarak kapalı kalır; e-postasız müşteri panosunu kendi karekoduyla
     sahiplenir (e-posta/SMS sistemi gelene kadar); personel süper kullanıcının dondurduğu hesabı açabilir.
+12. **Aboneler ve Servis Yönetimi'nde iki karar:** "Kurulumu sürdür" artık servis sorumlusuna da açık (yarım kalan dairede, 72 saatlik
+    kurulum penceresi sürerken; bitmişse "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin."); süper
+    kullanıcı hesap kartında başka hesaplar için "Rol Değiştir" ve "Kalıcı Sil" düğmelerini görür (Bölüm 6.3).
 
 **Aynı gün sabah gelenler:**
 
@@ -254,14 +257,28 @@ bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
 
 ### 6.3 Abone ve hesap yönetimi
 1. "Servis Yönetimi" (hesap/müşteri ekle, dondur, davet), "Abonelerim & Cihaz Atama" ("Home Admin Ata" / "Yöneticiyi Devret").
-   Aboneler listesindeki "Kurulumu sürdür" de yarım kaydı sorar (Bölüm 5.1, madde 5).
+   Aboneler listesindeki "Kurulumu sürdür" yarım kalan (devreye alınmamış, panosu olan) dairede **süper kullanıcıya ve servis
+   sorumlusuna** görünür; sihirbazı mevcut cihaz kipinde 5. adımdan (Wi-Fi) açar ve yarım kaydı sorar (Bölüm 5.1, madde 5).
+   Servis sorumlusunun listesinde yalnız kendi kurulum penceresi (sahiplendirmeden sonra 72 saat) süren daireler bulunur; pencere
+   bitince daire listeden düşer, liste eskiyse dokununca "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile
+   girin." çıkar ve sihirbaz açılmaz. Müşteri PIN'i verince "Yetkili Servis Girişi (PIN)" ile 2 saatliğine girilir ("Mevcut
+   cihazlarım" → "Bağlantıyı yeniden kur", Bölüm 5.1). Müşteri ve misafir bu ekranı hiç açamaz.
 2. Dondurma: etkin hesap "askıda" olur; davet bekleyen hesap dondurulup çözülünce "davet bekliyor" kalır. Silinmiş hesapta
    dondurma, rol ve parola işlemi yapılamaz ("Silinmiş hesap üzerinde bu işlem yapılamaz.").
 3. Müşterinin telefonunu siz yazar ya da değiştirirseniz telefon "doğrulanmamış" sayılır: o numarayla SMS girişi bu hesaba açılmaz
    (müşteri e-posta ve şifresiyle girer). Telefon alanlarında "+90 " hazır gelir; numara tek biçimde (+905…) saklanır.
-4. Kalıcı silme (süper kullanıcı): kullanıcı panosu takılı bir dairenin tek sahibiyse "Kullanıcı, panosu olan bir dairenin tek
-   sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama yapın." görünür. Silinen kullanıcının sözleşme onay
-   kayıtları kimliksiz saklanır.
+4. **Kalıcı Sil (yalnız süper kullanıcı; kendi hesabında düğme yoktur):** hesap kartında "Kalıcı Sil" → "Bu işlem geri alınamaz."
+   uyarısı → hesabın e-posta adresini (e-postası yoksa adını) yazın → "Kalıcı Olarak Sil". Kullanıcı panosu takılı bir dairenin tek
+   sahibiyse "Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama
+   yapın." görünür, pencere açık kalır, hesap silinmez. Başarıda "Kullanıcı kalıcı olarak silindi." (üyesiz ve panosuz tek sahipli
+   daire kaydı varsa "… (üyesi ve panosu olmayan N daire kaydı da silindi)."). Son aktif süper kullanıcı silinemez. Silinen
+   kullanıcının sözleşme onay kayıtları kimliksiz saklanır.
+5. **Rol Değiştir (yalnız süper kullanıcı; kendi hesabında düğme yoktur):** hesap kartında "Rol Değiştir" → yeni rol ("Süper
+   yönetici" / "Servis sorumlusu" / "Müşteri"; mevcut rol seçilmez) → "Devam" → onay metni ("… hesabının rolü "Müşteri" iken
+   "Servis sorumlusu" olarak değiştirilecek.") → "Rolü Değiştir". Rol değişince hesabın tüm oturumları kapanır (kullanıcı yeniden
+   giriş yapar); servis sorumlusu ya da süperden müşteriye düşürülenin dairelerdeki servis üyelikleri kalkar. Son aktif süper
+   yönetici düşürülemez (tüm süperler listedeyse düğme pasif, değilse sunucunun iletisi pencerede kalır); silinmiş hesabın rolü
+   değişmez.
 
 ### 6.4 Wi-Fi değişikliği (modem/şifre değişince)
 "Wi-Fi Kurulum & Kurtarma Sihirbazı": kurulum ağına bağlan → yeni ağ bilgisini yükle. Giriş/internet gerekmez.

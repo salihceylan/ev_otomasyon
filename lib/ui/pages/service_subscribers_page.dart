@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../../models/capabilities.dart';
 import '../../services/automation_state.dart';
 import '../../utils/friendly_error.dart';
 import '../motion/motion.dart';
@@ -32,6 +33,11 @@ import 'service_setup/setup_style.dart';
 /// Yükleme hatası **görünür** kalır (bayat liste yenileme hatasıyla birlikte uyarılır); sonsuz
 /// yükleme dönmez (zaman aşımı + hata + yeniden dene).
 ///
+/// "Kurulumu sürdür" yarım kalan (devreye alınmamış) dairede **süper kullanıcıya ve servis sorumlusuna** açıktır
+/// ([canResumeSetup]); müşteri/misafir/servis PIN oturumu bu sayfayı zaten açamaz. Servis sorumlusu yalnız sunucunun
+/// kendi listesine koyduğu (süresi dolmamış 72 saatlik kurulum penceresi olan) dairelerde sürdürebilir; süre bittiyse
+/// sunucu 403 döner ve sade bir yönlendirme gösterilir (Servis PIN'i ile girin).
+///
 /// Sayfa TEK kaydırma alanıdır: oturum bandı, sayaçlar ve arama kutusu listenin ilk öğeleridir (sabit bir üst bant büyük
 /// yazıda ekranın yarısını yerdi ve opak zemin küresel devre kartı arka planını örterdi); arama kutusu her durumda
 /// (yükleniyor/hata/boş/liste) AYNI ağaç konumunda kalır, böylece yazarken odak kaybolmaz.
@@ -41,6 +47,11 @@ class ServiceSubscribersPage extends StatefulWidget {
   /// Sayfa başına abone sayısı.
   final int pageSize;
 
+  /// "Kurulumu sürdür" düğmesini görecek roller: süper kullanıcı ve (küresel rolü) servis sorumlusu. Müşteri, ev sahibi,
+  /// sakin, misafir, servis PIN oturumu ve oturumsuz durum göremez. Bu yalnız arayüz kapısıdır; karar sunucudadır
+  /// (`requireHomeAccess`: staff yalnız süresi dolmamış `service_user` üyeliği olan evde geçer).
+  static bool canResumeSetup(Capabilities caps) => caps.isSuperUser || caps.isStaff;
+
   @override
   State<ServiceSubscribersPage> createState() => _ServiceSubscribersPageState();
 }
@@ -48,6 +59,10 @@ class ServiceSubscribersPage extends StatefulWidget {
 class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
   static const Duration _searchDebounce = Duration(milliseconds: 300);
   static const Duration _requestTimeout = Duration(seconds: 25);
+
+  /// Servis sorumlusunun bu dairede (artık) yetkisi yok: kurulum penceresi bitti ya da üye değil.
+  static const String _noServiceAccess =
+      "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin.";
 
   final TextEditingController _search = TextEditingController();
   final ScrollController _scroll = ScrollController();
@@ -571,8 +586,11 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
                   icon: Icon(Icons.person_add_alt_1_rounded, size: accentIconSize(context, base: 18)),
                   label: const Text('Home Admin Ata', textAlign: TextAlign.center),
                 ),
-              // Süper yönetici yarım kurulumu buradan sürdürür (servis_kurulum-9).
-              if (context.read<AutomationState>().isSuperUser && s.deviceUuids.isNotEmpty && !s.isCommissioned)
+              // Süper yönetici ve servis sorumlusu yarım kurulumu buradan sürdürür (servis_kurulum-9; sihirbaz claim
+              // sonrası "Aboneler > Kurulumu sürdür" diye yönlendirir). Müşteri/misafir bu sayfayı hiç açamaz.
+              if (ServiceSubscribersPage.canResumeSetup(context.read<AutomationState>().capabilities) &&
+                  s.deviceUuids.isNotEmpty &&
+                  !s.isCommissioned)
                 OutlinedButton.icon(
                   key: Key('btn_resume_setup_${s.homeId}'),
                   style: accentOutlinedButtonStyle(context, AppFamilies.emerald),
@@ -587,8 +605,12 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
     );
   }
 
-  /// Süper yönetici (evin üyesi değildir; "Mevcut cihazlarım" yolu yoktur) yarım kalan kurulumu sürdürür (servis_kurulum-9):
-  /// evin panoları sunucudan alınır, sihirbaz mevcut cihaz kipinde 5. adımdan açılır.
+  /// Süper yönetici (evin üyesi değildir; "Mevcut cihazlarım" yolu yoktur) ve servis sorumlusu yarım kalan kurulumu
+  /// sürdürür (servis_kurulum-9): evin panoları sunucudan alınır, sihirbaz mevcut cihaz kipinde 5. adımdan açılır.
+  ///
+  /// Servis sorumlusunda sunucu, evde süresi dolmamış `service_user` üyeliği (sahiplenmeden sonra 72 saat) arar. Üyelik
+  /// yoksa ya da süre bittiyse `403` (nadiren `404`) döner; ham sunucu iletisi yerine [_noServiceAccess] gösterilir.
+  /// Süper kullanıcıda sunucu iletisi olduğu gibi gösterilir.
   Future<void> _resumeSetup(Subscriber s) async {
     final state = context.read<AutomationState>();
     final messenger = ScaffoldMessenger.of(context);
@@ -597,7 +619,14 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
       final devices = await state.cloudApi.devices(s.homeId).timeout(_requestTimeout);
       uids = <String>[for (final d in devices) d.deviceUuid];
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text(friendlyError(e, fallback: 'Dairenin panoları alınamadı.'))));
+      final denied = !state.isSuperUser && e is ApiException && (e.isForbidden || e.isNotFound);
+      messenger.showSnackBar(
+        SnackBar(
+          key: denied ? const Key('snack_resume_no_access') : null,
+          duration: denied ? const Duration(seconds: 6) : const Duration(seconds: 4),
+          content: Text(denied ? _noServiceAccess : friendlyError(e, fallback: 'Dairenin panoları alınamadı.')),
+        ),
+      );
       return;
     }
     if (!mounted) return;

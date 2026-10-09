@@ -31,6 +31,9 @@ import 'service_setup/setup_widgets.dart';
 ///   gösterilmez); oluşturma/düzenleme diyalogları yalnızca API başarısından sonra kapanır.
 /// * Süper yönetici kendi hesabını ve **son aktif süper yöneticiyi donduramaz**; dondurma onaylanır.
 ///   Başka bir süper yöneticinin parolası için kendi mevcut parolası istenir.
+/// * Yalnız süper yönetici, **başka** hesaplarda **Rol Değiştir** (iki adımlı onay) ve **Kalıcı Sil** (geri alınamaz uyarısı +
+///   e-postayı yazarak onay) eylemlerini görür; kurallar sunucudadır (kendi hesabı, silinmiş hesap, son aktif süper,
+///   panolu dairenin tek sahibi): ön denetim [AccountRules], sunucu iletisi olduğu gibi gösterilir.
 /// * Servis sorumlusu hesap oluştururken **parola veremez**: hesap `pending_invite` olur ve
 ///   etkinleştirme / sıfırlama bağlantısı e-postayla gider.
 /// * **Görevler ve Araçlar** sekmesi: servis araçlarına kısayollar.
@@ -261,6 +264,24 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
     if (ok != true || !mounted) return;
     _snack('${account.fullName} hesabı güncellendi.');
     unawaited(_loadAccounts(reset: true));
+  }
+
+  /// Süper yönetici: başka bir hesabın küresel rolünü değiştirir (iki adımlı pencere; API pencerede çağrılır).
+  Future<void> _changeRole(AdminAccount account) async {
+    if (_busyIds.contains(account.id)) return;
+    final role = await ChangeRoleDialog.show(context, account: account);
+    if (role == null || !mounted) return;
+    _snack('${account.fullName} hesabının rolü "${AccountRules.roleName(role)}" olarak değiştirildi.');
+    unawaited(_refreshAll());
+  }
+
+  /// Süper yönetici: hesabı **kalıcı** siler (e-postayı yazarak onay; API pencerede çağrılır). Sunucu iletisi snackbar'da.
+  Future<void> _hardDelete(AdminAccount account) async {
+    if (_busyIds.contains(account.id)) return;
+    final message = await HardDeleteAccountDialog.show(context, account: account);
+    if (message == null || !mounted) return;
+    _snack(message);
+    unawaited(_refreshAll());
   }
 
   bool get _allSupersLoaded {
@@ -500,10 +521,28 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
         loaded: _items,
         allSupersLoaded: allSupersLoaded,
       ),
+      roleChangeBlock: isSuper
+          ? AccountRules.roleChangeBlock(
+              target: account,
+              currentUserId: meId,
+              loaded: _items,
+              allSupersLoaded: allSupersLoaded,
+            )
+          : null,
+      hardDeleteBlock: isSuper
+          ? AccountRules.hardDeleteBlock(
+              target: account,
+              currentUserId: meId,
+              loaded: _items,
+              allSupersLoaded: allSupersLoaded,
+            )
+          : null,
       onEdit: () => _edit(account, isSelf: isSelf),
       onFreeze: () => _freeze(account),
       onActivate: () => _activate(account),
       onSendReset: () => _sendReset(account),
+      onChangeRole: () => _changeRole(account),
+      onHardDelete: () => _hardDelete(account),
     );
   }
 
@@ -744,10 +783,14 @@ class _AccountCard extends StatelessWidget {
     required this.actorIsSuper,
     required this.busy,
     required this.freezeBlock,
+    required this.roleChangeBlock,
+    required this.hardDeleteBlock,
     required this.onEdit,
     required this.onFreeze,
     required this.onActivate,
     required this.onSendReset,
+    required this.onChangeRole,
+    required this.onHardDelete,
   });
 
   final AdminAccount account;
@@ -755,10 +798,16 @@ class _AccountCard extends StatelessWidget {
   final bool actorIsSuper;
   final bool busy;
   final FreezeBlock? freezeBlock;
+
+  /// "Rol Değiştir" / "Kalıcı Sil" ön denetimi (yalnız süper yönetici için hesaplanır; `self` ⇒ düğmeler hiç çizilmez).
+  final AccountBlock? roleChangeBlock;
+  final AccountBlock? hardDeleteBlock;
   final VoidCallback onEdit;
   final VoidCallback onFreeze;
   final VoidCallback onActivate;
   final VoidCallback onSendReset;
+  final VoidCallback onChangeRole;
+  final VoidCallback onHardDelete;
 
   /// Rol rengi: süper yönetici violet, servis cyan, müşteri sky. Müşteri eskiden AMBER'di: amber "uyarı/bekliyor"
   /// demektir ve "Davet bekliyor"/"Dondur" durumlarıyla karışıyordu (rol ile durum ayrışmıyordu).
@@ -783,6 +832,9 @@ class _AccountCard extends StatelessWidget {
     // Düzenleme/dondurma yetkisi: süper yönetici herkes için; servis personeli yalnızca müşteri hesapları için.
     final canManage = actorIsSuper || account.role == GlobalRole.user;
     final canSendReset = canManage && !frozen && !isSelf;
+    // Rol değiştirme ve kalıcı silme YALNIZ süper yönetici içindir (sunucu: 403) ve kendi hesabında hiç gösterilmez.
+    final canSuperActions = actorIsSuper && !isSelf;
+    final superBlock = roleChangeBlock ?? hardDeleteBlock;
     return ServiceCard(
       key: Key('card_account_${account.id}'),
       accent: frozen ? SetupColors.error : null,
@@ -898,8 +950,33 @@ class _AccountCard extends StatelessWidget {
                     label: const Text('Aktifleştir', textAlign: TextAlign.center),
                     style: accentOutlinedButtonStyle(context, AppFamilies.emerald),
                   ),
+                if (canSuperActions)
+                  OutlinedButton.icon(
+                    key: Key('btn_change_role_${account.id}'),
+                    onPressed: (busy || roleChangeBlock != null) ? null : onChangeRole,
+                    icon: Icon(Icons.admin_panel_settings_outlined, size: accentIconSize(context, base: 18)),
+                    label: const Text('Rol Değiştir', textAlign: TextAlign.center),
+                    style: accentOutlinedButtonStyle(context, AppFamilies.violet),
+                  ),
+                if (canSuperActions)
+                  OutlinedButton.icon(
+                    key: Key('btn_hard_delete_${account.id}'),
+                    onPressed: (busy || hardDeleteBlock != null) ? null : onHardDelete,
+                    icon: Icon(Icons.delete_forever_outlined, size: accentIconSize(context, base: 18)),
+                    label: const Text('Kalıcı Sil', textAlign: TextAlign.center),
+                    style: accentOutlinedButtonStyle(context, AppFamilies.rose),
+                  ),
               ],
             ),
+            if (canSuperActions && superBlock != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  AccountRules.blockText(superBlock),
+                  key: Key('note_action_block_${account.id}'),
+                  style: TextStyle(fontSize: AppText.badge, color: muted),
+                ),
+              ),
             if (canManage && !frozen && freezeBlock != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
