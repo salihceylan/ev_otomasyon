@@ -1,5 +1,6 @@
 // EthLink.cpp - W5500 Ethernet sürücüsü (IDF 4.4 esp_eth + esp_netif). Bkz. EthLink.h.
 #include "EthLink.h"
+#include "IdfIpcWrap.h"
 #include "NetLink.h"
 #include "WiFiManager.h"
 #include <Arduino.h>
@@ -68,10 +69,20 @@ bool initDriver() {
   esp_netif_init();
   esp_err_t er = esp_event_loop_create_default();
   if (er != ESP_OK && er != ESP_ERR_INVALID_STATE) return false;
+  // gpio_install_isr_service -> esp_ipc_call_blocking: bu gorev Core 0'a sabit oldugundan IdfIpcWrap.cpp isi ipc0'in 1 KB'lik yiginda degil
+  // bu gorevin 4 KB'lik yiginda kosturur (aksi halde Wi-Fi baslatmasiyla ayni ana denk gelince ipc0 yigini tasar: acilista PANIC; IpcPolicy.h).
+  const uint32_t ipcInlineBefore = idfipc::inlineCalls();
   er = gpio_install_isr_service(0);
   if (er != ESP_OK && er != ESP_ERR_INVALID_STATE) {
     printf("[ETH] gpio_install_isr_service hatasi (%d).\r\n", (int)er);
     return false;
+  }
+  if (er == ESP_OK) {   // hizmet bu cagriyla kuruldu (INVALID_STATE: baska biri onceden kurmus, IPC hic kullanilmadi)
+    if (idfipc::inlineCalls() != ipcInlineBefore) {
+      printf("[ETH] GPIO ISR servisi eth_init yiginda kuruldu (ipc0 atlandi).\r\n");
+    } else {
+      printf("[ETH] UYARI: IPC sarmalayicisi etkin degil (platformio.ini -Wl,--wrap=esp_ipc_call_blocking eksik): acilista PANIC riski.\r\n");
+    }
   }
 
   spi_bus_config_t bus;

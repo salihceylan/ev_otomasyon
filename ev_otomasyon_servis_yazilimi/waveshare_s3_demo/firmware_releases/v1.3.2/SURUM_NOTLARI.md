@@ -3,18 +3,20 @@
 > Durum: v1.3.2 = v1.3.1 + 2026-10-09 gece düzeltmelerinin firmware maddeleri (fw-tarama-1, fw-tarama-3, fw-tarama-4, fw-tarama-5,
 > sko-5; sözleşme `docs/CONTRACTS.md` C1 ve C6) + iki sahip kararı (bulut sunucu kilidi; sabit rolsüz fabrika varsayılanı, madde 7-8).
 > Sürüm numarası 1.3.2 olarak kaldı (hiç yayımlanmadı/karta yazılmadı); imajlar bu iki madde ile yeniden paketlendi.
-> **Kartta HENÜZ DENENMEDİ**: yalnız derleme, PC birim testleri (Unity/MSVC) ve QA yığınının simülatörü. `version_info.json` bilerek
-> değiştirilmedi (hâlâ v1.3.1'i gösterir); kartta denendikten sonra güncellenmeli.
+> **Kartta denendi (2026-10-09, AHBU-S3-DD8754):** açılış 12/12 temiz (panik 0), Wi-Fi, MQTTS (istemci kimliği bağlı EMQX ile),
+> kayıtlı ayarların korunması (yalnız uygulama 0x10000'e yazıldı). Bu denemede v1.3.1'den beri süren açılış çökmesi bulunup
+> düzeltildi (madde 9) ve imajlar yeniden paketlendi. Aşağıdaki "donanımda doğrulanacaklar" maddeleri hâlâ açık.
+> `version_info.json` bu sürümü gösterir (servis yazılımı yeni karta v1.3.2 yazar).
 
 ## Dosyalar
 
 | Dosya | Boyut | Ne zaman |
 |---|---|---|
-| `firmware_combined_0x0.bin` | 1411280 | Yeni / boş kart. 0x0'a yazılır. **Panonun ayarlarını (NVS: anahtar, Wi-Fi, bulut kimliği, güvenlik) SİLER.** |
-| `app_0x10000_v1.3.2.bin` | 1345744 | Kurulu kartı güncellemek. **0x10000'e** yazılır; ayarlar korunur. 0x0'a yazmayın (kart açılmaz). |
+| `firmware_combined_0x0.bin` | 1411664 | Yeni / boş kart. 0x0'a yazılır. **Panonun ayarlarını (NVS: anahtar, Wi-Fi, bulut kimliği, güvenlik) SİLER.** |
+| `app_0x10000_v1.3.2.bin` | 1346128 | Kurulu kartı güncellemek. **0x10000'e** yazılır; ayarlar korunur. 0x0'a yazmayın (kart açılmaz). |
 
-SHA-256 (ana imaj): `da5273fa1831a2428c81f8f0e61b19f2c1ee42661e973da7f70aebc578924d47`
-SHA-256 (yalnız uygulama): `0de1b4546d37bade0ffd3bd2d8189c52b077e80bf72d219a60565fd2fea586e6`
+SHA-256 (ana imaj): `d2dd086dd589287726eaf72d2a0ba5abd99c062f540cef97a5484d7825edf307`
+SHA-256 (yalnız uygulama): `21fb3b13feea52d112362bb89af9e4e42aac1fed1c613ededbb0f2104cb95545` (ELF SHA-256 ilk 16: `bcdc8e292fc78284`)
 ELF SHA-256: `dedb76d154f090d742f4ce48e2d03974268d1be6e6044ee27091d573d14bd8e8`
 
 Derleme: PlatformIO espressif32@7.1.3 (Arduino-ESP32 2.0.17 / IDF 4.4), temiz derleme; esptool `merge_bin` (`--flash_mode dio
@@ -64,9 +66,19 @@ simülatör artık bootstrap'i de modelliyor: kimlik döndürülünce art arda 3
    davranışı (komşu röleyle YUKARI/AŞAĞI eşleşmesi, kilit) yalnız servisin yazdığı şablon/yapılandırmadan gelir; çıkış/kilit kodu
    zaten tipten türetiyordu (röle 1-4'e özgü kod yok). Seri `DEFAULT_DI` artık DI 1..4'ü bu fabrika düzenine döndürür; panjur DI düzeni
    yalnız açık `SET_SHUTTER_DI` komutuyla. Etki: yalnız fabrika sıfırlaması / boş NVS; kayıtlı yapılandırması olan pano değişmez.
+9. **Açılışta tekrarlayan çökme düzeltildi** (v1.3.1'de de vardı). Belirti: `STA baglantisi kuruluyor` satırından hemen sonra
+   `Backtrace: 0xfffffffe:0x8037f3ec |<-CORRUPTED` ve `Reset nedeni: PANIC`; v1.3.1'de açılış başına ~1, v1.3.2'nin ilk paketinde
+   3-8 çökme (sonunda açılıyordu; her çökmede röleler kapanıp açılır). Kök neden (çekirdek dökümü + ELF ile kanıtlı):
+   `eth_init` görevi (Core 0) `gpio_install_isr_service(0)` çağırır; IDF 4.4 bunu `esp_ipc_call_blocking(0, ...)` ile 1 KB yığınlı
+   `ipc0` görevine yaptırır (`CONFIG_ESP_IPC_TASK_STACK_SIZE=1024`). `esp_intr_alloc` -> `heap_caps_malloc` zincirinin en derin
+   noktasında gelen kesme yığını taşırır (yığın sonu izleme noktası -> çift istisna). Düzeltme: `-Wl,--wrap=esp_ipc_call_blocking`
+   (`src/IdfIpcWrap.cpp`, karar kuralı `src/IpcPolicy.h`, test `test_ipc_policy`): çağıran görev hedef çekirdeğe sabitse iş IPC'ye
+   gitmeden çağıranın kendi yığınında koşar (IDF'in tek çekirdek davranışı); diğer durumlar gerçek IPC. Açılışta
+   `[ETH] GPIO ISR servisi eth_init yiginda kuruldu (ipc0 atlandi).` görünür. `platformio.ini`'deki bayrak KALDIRILMAMALI.
+   Kartta: 12 yeniden başlatmada panik 0, `eth_init` boş yığını ~2 KB, her açılışta Wi-Fi + MQTTS bağlandı.
 
 ## Bilinen / donanımda doğrulanacaklar
-- Bu sürüm kartta denenmedi. Kartta bakılacaklar: açılış ve `fw: 1.3.2`, MQTTS bağlantısı, bulut `cfg_patch` sonrası state'te
+- Kartta denendi: açılış, Wi-Fi, MQTTS, ayarların korunması (yukarıda). Hâlâ bakılacaklar: bulut `cfg_patch` sonrası state'te
   `cfg.safety.id`; v1.3.1'den kalan kayıtlı köprü sensörlü panoda açılışın normal kipte olması; ek modüllü kartta 16 → 8 kanal
   geçişinde açık rölenin kapanması; panjur hareketindeyken `EXTMOD` reddi; yabancı sunucuyla `POST /api/mqtt/config` -> 400
   `host_not_allowed` (Ethernet'ten ve anahtarla), `server`sız istekte sunucunun korunması, bootstrap sonrası bağlantı; fabrika

@@ -4,9 +4,11 @@
 yapan **servis sorumlusu**. Teknik bilgi gerekmez; adımları sırayla uygulamanız yeterlidir.
 Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, testler) en sonda "Teknik Ek" bölümündedir.
 
-> **Güncel durum (2026-10-08 akşam):** 1. sekmede seçili firmware `version_info.json`'a göre **v1.3.1**'dir (Ethernet, şablon,
-> panonun kendi bulut kimliği, yerel anahtar izi). v1.3.1 kartta denendi: açılış, Wi-Fi, bulut bağlantısı ve sunucuyla anahtar izi
-> eşleşmesi tamam; Ethernet kablosu ve panonun kendi bulut kimliği (bootstrap) gerçek kabloyla henüz denenmedi. Ethernet, şablon
+> **Güncel durum (2026-10-09):** 1. sekmede seçili firmware `version_info.json`'a göre **v1.3.2**'dir (v1.3.1'in üstüne: bulut
+> sunucu kilidi, rölelerde sabit görev olmayan fabrika ayarı, açılış çökmesi düzeltmesi; ayrıntı `firmware_releases/v1.3.2/SURUM_NOTLARI.md`).
+> v1.3.2 kartta denendi: 12 açılışta çökme yok, Wi-Fi ve bulut bağlantısı tamam. v1.3.1 de kartta denenmişti (açılış, Wi-Fi, bulut,
+> anahtar izi eşleşmesi) ama açılışta ara sıra çöküyordu: kurulu kartları v1.3.2 uygulama imajıyla güncelleyin. Ethernet kablosu ve
+> panonun kendi bulut kimliği (bootstrap) gerçek kabloyla henüz denenmedi. Ethernet, şablon
 > yazımı ve bireysel sahiplenme için kartta v1.3.0+ gerekir. Kartta daha yeni bir sürüm çalışırken eski bir imaj (ör. v1.2.1)
 > seçilirse araç sormadan yazmaz: **"Güncelle (ayarlar korunur)"** kipinde **"Sürüm Düşürme Engellendi"** der (Gözat... ile v1.3.0+
 > uygulama imajını seçin: `v1.3.1\app_0x10000_v1.3.1.bin` ya da `v1.3.0\app_0x10000_v1.3.0.bin`), birleşik imajda **"Sürüm Düşürme"** diye sorar.
