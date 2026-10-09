@@ -1,0 +1,21 @@
+{
+  "aciklama": "Konya Diafon ESP32-WROOM-32U 8DI-8RO Kartı Pin Haritası",
+  "cihaz_no": 1,
+  "role_pinleri": [
+    25, 26, 27, 14, 12, 13, 32, 33
+  ],
+  "role_aktif_seviye": "HIGH",
+  "rs485": {
+    "uart_no": 2,
+    "tx_pin": 17,
+    "rx_pin": 16,
+    "de_re_pin": 4,
+    "baudrate": 9600
+  },
+  "dijital_giris_74hc165": {
+    "data_pin": 19,
+    "clock_pin": 18,
+    "latch_pin": 5
+  }
+}
+
