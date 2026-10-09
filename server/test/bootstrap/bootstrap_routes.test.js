@@ -98,14 +98,36 @@ test('oran siniri (bireysel-6): imzasi dogrulanmayan (401) istekler kart butcesi
   assert.equal(still.status, 202);
 });
 
-test('oran siniri: ayni IP icin saatte 60 (farkli kartlarla 61. istek 429)', async () => {
+test('sozlesme-1 (C7): IP butcesini yalniz basarisiz (200/202 disi) istekler harcar; ortak NAT arkasinda 61 sahiplenilmemis kart 202 alir', async () => {
   const { app, calls } = build();
-  for (let i = 0; i < 60; i += 1) {
+  for (let i = 0; i < 61; i += 1) {
     const r = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '192.0.2.10').send({ ...BODY, device_uuid: `AHBU-IP-${String(i).padStart(4, '0')}` });
     assert.equal(r.status, 202, `istek ${i + 1}`);
   }
+  assert.equal(calls.length, 61);
+  // 200 (sahiplenilmis pano kimligini alir) de harcamaz
+  const ok = build({ http: 200, body: { status: 'ok', mqtt: { host: 'h', port: 8883, username: 'd_x', password: 'p' } } });
+  for (let i = 0; i < 61; i += 1) {
+    const r = await request(ok.app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '192.0.2.12').send({ ...BODY, device_uuid: `AHBU-OK-${String(i).padStart(4, '0')}` });
+    assert.equal(r.status, 200, `istek ${i + 1}`);
+  }
+});
+
+test('oran siniri: ayni IP icin saatte 60 BASARISIZ istek (61. istek 429, servis cagrilmaz); butce doluyken gecerli imzali istek de 429 (once bakilir)', async () => {
+  let verdict = { http: 401, body: DENIED_BODY };
+  const { app, calls } = build(() => verdict);
+  for (let i = 0; i < 60; i += 1) {
+    const r = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '192.0.2.10').send({ ...BODY, device_uuid: `AHBU-IP-${String(i).padStart(4, '0')}` });
+    assert.equal(r.status, 401, `istek ${i + 1}`);
+  }
   const r61 = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '192.0.2.10').send({ ...BODY, device_uuid: 'AHBU-IP-9999' });
   assert.equal(r61.status, 429);
+  assert.equal(r61.body.code, 'RATE_LIMITED');
+  assert.ok(Number(r61.headers['retry-after']) > 0);
+  assert.equal(calls.length, 60, '61. istek servise gitmez');
+  verdict = { http: 202, body: { status: 'pending' } };
+  const valid = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '192.0.2.10').send({ ...BODY, device_uuid: 'AHBU-IP-8888' });
+  assert.equal(valid.status, 429, 'IP butcesi doluyken gecerli istek de reddedilir');
   assert.equal(calls.length, 60);
   const otherIp = await request(app).post('/api/v1/devices/bootstrap').set('X-Forwarded-For', '192.0.2.11').send({ ...BODY, device_uuid: 'AHBU-IP-9999' });
   assert.equal(otherIp.status, 202);

@@ -13,6 +13,8 @@
 //   cakismasi, NC zorunlulugu ...) panoda: firmware `cfg_invalid` -> 400 CONFIG_INVALID.
 //   Hirsiz katmani alanlari (set.intrusion, sensor flags > 0x07, kind "arm_key") yalniz caps 'intrusion' ilan eden panoya
 //   (v1.2.0 parseCfgEdit flags > 0x07'yi bad_value ile reddeder): yoksa 409 FIRMWARE_UNSUPPORTED.
+//   Kopru sensoru ekleme/degistirme (set.sensor "bN") yalniz caps 'bridge' ilan eden panoya (sozlesme C1): yoksa 400
+//   VALIDATION; kopru sensorunu silmek her zaman serbest.
 // sys yuku: {cmd:"cfg_patch", module:"safety", uid, id, base_rev, set|del} <= 1024 bayt (firmware sys siniri).
 // Bekleyen kuyruk (device_configs.pending, surum 1):
 //   {"v":1,"items":[{id, base_rev, patch:{set|del}, by, role, at, loosening, sent_at?}], "inflight"?: {id, at, by?}}
@@ -222,6 +224,10 @@ function validatePatchRequest(body, { caps = [] } = {}) {
     if (!SET_ITEMS.includes(what)) return fail('Bilinmeyen yama öğesi.');
     const err = validateSetItem(what, value, intrusion);
     if (err) return err;
+    // fw-tarama-1 (sozlesme C1): kopru sensoru yalniz caps 'bridge' ilan eden (kopru surucusuyle derlenmis) panoya; silme serbest.
+    if (what === 'sensor' && value.id[0] === 'b' && !(Array.isArray(caps) && caps.includes('bridge'))) {
+      return fail('Kablosuz (köprü) sensör bu panoda desteklenmiyor.');
+    }
   }
   return {
     ok: true,

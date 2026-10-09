@@ -18,7 +18,8 @@
 //   zones -> bad_zone (liste, kimlik, bolge 1 yok) | bad_name (bolge adi)
 //   sensor/eylemci/isik oge ayristirici          -> bad_id | bad_kind | bad_zone | bad_value | bad_relay | bad_name | bad_field
 //   cok fazla oge -> count; eylemci tanimsiz bolge -> act_zone; dimmer lamba olmayan / tekrarli role -> invalid_light
-//   capraz kurallar (firmware validate): sensor_di_range, sensor_src, sensor_dup, sensor_di_is_button, gas_smoke_not_nc,
+//   capraz kurallar (firmware validate): sensor_di_range, sensor_src, sensor_bridge_unsupported, sensor_dup,
+//   sensor_di_is_button, gas_smoke_not_nc,
 //   arm_key_not_nc, confirm_range, act_relay_range|shutter|impulse|dup, act_zone, valve_medium, pulse_relay2, pulse_time,
 //   fb_di_range, fb_di_conflict, fb_timeout_range, siren_run_limit.
 
@@ -314,7 +315,6 @@ function relayUsable(relays, n, r) {
 function crossValidate(relays, dis, n, sensors, actuators) {
   if (sensors.length > MAX_SENSORS || actuators.length > MAX_ACTUATORS) return 'count';
   let sensorDi = 0n;
-  let bridgeSeen = 0;
   for (const s of sensors) {
     const control = CONTROL_KINDS.includes(s.kind);
     if (s.di) {
@@ -325,9 +325,9 @@ function crossValidate(relays, dis, n, sensors, actuators) {
       if (dis[s.index - 1].target_relay !== 0) return 'sensor_di_is_button';
     } else {
       if (control) return 'sensor_src';
-      if (s.index < 1 || s.index > MAX_BRIDGE) return 'sensor_bridge_range';
-      if (bridgeSeen & (1 << (s.index - 1))) return 'sensor_dup';
-      bridgeSeen |= 1 << (s.index - 1);
+      // fw-tarama-1 (sozlesme C1): firmware kopru surucusu olmadan derlenir (BridgeSensor.h, caps'te 'bridge' yok); kopru
+      // sensoru kartta hic okunmaz. Sira firmware validate(forWrite) ve servis yazilimiyla ayni: aralik/dup denetiminden once.
+      return 'sensor_bridge_unsupported';
     }
     if (control ? s.zone > MAX_ZONES : s.zone < 1 || s.zone > MAX_ZONES) return 'sensor_zone';
     const gasSmoke = s.kind === 'gas' || s.kind === 'smoke';

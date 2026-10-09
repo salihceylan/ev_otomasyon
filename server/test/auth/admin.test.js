@@ -41,6 +41,12 @@ fakeDb.on(/UPDATE users SET [\s\S]*updated_at = CURRENT_TIMESTAMP WHERE id = \$(
   }
   return [{ ...u }];
 });
+// hesap-uyelik-6 (C10): davet bekleyen hesabin yumusak silinmesi yalniz pasife alir (durum korunur)
+fakeDb.on(/UPDATE users SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = \$1/, (p) => {
+  const u = store.users.get(p[0]);
+  if (u) u.is_active = false;
+  return [];
+});
 fakeDb.on(/UPDATE users SET is_active = FALSE, account_status = 'suspended'/, (p) => {
   const u = store.users.get(p[0]);
   if (u) { u.is_active = false; u.account_status = 'suspended'; }
@@ -213,6 +219,23 @@ test('guncelleme: staff parola/rol DEGISTIREMEZ, kapsam disi kullanici 404; ad/t
   assert.strictEqual(store.users.get(staffUser.id).full_name, 'Musteri Yeni Ad');
 });
 
+test('hesap-uyelik-3: personel telefonu degistirince phone_verified=FALSE (OTP girisi o hesaba baglanmaz); ayni telefon bayragi korur', async () => {
+  const u = store.users.get(staffUser.id);
+  u.phone = '+905551119988';
+  u.phone_verified = true;
+  const same = await api('patch', `/users/${staffUser.id}`, T(staff), { phone: '+905551119988' });
+  assert.strictEqual(same.status, 200, JSON.stringify(same.body));
+  assert.strictEqual(store.users.get(staffUser.id).phone_verified, true, 'ayni telefon: bayrak korunur');
+  const changed = await api('patch', `/users/${staffUser.id}`, T(staff), { phone: '+905551117766' });
+  assert.strictEqual(changed.status, 200, JSON.stringify(changed.body));
+  assert.strictEqual(store.users.get(staffUser.id).phone, '+905551117766');
+  assert.strictEqual(store.users.get(staffUser.id).phone_verified, false, 'personelin yazdigi telefon dogrulanmamis');
+  u.phone_verified = true;
+  await api('patch', `/users/${staffUser.id}`, T(staff), { phone: null });
+  assert.strictEqual(store.users.get(staffUser.id).phone, null);
+  assert.strictEqual(store.users.get(staffUser.id).phone_verified, false);
+});
+
 test('sifirlama baglantisi: staff kendi kullanicisina gonderebilir; super kullaniciya/kapsam disina 404', async () => {
   const before = sentMails.length;
   const r = await api('post', `/users/${staffUser.id}/send-reset`, T(staff));
@@ -294,6 +317,43 @@ test('dondurma (soft delete / is_active=false): oturumlar + TUM evlerdeki MQTT k
   assert.deepStrictEqual(mqttCalls.filter((c) => c[0] === 'all'), [['all', u1.id, true]]);
   assert.deepStrictEqual(mqttCalls.find((c) => c[0] === 'kick')[1].sort(), [`a_ev-1_${u1.id}`, `a_ev-2_${u1.id}`].sort());
   assert.ok(mqttCalls.findIndex((c) => c[0] === 'kick') > mqttCalls.findIndex((c) => c[0] === 'all'));
+});
+
+// hesap-uyelik-6 (sozlesme C10): dondur/coz davet bekleyen hesabin durumunu korur; silinmis hesap degistirilemez
+test('C10: pending_invite dondurulup cozulunce durum pending_invite KALIR (yalniz is_active degisir); yumusak silmede de', async () => {
+  const p = store.addUser({ email: 'davetli-c10@example.com', password_hash: hash, created_by_user_id: staff.id, account_status: 'pending_invite' });
+  const off = await api('patch', `/users/${p.id}`, T(staff), { is_active: false });
+  assert.strictEqual(off.status, 200, JSON.stringify(off.body));
+  assert.deepStrictEqual([store.users.get(p.id).is_active, store.users.get(p.id).account_status], [false, 'pending_invite']);
+  const on = await api('patch', `/users/${p.id}`, T(staff), { is_active: true });
+  assert.strictEqual(on.status, 200, JSON.stringify(on.body));
+  assert.deepStrictEqual([store.users.get(p.id).is_active, store.users.get(p.id).account_status], [true, 'pending_invite'], 'davet akisi bozulmaz');
+  const del = await api('delete', `/users/${p.id}`, T(staff));
+  assert.strictEqual(del.status, 200, JSON.stringify(del.body));
+  assert.deepStrictEqual([store.users.get(p.id).is_active, store.users.get(p.id).account_status], [false, 'pending_invite']);
+  // active <-> suspended bugunku gibi
+  const a = store.addUser({ email: 'aktif-c10@example.com', password_hash: hash, created_by_user_id: staff.id });
+  await api('patch', `/users/${a.id}`, T(staff), { is_active: false });
+  assert.strictEqual(store.users.get(a.id).account_status, 'suspended');
+  await api('patch', `/users/${a.id}`, T(staff), { is_active: true });
+  assert.strictEqual(store.users.get(a.id).account_status, 'active');
+});
+
+test('C10: silinmis hesapta dondurma/cozme/rol/parola ve yumusak silme 409 CONFLICT; hesap degismez', async () => {
+  const d = store.addUser({ email: 'deleted+c10@deleted.invalid', is_active: false, account_status: 'deleted' });
+  const msg = 'Silinmiş hesap üzerinde bu işlem yapılamaz.';
+  for (const [method, body] of [
+    ['delete', null],
+    ['patch', { is_active: true }],
+    ['patch', { role: 'service_user' }],
+    ['patch', { password: 'Yeni-Parola-2026' }],
+  ]) {
+    const r = await api(method, `/users/${d.id}`, T(super1), body);
+    assert.strictEqual(r.status, 409, `${method} ${JSON.stringify(body)} -> ${JSON.stringify(r.body)}`);
+    assert.strictEqual(r.body.code, 'CONFLICT');
+    assert.strictEqual(r.body.message, msg);
+  }
+  assert.deepStrictEqual([store.users.get(d.id).is_active, store.users.get(d.id).account_status, store.users.get(d.id).role], [false, 'deleted', 'user']);
 });
 
 test('parola atama ve rol degisimi de TUM evlerdeki uygulama MQTT kimliklerini iptal eder + COMMIT sonrasi kick (UYELIK-02)', async () => {

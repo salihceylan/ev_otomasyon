@@ -403,6 +403,45 @@ test('kullanim-4: zamanli kurallar ayni tx te yeni cihaza tasinir; baska evin ku
   assert.ok(migrateSql[0].tx !== null, 'ayni transaction');
 });
 
+// tarama-sunucu-cihaz-site-1 (sozlesme C4): guvenlik yapilandirmasi yeni panoya AKTARILMAZ; yanit bunu acikca soyler.
+const SAFETY_RESTORE_WARNING =
+  'Eski panonun güvenlik ayarları (sensörler, vanalar, bölgeler) yeni panoya aktarılmadı. Servis bu ayarları yeniden yazana kadar su/gaz koruması ÇALIŞMAZ. Yetkili servisi çağırın.';
+const REPLACE_MESSAGE = 'Pano değişimi tamamlandı. Kanal adları, kurallar ve panjur süreleri yeni panoya taşındı.';
+
+test('C4: eski panonun guvenlik yapilandirmasinda sensor/eylemci varsa safety_restore required + uyari; denetim kaydinda', async () => {
+  for (const body of [
+    { sensors: [{ id: 'd3', kind: 'water', zone: 1 }], actuators: [] },
+    { sensors: [], actuators: [{ id: 'a1', relay: 5, kind: 'valve' }] },
+  ]) {
+    const ctx = await setup();
+    ctx.world.state.device_configs = [{ device_id: ctx.oldDev.id, module: 'safety', rev: 3, crc: '0000000a', body }];
+    const r = await ctx.replace();
+    assert.strictEqual(r.safety_restore, 'required', JSON.stringify(body));
+    assert.ok(Array.isArray(r.warnings) && r.warnings.includes(SAFETY_RESTORE_WARNING), JSON.stringify(r.warnings));
+    assert.strictEqual(r.message, REPLACE_MESSAGE);
+    const audit = ctx.world.state.device_audit_logs.find((a) => a.event === 'board_replaced');
+    assert.strictEqual(audit.details.safety_restore, 'required');
+  }
+});
+
+test('C4: tasinan uc noktada actuator_type dolu ise required; guvenlik yapilandirmasiz evde not_required ve uyari yok', async () => {
+  const withActuator = await setup();
+  withActuator.eps[5].actuator_type = 'valve';
+  assert.strictEqual((await withActuator.replace()).safety_restore, 'required');
+
+  const plain = await setup();
+  // bos guvenlik govdesi ve baska modul sayilmaz
+  plain.world.state.device_configs = [
+    { device_id: plain.oldDev.id, module: 'safety', rev: 1, crc: '00000001', body: { sensors: [], actuators: [], zones: [{ id: 1, name: 'Ev' }] } },
+    { device_id: plain.oldDev.id, module: 'other', rev: 1, crc: '00000001', body: { sensors: [{ id: 'd1' }] } },
+  ];
+  const r = await plain.replace();
+  assert.strictEqual(r.safety_restore, 'not_required');
+  assert.ok(!(r.warnings || []).includes(SAFETY_RESTORE_WARNING));
+  assert.strictEqual(r.message, REPLACE_MESSAGE);
+  assert.strictEqual(plain.world.state.device_audit_logs.find((a) => a.event === 'board_replaced').details.safety_restore, 'not_required');
+});
+
 test('guvenlik-1: eski panonun ACIK alarm satirlari lost/detached olur (gaz bastirmasi kalkar); kapali satirlara dokunulmaz', async () => {
   const ctx = await setup();
   const { state } = ctx.world;

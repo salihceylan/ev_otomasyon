@@ -161,8 +161,11 @@ function createHomeStore({ now = () => Date.now() } = {}) {
     // ---------------- home_invitations ----------------
     [/SELECT COUNT\(\*\)::int AS n FROM home_invitations/, (p) =>
       [{ n: s.invitations.filter((i) => i.home_id === p[0] && !i.is_used && alive(i.expires_at)).length }]],
-    [/INSERT INTO home_invitations/, (p) => {
-      if (s.invitations.some((i) => i.code_hash === p[2])) { const e = new Error('dup'); e.code = '23505'; throw e; }
+    [/INSERT INTO home_invitations/, (p, t) => {
+      if (s.invitations.some((i) => i.code_hash === p[2])) {
+        if (/ON CONFLICT DO NOTHING/.test(t)) return []; // hesap-uyelik-7: islem icinde cakisma satir dondurmez
+        const e = new Error('dup'); e.code = '23505'; throw e;
+      }
       const i = { id: crypto.randomUUID(), home_id: p[0], created_by: p[1], invite_code: null, code_hash: p[2], role: p[3], expires_at: new Date(p[4]), guest_valid_from: p[5], guest_valid_until: p[6], guest_name: p[7], is_used: false, used_by: null, used_at: null, created_at: NOW() };
       s.invitations.push(i);
       return [{ ...i }];
@@ -200,7 +203,7 @@ function createHomeStore({ now = () => Date.now() } = {}) {
     // ---------------- home_users ----------------
     [/SELECT role, valid_from, valid_until FROM home_users WHERE home_id = \$1 AND user_id = \$2 FOR UPDATE/, (p) =>
       s.members.filter((m) => m.home_id === p[0] && m.user_id === p[1]).map((m) => ({ ...m }))],
-    [/SELECT role FROM home_users WHERE home_id = \$1 AND user_id = \$2 FOR UPDATE/, (p) =>
+    [/SELECT role FROM home_users WHERE home_id = \$1 AND user_id = \$2 FOR (UPDATE|SHARE)/, (p) =>
       s.members.filter((m) => m.home_id === p[0] && m.user_id === p[1]).map((m) => ({ role: m.role }))],
     [/UPDATE home_users SET valid_from = \$3, valid_until = \$4 WHERE home_id = \$1 AND user_id = \$2/, (p) => {
       const m = s.member(p[0], p[1]);

@@ -74,6 +74,8 @@ async function world() {
   )).rows[0];
   const owner = (await db.query("INSERT INTO users (email, full_name, password_hash) VALUES ($1, 'Sahip', 'x') RETURNING id", [`s2-${tag}@test.invalid`])).rows[0];
   createdUsers.push(owner.id);
+  // sko-1: kuyruktaki onay istegi teslimden once isteyenin yetkisini denetler (evin sahibi uyedir)
+  await db.query("INSERT INTO home_users (home_id, user_id, role) VALUES ($1, $2, 'owner')", [home.id, owner.id]);
 
   const published = [];
   const sys = [];
@@ -282,6 +284,49 @@ test('cevrimdisi onay istegi: pano donunce yalniz ayni aid ile alarm_ack gonderi
   assert.equal(old.ack_requested_at, null, 'istek dusuruldu');
 });
 
+test('sko-1 (040): servis oturumu iptal edilince ya da istek 24 saati asinca kuyruktaki onay iletilmez; istek duser + denetim kaydi', { skip: SKIP }, async () => {
+  const w = await world();
+  await w.event('alarm_raised', { eid: 'aeae0001-1', zone: 1 });
+  const [row] = await w.alarms();
+  const sess = (await w.db.query("INSERT INTO service_sessions (home_id, technician_name, expires_at) VALUES ($1, 'Tekn', now() + interval '1 hour') RETURNING id", [w.home.id])).rows[0];
+  assert.equal(await w.svc.requestAck({ alarmId: row.id, homeId: w.home.id, userId: null, sessionId: sess.id }), true);
+  let cur = (await w.alarms())[0];
+  assert.equal(cur.ack_requested_sid, sess.id, '040: istegi yapan oturum yazilir');
+  assert.equal(cur.ack_requested_by, null);
+  await w.db.query("UPDATE service_sessions SET revoked_at = now(), revoked_reason = 'test' WHERE id = $1", [sess.id]);
+  await w.live(w.summary([{ id: 1, st: 'latched', aid: 'aeae0001-1', srcs: [] }]));
+  assert.equal(w.published.filter((p) => p.cmd.cmd === 'alarm_ack').length, 0, 'iptal edilen oturumun onayi panoya GITMEZ');
+  cur = (await w.alarms())[0];
+  assert.deepEqual([cur.ack_requested_at, cur.ack_requested_by, cur.ack_requested_sid, cur.acked_by], [null, null, null, null]);
+  const audit = async (homeId) => (await w.db.query("SELECT actor_role, details FROM device_audit_logs WHERE home_id = $1 AND event = 'alarm_ack_request_dropped' ORDER BY id", [homeId])).rows;
+  assert.deepEqual((await audit(w.home.id)).map((a) => [a.actor_role, a.details.reason, a.details.alarm_id]), [['system', 'revoked', Number(row.id)]]);
+
+  // gecerli oturum: iletilir ve teslim sid'i temizler
+  const s2 = (await w.db.query("INSERT INTO service_sessions (home_id, technician_name, expires_at) VALUES ($1, 'Tekn', now() + interval '1 hour') RETURNING id", [w.home.id])).rows[0];
+  await w.svc.requestAck({ alarmId: row.id, homeId: w.home.id, userId: null, sessionId: s2.id });
+  await w.live(w.summary([{ id: 1, st: 'latched', aid: 'aeae0001-1', srcs: [] }]));
+  assert.equal(w.published.filter((p) => p.cmd.cmd === 'alarm_ack').length, 1);
+  cur = (await w.alarms())[0];
+  assert.deepEqual([cur.ack_requested_at, cur.ack_requested_sid], [null, null]);
+
+  // 25 saatlik (yetkili sahibin) istegi: expired
+  const w2 = await world();
+  await w2.event('alarm_raised', { eid: 'afaf0001-1' });
+  const [r2] = await w2.alarms();
+  await w2.db.query("UPDATE alarms SET ack_requested_at = now() - interval '25 hours', ack_requested_by = $2 WHERE id = $1", [r2.id, w2.owner.id]);
+  await w2.live(w2.summary([{ id: 1, st: 'latched', aid: 'afaf0001-1', srcs: [] }]));
+  assert.equal(w2.published.filter((p) => p.cmd.cmd === 'alarm_ack').length, 0);
+  assert.equal((await w2.alarms())[0].ack_requested_at, null);
+  assert.deepEqual((await audit(w2.home.id)).map((a) => a.details.reason), ['expired']);
+
+  // yeni alarm acilisi (insertRaised ON CONFLICT yeniden acma) ve kayip (setLost) sid'i temizler
+  await w2.db.query('UPDATE alarms SET ack_requested_at = now(), ack_requested_sid = $2 WHERE id = $1', [r2.id, s2.id]);
+  await w2.live(w2.summary([], { mode: 'safe', reason: 'cfg_corrupt' }));
+  const lost = (await w2.alarms())[0];
+  assert.equal(lost.status, 'lost');
+  assert.deepEqual([lost.ack_requested_at, lost.ack_requested_sid], [null, null]);
+});
+
 test('listAlarms: open | all, before ile sayfalama, ev disi satir gelmez', { skip: SKIP }, async () => {
   const w = await world();
   await w.event('alarm_raised', { eid: 'a1a10001-1', zone: 1 });
@@ -462,4 +507,52 @@ test('guvenlik-1: zamanlayici ve gece hatirlatmasi gaz bastirmasi yalniz EVDEKI 
     [w.home.id, w.dev.id]
   );
   assert.equal(await gas(), true, 'evdeki panonun acik gaz alarmi bastirir');
+});
+
+test('sko-2: retryStuckPushes gercek SQL: failed (1 dk) / eski claimed (2 dk) / pending yeniden gonderilir; CAS cift talebi onler', { skip: SKIP }, async () => {
+  const w = await world();
+  const { SQL } = require('../../src/services/alarm_service');
+  const mk = async (aid, status, push, { attempts = 1, ageSec = 0, fault = null } = {}) => (await w.db.query(
+    'INSERT INTO alarms (home_id, device_id, aid, zone, kind, status, raised_at, push_status, push_attempts, fault_push_status, updated_at) ' +
+    "VALUES ($1, $2, $3, 1, 'gas', $4, now(), $5, $6, $7, now() - make_interval(secs => $8)) RETURNING id",
+    [w.home.id, w.dev.id, aid, status, push, attempts, fault, ageSec]
+  )).rows[0].id;
+  const failedOld = await mk('b0b00001-1', 'latched', 'failed', { ageSec: 61 });
+  const failedNew = await mk('b0b00001-2', 'latched', 'failed', { ageSec: 10 });
+  const claimedOld = await mk('b0b00001-3', 'latched', 'claimed', { ageSec: 180 });
+  const faultOld = await mk('b0b00001-a', 'fault', 'sent', { ageSec: 180, fault: 'sending' });
+  // ikisi birden yarim (nadir): once alarm push'u; ariza push'u satir 2 dk daha degismezse sonraki turda
+  const both = await mk('b0b00001-b', 'fault', 'sending', { ageSec: 180, fault: 'claimed' });
+  const sendingNew = await mk('b0b00001-4', 'latched', 'sending', { ageSec: 30 });
+  const pending = await mk('b0b00001-5', 'latched', 'pending', { attempts: 0 });
+  const closed = await mk('b0b00001-6', 'cleared', 'failed', { ageSec: 600 });
+  const silenced = await mk('b0b00001-7', 'silenced', 'failed', { ageSec: 600 });
+  const exhausted = await mk('b0b00001-8', 'latched', 'failed', { attempts: 5, ageSec: 600 });
+  const sent = await mk('b0b00001-9', 'latched', 'sent', { ageSec: 600 });
+
+  // CAS: ayni satiri iki es zamanli talep -> yalniz biri alir
+  const [a, b] = await Promise.all([w.db.query(SQL.claimRetry, [failedOld]), w.db.query(SQL.claimRetry, [failedOld])]);
+  assert.equal(a.rows.length + b.rows.length, 1, 'cift talep yok');
+  assert.equal((a.rows[0] || b.rows[0]).device_uuid, w.uid);
+  await w.db.query("UPDATE alarms SET push_status = 'failed', updated_at = now() - interval '61 seconds' WHERE id = $1", [failedOld]);
+
+  const r = await w.svc.retryStuckPushes();
+  await w.svc.idle();
+  const byId = new Map((await w.alarms()).map((x) => [String(x.id), x]));
+  const st = (id) => byId.get(String(id)).push_status;
+  assert.deepEqual([failedOld, claimedOld, pending, both].map(st), ['sent', 'sent', 'sent', 'sent']);
+  assert.deepEqual([failedNew, sendingNew, closed, silenced, exhausted, sent].map(st), ['failed', 'sending', 'failed', 'failed', 'failed', 'sent']);
+  assert.equal(byId.get(String(failedOld)).push_attempts, 3, 'her talep denemeyi sayar');
+  assert.equal(byId.get(String(faultOld)).fault_push_status, 'sent', '2 dk\'dan eski ariza push\'u da gonderilir');
+  assert.equal(byId.get(String(both)).fault_push_status, 'claimed', 'ayni turda alarm push\'u satiri tazeledi');
+  // (tur veritabanindaki BUTUN acik alarmlara bakar: diger testlerin satirlari da sayilabilir; yalniz bu ev denetlenir)
+  const mine = w.pushes.filter((p) => p.data.home_id === w.home.id);
+  assert.ok(r.claimed >= 5); // bu evde 4 alarm + 1 ariza push'u
+  assert.equal(mine.length, 5);
+  const { helpers } = require('../../src/services/alarm_service');
+  assert.deepEqual(mine.filter((p) => p.title === helpers.faultTitle('gas')).map((p) => String(p.data.alarm_id)), [String(faultOld)]);
+  await w.db.query("UPDATE alarms SET updated_at = now() - interval '121 seconds' WHERE id = $1", [both]);
+  await w.svc.retryStuckPushes();
+  const after = (await w.alarms()).find((x) => String(x.id) === String(both));
+  assert.equal(after.fault_push_status, 'sent', 'sonraki turda ariza push\'u');
 });

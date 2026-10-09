@@ -202,8 +202,11 @@ class EndpointService {
       }
     }
 
+    // uygulama-ekranlar-7 (sozlesme C14): panjur satirina ad/oda gelirse ciftin IKI satirina yazilir (oda cipleri ve ad tutarli).
+    const pairText = ep.type === 'shutter' && Boolean(ep.shutter_pair_index) && (name !== null || room !== null);
     const updated = await this.db.withTransaction(async (tx) => {
-      if (durationSec !== null) {
+      let pairOk = false;
+      if (durationSec !== null || pairText) {
         // Kilit sirasi esitlemeyle ayni (endpoint_layout_sync rowsLocked): cihazin satirlari kanal sirasinda.
         // Hedef ve cift satirlari bu kumenin icindedir; sonraki UPDATE'ler yeni kilit almaz (40P01 dongusu yok).
         const locked = await tx.query(
@@ -211,7 +214,9 @@ class EndpointService {
              FROM endpoints WHERE home_id = $1 AND device_id = $2 ORDER BY channel_index ASC FOR UPDATE`,
           [homeId, ep.device_id]
         );
-        if (!isSamePairLocked(locked.rows, endpointId, ep.shutter_pair_index)) {
+        pairOk = isSamePairLocked(locked.rows, endpointId, ep.shutter_pair_index);
+        // Yalniz ad/oda: kilitsiz okumadan sonra esitleme cifti bozduysa yalniz hedef satir yazilir (eski davranis).
+        if (!pairOk && durationSec !== null) {
           // set_runtime yayinlandi ve pano ONAYLADI (cift panoda tanimli); ancak onay beklenirken esitleme DB'deki
           // kanal yerlesimini degistirdi. DB'ye yazilmaz, istemci listeyi yenileyip yeniden dener. (Pano cifti artik
           // tanimiyorsa komutu reddeder ve onay gelmez: yukarida 409 "uygulamadi".)
@@ -240,12 +245,14 @@ class EndpointService {
         throw httpError(404, 'Kontrol noktası bulunamadı.', 'NOT_FOUND');
       }
 
-      if (durationSec !== null) {
-        // Panjur cifti (yukari + asagi satiri) ayni sureyi paylasir; hedef satir yukarida yazildi.
+      if (pairOk) {
+        // Panjur cifti (yukari + asagi satiri) ayni sureyi, adi ve odayi paylasir; hedef satir yukarida yazildi. Diger
+        // satir TEK UPDATE ile (verilmeyen alan COALESCE ile korunur).
         await tx.query(
-          `UPDATE endpoints SET shutter_duration_sec = $1, updated_at = CURRENT_TIMESTAMP
+          `UPDATE endpoints SET shutter_duration_sec = COALESCE($1::int, shutter_duration_sec), name = COALESCE($6, name), room = COALESCE($7, room),
+                  updated_at = CURRENT_TIMESTAMP
             WHERE home_id = $2 AND device_id = $3 AND shutter_pair_index = $4 AND type = 'shutter' AND id <> $5`,
-          [durationSec, homeId, ep.device_id, ep.shutter_pair_index, endpointId]
+          [durationSec, homeId, ep.device_id, ep.shutter_pair_index, endpointId, name, room]
         );
       }
 

@@ -60,8 +60,12 @@ const BCRYPT_HASH_RE = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 // terms_version (migration 039) to_jsonb ile okunur: 039 uygulanmamis veritabaninda da giris / kayit / profil sorgulari
 // calisir (alan NULL; yanlis dagitim sirasinda kimlik yolu kopmasin). Yazim yolu (legal_service) kolonu dogrudan kullanir
 // ve sema-sozlesme denetcisi onu denetler. Tum USER_COLS sorgulari tabloyu takma adsiz `users` olarak anar.
+// phone_verified (041, hesap-uyelik-3) ayni nedenle to_jsonb ile okunur (041'siz veritabaninda NULL).
 const USER_COLS = `id, email, full_name, phone, role, is_active, account_status, token_version,
-  must_change_password, email_verified, google_id, apple_id, (to_jsonb(users) ->> 'terms_version')::int AS terms_version`;
+  must_change_password, email_verified, google_id, apple_id, (to_jsonb(users) ->> 'terms_version')::int AS terms_version,
+  (to_jsonb(users) ->> 'phone_verified')::boolean AS phone_verified`;
+// Telefon-OTP ile acilan hesabin yer tutucu e-postasi (verifyPhoneOtp; 041 doldurmasi ayni deseni kullanir)
+const OTP_PLACEHOLDER_EMAIL_RE = /^phone_[0-9]+@ahbu\.local$/i;
 
 // bcrypt cost: uretimde HER ZAMAN 12. Yalnizca NODE_ENV=test iken BCRYPT_TEST_COST ile
 // testleri hizlandirmak icin dusurulebilir.
@@ -477,10 +481,17 @@ class AuthService {
       [userId]
     );
     const nowMs = Date.now();
+    // cekirdek-7 (sozlesme C5): erisim penceresinin yanit anindaki SUNUCU saatine goreli kalan sureleri (tamsayi sn >= 0).
+    // Istemci saat farkini (sunucuNow - yerelNow) bunlardan hesaplar; yerel saati ileri/geri olan misafir erken/gec kapanmaz.
+    const secondsUntil = (t, round) => {
+      const ms = t ? new Date(t).getTime() : NaN;
+      return Number.isFinite(ms) ? Math.max(0, round((ms - nowMs) / 1000)) : null;
+    };
     return r.rows.map((row) => {
       const state = homeAccessState(row, nowMs);
       const visibleTopic = state === 'active' ? row.mqtt_username : null;
       const validUntil = row.role === 'service_user' ? (row.installer_expires_at || null) : (row.valid_until || null);
+      const accessEnd = row.role === 'guest' ? row.valid_until : row.role === 'service_user' ? row.installer_expires_at : null;
       return {
         id: row.id,
         name: row.name,
@@ -493,6 +504,8 @@ class AuthService {
         valid_until: validUntil,
         access_state: state,
         is_expired: state !== 'active',
+        access_starts_in: secondsUntil(row.valid_from, Math.ceil),
+        access_expires_in: secondsUntil(accessEnd, Math.floor),
       };
     });
   }
@@ -514,6 +527,8 @@ class AuthService {
       mqtt_username: row.mqtt_username,
       access_state: 'active',
       is_expired: false,
+      access_starts_in: null, // C5: servis oturumunun penceresi oturum suresidir (ev listesinde yok)
+      access_expires_in: null,
     }));
   }
 
@@ -601,6 +616,8 @@ class AuthService {
     }
 
     const passwordHash = await bcrypt.hash(password, bcryptCost());
+    // Kayitta yazilan telefon DOGRULANMAMISTIR: users.phone_verified DEFAULT FALSE (041); telefon-OTP girisi bu hesaba
+    // baglanmaz (hesap-uyelik-3).
     const createUser = async (q) => {
       const ins = await q.query(
         `INSERT INTO users (full_name, email, password_hash, phone, role, is_active, account_status, password_changed_at)
@@ -840,6 +857,7 @@ class AuthService {
               token_version = token_version + 1,
               must_change_password = FALSE,
               password_changed_at = NULL,
+              phone = CASE WHEN phone_verified THEN phone ELSE NULL END,
               account_status = CASE WHEN account_status = 'active' THEN 'pending_invite' ELSE account_status END,
               updated_at = CURRENT_TIMESTAMP
         WHERE id = $1 AND email_verified = FALSE
@@ -1473,12 +1491,26 @@ class AuthService {
       throw httpError(409, 'Bu telefon numarası birden fazla hesapta kayıtlı. Lütfen e-posta ile giriş yapın.', 'CONFLICT');
     }
     let user = users.rows[0];
+    if (user && user.phone_verified !== true) {
+      // hesap-uyelik-3 (sozlesme C9): telefon yalniz OTP ile acilmis yer tutucu hesapta dogrulanmis sayilir (bayrak eski
+      // kayitta FALSE kalmis olabilir: TRUE yapilir). Kayit/yonetici yazdigi (dogrulanmamis) telefon bu hesaba giris
+      // VERMEZ; telefon baska hesaptan dusurulmez, yeni hesap acilmaz (OTP tuketildi).
+      if (!OTP_PLACEHOLDER_EMAIL_RE.test(String(user.email || ''))) {
+        throw httpError(
+          409,
+          'Bu telefon numarası doğrulanmamış bir hesapta kayıtlı. E-posta adresiniz ve şifrenizle giriş yapın.',
+          'CONFLICT',
+          { body: { reason: 'PHONE_NOT_VERIFIED' } }
+        );
+      }
+      if (user.phone_verified === false) await db.query('UPDATE users SET phone_verified = TRUE WHERE id = $1', [user.id]);
+    }
     if (!user) {
       const dummyEmail = `phone_${cleanPhone.replace(/[^0-9]/g, '')}@ahbu.local`;
       try {
         const ins = await db.query(
-          `INSERT INTO users (full_name, phone, email, password_hash, role, is_active, account_status)
-           VALUES ($1, $2, $3, $4, 'user', TRUE, 'active')
+          `INSERT INTO users (full_name, phone, email, password_hash, role, is_active, account_status, phone_verified)
+           VALUES ($1, $2, $3, $4, 'user', TRUE, 'active', TRUE)
            RETURNING ${USER_COLS}`,
           [`Sakin (${cleanPhone.slice(-4)})`, cleanPhone, dummyEmail, await this._unusablePasswordHash()]
         );

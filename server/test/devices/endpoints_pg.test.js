@@ -222,6 +222,20 @@ test('(a2) yarissiz PUT: light->plug, ad/oda ve panjurda ayni tip + ad gercek PG
   assert.equal((await t.row(3)).shutter_duration_sec, 20);
 });
 
+test('(a3) C14: panjur satirina ad/oda gelince ciftin iki satiri da yazilir; sure+oda tek UPDATE; isik etkilenmez (gercek PG)', { skip: SKIP }, async () => {
+  const c = await getCtx();
+  const t = await makeHome(c);
+  await t.update(await t.row(1), { room: 'Yatak' });
+  assert.deepEqual([(await t.row(1)).room, (await t.row(2)).room], ['Yatak', 'Yatak']);
+  assert.equal((await t.row(2)).name, 'Salon Panjur Aşağı', 'verilmeyen ad korunur');
+  await t.update(await t.row(4), { room: 'Calisma', name: 'Oda Panjuru', shutter_duration_sec: 31 });
+  for (const ch of [3, 4]) {
+    const r = await t.row(ch);
+    assert.deepEqual([r.room, r.name, r.shutter_duration_sec], ['Calisma', 'Oda Panjuru', 31], `kanal ${ch}`);
+  }
+  assert.equal((await t.row(5)).room, SEED[5][2], 'isik satiri degismez');
+});
+
 test('(b) sure yolu + esitleme benzeri transaction es zamanli: kilitlenme (40P01) YOK, ikisi de COMMIT', { skip: SKIP }, async () => {
   const c = await getCtx();
   const t = await makeHome(c);

@@ -901,6 +901,15 @@ test('PG join-preview: davet onizleme kodu TUKETMEZ (sonra katilim calisir, kull
   const p2 = await post(c, '/api/v1/homes/join-preview', (await h.user()).token, { code });
   assert.equal(p2.status, 410);
   assert.equal(p2.body.code, 'GONE');
+  // hesap-uyelik-5 (C3): kodu kullanan uye yeniden katilir / onizler -> 200 already_member (yazim yok)
+  const rejoin = await post(c, '/api/v1/homes/join', joiner.token, { code });
+  assert.equal(rejoin.status, 200, JSON.stringify(rejoin.body));
+  assert.equal(rejoin.body.data.already_member, true);
+  assert.equal(rejoin.body.data.home.role, 'resident');
+  assert.equal(rejoin.body.message, 'Bu davet kodunu zaten kullandınız; dairenin üyesisiniz.');
+  const p2b = await post(c, '/api/v1/homes/join-preview', joiner.token, { code });
+  assert.equal(p2b.status, 200, JSON.stringify(p2b.body));
+  assert.deepEqual([p2b.body.data.already_member, p2b.body.data.role], [true, 'resident']);
   // zaten uye olan icin already_member
   const inv2 = await post(c, `/api/v1/homes/${home.id}/invitations`, owner.token, { role: 'resident' });
   const p3 = await post(c, '/api/v1/homes/join-preview', joiner.token, { code: inv2.body.data.code });
@@ -923,7 +932,15 @@ test('PG join-preview: davet onizleme kodu TUKETMEZ (sonra katilim calisir, kull
   assert.equal(own.status, 400);
   // devir onizleme tuketmedi: kabul calisir
   assert.equal((await post(c, '/api/v1/homes/transfer-accept', target.token, { code: trCode })).status, 200);
-  assert.equal((await post(c, '/api/v1/homes/join-preview', target.token, { code: trCode })).status, 410);
+  // hesap-uyelik-5 (C3): devri kabul eden sahip yeniden onizler / kabul eder -> 200 already_member; baskasi 410
+  const t3 = await post(c, '/api/v1/homes/join-preview', target.token, { code: trCode });
+  assert.equal(t3.status, 200, JSON.stringify(t3.body));
+  assert.deepEqual([t3.body.data.kind, t3.body.data.role, t3.body.data.already_member], ['transfer', 'owner', true]);
+  const reAccept = await post(c, '/api/v1/homes/transfer-accept', target.token, { code: trCode });
+  assert.equal(reAccept.status, 200, JSON.stringify(reAccept.body));
+  assert.equal(reAccept.body.data.already_member, true);
+  assert.equal(reAccept.body.message, `"${home.name}" dairesinin sahipliği zaten size devredildi.`);
+  assert.equal((await post(c, '/api/v1/homes/join-preview', stranger.token, { code: trCode })).status, 410);
   // bilinmeyen kodlar
   assert.equal((await post(c, '/api/v1/homes/join-preview', target.token, { code: 'AHBU-ABCDEFGHJK' })).status, 410);
   assert.equal((await post(c, '/api/v1/homes/join-preview', target.token, { code: 'AHBU-TR-ABCDEFGHJKMNPQRS' })).status, 410);

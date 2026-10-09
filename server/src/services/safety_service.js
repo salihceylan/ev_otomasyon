@@ -98,7 +98,12 @@ class SafetyService {
       throw httpError(409, 'Hırsız alarmı onaylanmaz, çözülür.', 'ALARM_USE_DISARM');
     }
     if (!row.is_online) {
-      const queued = await this.alarms.requestAck({ alarmId, homeId, userId: (actor && actor.userId) || null });
+      const queued = await this.alarms.requestAck({
+        alarmId,
+        homeId,
+        userId: (actor && actor.userId) || null,
+        sessionId: (actor && actor.sessionId) || null, // sko-1: servis (PIN) oturumu; teslimden once gecerliligi denetlenir
+      });
       throw httpError(409, 'Pano çevrimdışı; onay pano bağlanınca (aynı alarm sürüyorsa) iletilecek.', 'DEVICE_OFFLINE', {
         device_online: false,
         ack_queued: queued === true,

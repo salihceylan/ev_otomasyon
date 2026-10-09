@@ -164,6 +164,36 @@ test('devir önizleme: iptal/süresi dolmuş/tamamlanmış/bilinmeyen kod 410; d
   await rejects(run(target, 'AHBU-TR-KISA'), 400, 'VALIDATION');
 });
 
+test('hesap-uyelik-5 (C3): kodu kullanan üye / devri kabul eden sahip yeniden önizler -> 200 already_member; başkası 410', async () => {
+  // davet: kodu kullanan ve hâlâ üye olan kullanıcı -> mevcut rolüyle
+  const joined = h.user();
+  h.member(home, joined, 'resident');
+  const used = addInvite(home, owner, { role: 'guest', used: true });
+  state.home_invitations[state.home_invitations.length - 1].used_by = joined.id;
+  const r = await run(joined, used);
+  assert.equal(r.kind, 'invitation');
+  assert.equal(r.is_transfer, false);
+  assert.equal(r.already_member, true);
+  assert.equal(r.role, 'resident', 'mevcut rol (davetin rolü değil)');
+  assert.equal(r.home_name, 'Önizleme Evi');
+  await rejects(run(h.user(), used), 410, 'GONE');
+  const left = h.user();
+  const usedLeft = addInvite(home, owner, { used: true });
+  state.home_invitations[state.home_invitations.length - 1].used_by = left.id;
+  await rejects(run(left, usedLeft), 410, 'GONE');
+
+  // devir: tamamlanmış devri kabul eden ve hâlâ sahip olan kullanıcı
+  const newOwner = h.user({ email: 'devralan@example.test' });
+  const tHome = h.home({ name: 'Devredilen Ev', owner: newOwner });
+  const done = addTransfer(tHome, owner, 'devralan@example.test', { status: 'COMPLETED' });
+  state.home_transfers[state.home_transfers.length - 1].accepted_by = newOwner.id;
+  const t = await run(newOwner, done);
+  assert.deepEqual([t.kind, t.is_transfer, t.role, t.already_member, t.home_name], ['transfer', true, 'owner', true, 'Devredilen Ev']);
+  await rejects(run(h.user({ email: 'devralan2@example.test' }), done), 410, 'GONE');
+  state.home_users = state.home_users.filter((m) => !(m.home_id === tHome.id && m.user_id === newOwner.id));
+  await rejects(run(newOwner, done), 410, 'GONE');
+});
+
 test('HTTP: başarılı yanıt sarmalayıcısı (success/data), önbelleksiz; /api/ takma yolu; alan adı takma adları (invite_code, inviteCode)', async () => {
   const user = h.user();
   const code = addInvite(home, owner);

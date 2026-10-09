@@ -19,9 +19,9 @@
 //   - 2 dakikalik TELAFI penceresi: gecikmeli/atlanan turlar son 2 dakikanin yuvalarini
 //     yakalar. Kural olusturulmadan/duzenlenmeden ONCE baslayan yuvalar telafi edilmez
 //     (`schedule_changed_at`): yeni kural gecmis bir dakika icin aninda tetiklenmez.
-//   - Gecici hatalar (cihaz cevrimdisi, broker yok) talebi GERI BIRAKIR; ayni pencerede
-//     sonraki dakikada yeniden denenir. Kalici durumlar (yetki, cihaz, gecersiz kural)
-//     yuvayi tuketir. Komutlar mutlak (on/off/up/down) oldugu icin tekrar zararsizdir ve
+//   - Gecici hatalar (cihaz cevrimdisi, broker yok, yayindan ONCEKI beklenmeyen hata - or. veritabani
+//     baglantisi koptu, sko-4) talebi GERI BIRAKIR; ayni pencerede sonraki dakikada yeniden denenir. Kalici
+//     durumlar (yetki, cihaz, gecersiz kural) yuvayi tuketir. Komutlar mutlak (on/off/up/down) oldugu icin tekrar zararsizdir ve
 //     cihaz ayni `id`'yi (`sr<kural>-<yuva>`) tekilleştirir.
 //   - Calistirma aninda: kuralin sahibi (created_by) hala yetkili mi (owner/resident/
 //     staff/super), kural cihazi hala o evde mi, cihaz cevrimici mi -> degilse atlanir ve
@@ -526,45 +526,16 @@ class Scheduler {
   }
 
   async _dispatch(rule, slot, nowMs) {
-    if (!rule.mqtt_username) {
-      return { status: 'skipped_invalid', detail: 'ev konu kimligi yok' };
+    // sko-4: yayindan ONCEKI adimlarda beklenmeyen hata (gecici veritabani hatasi) yuvayi tuketmez: talep geri birakilir
+    // ve ayni telafi penceresinde sonraki dakikada yeniden denenir. Yayin sonrasi davranis degismez.
+    let prepared;
+    try {
+      prepared = await this._prepareDispatch(rule, slot, nowMs);
+    } catch (err) {
+      return { status: 'failed', detail: safeMessage(err), release: true };
     }
-    const command = ruleToCommand(rule, slot.ms);
-    if (!command) {
-      return { status: 'skipped_invalid', detail: 'kural komuta cevrilemedi (kanal/tip/eylem)' };
-    }
-
-    // Kural sahibi hala yetkili mi?
-    const who = await this.db.query(SQL.creator, [rule.home_id, rule.created_by]);
-    if (!isCreatorAuthorized((who && who.rows && who.rows[0]) || null, nowMs)) {
-      return { status: 'skipped_creator', detail: 'kural sahibi artik yetkili degil' };
-    }
-
-    // Kural cihazi hala bu evde mi?
-    const devRes = await this.db.query(SQL.devices, [rule.home_id, rule.device_id || null]);
-    const devices = (devRes && devRes.rows) || [];
-    let device = null;
-    if (rule.device_id) {
-      device = devices.find((d) => String(d.id) === String(rule.device_id)) || null;
-      if (!device) return { status: 'skipped_device', detail: 'kural cihazi artik bu eve ait degil' };
-    } else if (devices.length === 1) {
-      device = devices[0];
-    } else {
-      return {
-        status: 'skipped_device',
-        detail: devices.length === 0 ? 'evde cihaz yok' : 'evde birden fazla cihaz var, kural cihaz belirtmiyor',
-      };
-    }
-
-    // Hedef hala kuralla uyumlu mu? (pano yerlesimi degismis olabilir; kalici durum)
-    const mismatch = await this._checkTarget(device, command);
-    if (mismatch) return { status: 'skipped_invalid', detail: mismatch };
-
-    // Faz 2 F2.A.4: gaz kacaginda OTOMATIK anahtarlama tutusma kaynagidir; kural yayinlanmaz, yuva tuketilir
-    // (alarm pencere icinde kapansa bile gecikmis anahtarlama yapilmaz). Kullanicinin bilincli komutu engellenmez.
-    if (device.gas_alarm === true || device.gas_alarm === 't') {
-      return { status: 'skipped_hazard', detail: 'gas_alarm' };
-    }
+    if (prepared.outcome) return prepared.outcome;
+    const { command, device } = prepared;
 
     if (!device.is_online) {
       return { status: 'skipped_offline', detail: 'cihaz cevrimdisi', release: true };
@@ -582,6 +553,52 @@ class Scheduler {
       `[SCHEDULER] Kural #${rule.id} gonderildi -> ev/${rule.mqtt_username}/cmd | ${rule.channel_type} ${rule.channel} ${rule.action}`
     );
     return { status: 'sent', commandId: command.id };
+  }
+
+  /** Yayin oncesi kararlar (komut, yetki, cihaz, hedef, gaz): {outcome} (yayin yok) ya da {command, device}. */
+  async _prepareDispatch(rule, slot, nowMs) {
+    if (!rule.mqtt_username) {
+      return { outcome: { status: 'skipped_invalid', detail: 'ev konu kimligi yok' } };
+    }
+    const command = ruleToCommand(rule, slot.ms);
+    if (!command) {
+      return { outcome: { status: 'skipped_invalid', detail: 'kural komuta cevrilemedi (kanal/tip/eylem)' } };
+    }
+
+    // Kural sahibi hala yetkili mi?
+    const who = await this.db.query(SQL.creator, [rule.home_id, rule.created_by]);
+    if (!isCreatorAuthorized((who && who.rows && who.rows[0]) || null, nowMs)) {
+      return { outcome: { status: 'skipped_creator', detail: 'kural sahibi artik yetkili degil' } };
+    }
+
+    // Kural cihazi hala bu evde mi?
+    const devRes = await this.db.query(SQL.devices, [rule.home_id, rule.device_id || null]);
+    const devices = (devRes && devRes.rows) || [];
+    let device = null;
+    if (rule.device_id) {
+      device = devices.find((d) => String(d.id) === String(rule.device_id)) || null;
+      if (!device) return { outcome: { status: 'skipped_device', detail: 'kural cihazi artik bu eve ait degil' } };
+    } else if (devices.length === 1) {
+      device = devices[0];
+    } else {
+      return {
+        outcome: {
+          status: 'skipped_device',
+          detail: devices.length === 0 ? 'evde cihaz yok' : 'evde birden fazla cihaz var, kural cihaz belirtmiyor',
+        },
+      };
+    }
+
+    // Hedef hala kuralla uyumlu mu? (pano yerlesimi degismis olabilir; kalici durum)
+    const mismatch = await this._checkTarget(device, command);
+    if (mismatch) return { outcome: { status: 'skipped_invalid', detail: mismatch } };
+
+    // Faz 2 F2.A.4: gaz kacaginda OTOMATIK anahtarlama tutusma kaynagidir; kural yayinlanmaz, yuva tuketilir
+    // (alarm pencere icinde kapansa bile gecikmis anahtarlama yapilmaz). Kullanicinin bilincli komutu engellenmez.
+    if (device.gas_alarm === true || device.gas_alarm === 't') {
+      return { outcome: { status: 'skipped_hazard', detail: 'gas_alarm' } };
+    }
+    return { command, device };
   }
 
   /**

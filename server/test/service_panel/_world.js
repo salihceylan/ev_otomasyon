@@ -490,9 +490,9 @@ function createWorld({ clock = createClock() } = {}) {
   });
 
   // ================================================================== hesap kurulum daveti (auth_service.issueUserCode)
-  // auth_service USER_COLS (039: terms_version to_jsonb ile, 039'suz veritabaninda da calissin)
+  // auth_service USER_COLS (039: terms_version, 041: phone_verified to_jsonb ile; migration'suz veritabaninda da calissin)
   db.on(
-    "SELECT id, email, full_name, phone, role, is_active, account_status, token_version, must_change_password, email_verified, google_id, apple_id, (to_jsonb(users) ->> 'terms_version')::int AS terms_version FROM users WHERE id = $1",
+    "SELECT id, email, full_name, phone, role, is_active, account_status, token_version, must_change_password, email_verified, google_id, apple_id, (to_jsonb(users) ->> 'terms_version')::int AS terms_version, (to_jsonb(users) ->> 'phone_verified')::boolean AS phone_verified FROM users WHERE id = $1",
     ({ params }) => copies(s.users.filter((u) => u.id === params[0]))
   );
   db.on('UPDATE password_resets SET used_at = NOW() WHERE identifier = $1 AND used_at IS NULL', (ctx) => {
@@ -589,12 +589,16 @@ function createWorld({ clock = createClock() } = {}) {
       ...i, home_name: homeById(i.home_id).name,
       resident_count: s.home_users.filter((m) => m.home_id === i.home_id && ['owner', 'resident'].includes(m.role)).length,
       already_member: s.home_users.some((m) => m.home_id === i.home_id && m.user_id === params[1]),
+      // hesap-uyelik-5: cagiranin bu evdeki rolu (yoksa null)
+      my_role: (s.home_users.find((m) => m.home_id === i.home_id && m.user_id === params[1]) || {}).role || null,
     }))
   );
   db.on('FROM home_transfers t JOIN homes h ON h.id = t.home_id WHERE t.code_hash = $1', ({ params }) =>
     s.home_transfers.filter((t) => t.code_hash === params[0]).map((t) => ({
       ...t, home_name: homeById(t.home_id).name,
       resident_count: s.home_users.filter((m) => m.home_id === t.home_id && ['owner', 'resident'].includes(m.role)).length,
+      // hesap-uyelik-5: cagiran (params[1]) bu evin sahibi mi
+      caller_is_owner: s.home_users.some((m) => m.home_id === t.home_id && m.user_id === params[1] && m.role === 'owner'),
     }))
   );
   db.on('SELECT id, email, phone FROM users WHERE id = $1', ({ params }) => copies(s.users.filter((u) => u.id === params[0])));

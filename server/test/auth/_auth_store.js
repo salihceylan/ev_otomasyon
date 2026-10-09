@@ -47,6 +47,7 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       token_version: 1,
       must_change_password: false,
       email_verified: false,
+      phone_verified: false, // 041 (hesap-uyelik-3): DEFAULT FALSE
       google_id: null,
       apple_id: null,
       password_hash: null,
@@ -236,7 +237,7 @@ function createAuthStore({ now = () => Date.now() } = {}) {
 
     // ---------------- users ----------------
     // uyelik-1: dogrulanmamis on-hesabin etkisizlestirilmesi
-    [/UPDATE users\s+SET password_hash = \$2,\s+token_version = token_version \+ 1,\s+must_change_password = FALSE,\s+password_changed_at = NULL,[\s\S]*WHERE id = \$1 AND email_verified = FALSE/, (p) => {
+    [/UPDATE users\s+SET password_hash = \$2,\s+token_version = token_version \+ 1,\s+must_change_password = FALSE,\s+password_changed_at = NULL,[\s\S]*WHERE id = \$1 AND email_verified = FALSE/, (p, t) => {
       const u = s.users.get(p[0]);
       if (!u || u.email_verified !== false) return [];
       u.password_hash = p[1];
@@ -244,6 +245,8 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       u.must_change_password = false;
       u.password_changed_at = null;
       if (u.account_status === 'active') u.account_status = 'pending_invite';
+      // hesap-uyelik-3: dogrulanmamis telefon serbest birakilir (phone = CASE WHEN phone_verified THEN phone ELSE NULL END)
+      if (/phone = CASE WHEN phone_verified THEN phone ELSE NULL END/.test(t) && u.phone_verified !== true) u.phone = null;
       return [{ id: u.id }];
     }],
     [/UPDATE users SET token_version = token_version \+ 1 WHERE id = \$1/, (p) => {
@@ -265,6 +268,12 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     [/UPDATE users SET email_verified = TRUE, last_login_at = NOW\(\) WHERE id = \$1/, (p) => {
       const u = s.users.get(p[0]);
       if (u) { u.email_verified = true; u.last_login_at = NOW(); }
+      return [];
+    }],
+    // hesap-uyelik-3: yer tutucu (OTP) hesapta telefon dogrulandi
+    [/UPDATE users SET phone_verified = TRUE WHERE id = \$1/, (p) => {
+      const u = s.users.get(p[0]);
+      if (u) u.phone_verified = true;
       return [];
     }],
     [/UPDATE users SET last_login_at = NOW\(\) WHERE id = \$1/, (p) => {
@@ -302,10 +311,11 @@ function createAuthStore({ now = () => Date.now() } = {}) {
       checkUnique(cand);
       return [{ ...s.addUser({ ...cand, role: 'user', account_status: 'active' }) }];
     }],
-    [/INSERT INTO users \(full_name, phone, email, password_hash, role, is_active, account_status\)/, (p) => {
+    [/INSERT INTO users \(full_name, phone, email, password_hash, role, is_active, account_status(, phone_verified)?\)/, (p, t) => {
       const cand = { full_name: p[0], phone: p[1], email: p[2], password_hash: p[3] };
       checkUnique(cand);
-      return [{ ...s.addUser({ ...cand }) }];
+      // hesap-uyelik-3: OTP ile acilan hesabin telefonu dogrulanmistir (VALUES ... TRUE)
+      return [{ ...s.addUser({ ...cand, phone_verified: /phone_verified\)\s+VALUES \([^)]*TRUE\)/.test(t) }) }];
     }],
     [/INSERT INTO users \(full_name, email, password_hash, (google_id|apple_id), role, is_active, account_status, email_verified\)/, (p, t) => {
       const col = t.match(/password_hash, (google_id|apple_id), role/)[1];

@@ -15,6 +15,8 @@
 //    (aksi 403; devir kabulundeki kuralla ayni). Hedef e-posta/telefon HICBIR yanitta donmez.
 //  * Bulunamayan / kullanilmis / suresi dolmus kod AYNI yanittir: 410 GONE (numaralandirma ayrimi yok;
 //    istemci 404/405'i "uc yok" sayar, bu yuzden 404 KULLANILMAZ).
+//  * hesap-uyelik-5 (sozlesme C3): davet kodunu KULLANAN ve hala uye olan kullanici ile devri KABUL EDEN ve hala sahip
+//    olan kullanici icin 200 already_member:true (davette rol = mevcut rol; devirde role 'owner'); digerlerine 410 aynen.
 
 const { HttpError, isUuid } = require('../utils/helpers');
 
@@ -69,10 +71,11 @@ class JoinPreviewService {
     if (!normalized) throw httpError(400, 'Geçerli bir davet veya devir kodu giriniz.', 'VALIDATION');
 
     const res = await this.db.query(
-      `SELECT i.id, i.home_id, i.role, i.is_used, i.expires_at, i.guest_valid_from, i.guest_valid_until,
+      `SELECT i.id, i.home_id, i.role, i.is_used, i.used_by, i.expires_at, i.guest_valid_from, i.guest_valid_until,
               h.name AS home_name,
               (SELECT COUNT(*)::int FROM home_users m WHERE m.home_id = i.home_id AND m.role IN ('owner', 'resident')) AS resident_count,
-              EXISTS (SELECT 1 FROM home_users me WHERE me.home_id = i.home_id AND me.user_id = $2) AS already_member
+              EXISTS (SELECT 1 FROM home_users me WHERE me.home_id = i.home_id AND me.user_id = $2) AS already_member,
+              (SELECT me.role FROM home_users me WHERE me.home_id = i.home_id AND me.user_id = $2) AS my_role
          FROM home_invitations i
          JOIN homes h ON h.id = i.home_id
         WHERE i.code_hash = $1`,
@@ -80,6 +83,17 @@ class JoinPreviewService {
     );
     const inv = res.rows[0];
     const nowMs = this._now().getTime();
+    if (inv && inv.is_used && inv.my_role && inv.used_by && String(inv.used_by).toLowerCase() === String(userId).toLowerCase()) {
+      return {
+        kind: 'invitation',
+        is_transfer: false,
+        home_name: inv.home_name,
+        resident_count: Number(inv.resident_count) || 0,
+        role: inv.my_role,
+        expires_at: inv.expires_at,
+        already_member: true,
+      };
+    }
     const role = inv ? this.invitations.normalizeRole(inv.role) : null;
     if (
       !inv ||
@@ -111,15 +125,33 @@ class JoinPreviewService {
     if (!normalized) throw httpError(400, 'Geçerli bir davet veya devir kodu giriniz.', 'VALIDATION');
 
     const res = await this.db.query(
-      `SELECT t.id, t.home_id, t.from_user_id, t.target_identifier, t.status, t.expires_at,
+      `SELECT t.id, t.home_id, t.from_user_id, t.target_identifier, t.status, t.expires_at, t.accepted_by,
               h.name AS home_name,
-              (SELECT COUNT(*)::int FROM home_users m WHERE m.home_id = t.home_id AND m.role IN ('owner', 'resident')) AS resident_count
+              (SELECT COUNT(*)::int FROM home_users m WHERE m.home_id = t.home_id AND m.role IN ('owner', 'resident')) AS resident_count,
+              EXISTS (SELECT 1 FROM home_users o WHERE o.home_id = t.home_id AND o.user_id = $2 AND o.role = 'owner') AS caller_is_owner
          FROM home_transfers t
          JOIN homes h ON h.id = t.home_id
         WHERE t.code_hash = $1`,
-      [this.transfers.hashTransferCode(normalized)]
+      [this.transfers.hashTransferCode(normalized), userId]
     );
     const tr = res.rows[0];
+    if (
+      tr &&
+      tr.status === 'COMPLETED' &&
+      tr.caller_is_owner === true &&
+      tr.accepted_by &&
+      String(tr.accepted_by).toLowerCase() === String(userId).toLowerCase()
+    ) {
+      return {
+        kind: 'transfer',
+        is_transfer: true,
+        home_name: tr.home_name,
+        resident_count: Number(tr.resident_count) || 0,
+        role: 'owner',
+        expires_at: tr.expires_at,
+        already_member: true,
+      };
+    }
     if (!tr || tr.status !== 'PENDING' || new Date(tr.expires_at).getTime() <= this._now().getTime()) {
       throw httpError(410, GONE_MESSAGE, 'GONE');
     }

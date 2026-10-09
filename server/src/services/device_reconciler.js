@@ -50,12 +50,22 @@
 // Sinirlar (bilincli):
 //   * Panjur uzlastirmasi YALNIZ tek panolu evde yapilir: ev konusu tum panolara gittiginden `set_runtime` ortak
 //     panjur numarali saglam panonun kalibrasyonunu ezerdi. Cok panolu evde atlanir ve loglanir (isaret kalir).
-//   * PUBACK = broker aldi; cihazin uyguladigini KANITLAMAZ. Cocuk kilidi icin kanit cihaz bildirimidir (dongu dogrular);
-//     panjur suresi icin kanit yoktur: tum komutlar PUBACK alinca isaret `synced` olur.
+//   * PUBACK = broker aldi; cihazin uyguladigini KANITLAMAZ. Cocuk kilidi icin kanit cihaz bildirimidir (dongu dogrular).
+//     Panjur suresi (sko-3): komut yankisi veren panoda (caps 'intrusion'; firmware state.last_id / last_rej, ayni kapi
+//     safety_cfg_sync.echoesCfgId) her set_runtime icin bekleyici YAYINDAN ONCE kurulur; isaret yalniz butun ciftler
+//     ONAYLANINCA `synced` olur (ret / zaman asimi -> deneme sayilir, geri cekilme, isaret bekler). Yanki vermeyen ya da
+//     caps'i bilinmeyen panoda eski davranis: tum komutlar PUBACK alinca `synced`.
 //   * Surec yeniden baslayinca bellek ici deneme sayaclari sifirlanir (her cevrimici donem en cok MAX_ATTEMPTS).
 
 const crypto = require('crypto');
 const { validateCommand } = require('../utils/command_schema');
+
+// sko-3: set_runtime onayi (panonun canli state yankisi) bekleme suresi
+const RUNTIME_OUTCOME_TIMEOUT_MS = 5000;
+/** Komut sonucunu (last_id / last_rej) yankilayan pano mu? safety_cfg_sync.echoesCfgId ile ayni kapi. */
+function echoesCommandOutcome(caps) {
+  return Array.isArray(caps) && caps.includes('intrusion');
+}
 const { localKeyFingerprint, isValidFingerprint } = require('../utils/local_key_fp');
 
 // ------------------------------------------------------------------------------
@@ -134,6 +144,7 @@ SELECT h.id AS home_id,
          AND d.last_seen_at > CURRENT_TIMESTAMP - ($2::int * INTERVAL '1 second')) AS live,
        d.config_snapshot ->> 'home_id' AS marker_home_id,
        d.config_snapshot ->> 'replaced_at' AS marker_replaced_at,
+       d.caps,
        (SELECT COUNT(*)::int FROM devices x WHERE x.home_id = h.id) AS device_count
   FROM homes h
   JOIN devices d ON d.home_id = h.id
@@ -277,6 +288,9 @@ class DeviceReconciler {
     this.db = deps.db;
     this.publishCommand = deps.publishCommand;
     this.publishSys = typeof deps.publishSys === 'function' ? deps.publishSys : null;
+    // sko-3: komut sonucu bekleyicisi (kopru expectOutcome) ve iptali; yoksa set_runtime icin PUBACK yeterli sayilir
+    this._expectOutcome = typeof deps.expectOutcome === 'function' ? deps.expectOutcome : null;
+    this._cancelAck = typeof deps.cancelAck === 'function' ? deps.cancelAck : null;
     this._secretBox = deps.secretBox || null;
     this.isConnected = typeof deps.isConnected === 'function' ? deps.isConnected : () => true;
     this.logger = deps.logger || console;
@@ -749,9 +763,13 @@ class DeviceReconciler {
     }
     home.disconnectedRetries = 0;
 
+    // sko-3: yanki veren panoda her komut panonun ONAYIYLA tamamlanir (bekleyici yayindan ONCE kurulur)
+    const confirm = this._expectOutcome !== null && echoesCommandOutcome(row.caps);
+    const uid = String(row.device_uuid || '').toUpperCase();
     let ok = 0;
     let invalid = 0;
     let failure = null;
+    let unconfirmed = 0;
     for (let i = 0; i < todo.length; i += 1) {
       const p = todo[i];
       const v = validateCommand({ cmd: 'set_runtime', shutter: p.pair, sec: p.sec, id: this.newCommandId() });
@@ -760,29 +778,57 @@ class DeviceReconciler {
         continue;
       }
       if (i > 0) await this._sleep(RUNTIME_SPACING_MS); // FIFO + kuyruk derinligi: ardisik yayinlari ayir
+      let waiter = null;
+      if (confirm) {
+        try {
+          waiter = Promise.resolve(this._expectOutcome(topicId, v.command.id, RUNTIME_OUTCOME_TIMEOUT_MS, { uid }));
+        } catch (_) {
+          waiter = null; // gecersiz hedef kimligi: onay beklenemez (eski davranis)
+        }
+      }
       try {
         await this.publishCommand(topicId, v.command);
         this.counters.published += 1;
-        done.add(p.pair);
-        ok += 1;
       } catch (err) {
+        if (waiter && this._cancelAck) {
+          try {
+            this._cancelAck(topicId, v.command.id);
+          } catch (_) {
+            /* iptal en iyi caba */
+          }
+        }
         failure = errorKind(err);
         this.counters.publishFailed += 1;
         break; // sirayi bozma: kalanlar sonraki denemede
       }
+      if (waiter) {
+        const out = await waiter.catch(() => null);
+        if (out && out.ok === true) {
+          done.add(p.pair);
+          ok += 1;
+        } else {
+          unconfirmed += 1; // ret (or. cift panoda tanimli degil) ya da zaman asimi: cift tamamlanmadi
+          const code = out && typeof out.rejected === 'string' && /^[A-Za-z0-9_]{1,24}$/.test(out.rejected) ? out.rejected : null;
+          const why = out && out.rejected ? `reddedildi(${code || 'diger'})` : 'onay_yok';
+          this._log('warn', `panjur_suresi ${tag} cihaz=${row.device_uuid} cift=${p.pair} sonuc=${why}`);
+        }
+      } else {
+        done.add(p.pair);
+        ok += 1;
+      }
     }
 
-    const complete = failure === null;
+    const complete = failure === null && unconfirmed === 0;
     if (!complete) {
       const e = this._recordAttempt(home, key, intentKey, t);
       e.donePairs = done;
       this._log('warn', `panjur_suresi ${tag} cihaz=${row.device_uuid} deneme=${e.attempts}/${MAX_ATTEMPTS} sonuc=kismi `
-        + `yayinlanan=${ok}/${todo.length} hata=${failure}`);
+        + `yayinlanan=${ok}/${todo.length} hata=${failure || 'onaylanmadi'}`);
       this._schedule(topicId, home, e.nextAt - t);
       return;
     }
 
-    // Hepsi PUBACK aldi (ya da uygulanacak panjur yok): isaret temizlenir
+    // Hepsi onaylandi (yanki veren pano) / PUBACK aldi (eski pano) ya da uygulanacak panjur yok: isaret temizlenir
     const r = await this.db.query(SQL.runtimeDone, [row.device_id, row.marker_replaced_at]);
     home.budgets.delete(key);
     this.counters.runtimeSynced += 1;

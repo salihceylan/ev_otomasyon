@@ -181,3 +181,56 @@ test('expectAck (eski, boolean) davranisi AYNEN: last_id -> true; last_rej bekle
   await bridge.handleIncomingMessage(`ev/${TOPIC}/state`, JSON.stringify({ v: 2, uid: UID, last_id: 'old2', relays: [], shutters: [] }));
   assert.equal(await b, true);
 });
+
+// ---- sko-2 (sozlesme C12): kapanista bekleyen alarm push'lari beklenir; yarim kalan push'lar yeniden denenir ----
+test('sko-2: end() alarm servisini durdurmadan once bekleyen push islerini bekler (en cok timeoutMs/3 sn)', async () => {
+  const order = [];
+  let release = null;
+  const alarms = { ...spyAlarms(), idle: () => new Promise((r) => { release = () => { order.push('idle'); r(); }; }), stop() { order.push('stop'); } };
+  const { bridge } = setup({ alarms });
+  const p = bridge.end();
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(order, [], 'bekleyen push bitmeden alarm servisi durdurulmaz');
+  release();
+  await p;
+  assert.deepEqual(order, ['idle', 'stop']);
+
+  const stuck = { ...spyAlarms(), idle: () => new Promise(() => {}), stop() { order.push('stop2'); } };
+  const s2 = setup({ alarms: stuck });
+  const t0 = Date.now();
+  await s2.bridge.end({ timeoutMs: 50 });
+  assert.ok(order.includes('stop2'), 'sure dolunca yine durdurulur');
+  assert.ok(Date.now() - t0 < 2000, 'kapanis sinirli bekler');
+});
+
+test('sko-2: kopru acilistan ~5 sn sonra bir kez ve dakikada bir retryStuckPushes cagirir; end() sonrasi cagirmaz', async () => {
+  const { makeFakeClient, makeFakeMqttLib, makeFakeTimers } = require('../bridge/_helpers');
+  const calls = [];
+  const alarms = { ...spyAlarms(), async retryStuckPushes(opts) { calls.push(opts); return { claimed: 0, sent: 0 }; }, async idle() {} };
+  const client = makeFakeClient();
+  const timers = makeFakeTimers();
+  const clock = { t: 1_800_000_000_000 };
+  const bridge = new MqttBridge({
+    mqttLib: makeFakeMqttLib(client), db: makeFakeDb([]), logger: makeLogger(), timers, now: () => clock.t, alarmService: alarms,
+    env: { MQTT_BACKEND_USER: 'backend_service', MQTT_BACKEND_PASS: 'test-only-placeholder-password-not-real' },
+  });
+  bridge.init();
+  const kick = timers.pendingTimeouts().find((h) => h.ms === 5000);
+  assert.ok(kick, 'acilis tetigi (~5 sn)');
+  timers.fireTimeout(kick);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].limit, 50);
+  const sweep = timers.pendingIntervals()[0];
+  clock.t += 30 * 1000;
+  timers.fireInterval(sweep);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 1, '60 sn dolmadan yinelenmez');
+  clock.t += 30 * 1000;
+  timers.fireInterval(sweep);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls.length, 2, 'dakikada bir');
+  await bridge.end({ timeoutMs: 50 });
+  assert.equal(timers.pendingTimeouts().filter((h) => h.ms === 5000).length, 0);
+  assert.equal(timers.pendingIntervals().length, 0);
+});

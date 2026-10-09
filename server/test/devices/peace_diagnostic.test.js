@@ -254,3 +254,47 @@ test('tanı: sessiz "ilk daire" yedegi YOK (home_id zorunlu; kullanicinin ilk ev
   assert.ok(!/ORDER BY created_at ASC LIMIT 1/.test(src.replace(/home_users WHERE home_id = \$1 AND role = 'owner' ORDER BY created_at ASC LIMIT 1/, '')));
   assert.ok(!/fallbackRes/.test(src));
 });
+
+// sko-6 (sozlesme C15): bulut-MQTT kopru kesintisi evin elektrik/internet arizasi diye teshis EDILMEZ.
+const C15_TITLE = 'Bulut Bağlantısında Geçici Sorun';
+const C15_SUMMARY = 'Sunucumuzun cihazlarla bağlantısında geçici bir sorun var; panonuz büyük olasılıkla çalışıyor. Birkaç dakika sonra yeniden deneyin.';
+
+test('sko-6: kopru bagli degilken last_seen 120 sn\'den eski pano -> UNKNOWN/warning bulut metni, eylem yok (Wi-Fi/sigorta onerilmez)', async () => {
+  const ctx = setup();
+  ctx.dev.last_seen_at = new Date(ctx.world.clock.t - 10 * 60 * 1000);
+  ctx.bridge.connected = false;
+  const r = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.strictEqual(r.diagnosis_level, 'warning');
+  assert.strictEqual(r.diagnosis_title, C15_TITLE);
+  assert.strictEqual(r.diagnosis_summary, C15_SUMMARY);
+  assert.strictEqual(r.action_recommendation, null);
+  assert.strictEqual(r.home_network.status, 'UNKNOWN');
+  assert.strictEqual(r.hardware_power.status, 'UNKNOWN');
+  assert.deepStrictEqual([r.devices[0].level, r.devices[0].network_status, r.devices[0].power_status], ['warning', 'UNKNOWN', 'UNKNOWN']);
+  assert.doesNotMatch(JSON.stringify(r), /Güç Kesik|Wi-Fi Kurtarma|sigorta/i);
+  assert.strictEqual(r.cloud.status, 'DEGRADED', 'bulut alanlari degismez');
+  // cok panolu evde de genel baslik bulut metni (Bazi Panolar Cevrimdisi DEGIL)
+  const second = ctx.world.helpers.addDevice({ home: ctx.home, uuid: 'AHBU-S3-0011', mac: 'E8:F6:0A:00:00:11', online: false });
+  second.last_seen_at = new Date(ctx.world.clock.t - 3600 * 1000);
+  const r2 = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.deepStrictEqual([r2.diagnosis_level, r2.diagnosis_title, r2.action_recommendation], ['warning', C15_TITLE, null]);
+});
+
+test('sko-6: kopru yeni baglandiysa (120 sn dolmadi) yine bulut metni; kopru bagli ve oturmussa bugunku siniflandirma', async () => {
+  const ctx = setup();
+  ctx.dev.last_seen_at = new Date(ctx.world.clock.t - 10 * 60 * 1000);
+  ctx.bridge.connected = true;
+  ctx.bridge.connectedSince = ctx.world.clock.t - 30 * 1000;
+  const r = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.deepStrictEqual([r.diagnosis_level, r.diagnosis_title, r.home_network.status], ['warning', C15_TITLE, 'UNKNOWN']);
+  ctx.bridge.connectedSince = ctx.world.clock.t - 600 * 1000;
+  const r2 = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.strictEqual(r2.diagnosis_level, 'error');
+  assert.strictEqual(r2.diagnosis_title, 'Pano Çevrimdışı (Ev İnterneti veya Güç Kesik)');
+  assert.strictEqual(r2.home_network.status, 'OFFLINE');
+  // taze gorulen pano kopru kopukken de saglikli
+  ctx.bridge.connected = false;
+  ctx.dev.last_seen_at = new Date(ctx.world.clock.t - 10 * 1000);
+  const r3 = await ctx.deviceService.getSystemDiagnostic({ homeId: ctx.home.id });
+  assert.strictEqual(r3.devices[0].network_status, 'OK');
+});

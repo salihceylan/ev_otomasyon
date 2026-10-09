@@ -187,6 +187,8 @@ function createWorld({ clock = createClock() } = {}) {
     // kullanim-4 / guvenlik-1: pano degisimi / stoga donuste kural tasima ve acik alarm kapatma
     scheduled_rules: [],
     alarms: [],
+    // tarama-sunucu-cihaz-site-1 (C4): panonun guvenlik yapilandirma kopyasi {device_id, module, rev, crc, body}
+    device_configs: [],
   };
   const db = new FakeDb();
   const now = () => clock.now();
@@ -880,6 +882,16 @@ function createWorld({ clock = createClock() } = {}) {
       .slice(0, 1)
       .map((w) => ({ id: w.id }))
   );
+  // tarama-sunucu-cihaz-site-1 (C4): pano degisiminde guvenlik yeniden yazimi gerekir mi ('SELECT 1'den ONCE) (eski panonun kopyasi + uc noktalar)
+  db.on('AS safety_restore_required', ({ params }) => {
+    const [deviceId, homeId] = params;
+    const len = (v) => (Array.isArray(v) ? v.length : 0);
+    const cfg = (state.device_configs || []).some(
+      (c) => c.device_id === deviceId && c.module === 'safety' && c.body && (len(c.body.sensors) > 0 || len(c.body.actuators) > 0)
+    );
+    const ep = state.endpoints.some((e) => e.device_id === deviceId && e.home_id === homeId && e.actuator_type);
+    return [{ safety_restore_required: cfg || ep }];
+  });
   db.on('SELECT 1', () => [{ '?column?': 1 }]);
   db.on('SELECT count(*) AS count FROM endpoints WHERE home_id = $1', ({ params }) => [
     { count: String(state.endpoints.filter((e) => e.home_id === params[0]).length) },
@@ -918,16 +930,36 @@ function createWorld({ clock = createClock() } = {}) {
     copies(state.endpoints.filter((e) => e.id === params[0] && e.home_id === params[1]))
   );
   db.on('UPDATE endpoints SET name = COALESCE($1, name)', (ctx) => {
-    const [name, room, type, id, homeId] = ctx.params;
+    const [name, room, type, id, homeId, sec] = ctx.params;
     const ep = state.endpoints.find((e) => e.id === id && e.home_id === homeId);
     if (!ep) return [];
-    patch(ctx, ep, { name: name === null ? ep.name : name, room: room === null ? ep.room : room, type: type === null ? ep.type : type });
+    patch(ctx, ep, {
+      name: name === null ? ep.name : name,
+      room: room === null ? ep.room : room,
+      type: type === null ? ep.type : type,
+      // hedefin suresi de bu UPDATE ile yazilir (COALESCE($6::int, shutter_duration_sec))
+      shutter_duration_sec: sec === null || sec === undefined ? ep.shutter_duration_sec : sec,
+    });
     return [{ id: ep.id }];
   });
   db.on('UPDATE endpoints SET shutter_duration_sec = $1', (ctx) => {
     const [sec, homeId, deviceId, pair] = ctx.params;
     const rows = state.endpoints.filter((e) => e.home_id === homeId && e.device_id === deviceId && e.shutter_pair_index === pair);
     for (const r of rows) patch(ctx, r, { shutter_duration_sec: sec });
+    return { rows: [], rowCount: rows.length };
+  });
+  // uygulama-ekranlar-7 (C14): panjur ciftinin DIGER satiri tek UPDATE ile sure + ad + oda (COALESCE) alir
+  db.on('UPDATE endpoints SET shutter_duration_sec = COALESCE($1::int, shutter_duration_sec), name = COALESCE($6, name), room = COALESCE($7, room)', (ctx) => {
+    const [sec, homeId, deviceId, pair, exceptId, name, room] = ctx.params;
+    const rows = state.endpoints.filter((e) => e.home_id === homeId && e.device_id === deviceId && e.shutter_pair_index === pair
+      && e.type === 'shutter' && e.id !== exceptId);
+    for (const r of rows) {
+      patch(ctx, r, {
+        shutter_duration_sec: sec === null ? r.shutter_duration_sec : sec,
+        name: name === null ? r.name : name,
+        room: room === null ? r.room : room,
+      });
+    }
     return { rows: [], rowCount: rows.length };
   });
   db.on('FROM endpoints e LEFT JOIN devices d ON d.id = e.device_id WHERE e.id = $1', ({ params }) =>

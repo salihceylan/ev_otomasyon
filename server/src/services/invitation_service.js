@@ -175,29 +175,40 @@ class InvitationService {
     }
 
     const guestName = cleanRole === 'guest' ? cleanGuestName(options.guestName) : null;
+    // hesap-uyelik-7: yetki ev uyeliginden geliyorsa (global super_user disi) INSERT ile AYNI islemde uyelik satiri FOR SHARE
+    // ile yeniden okunur: es zamanli devir kabulu (uyelikleri silen her yol) bu kilidi bekler ve temizligini davet commit
+    // edildikten sonra yapar; sahiplik ara katmandan sonra gittiyse 403 ve davet uretilmez.
+    const viaMembership = !(actor && typeof actor === 'object' && actor.access === 'super_user');
 
-    const active = await db.query(
-      `SELECT COUNT(*)::int AS n FROM home_invitations
-        WHERE home_id = $1 AND is_used = FALSE AND expires_at > NOW()`,
-      [homeId]
-    );
-    if (active.rows[0] && Number(active.rows[0].n) >= MAX_ACTIVE_INVITATIONS) {
-      throw new HttpError(409, 'Bu ev için çok fazla aktif davet var. Kullanılmayan davetlerin süresinin dolmasını bekleyin.', 'CONFLICT');
-    }
+    return db.withTransaction(async (tx) => {
+      if (viaMembership) {
+        const m = await tx.query('SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2 FOR SHARE', [homeId, actorId]);
+        if (!m.rows[0] || m.rows[0].role !== 'owner') throw new HttpError(403, 'Bu işlem için yetkiniz yok.', 'FORBIDDEN');
+      }
+      const active = await tx.query(
+        `SELECT COUNT(*)::int AS n FROM home_invitations
+          WHERE home_id = $1 AND is_used = FALSE AND expires_at > NOW()`,
+        [homeId]
+      );
+      if (active.rows[0] && Number(active.rows[0].n) >= MAX_ACTIVE_INVITATIONS) {
+        throw new HttpError(409, 'Bu ev için çok fazla aktif davet var. Kullanılmayan davetlerin süresinin dolmasını bekleyin.', 'CONFLICT');
+      }
 
-    const homeRes = await db.query('SELECT id, name FROM homes WHERE id = $1', [homeId]);
-    if (homeRes.rows.length === 0) throw new HttpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
+      const homeRes = await tx.query('SELECT id, name FROM homes WHERE id = $1', [homeId]);
+      if (homeRes.rows.length === 0) throw new HttpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
 
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const code = CODE_PREFIX + generateCode(CODE_LENGTH);
-      try {
-        const ins = await db.query(
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const code = CODE_PREFIX + generateCode(CODE_LENGTH);
+        // Islem icinde cakisma (23505) islemi bozardi: ON CONFLICT DO NOTHING -> satir yoksa yeni kod (cok dusuk olasilik)
+        const ins = await tx.query(
           `INSERT INTO home_invitations
              (home_id, created_by, invite_code, code_hash, role, expires_at, guest_valid_from, guest_valid_until, guest_name)
            VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT DO NOTHING
            RETURNING id, home_id, role, expires_at, guest_valid_from, guest_valid_until, guest_name, created_at`,
           [homeId, actorId, hashInviteCode(code), cleanRole, expiresAt, guestValidFrom, guestValidUntil, guestName]
         );
+        if (!ins.rows || ins.rows.length === 0) continue;
         const row = ins.rows[0] || {};
         return {
           id: row.id,
@@ -212,14 +223,11 @@ class InvitationService {
           guest_valid_until: row.guest_valid_until || guestValidUntil,
           qr_payload: `${QR_PREFIX}${code}`,
         };
-      } catch (err) {
-        if (err && err.code === '23505') continue; // kod cakismasi (cok dusuk olasilik): yeniden uret
-        throw err;
       }
-    }
-    const err = new HttpError(503, 'Davet kodu şu anda üretilemedi. Lütfen tekrar deneyin.', 'SERVICE_UNAVAILABLE');
-    err.expose = true;
-    throw err;
+      const err = new HttpError(503, 'Davet kodu şu anda üretilemedi. Lütfen tekrar deneyin.', 'SERVICE_UNAVAILABLE');
+      err.expose = true;
+      throw err;
+    });
   }
 
   /**
@@ -294,7 +302,7 @@ class InvitationService {
 
     return db.withTransaction(async (tx) => {
       const invRes = await tx.query(
-        `SELECT i.id, i.home_id, i.role, i.is_used, i.expires_at, i.guest_valid_from, i.guest_valid_until,
+        `SELECT i.id, i.home_id, i.role, i.is_used, i.used_by, i.expires_at, i.guest_valid_from, i.guest_valid_until,
                 h.name AS home_name, h.address AS home_address
            FROM home_invitations i
            JOIN homes h ON h.id = i.home_id
@@ -307,7 +315,32 @@ class InvitationService {
       }
       const inv = invRes.rows[0];
       const nowMs = Date.now();
-      if (inv.is_used) throw new HttpError(410, 'Bu davet kodu daha önce kullanılmış.', 'GONE');
+      if (inv.is_used) {
+        // hesap-uyelik-5 (sozlesme C3): yaniti kaybolan katilimin yinelenmesi idempotent basaridir (yalniz kodu kullanan
+        // ve hala o evin uyesi olan kullanici; yazim yok). Digerleri icin 410 aynen (numaralandirma yok).
+        if (inv.used_by && String(inv.used_by).toLowerCase() === String(userId).toLowerCase()) {
+          const mine = await tx.query(
+            'SELECT role, valid_from, valid_until FROM home_users WHERE home_id = $1 AND user_id = $2 FOR UPDATE',
+            [inv.home_id, userId]
+          );
+          const m = mine.rows[0];
+          if (m) {
+            return {
+              home: {
+                id: inv.home_id,
+                name: inv.home_name,
+                address: inv.home_address || null,
+                role: m.role,
+                valid_from: m.valid_from || null,
+                valid_until: m.valid_until || null,
+              },
+              already_member: true,
+              message: 'Bu davet kodunu zaten kullandınız; dairenin üyesisiniz.',
+            };
+          }
+        }
+        throw new HttpError(410, 'Bu davet kodu daha önce kullanılmış.', 'GONE');
+      }
       if (new Date(inv.expires_at).getTime() <= nowMs) {
         throw new HttpError(410, 'Bu davet kodunun geçerlilik süresi dolmuş.', 'GONE');
       }

@@ -217,3 +217,27 @@ test('hedefin e-postasi buyuk/kucuk harf duyarsiz tek satira indirgenir', async 
   assert.strictEqual(ctx.world.state.device_claim_otps.length, 1);
   assert.strictEqual(ctx.world.state.device_claim_otps[0].target_identifier, 'musteri@example.test');
 });
+
+// tarama-sunucu-cihaz-site-3 (sozlesme C8): telefonla bulunan hesabin e-postasi yer tutucuysa (telefon-OTP hesabi) onay
+// kodu gonderilemez: 400 VALIDATION + reason CUSTOMER_EMAIL_REQUIRED; OTP uretilmez, e-posta gonderilmez.
+const C8_MSG = 'Bu müşteri uygulamaya telefonla giriş yapıyor; hesabında e-posta olmadığı için onay kodu gönderilemez. Müşteri panoyu kendi uygulamasından etiketteki karekodla sahiplenmeli.';
+
+test('C8: telefonla giris yapan (yer tutucu e-postali) musteriye sahiplenme kodu istenince acik hata; OTP/e-posta yok', async () => {
+  const ctx = setup();
+  ctx.world.helpers.addUser({ email: 'phone_905557778899@ahbu.local', phone: '+905557778899' });
+  const e = await expectHttp(ctx.req('+905557778899'), 400, 'VALIDATION', { reason: 'CUSTOMER_EMAIL_REQUIRED' });
+  assert.strictEqual(e.message, C8_MSG);
+  assert.strictEqual(ctx.mailer.sent.length, 0, 'e-posta gonderilmez');
+  assert.strictEqual(ctx.world.state.device_claim_otps.length, 0, 'OTP satiri yok');
+});
+
+test('C8: personel sahiplenmesinde telefon hedefi yer tutucu e-postali hesapsa ayni acik hata (kart sahiplenilmez)', async () => {
+  const ctx = setup();
+  ctx.world.helpers.addUser({ email: 'phone_905557778800@ahbu.local', phone: '+905557778800' });
+  const e = await expectHttp(
+    ctx.deviceService.claimDevice({ actor: ctx.act(ctx.tech), deviceUuid: UUID, setupPin: '123456', homeName: 'Daire', targetOwnerIdentifier: '+905557778800', otpCode: '123456' }),
+    400, 'VALIDATION', { reason: 'CUSTOMER_EMAIL_REQUIRED' }
+  );
+  assert.strictEqual(e.message, C8_MSG);
+  assert.notStrictEqual(ctx.world.state.device_inventory.find((i) => i.device_uuid === UUID).status, 'CLAIMED');
+});

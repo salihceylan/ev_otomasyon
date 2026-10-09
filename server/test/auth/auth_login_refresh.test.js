@@ -401,6 +401,36 @@ test('/homes: sureli teknisyen uyeligi (WP-B) aktifken listelenir ve bitisi vali
   assert.strictEqual(res.body.data[0].is_expired, false);
 });
 
+test('cekirdek-7 (C5): /homes ogelerinde sunucu saatine goreli access_starts_in / access_expires_in (tamsayi sn >= 0)', async (t) => {
+  const reg = await register('pencere@example.com');
+  const uid = reg.body.data.user.id;
+  store.users.get(uid).role = 'service_user'; // servis uyeligi yalniz personel rolunde listelenir
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now }); // yanit anindaki sunucu saati sabit: sureler kesin
+  try {
+    store.homes.push({ home_id: '71111111-1111-4111-8111-111111111111', user_id: uid, role: 'guest', name: 'G1 Baslamamis', mqtt_username: 'h_g1g1g1g1g1g1g1g1', valid_from: new Date(now + 30 * 1000 - 400), valid_until: new Date(now + 7200 * 1000 + 600) });
+    store.homes.push({ home_id: '72222222-2222-4222-8222-222222222222', user_id: uid, role: 'guest', name: 'G2 Aktif', mqtt_username: 'h_g2g2g2g2g2g2g2g2', valid_from: new Date(now - 3600e3), valid_until: new Date(now + 90 * 1000 + 500) });
+    store.homes.push({ home_id: '73333333-3333-4333-8333-333333333333', user_id: uid, role: 'guest', name: 'G3 Bitmis', mqtt_username: 'h_g3g3g3g3g3g3g3g3', valid_from: new Date(now - 7200e3), valid_until: new Date(now - 3600e3) });
+    store.homes.push({ home_id: '74444444-4444-4444-8444-444444444444', user_id: uid, role: 'owner', name: 'O Sahip', mqtt_username: 'h_o1o1o1o1o1o1o1o1' });
+    store.homes.push({ home_id: '75555555-5555-4555-8555-555555555555', user_id: uid, role: 'service_user', name: 'S Kurulum', mqtt_username: 'h_s1s1s1s1s1s1s1s1', installer_expires_at: new Date(now + 600 * 1000) });
+    const res = await request(app).get('/api/v1/auth/homes').set('Authorization', `Bearer ${reg.body.data.access_token}`);
+    assert.strictEqual(res.status, 200);
+    const by = Object.fromEntries(res.body.data.map((h) => [h.name, [h.access_starts_in, h.access_expires_in]]));
+    assert.deepStrictEqual(by['G1 Baslamamis'], [30, 7200], 'baslangic yukari, bitis asagi yuvarlanir');
+    assert.deepStrictEqual(by['G2 Aktif'], [0, 90]);
+    assert.deepStrictEqual(by['G3 Bitmis'], [0, 0]);
+    assert.deepStrictEqual(by['O Sahip'], [null, null]);
+    assert.deepStrictEqual(by['S Kurulum'], [null, 600], 'servis uyeligi: installer_expires_at');
+  } finally {
+    t.mock.timers.reset();
+  }
+  // servis (PIN) oturumu listesinde ikisi de null
+  fakeDb.on(/FROM homes h\s+WHERE h\.id = \$1/, (p) => [{ id: p[0], name: 'Servis Evi', mqtt_username: 'h_svsvsvsvsvsvsvsv', timezone: 'Europe/Istanbul' }]);
+  const svcHomes = await authService.listHomesForServiceSession('76666666-6666-4666-8666-666666666666');
+  assert.strictEqual(svcHomes.length, 1);
+  assert.deepStrictEqual([svcHomes[0].access_starts_in, svcHomes[0].access_expires_in], [null, null]);
+});
+
 test('uyelik-13: rolu user a dusurulmus hesabin kalmis servis uyeligi /homes ta GORUNMEZ; diger uyelikleri gorunur', async () => {
   const reg = await register('eski.personel@example.com');
   const uid = reg.body.data.user.id;

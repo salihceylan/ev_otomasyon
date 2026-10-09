@@ -292,3 +292,32 @@ test('PG telefon OTP: yeni SMS gonderilemezse (503) eski kod gecerli kalir', { s
   assert.equal(c.mail.sent.length, before);
   assert.equal(await c.h.count('password_resets', 'user_id = $1', [ok.body.data.user.id]), 0);
 });
+
+test('PG hesap-uyelik-3 (041): dogrulanmamis telefonlu hesaba OTP girisi 409 PHONE_NOT_VERIFIED; OTP hesabi TRUE; neutralize telefonu NULL\'lar', { skip: SKIP }, async () => {
+  const c = await getCtx();
+  const sendCode = async (phone) => {
+    await c.q("UPDATE phone_otp_codes SET created_at = created_at - interval '2 minutes' WHERE phone = $1", [phone]);
+    assert.equal((await c.api('post', '/api/v1/auth/otp/send', null, { phone })).status, 200);
+    return /(\d{6})/.exec(c.sms.sent.filter((m) => m.phone === phone).at(-1).text)[1];
+  };
+  // kayit yapan (dogrulanmamis) telefonlu hesap
+  const victimPhone = uniquePhone();
+  const attacker = await c.h.user({ phone: victimPhone });
+  assert.equal((await c.h.one('SELECT phone_verified FROM users WHERE id = $1', [attacker.id])).phone_verified, false, 'DEFAULT FALSE');
+  const r = await c.api('post', '/api/v1/auth/otp/verify', null, { phone: victimPhone, code: await sendCode(victimPhone) });
+  assert.equal(r.status, 409, JSON.stringify(r.body));
+  assert.equal(r.body.reason, 'PHONE_NOT_VERIFIED');
+  assert.equal(await c.h.count('users', 'phone = $1', [victimPhone]), 1, 'yeni hesap yok, telefon yerinde');
+
+  // OTP ile acilan hesap phone_verified=TRUE
+  const phone = uniquePhone();
+  const ok = await c.api('post', '/api/v1/auth/otp/verify', null, { phone, code: await sendCode(phone) });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  created.users.add(ok.body.data.user.id);
+  assert.equal((await c.h.one('SELECT phone_verified FROM users WHERE id = $1', [ok.body.data.user.id])).phone_verified, true);
+
+  // neutralizeUnverifiedAccount dogrulanmamis telefonu NULL'lar (gercek SQL)
+  const unusableHash = await c.authService._unusablePasswordHash();
+  await c.db.withTransaction((tx) => c.authService.neutralizeUnverifiedAccount(attacker.id, { tx, reason: 'x', unusableHash }));
+  assert.equal((await c.h.one('SELECT phone FROM users WHERE id = $1', [attacker.id])).phone, null);
+});

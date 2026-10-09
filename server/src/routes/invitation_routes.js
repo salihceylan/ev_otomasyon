@@ -57,7 +57,8 @@ router.post(
     const body = req.body || {};
     const invitation = await InvitationService.createInvitation(
       req.homeAccess.home_id,
-      { userId: req.user.id },
+      // hesap-uyelik-7: yetki uyelikten geliyorsa servis INSERT ile ayni islemde yeniden dogrular
+      { userId: req.user.id, access: req.homeAccess.role },
       pick(body, ['role']) || 'resident',
       {
         durationHours: pick(body, ['duration_hours', 'durationHours']),

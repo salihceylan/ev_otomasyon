@@ -174,6 +174,42 @@ test('PIN uretimi: kullanici basina saatte 10 -> 429', async () => {
   assert.strictEqual(res.status, 429);
 });
 
+
+// hesap-uyelik-7: ara katman (requireHomeAccess) uyeligi okuduktan SONRA ama servis INSERT'inden ONCE sahiplik gider
+// (es zamanli devir kabulu): ilk uyelik okumasindan sonra satir silinir.
+function dropMembershipAfterMiddleware(home, user) {
+  let fired = false;
+  fakeDb.on(/FROM home_users\s+WHERE home_id = \$1 AND user_id = \$2/, async (p, t) => {
+    const out = await store.handle(p, t);
+    if (!fired && /installer_expires_at/.test(t) && p[0] === home.id && p[1] === user.id) {
+      fired = true;
+      store.members = store.members.filter((m) => !(m.home_id === home.id && m.user_id === user.id));
+    }
+    return out;
+  });
+}
+const txSlice = (re) => {
+  const texts = fakeDb.calls.map((c) => c.text);
+  const begin = texts.lastIndexOf('BEGIN');
+  return texts.slice(begin, texts.indexOf('COMMIT', begin) + 1).filter((t) => t === 'BEGIN' || t === 'COMMIT' || re.test(t));
+};
+
+test('hesap-uyelik-7: servis PIN uretimi yetkiyi ayni islemde FOR SHARE ile yeniden dogrular; ara katmandan sonra sahiplik giderse 403, PIN yok', async () => {
+  const h = store.addHome({ name: 'Yaris Servis Evi' });
+  const seller = store.addUser();
+  store.addMember(h, seller, 'owner');
+  const before = store.tokens.length;
+  dropMembershipAfterMiddleware(h, seller);
+  const r = await request(app).post(`/api/v1/homes/${h.id}/service-token`).set('Authorization', `Bearer ${tok(seller)}`);
+  assert.strictEqual(r.status, 403, JSON.stringify(r.body));
+  assert.strictEqual(r.body.message, 'Bu işlem için yetkiniz yok.');
+  assert.strictEqual(store.tokens.length, before, 'PIN uretilmedi');
+  const ok = await request(app).post(`/api/v1/homes/${HOME.id}/service-token`).set('Authorization', `Bearer ${tok(owner)}`);
+  assert.strictEqual(ok.status, 201);
+  const seq = txSlice(/FOR SHARE|INSERT INTO service_tokens/).map((t) => (/FOR SHARE/.test(t) ? 'share' : /INSERT/.test(t) ? 'insert' : t));
+  assert.deepStrictEqual(seq, ['BEGIN', 'share', 'insert', 'COMMIT']);
+});
+
 test('PIN uretimi: yalnizca owner; 6 hane; DB de ozet; yanit no-store', async () => {
   const res = await request(app).post(`/api/v1/homes/${HOME.id}/service-token`).set('Authorization', `Bearer ${tok(owner)}`);
   assert.strictEqual(res.status, 201);

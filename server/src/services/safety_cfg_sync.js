@@ -37,6 +37,7 @@
 const crypto = require('crypto');
 const { httpError } = require('../utils/http_errors');
 const P = require('../utils/safety_cfg_patch');
+const RA = require('./requester_access');
 const { isLoosening, isGasRelease, isIntrusionLoosening, diUseMask } = require('../utils/safety_cfg_loosen');
 
 const OUTCOME_TIMEOUT_MS = 10 * 1000;
@@ -54,23 +55,16 @@ const SQL = Object.freeze({
   view:
     'SELECT d.safety_state, c.rev AS copy_rev, c.pending FROM devices d ' +
     "LEFT JOIN device_configs c ON c.device_id = d.id AND c.module = 'safety' WHERE d.id = $1",
-  // Kuyruktaki ogenin sahibinin eve erisimi suruyor mu (rol yeniden denetlenmez; F2.D.2 madde 2)
-  access:
-    "SELECT u.id, u.is_active, to_jsonb(u) ->> 'account_status' AS account_status, u.role AS global_role, " +
-    'EXISTS (SELECT 1 FROM home_users hu WHERE hu.user_id = u.id AND hu.home_id = $2 ' +
-    'AND (hu.installer_expires_at IS NULL OR hu.installer_expires_at > CURRENT_TIMESTAMP)) AS member ' +
-    'FROM users u WHERE u.id = $1',
+  // Kuyruktaki ogenin sahibinin eve erisimi suruyor mu (rol yeniden denetlenmez; F2.D.2 madde 2). Ortak: requester_access.
+  access: RA.SQL.access,
   audit:
     'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
     'VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)',
-  // guvenlik-5: servis (PIN) oturumunun kuyruktaki ogesi: oturum iptal / suresi dolmus ise oge (ve sonrakiler) duser
-  sessionById: 'SELECT revoked_at, expires_at FROM service_sessions WHERE id = $1 AND home_id = $2',
-  // sid tasimayan ESKI oge: ogenin zamanindan sonra evde iptal edilen bir servis oturumu varsa duser
-  sessionRevokedSince:
-    'SELECT EXISTS (SELECT 1 FROM service_sessions WHERE home_id = $1 AND revoked_at IS NOT NULL AND revoked_at >= $2::timestamptz) AS revoked',
+  // guvenlik-5: servis (PIN) oturumunun kuyruktaki ogesi: oturum iptal / suresi dolmus ise oge (ve sonrakiler) duser;
+  // sid tasimayan ESKI oge: ogenin zamanindan sonra evde iptal edilen bir servis oturumu varsa duser (requester_access)
+  sessionById: RA.SQL.sessionById,
+  sessionRevokedSince: RA.SQL.sessionRevokedSince,
 });
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Surec geneli "kuyruk bos" onbellegi: REST (safety_service) ve kopru uzlastiricisi ayni sureci paylasir.
 const emptyCache = new Map(); // deviceId -> dogrulama zamani (ms)
@@ -392,7 +386,7 @@ class SafetyCfgSync {
    * Kopru -> uzlastirici: cfg yetenekli panonun CANLI state'i. ASLA firlatmaz.
    * @param {{topicId, homeId, deviceId, uid, caps:string[], summary:object}} p
    */
-  async onLiveState({ topicId, homeId, deviceId, uid, caps, summary, lastId = null } = {}) {
+  async onLiveState({ topicId, homeId, deviceId, uid, caps, summary, lastId = null, cfgId = null } = {}) {
     if (!Array.isArray(caps) || !caps.includes('cfg') || !deviceId || !topicId) return { status: 'skipped' };
     const stateRev = summary && summary.cfg && Number.isInteger(summary.cfg.rev) ? summary.cfg.rev : null;
     if (stateRev === null) return { status: 'skipped' };
@@ -403,7 +397,7 @@ class SafetyCfgSync {
     this._busy.add(deviceId);
     try {
       return await this._processQueue({
-        topicId, homeId, deviceId, uid: String(uid || '').toUpperCase(), stateRev, nowMs, echoes: echoesCfgId(caps), lastId,
+        topicId, homeId, deviceId, uid: String(uid || '').toUpperCase(), stateRev, nowMs, echoes: echoesCfgId(caps), lastId, cfgId,
       });
     } catch (err) {
       this.counters.errors += 1;
@@ -442,16 +436,7 @@ class SafetyCfgSync {
    * evde iptal edilen bir servis oturumu varsa gecersiz.
    */
   async _sessionItemOk(q, homeId, item) {
-    if (item.sid !== undefined && item.sid !== null) {
-      if (typeof item.sid !== 'string' || !UUID_RE.test(item.sid)) return false;
-      const r = await q(SQL.sessionById, [item.sid, homeId]);
-      const s = r && r.rows && r.rows[0];
-      if (!s || s.revoked_at) return false;
-      const exp = s.expires_at ? new Date(s.expires_at).getTime() : NaN;
-      return Number.isFinite(exp) && exp > this.now();
-    }
-    const r = await q(SQL.sessionRevokedSince, [homeId, item.at]);
-    return !(r && r.rows && r.rows[0] && r.rows[0].revoked === true);
+    return RA.sessionOk(q, homeId, { sid: item.sid, at: item.at }, this.now());
   }
 
   async _firstRevoked(q, homeId, items) {
@@ -466,19 +451,13 @@ class SafetyCfgSync {
         if (!cache.get(key)) return i;
         continue;
       }
-      if (!cache.has(by)) {
-        const r = await q(SQL.access, [by, homeId]);
-        const u = r && r.rows && r.rows[0];
-        const blocked = ['deleted', 'suspended', 'frozen', 'disabled', 'banned', 'blocked', 'inactive', 'locked'];
-        const ok = Boolean(u) && u.is_active !== false && !blocked.includes(u.account_status) && (u.member === true || u.global_role === 'super_user');
-        cache.set(by, ok);
-      }
+      if (!cache.has(by)) cache.set(by, await RA.userAccessOk(q, homeId, by));
       if (!cache.get(by)) return i;
     }
     return -1;
   }
 
-  async _processQueue({ topicId, homeId, deviceId, uid, stateRev, nowMs, echoes = false, lastId = null }) {
+  async _processQueue({ topicId, homeId, deviceId, uid, stateRev, nowMs, echoes = false, lastId = null, cfgId = null }) {
     const nowIso = new Date(nowMs).toISOString();
     const connected = typeof this._deps.isConnected === 'function' ? this._deps.isConnected() : true;
     const plan = await this._tx(async (q) => {
@@ -507,9 +486,10 @@ class SafetyCfgSync {
       let send = null;
       while (queue.items.length > 0) {
         const head = queue.items[0];
-        // yanki kacti ama pano uyguladi: cift uygulama yok. Yankili firmware'de (R2) yalniz state.last_id bas ogeyse; aksi halde rev
-        // artisi baska kaynaktandir (LAN/CLI) ve asagidaki "pano kazanir" kurali isler.
-        if (head.sent_at && stateRev === head.base_rev + 1 && (!echoes || lastId === head.id)) {
+        // yanki kacti ama pano uyguladi: cift uygulama yok. Yankili firmware'de (R2) yalniz state.last_id bas ogeyse ya da (sko-5,
+        // C6; firmware 1.3.2) state.cfg.safety.id bas ogeyse (araya giren komut last_id'yi degistirmis olabilir); aksi halde rev
+        // artisi baska kaynaktandir (LAN/CLI) ve asagidaki "pano kazanir" kurali isler. cfgId yoksa bugunku davranis.
+        if (head.sent_at && stateRev === head.base_rev + 1 && (!echoes || lastId === head.id || (cfgId !== null && cfgId === head.id))) {
           inferred.push(head);
           queue.items.shift();
           continue;

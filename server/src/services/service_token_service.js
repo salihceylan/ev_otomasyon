@@ -140,6 +140,11 @@ class ServiceTokenService {
     }
 
     return db.withTransaction(async (tx) => {
+      // hesap-uyelik-7: yetki (owner) INSERT ile AYNI islemde uyelik satiri FOR SHARE ile yeniden dogrulanir: es zamanli
+      // devir kabulu bu kilidi bekler ve servis erisimi temizligini PIN commit edildikten sonra yapar; sahiplik ara
+      // katmandan sonra gittiyse 403 ve PIN uretilmez (yeni sahibin evinde eski sahibin PIN'i kalmaz).
+      const m = await tx.query('SELECT role FROM home_users WHERE home_id = $1 AND user_id = $2 FOR SHARE', [homeId, ownerUserId]);
+      if (!m.rows[0] || m.rows[0].role !== 'owner') throw new HttpError(403, 'Bu işlem için yetkiniz yok.', 'FORBIDDEN');
       // Suresi dolmus kullanilmamis PIN'ler kapatilir (aktif-PIN tekillik indeksini bosaltir).
       await tx.query(
         `UPDATE service_tokens SET revoked_at = NOW()

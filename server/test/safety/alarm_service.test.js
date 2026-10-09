@@ -291,3 +291,241 @@ test('RV2-1: zones_complete=false iken listede olmayan bolgenin satirina dokunul
   await s.svc.onLiveState(liveArgs(sum([])));
   assert.equal(a.calls.cleared.length, 1, 'alan yoksa (eski ozet) tam sayilir');
 });
+
+// ---- sko-1 (sozlesme C11): kuyruktaki (cevrimdisi) onay istegi yalniz 24 saatten genc ve isteyen hala yetkiliyse iletilir;
+// aksi halde duser + device_audit_logs 'alarm_ack_request_dropped' {reason: expired|revoked}. ----
+const T0 = Date.parse('2026-10-09T10:00:00.000Z');
+const HOUR = 3600 * 1000;
+const SID = '5e55e55e-0000-4000-8000-000000000001';
+const OWNER_ID = '0a0a0a0a-0000-4000-8000-000000000001';
+
+function ackWorld({ row, users = {}, sessions = [] }) {
+  const w = { published: [], dropped: [], taken: [], audits: [], requests: [] };
+  const run = async (text, params) => {
+    if (/home_id <> \$2/.test(text)) return { rows: [], rowCount: 0 };
+    if (/^SELECT id, aid, zone, kind, status, ack_requested_at/.test(text)) return { rows: row ? [{ ...row }] : [] };
+    if (/FROM users u WHERE u\.id = \$1/.test(text)) {
+      const u = users[params[0]];
+      return { rows: u ? [{ id: params[0], ...u }] : [] };
+    }
+    if (/FROM service_sessions WHERE id = \$1/.test(text)) {
+      return { rows: sessions.filter((s) => s.id === params[0] && s.home_id === params[1]).map((s) => ({ revoked_at: s.revoked_at, expires_at: s.expires_at })) };
+    }
+    if (/revoked_at >= \$2/.test(text)) {
+      const since = Date.parse(params[1] instanceof Date ? params[1].toISOString() : params[1]);
+      return { rows: [{ revoked: sessions.some((s) => s.home_id === params[0] && s.revoked_at && Date.parse(s.revoked_at) >= since) }] };
+    }
+    if (/SET ack_requested_at = NULL, acked_by = ack_requested_by/.test(text)) {
+      w.taken.push(params[0]);
+      return { rows: [{ id: params[0] }], rowCount: 1 };
+    }
+    if (/SET ack_requested_at = NULL, ack_requested_by = NULL/.test(text)) {
+      w.dropped.push(params[0]);
+      return { rows: [], rowCount: 1 };
+    }
+    if (/SET ack_requested_at = CURRENT_TIMESTAMP/.test(text)) {
+      w.requests.push({ text, params });
+      return { rows: [{ id: params[0] }], rowCount: 1 };
+    }
+    if (/INSERT INTO device_audit_logs/.test(text)) {
+      w.audits.push({ event: params[0], home: params[2], details: JSON.parse(params[params.length - 1]) });
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  w.svc = createAlarmService({
+    db: { query: run, withTransaction: async (fn) => fn({ query: run }) },
+    publishCommand: async (topicId, cmd) => w.published.push({ topicId, cmd }),
+    publishSys: async () => {},
+    isConnected: () => true,
+    getPush: () => null,
+    logger: { log() {}, warn() {}, error() {} },
+    timers: fakeTimers(),
+    now: () => T0,
+  });
+  w.live = () => w.svc.onLiveState({ topicId: 't', homeId: 'h', deviceId: 'd1', uid: UID, caps: CAPS, summary: sum([{ id: 1, st: 'latched', aid: 'abcd0001-1', kind: 'water', srcs: [] }]), prev: null, hadCaps: true });
+  w.acks = () => w.published.filter((p) => p.cmd.cmd === 'alarm_ack');
+  return w;
+}
+const ackRow = (over) => ({ id: 7, aid: 'abcd0001-1', zone: 1, kind: 'water', status: 'latched', ack_requested_at: new Date(T0 - HOUR), ack_requested_by: null, ack_requested_sid: null, ...over });
+const OWNER_ROW = { is_active: true, account_status: 'active', global_role: 'user', member: true, home_role: 'owner' };
+
+test('sko-1: requestAck servis (PIN) oturumunun kimligini (sid) satira yazar', async () => {
+  const w = ackWorld({ row: null });
+  assert.equal(await w.svc.requestAck({ alarmId: '7', homeId: 'h', userId: null, sessionId: SID }), true);
+  assert.equal(w.requests.length, 1);
+  assert.match(w.requests[0].text, /ack_requested_sid = \$4/);
+  assert.deepEqual(w.requests[0].params, ['7', 'h', null, SID]);
+  await w.svc.requestAck({ alarmId: '7', homeId: 'h', userId: OWNER_ID });
+  assert.deepEqual(w.requests[1].params, ['7', 'h', OWNER_ID, null]);
+});
+
+test('sko-1: servis oturumu iptal edildiyse kuyruktaki onay iletilmez; istek duser + revoked denetim kaydi', async () => {
+  const w = ackWorld({
+    row: ackRow({ ack_requested_sid: SID }),
+    sessions: [{ id: SID, home_id: 'h', revoked_at: new Date(T0 - 10 * 60 * 1000).toISOString(), expires_at: new Date(T0 + HOUR).toISOString() }],
+  });
+  await w.live();
+  assert.equal(w.acks().length, 0, 'iptal edilen oturumun onayi panoya GITMEZ');
+  assert.deepEqual(w.taken, []);
+  assert.deepEqual(w.dropped, [7]);
+  assert.deepEqual(w.audits.map((a) => [a.event, a.details.reason, a.details.alarm_id]), [['alarm_ack_request_dropped', 'revoked', 7]]);
+});
+
+test('sko-1: suresi dolmus servis oturumu da revoked; gecerli oturumun onayi iletilir', async () => {
+  const expired = ackWorld({ row: ackRow({ ack_requested_sid: SID }), sessions: [{ id: SID, home_id: 'h', revoked_at: null, expires_at: new Date(T0 - 1000).toISOString() }] });
+  await expired.live();
+  assert.equal(expired.acks().length, 0);
+  assert.deepEqual(expired.audits.map((a) => a.details.reason), ['revoked']);
+  const ok = ackWorld({ row: ackRow({ ack_requested_sid: SID }), sessions: [{ id: SID, home_id: 'h', revoked_at: null, expires_at: new Date(T0 + HOUR).toISOString() }] });
+  await ok.live();
+  assert.equal(ok.acks().length, 1);
+  assert.deepEqual(ok.taken, [7]);
+  assert.deepEqual(ok.audits, []);
+});
+
+test('sko-1: 24 saatten eski istek duser (expired); 1 saatlik yetkili kullanici istegi iletilir', async () => {
+  const old = ackWorld({ row: ackRow({ ack_requested_by: OWNER_ID, ack_requested_at: new Date(T0 - 25 * HOUR) }), users: { [OWNER_ID]: OWNER_ROW } });
+  await old.live();
+  assert.equal(old.acks().length, 0, '25 saatlik istek panoya GITMEZ');
+  assert.deepEqual(old.dropped, [7]);
+  assert.deepEqual(old.audits.map((a) => [a.event, a.details.reason]), [['alarm_ack_request_dropped', 'expired']]);
+  const fresh = ackWorld({ row: ackRow({ ack_requested_by: OWNER_ID }), users: { [OWNER_ID]: OWNER_ROW } });
+  await fresh.live();
+  assert.equal(fresh.acks().length, 1);
+  assert.equal(fresh.acks()[0].cmd.aid, 'abcd0001-1');
+  assert.deepEqual(fresh.dropped, []);
+});
+
+test('sko-1: isteyen kullanicinin yetkisi bittiyse (uyelik yok / misafire dusuruldu / donduruldu) istek duser; super_user gecer', async () => {
+  for (const u of [
+    { ...OWNER_ROW, member: false, home_role: null },
+    { ...OWNER_ROW, home_role: 'guest' },
+    { ...OWNER_ROW, is_active: false },
+    { ...OWNER_ROW, account_status: 'suspended' },
+    { ...OWNER_ROW, global_role: 'user', home_role: 'service_user' }, // personelligi kaldirilmis eski servis uyeligi
+    null, // hesap silinmis
+  ]) {
+    const w = ackWorld({ row: ackRow({ ack_requested_by: OWNER_ID }), users: u ? { [OWNER_ID]: u } : {} });
+    await w.live();
+    assert.equal(w.acks().length, 0, JSON.stringify(u));
+    assert.deepEqual(w.audits.map((a) => a.details.reason), ['revoked'], JSON.stringify(u));
+  }
+  for (const u of [
+    { ...OWNER_ROW, global_role: 'super_user', member: false, home_role: null },
+    { ...OWNER_ROW, home_role: 'resident' },
+    { ...OWNER_ROW, global_role: 'service_user', home_role: 'service_user' },
+  ]) {
+    const w = ackWorld({ row: ackRow({ ack_requested_by: OWNER_ID }), users: { [OWNER_ID]: u } });
+    await w.live();
+    assert.equal(w.acks().length, 1, JSON.stringify(u));
+  }
+});
+
+test('sko-1: by ve sid bos ESKI istek: istekten sonra evde servis oturumu iptal edildiyse duser, edilmediyse iletilir', async () => {
+  const at = new Date(T0 - 2 * HOUR);
+  const revoked = ackWorld({ row: ackRow({ ack_requested_at: at }), sessions: [{ id: SID, home_id: 'h', revoked_at: new Date(T0 - HOUR).toISOString(), expires_at: null }] });
+  await revoked.live();
+  assert.equal(revoked.acks().length, 0);
+  assert.deepEqual(revoked.audits.map((a) => a.details.reason), ['revoked']);
+  const before = ackWorld({ row: ackRow({ ack_requested_at: at }), sessions: [{ id: SID, home_id: 'h', revoked_at: new Date(T0 - 3 * HOUR).toISOString(), expires_at: null }] });
+  await before.live();
+  assert.equal(before.acks().length, 1);
+});
+
+// ---- sko-2 (sozlesme C12): acik (latched/fault) alarmda push en az bir kez teslim edilir. Sahte tablo, gercek SQL'in
+// kosullarini taklit eder (gercek davranis: alarm_service_pg.test.js); veritabani saati `w.dbNow`. ----
+function pushWorld(rows) {
+  const w = { dbNow: T0, rows: new Map(rows.map((r) => [r.id, { push_attempts: 0, fault_push_status: null, updated_at: T0, ...r }])), sends: 0, results: [] };
+  const open = (r) => r.status === 'latched' || r.status === 'fault';
+  const age = (r) => w.dbNow - r.updated_at;
+  const alarmDue = (r) => open(r) && (r.push_status === 'pending' || (['claimed', 'sending'].includes(r.push_status) && age(r) > 120000) || (r.push_status === 'failed' && r.push_attempts < 5 && age(r) > 60000));
+  const faultDue = (r) => r.status === 'fault' && (r.fault_push_status === 'pending' || (['claimed', 'sending'].includes(r.fault_push_status) && age(r) > 120000));
+  const out = (r) => ({ rows: [{ id: r.id, home_id: 'h1', device_id: 'd1', zone: 1, kind: 'gas', status: r.status, device_uuid: UID }], rowCount: 1 });
+  const run = async (text, params) => {
+    const r = w.rows.get(params && params[0]);
+    if (/^SELECT id FROM alarms/.test(text)) {
+      const due = /fault_push_status/.test(text) ? faultDue : alarmDue;
+      return { rows: [...w.rows.values()].filter(due).slice(0, params[0]).map((x) => ({ id: x.id })) };
+    }
+    if (/SET push_status = 'claimed'/.test(text)) {
+      const retry = /push_attempts < 5/.test(text);
+      if (!r || !(retry ? alarmDue(r) : r.push_status === 'pending')) return { rows: [], rowCount: 0 };
+      Object.assign(r, { push_status: 'claimed', push_attempts: r.push_attempts + 1, updated_at: w.dbNow });
+      return out(r);
+    }
+    if (/SET fault_push_status = 'claimed'/.test(text)) {
+      const retry = /INTERVAL/.test(text);
+      if (!r || !(retry ? faultDue(r) : r.fault_push_status === 'pending')) return { rows: [], rowCount: 0 };
+      Object.assign(r, { fault_push_status: 'claimed', updated_at: w.dbNow });
+      return out(r);
+    }
+    if (/SET push_status = \$2/.test(text)) { Object.assign(r, { push_status: params[1], updated_at: w.dbNow }); return { rows: [], rowCount: 1 }; }
+    if (/SET fault_push_status = \$2/.test(text)) { Object.assign(r, { fault_push_status: params[1], updated_at: w.dbNow }); return { rows: [], rowCount: 1 }; }
+    return { rows: [], rowCount: 0 };
+  };
+  const push = {
+    isConfigured: () => true,
+    recipientsForHome: async () => [{ id: 'p1', token: 'tok-aaaaaaaaaaaaaaaaaaaaa' }],
+    sendNotice: async (args) => {
+      w.sends += 1;
+      const res = w.results.length > 0 ? w.results.shift() : { sent: 1, failed: 0 };
+      if (res instanceof Error) throw res;
+      w.notices = (w.notices || []).concat([args]);
+      return res;
+    },
+  };
+  w.svc = createAlarmService({
+    db: { query: run, withTransaction: async (fn) => fn({ query: run }) },
+    publishCommand: async () => {},
+    isConnected: () => true,
+    getPush: () => push,
+    logger: { log() {}, warn() {}, error() {} },
+    timers: fakeTimers(),
+    sleep: async () => {},
+    now: () => w.dbNow,
+  });
+  return w;
+}
+
+test('sko-2: gecici FCM hatasiyla failed kalan acik alarmin push\'u 1 dk sonra yeniden denenir ve gonderilir', async () => {
+  const w = pushWorld([{ id: 7, status: 'latched', push_status: 'pending' }]);
+  w.results.push(new Error('fcm 503'), new Error('fcm 503'));
+  assert.equal(await w.svc.pushAlarm(7), 'failed');
+  assert.equal(w.sends, 2);
+  assert.equal(w.rows.get(7).push_status, 'failed');
+  await w.svc.retryStuckPushes();
+  assert.equal(w.sends, 2, '1 dakika dolmadan yeniden denenmez');
+  w.dbNow += 61 * 1000;
+  const r = await w.svc.retryStuckPushes();
+  assert.equal(w.sends, 3, 'yeniden gonderildi');
+  assert.equal(w.rows.get(7).push_status, 'sent');
+  assert.equal(w.rows.get(7).push_attempts, 2);
+  assert.equal(r.sent, 1);
+  await w.svc.retryStuckPushes();
+  assert.equal(w.sends, 3, "'sent' yeniden gonderilmez");
+});
+
+test('sko-2: 2 dk\'dan eski claimed/sending (surec coktu) yeniden gonderilir; taze olan, kapali alarm ve 5 deneme sinirini asan gonderilmez', async () => {
+  const w = pushWorld([
+    { id: 1, status: 'latched', push_status: 'claimed', updated_at: T0 - 3 * 60 * 1000 },
+    { id: 2, status: 'fault', push_status: 'sending', updated_at: T0 - 3 * 60 * 1000 },
+    { id: 3, status: 'latched', push_status: 'sending', updated_at: T0 - 30 * 1000 },
+    { id: 4, status: 'cleared', push_status: 'claimed', updated_at: T0 - 3 * 60 * 1000 },
+    { id: 5, status: 'silenced', push_status: 'failed', push_attempts: 1, updated_at: T0 - 3 * 60 * 1000 },
+    { id: 6, status: 'latched', push_status: 'failed', push_attempts: 5, updated_at: T0 - 3 * 60 * 1000 },
+    { id: 8, status: 'latched', push_status: 'pending' }, // yeniden baslatmada talep edilmemis
+  ]);
+  await w.svc.retryStuckPushes();
+  assert.deepEqual([...w.rows.values()].filter((r) => r.push_status === 'sent').map((r) => r.id), [1, 2, 8]);
+  assert.equal(w.sends, 3);
+  assert.equal(w.rows.get(4).push_status, 'claimed', 'kapali alarm yeniden denenmez');
+  assert.equal(w.rows.get(6).push_status, 'failed', '5 deneme siniri');
+});
+
+test('sko-2: yarim kalan vana arizasi (fault) push\'u da yeniden denenir', async () => {
+  const w = pushWorld([{ id: 9, status: 'fault', push_status: 'sent', fault_push_status: 'claimed', updated_at: T0 - 3 * 60 * 1000 }]);
+  await w.svc.retryStuckPushes();
+  assert.equal(w.rows.get(9).fault_push_status, 'sent');
+  assert.equal(w.notices[0].data.status, 'fault');
+});

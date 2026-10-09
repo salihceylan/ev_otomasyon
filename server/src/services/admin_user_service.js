@@ -53,6 +53,11 @@ function notFound() {
   return new HttpError(404, 'Kullanıcı bulunamadı.', 'NOT_FOUND');
 }
 
+/** hesap-uyelik-6 (C10): silinmis hesap uzerinde durum/rol/parola islemi yok. */
+function deletedAccountConflict() {
+  return new HttpError(409, 'Silinmiş hesap üzerinde bu işlem yapılamaz.', 'CONFLICT');
+}
+
 /** Staff kapsami: kendisi veya kendi olusturdugu son kullanici. */
 function staffCanSee(actor, target) {
   if (!target) return false;
@@ -311,6 +316,8 @@ class AdminUserService {
           if (!actorIsSuper && target.id === currentUser.id && (wantsActive || wantsRole)) {
             throw new HttpError(403, 'Bu işlem için yetkiniz yok.', 'FORBIDDEN');
           }
+          // hesap-uyelik-6 (sozlesme C10): silinmis (anonimlestirilmis) hesap dondurulamaz / acilamaz, rol ve parola alamaz
+          if (target.account_status === 'deleted' && (wantsActive || wantsRole || wantsPassword)) throw deletedAccountConflict();
 
           // Baska bir super kullanicinin parolasi: aktorun kendi parolasi ile yeniden dogrulama.
           if (wantsPassword && target.role === 'super_user' && target.id !== currentUser.id) {
@@ -341,12 +348,14 @@ class AdminUserService {
             add('full_name', n);
           }
           if (phone !== undefined) {
-            if (phone === null || String(phone).trim() === '') add('phone', null);
-            else {
-              const p = normalizePhone(phone);
-              if (!p) throw new HttpError(400, 'Geçerli bir telefon numarası giriniz.', 'VALIDATION');
-              add('phone', p);
+            let nextPhone = null;
+            if (phone !== null && String(phone).trim() !== '') {
+              nextPhone = normalizePhone(phone);
+              if (!nextPhone) throw new HttpError(400, 'Geçerli bir telefon numarası giriniz.', 'VALIDATION');
             }
+            add('phone', nextPhone);
+            // hesap-uyelik-3 (C9): personelin yazdigi telefon dogrulanmamistir (telefon-OTP girisi bu hesaba baglanmaz)
+            if (nextPhone !== (target.phone || null)) add('phone_verified', false);
           }
           if (admin_notes !== undefined) add('admin_notes', cleanNotes(admin_notes));
           const roleChanged = wantsRole && role !== target.role;
@@ -354,7 +363,10 @@ class AdminUserService {
           const activeChanged = wantsActive && nextActive !== target.is_active;
           if (activeChanged) {
             add('is_active', nextActive);
-            add('account_status', nextActive ? (target.account_status === 'suspended' ? 'active' : target.account_status) : 'suspended');
+            // C10: dondurma 'active' -> 'suspended'; 'pending_invite' durumu KORUNUR (yalniz is_active; davet akisi
+            // bozulmaz). Cozme 'suspended' -> 'active'; diger durumlar (pending_invite) korunur.
+            const st = target.account_status;
+            add('account_status', nextActive ? (st === 'suspended' ? 'active' : st) : st === 'pending_invite' ? st : 'suspended');
           }
           sets.push('updated_at = CURRENT_TIMESTAMP');
 
@@ -464,11 +476,17 @@ class AdminUserService {
         }
 
         if (!hardDelete) {
-          await tx.query(
-            `UPDATE users SET is_active = FALSE, account_status = 'suspended', updated_at = CURRENT_TIMESTAMP
-              WHERE id = $1`,
-            [target.id]
-          );
+          // C10: silinmis hesap yumusak silinemez; davet bekleyen hesap yalniz pasife alinir (durumu korunur)
+          if (target.account_status === 'deleted') throw deletedAccountConflict();
+          if (target.account_status === 'pending_invite') {
+            await tx.query('UPDATE users SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [target.id]);
+          } else {
+            await tx.query(
+              `UPDATE users SET is_active = FALSE, account_status = 'suspended', updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1`,
+              [target.id]
+            );
+          }
           // Oturumlar + TUM evlerdeki uygulama MQTT kimlikleri (ayni transaction)
           const revoked = await authService.revokeAllUserSessions(target.id, { tx, reason: 'account_suspended' });
           return { target, usernames: revoked.mqttUsernames, deletedHomes: 0, sessionsRevoked: true };

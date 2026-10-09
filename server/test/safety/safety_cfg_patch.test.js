@@ -14,6 +14,7 @@ const P = require('../../src/utils/safety_cfg_patch');
 
 const CAPS = ['safety', 'actuator', 'event', 'cfg'];
 const CAPS_I = [...CAPS, 'intrusion'];
+const CAPS_B = [...CAPS, 'bridge']; // kopru surucusuyle derlenmis firmware (1.3.2 yazmaz; sozlesme C1)
 const ok = (body, caps = CAPS) => {
   const r = P.validatePatchRequest(body, { caps });
   assert.equal(r.ok, true, r.message);
@@ -49,7 +50,7 @@ test('govde: base_rev zorunlu u32; set ya da del (tam biri); id kurali; bilinmey
 
 test('sensor: firmware alan listesi ve araliklari', () => {
   ok({ base_rev: 0, set: { sensor: { id: 'd3', kind: 'water', zone: 1 } } });
-  ok({ base_rev: 0, set: { sensor: { id: 'b16', kind: 'smoke', zone: 4, active_open: true, flags: 7, confirm_ms: 60000, name: 'Salon' } } });
+  ok({ base_rev: 0, set: { sensor: { id: 'b16', kind: 'smoke', zone: 4, active_open: true, flags: 7, confirm_ms: 60000, name: 'Salon' } } }, CAPS_B);
   ok({ base_rev: 0, set: { sensor: { id: 'd40', kind: 'gas_reset', zone: 0, active_open: 1 } } });
   bad({ base_rev: 0, set: { sensor: { id: 'd41', kind: 'water', zone: 1 } } });
   bad({ base_rev: 0, set: { sensor: { id: 'b17', kind: 'water', zone: 1 } } });
@@ -66,6 +67,21 @@ test('sensor: firmware alan listesi ve araliklari', () => {
   bad({ base_rev: 0, set: { sensor: { id: 'd3', kind: 'water', zone: 1, src: 'di' } } });
   ok({ base_rev: 0, set: { sensor: { id: 'd3', kind: 'water', zone: 1, name: 'ç'.repeat(9) } } }); // 18 bayt < 20
   bad({ base_rev: 0, set: { sensor: { id: 'd3', kind: 'water', zone: 1, name: 'ç'.repeat(10) } } }); // 20 bayt
+});
+
+test("kopru sensoru (fw-tarama-1, sozlesme C1): caps 'bridge' yoksa eklenemez/degistirilemez; silme serbest", () => {
+  const msg = 'Kablosuz (köprü) sensör bu panoda desteklenmiyor.';
+  for (const caps of [CAPS, CAPS_I, ['safety', 'cfg']]) {
+    const r = bad({ base_rev: 0, set: { sensor: { id: 'b2', kind: 'water', zone: 1 } } }, caps);
+    assert.equal(r.message, msg);
+    assert.equal(bad({ base_rev: 0, set: { sensor: { id: 'b16', kind: 'alarm_ack', zone: 0 } } }, caps).message, msg);
+    // silme serbest: kayitli yapilandirmadaki kopru sensoru kaldirilabilmeli
+    assert.equal(ok({ base_rev: 0, del: { sensor: 'b2' } }, caps).target, 'b2');
+  }
+  ok({ base_rev: 0, set: { sensor: { id: 'b2', kind: 'water', zone: 1 } } }, CAPS_B);
+  ok({ base_rev: 0, set: { sensor: { id: 'd2', kind: 'water', zone: 1 } } }, ['safety', 'cfg']);
+  // bicim hatasi once (kimlik araligi): kopru kapisi ondan sonra gelir
+  assert.notEqual(bad({ base_rev: 0, set: { sensor: { id: 'b17', kind: 'water', zone: 1 } } }).message, msg);
 });
 
 test('eylemci: firmware alan listesi ve araliklari; kimliksiz = yeni satir', () => {
@@ -219,7 +235,8 @@ test('firmware ayristiricisiyla (parseCfgEdit JS portu) kabul/ret ESLIGI (hirsiz
   const diff = [];
   for (const it of items) {
     const body = { base_rev: 7, ...it };
-    const srv = P.validatePatchRequest(body, { caps: CAPS }).ok;
+    // kopru kapisi (caps 'bridge') ayristirma degil yetenek kapisidir; firmware onu validate(forWrite) adiminda uygular
+    const srv = P.validatePatchRequest(body, { caps: CAPS_B }).ok;
     const fw = parseCfgEdit(JSON.parse(JSON.stringify(body)), false).err === null;
     if (srv !== fw) diff.push({ body: JSON.stringify(it), srv, fw });
   }

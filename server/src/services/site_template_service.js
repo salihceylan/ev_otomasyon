@@ -168,8 +168,9 @@ function flatRow(r) {
           device_uuid: r.lw_device_uuid || null,
         }
       : null,
+    // C2: template_id (arac 'Son yazim'da dairenin guncel sablonundan farkli yazimi isaretler)
     last_ok_write: r.lok_version !== null && r.lok_version !== undefined
-      ? { version: r.lok_version, via: r.lok_via, at: r.lok_at, device_uuid: r.lok_device_uuid || null }
+      ? { template_id: r.lok_template_id || null, version: r.lok_version, via: r.lok_via, at: r.lok_at, device_uuid: r.lok_device_uuid || null }
       : null,
   };
 }
@@ -196,7 +197,8 @@ function templateInvalid(result) {
 const FLAT_SELECT = `SELECT f.id, f.site_id, f.block, f.number, f.flat_type, f.template_id, f.device_uuid, f.status,
         lw.template_id AS lw_template_id, lw.version AS lw_version, lw.via AS lw_via, lw.created_at AS lw_at,
         lw.result AS lw_result, lw.error_code AS lw_error_code, lw.device_uuid AS lw_device_uuid,
-        lok.version AS lok_version, lok.via AS lok_via, lok.created_at AS lok_at, lok.device_uuid AS lok_device_uuid
+        lok.template_id AS lok_template_id, lok.version AS lok_version, lok.via AS lok_via, lok.created_at AS lok_at,
+        lok.device_uuid AS lok_device_uuid
    FROM site_flats f
    LEFT JOIN LATERAL (
      SELECT w.template_id, w.version, w.via, w.created_at, w.result, w.error_code, w.device_uuid
@@ -206,7 +208,7 @@ const FLAT_SELECT = `SELECT f.id, f.site_id, f.block, f.number, f.flat_type, f.t
       LIMIT 1
    ) lw ON TRUE
    LEFT JOIN LATERAL (
-     SELECT w.version, w.via, w.created_at, w.device_uuid
+     SELECT w.template_id, w.version, w.via, w.created_at, w.device_uuid
        FROM template_writes w
       WHERE w.flat_id = f.id AND w.result = 'ok' AND (f.device_uuid IS NULL OR w.device_uuid = f.device_uuid)
       ORDER BY w.created_at DESC, w.id DESC
@@ -453,6 +455,10 @@ class SiteTemplateService {
    * PUT /sites/:siteId/flats/:flatId/device  {device_uuid} | {device_uuid:null}
    * atolye-8: IN_STOCK olmayan kart, pano degisim kaydi (eski = dairenin karti, yeni = kart) varsa ya da aktor super_user
    * ise baglanir. atolye-7: kart degisince yeni kartin bu dairenin sablonuyla basarili yazimi yoksa 'written' -> 'planned'.
+   * Sozlesme C13 (tarama-sunucu-cihaz-site-6): ayni kart -> degisiklik yok; 'written' dairede kart ayrilinca 'planned';
+   * installed / handed_over dairede farkli kart ya da ayirma: degisim kaydi varsa baglanir ve durum korunur (Pano
+   * Degisimi ile ayni); yoksa super_user degilse 409 INVALID_STATUS_TRANSITION; super_user ise baglanir ve durum yeniden
+   * hesaplanir (kartsiz -> planned; kartta dairenin sablonuyla basarili yazim varsa written, yoksa planned).
    */
   async linkFlatDevice(siteId, flatId, deviceUuid, actor = null) {
     const sid = uuidOrThrow(siteId, 'site');
@@ -474,18 +480,25 @@ class SiteTemplateService {
         invStatus = inv.rows[0].status;
       }
       const flat = await this._lockFlat(tx, sid, fid);
-      if (uuid && invStatus !== 'IN_STOCK' && uuid !== flat.device_uuid) {
-        let allowed = isSuper(actor);
-        if (!allowed && flat.device_uuid) {
-          const rep = await tx.query(
-            'SELECT 1 FROM device_replacement_logs WHERE old_device_uuid = $1 AND new_device_uuid = $2 LIMIT 1',
-            [flat.device_uuid, uuid]
-          );
-          allowed = rep.rows.length > 0;
-        }
-        if (!allowed) {
-          throw httpError(409, `Yalnızca stoktaki (IN_STOCK) kart daireye bağlanabilir (mevcut durum: ${invStatus}).`, 'DEVICE_NOT_IN_STOCK');
-        }
+      if (uuid === flat.device_uuid) return this._flatById((t, p) => tx.query(t, p), fid); // C13: ayni kart
+      const settled = flat.status === 'installed' || flat.status === 'handed_over';
+      let viaReplacement = false; // pano degisim kaydi: eski = dairenin karti, yeni = kart
+      if (uuid && flat.device_uuid && (settled || invStatus !== 'IN_STOCK')) {
+        const rep = await tx.query(
+          'SELECT 1 FROM device_replacement_logs WHERE old_device_uuid = $1 AND new_device_uuid = $2 LIMIT 1',
+          [flat.device_uuid, uuid]
+        );
+        viaReplacement = rep.rows.length > 0;
+      }
+      if (uuid && invStatus !== 'IN_STOCK' && !isSuper(actor) && !viaReplacement) {
+        throw httpError(409, `Yalnızca stoktaki (IN_STOCK) kart daireye bağlanabilir (mevcut durum: ${invStatus}).`, 'DEVICE_NOT_IN_STOCK');
+      }
+      if (settled && !viaReplacement && !isSuper(actor)) {
+        throw httpError(
+          409,
+          'Kurulmuş ya da teslim edilmiş dairenin kartı yalnız Pano Değişimi ile ya da yönetici tarafından değiştirilebilir.',
+          'INVALID_STATUS_TRANSITION'
+        );
       }
       if (uuid) {
         const other = await tx.query('SELECT id FROM site_flats WHERE device_uuid = $1 AND id <> $2', [uuid, fid]);
@@ -497,17 +510,21 @@ class SiteTemplateService {
         if (err && err.code === '23505') throw httpError(409, 'Bu kart başka bir daireye bağlı.', 'DEVICE_ALREADY_LINKED');
         throw err;
       }
-      // atolye-7: 'Yazıldı' karta baglidir: yeni kartin bu dairenin sablonuyla basarili yazimi yoksa 'planned'
-      if (uuid && uuid !== flat.device_uuid && flat.status === 'written') {
-        const okw = flat.template_id
-          ? await tx.query(
-            "SELECT 1 FROM template_writes WHERE device_uuid = $1 AND template_id = $2 AND result = 'ok' LIMIT 1",
-            [uuid, flat.template_id]
-          )
-          : { rows: [] };
-        if (okw.rows.length === 0) {
-          await tx.query("UPDATE site_flats SET status = 'planned', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [fid]);
-        }
+      // atolye-7: 'Yazıldı' karta baglidir: yeni kartin bu dairenin sablonuyla basarili yazimi yoksa 'planned'.
+      // C13: kartsiz 'written' -> 'planned'; super_user'in degistirdigi installed / handed_over yeniden hesaplanir
+      // (degisim kaydiyla baglanan kurulmus daire durumunu korur).
+      const okWrite = async () => {
+        if (!uuid || !flat.template_id) return false;
+        const okw = await tx.query(
+          "SELECT 1 FROM template_writes WHERE device_uuid = $1 AND template_id = $2 AND result = 'ok' LIMIT 1",
+          [uuid, flat.template_id]
+        );
+        return okw.rows.length > 0;
+      };
+      let nextStatus = null;
+      if (flat.status === 'written' || (settled && !viaReplacement)) nextStatus = (await okWrite()) ? 'written' : 'planned';
+      if (nextStatus && nextStatus !== flat.status) {
+        await tx.query('UPDATE site_flats SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [fid, nextStatus]);
       }
       return this._flatById((t, p) => tx.query(t, p), fid);
     });
@@ -737,7 +754,7 @@ class SiteTemplateService {
       let flat = null;
       let linkedElsewhere = null;
       if (flatId) {
-        const f = await tx.query('SELECT id, status, device_uuid FROM site_flats WHERE id = $1 FOR UPDATE', [flatId]);
+        const f = await tx.query('SELECT id, status, device_uuid, template_id FROM site_flats WHERE id = $1 FOR UPDATE', [flatId]);
         flat = f.rows[0];
         if (!flat) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
         if (flat.device_uuid && flat.device_uuid !== uuid) throw httpError(409, 'Daireye başka bir kart bağlı.', 'CONFLICT');
@@ -752,14 +769,18 @@ class SiteTemplateService {
          RETURNING id, device_uuid, template_id, version, flat_id, via, result, error_code, written_by, created_at`,
         [uuid, templateId, version, flatId, b.via, b.result, errorCode, userId]
       );
+      // C2: daire baska bir sablona ayarliysa (eski listeyle yazim) kayit eklenir ama daire 'Yazildi' OLMAZ; yanitta uyari.
+      const mismatch = flat && flat.template_id && flat.template_id !== templateId ? flat.template_id : null;
       let flatStatus = flat ? flat.status : null;
-      if (flat && !linkedElsewhere && b.result === 'ok' && flat.status === 'planned') {
+      if (flat && !linkedElsewhere && !mismatch && b.result === 'ok' && flat.status === 'planned') {
         await tx.query("UPDATE site_flats SET status = 'written', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [flatId]);
         flatStatus = 'written';
       }
       const row = ins.rows[0];
       const out = { ...row, id: Number(row.id), flat_status: flatStatus };
+      // Tek uyari alani: DEVICE_LINKED_ELSEWHERE oncelikli
       if (linkedElsewhere) Object.assign(out, { warning: 'DEVICE_LINKED_ELSEWHERE', linked_flat_id: linkedElsewhere });
+      else if (mismatch) Object.assign(out, { warning: 'FLAT_TEMPLATE_MISMATCH', flat_template_id: mismatch });
       return out;
     });
   }

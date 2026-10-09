@@ -62,6 +62,45 @@ test.beforeEach(() => {
   mqttCalls.length = 0;
 });
 
+// hesap-uyelik-7: ara katman (requireHomeAccess) uyeligi okuduktan SONRA ama servis INSERT'inden ONCE sahiplik gider
+// (es zamanli devir kabulu): ilk uyelik okumasindan sonra satir silinir.
+function dropMembershipAfterMiddleware(home, user) {
+  let fired = false;
+  fakeDb.on(/FROM home_users\s+WHERE home_id = \$1 AND user_id = \$2/, async (p, t) => {
+    const out = await store.handle(p, t);
+    if (!fired && /installer_expires_at/.test(t) && p[0] === home.id && p[1] === user.id) {
+      fired = true;
+      store.members = store.members.filter((m) => !(m.home_id === home.id && m.user_id === user.id));
+    }
+    return out;
+  });
+}
+const txSlice = (re) => {
+  const texts = fakeDb.calls.map((c) => c.text);
+  const begin = texts.lastIndexOf('BEGIN');
+  return texts.slice(begin, texts.indexOf('COMMIT', begin) + 1).filter((t) => t === 'BEGIN' || t === 'COMMIT' || re.test(t));
+};
+
+test('hesap-uyelik-7: davet uretimi yetkiyi INSERT ile ayni islemde FOR SHARE ile yeniden dogrular; ara katmandan sonra sahiplik giderse 403, davet yok', async () => {
+  const h = store.addHome({ name: 'Yaris Evi' });
+  const seller = store.addUser();
+  store.addMember(h, seller, 'owner');
+  const before = store.invitations.length;
+  dropMembershipAfterMiddleware(h, seller);
+  const r = await request(app).post(`/api/v1/homes/${h.id}/invitations`).set('Authorization', T(seller)).send({ role: 'resident' });
+  assert.strictEqual(r.status, 403, JSON.stringify(r.body));
+  assert.strictEqual(r.body.code, 'FORBIDDEN');
+  assert.strictEqual(r.body.message, 'Bu işlem için yetkiniz yok.');
+  assert.strictEqual(store.invitations.length, before, 'davet uretilmedi');
+  // yetkili sahip: denetim ve INSERT ayni islemde (BEGIN ... FOR SHARE ... INSERT ... COMMIT)
+  const ok = await invite(T(owner), { role: 'resident' });
+  assert.strictEqual(ok.status, 201, JSON.stringify(ok.body));
+  const seq = txSlice(/FOR SHARE|INSERT INTO home_invitations/).map((t) => (/FOR SHARE/.test(t) ? 'share' : /INSERT/.test(t) ? 'insert' : t));
+  assert.deepStrictEqual(seq, ['BEGIN', 'share', 'insert', 'COMMIT']);
+  // global rolle gelen super kullanici: uyelik gerekmez (mevcut denetim korunur)
+  assert.strictEqual((await invite(T(superUser), { role: 'resident' })).status, 201);
+});
+
 test('davet: owner -> 201, kod "AHBU-" + 10 karakter, QR, DB de yalnizca ozet', async () => {
   const res = await invite(T(owner), { role: 'resident' });
   assert.strictEqual(res.status, 201, JSON.stringify(res.body));
@@ -120,6 +159,26 @@ test('katilim: QR onekiyle ve kucuk harfle calisir; ikinci kullanim 410', async 
   const again = await join(T(u2), code);
   assert.strictEqual(again.status, 410);
   assert.strictEqual(store.member(HOME.id, u2.id), undefined);
+});
+
+test('hesap-uyelik-5 (C3): ayni kullanici ayni kodla yeniden katilir -> 200 already_member, yazim yok; uye degilse / baska kullanici 410', async () => {
+  const code = (await invite(T(owner), { role: 'resident' })).body.data.code;
+  const u = store.addUser();
+  assert.strictEqual((await join(T(u), code)).status, 200);
+  const inv = store.invitations.find((i) => i.used_by === u.id);
+  const snapshot = JSON.stringify({ members: store.members, used_at: inv.used_at });
+  const again = await join(T(u), code);
+  assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+  assert.strictEqual(again.body.message, 'Bu davet kodunu zaten kullandınız; dairenin üyesisiniz.');
+  assert.strictEqual(again.body.data.already_member, true);
+  assert.deepStrictEqual(again.body.data.home, { id: HOME.id, name: 'Davet Evi', address: null, role: 'resident', valid_from: null, valid_until: null });
+  assert.strictEqual(JSON.stringify({ members: store.members, used_at: inv.used_at }), snapshot, 'yazim yok');
+  // kodu kullanan baska kullanici degil: 410 aynen (numaralandirma yok)
+  const other = store.addUser();
+  assert.strictEqual((await join(T(other), code)).status, 410);
+  // kodu kullanan artik uye degil: 410
+  store.members = store.members.filter((m) => !(m.home_id === HOME.id && m.user_id === u.id));
+  assert.strictEqual((await join(T(u), code)).status, 410);
 });
 
 test('katilim: eszamanli iki kullanici ayni kodu kullanirsa yalnizca biri katilir', async () => {

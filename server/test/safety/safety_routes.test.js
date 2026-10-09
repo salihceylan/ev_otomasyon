@@ -189,8 +189,13 @@ test('ackAlarm: pano cevrimdisi -> onay istegi kaydedilir + 409 DEVICE_OFFLINE (
     assert.equal(e.extra.ack_queued, true);
     return true;
   });
-  assert.deepEqual(s.requested, [{ alarmId: '12', homeId: HOME_A, userId: 'u-res' }]);
+  assert.deepEqual(s.requested, [{ alarmId: '12', homeId: HOME_A, userId: 'u-res', sessionId: null }]);
   assert.equal(s.sent.length, 0);
+  // sko-1: servis (PIN) oturumunun istegi oturum kimligiyle kaydedilir (teslimden once gecerliligi denetlenir)
+  const sid = '5e55e55e-0000-4000-8000-000000000001';
+  const p = svcSetup({ alarm: { ...OPEN_ALARM, is_online: false } });
+  await assert.rejects(p.svc.ackAlarm({ actor: { userId: null, sessionId: sid, access: 'service_session' }, homeId: HOME_A, alarmId: '12' }), (e) => e.status === 409);
+  assert.deepEqual(p.requested, [{ alarmId: '12', homeId: HOME_A, userId: null, sessionId: sid }]);
 });
 
 test('controlActuator / testZone: komut cihazin uid\'siyle kurulur; gecersiz hedef 400', async () => {

@@ -143,4 +143,15 @@ test('R2: uzlastiriciya bildirilen canli state last_id tasir (kuyruk cikarimi ic
   const { bridge } = setup({ reconciler });
   await bridge.handleIncomingMessage(`ev/${TOPIC}/state`, JSON.stringify(state({ last_id: 'q-7' })));
   assert.equal(seen[0].lastId, 'q-7');
+  assert.equal(seen[0].cfgId, null, 'cfg.safety.id yok (eski firmware)');
+});
+
+test('sko-5 (C6): uzlastiriciya bildirilen canli state cfg.safety.id tasir (cfgId); ozete yazilmaz', async () => {
+  const seen = [];
+  const reconciler = { onLiveState() {}, onSafetyState(a) { seen.push(a); }, onOffline() {}, stop() {}, stats() { return {}; } };
+  const { bridge } = setup({ reconciler });
+  await bridge.handleIncomingMessage(`ev/${TOPIC}/state`, JSON.stringify(state({ last_id: 'relay-9', cfg: { safety: { rev: 13, crc: '9a3c11f0', id: 'q-7' } } })));
+  assert.equal(seen[0].lastId, 'relay-9');
+  assert.equal(seen[0].cfgId, 'q-7');
+  assert.deepEqual(seen[0].summary.cfg, { rev: 13, crc: '9a3c11f0' });
 });

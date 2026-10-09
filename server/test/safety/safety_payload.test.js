@@ -251,3 +251,22 @@ test('state: zones_complete -- dizi degilse ya da oge dusurulduyse false; anahta
   delete s.safety;
   assert.equal(P.parseStateSafety(s).summary.zones_complete, false, 'safety yok: bolge bilgisi yok');
 });
+
+// sko-5 (sozlesme C6): firmware 1.3.2 state.cfg.safety.id (desen [A-Za-z0-9_.:-]{1,24}) -> cfgId (ozete YAZILMAZ: ozet
+// bicimi degismez); gecersiz desen sessizce yok sayilir; alan yoksa null.
+test('sko-5: cfg.safety.id ayristirilir (cfgId); gecersiz desen yok sayilir; ozet cfg bicimi degismez', () => {
+  const s = v3();
+  s.cfg.safety.id = 'cfg-q1.7:A_b';
+  const r = P.parseStateSafety(s);
+  assert.equal(r.cfgId, 'cfg-q1.7:A_b');
+  assert.deepEqual(r.summary.cfg, { rev: 12, crc: '9a3c11f0' });
+  assert.equal(r.skipped, 0);
+  for (const bad of ['', 'x'.repeat(25), 'bosluk var', 'ç1', 5, null, { a: 1 }]) {
+    const b = v3();
+    b.cfg.safety.id = bad;
+    const rb = P.parseStateSafety(b);
+    assert.equal(rb.cfgId, null, JSON.stringify(bad));
+    assert.deepEqual(rb.summary.cfg, { rev: 12, crc: '9a3c11f0' });
+  }
+  assert.equal(P.parseStateSafety(v3()).cfgId, null, 'alan yok (eski firmware)');
+});

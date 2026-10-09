@@ -116,6 +116,10 @@ test('safety kodlari: zones, oge ayristirici (SafetyCfgApi), count, act_zone, in
     [(t) => { t.safety.lights = Array.from({ length: 9 }, () => ({})); }, 'count', 'safety.lights'],
     [(t) => { t.safety.sensors.push({ id: 'd5', kind: 'arm_key', zone: 0, active_open: 0, name: 'Anahtar' }); t.dis[4].target_relay = 0; }, 'arm_key_not_nc', 'safety.sensors'],
     [(t) => { t.safety.sensors.push({ id: 'b1', kind: 'alarm_ack', zone: 0 }); }, 'sensor_src', 'safety.sensors'],
+    // fw-tarama-1 (sozlesme C1): firmware'de kopru surucusu yok -> DI olmayan (kopru) sensor reddedilir; kontrol turu
+    // once 'sensor_src' (yukarida), aralik/dup denetiminden once 'sensor_bridge_unsupported'.
+    [(t) => { t.safety.sensors.push({ id: 'b1', kind: 'water', zone: 1, active_open: false, flags: 5, confirm_ms: 2000, name: 'Köprü Su' }); }, 'sensor_bridge_unsupported', 'safety.sensors'],
+    [(t) => { t.safety.sensors.push({ id: 'b16', kind: 'door', zone: 1 }, { id: 'b16', kind: 'door', zone: 1 }); }, 'sensor_bridge_unsupported', 'safety.sensors'],
   ];
   for (const [mut, code, path] of cases) {
     const t = load('ok_3p1_vana_dimmer.json');
@@ -123,7 +127,6 @@ test('safety kodlari: zones, oge ayristirici (SafetyCfgApi), count, act_zone, in
     assert.deepEqual(validateTemplate(t), { ok: false, error: code, path }, code + ' ' + path);
   }
   const ok = load('ok_3p1_vana_dimmer.json');
-  ok.safety.sensors.push({ id: 'b2', kind: 'water', zone: 1, active_open: false, flags: 5, confirm_ms: 2000, name: 'Köprü Su' });
   ok.safety.intrusion = { exit_s: 45, entry_s: 30 };
   assert.deepEqual(validateTemplate(ok), { ok: true });
 });

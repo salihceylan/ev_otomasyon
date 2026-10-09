@@ -124,6 +124,11 @@ const DEFAULTS = Object.freeze({
   queueMaxPending: 5000,
   resubscribeDelayMs: 10 * 1000,
   warnIntervalMs: 60 * 1000,
+  // sko-2 (C12): yarim kalan/basarisiz alarm push'lari: acilistan sonra bir kez, sonra supurucuyle dakikada bir
+  alarmPushKickMs: 5 * 1000,
+  alarmPushRetryMs: 60 * 1000,
+  alarmPushRetryBatch: 50,
+  alarmDrainMs: 3 * 1000, // end(): bekleyen alarm push'lari en cok bu kadar beklenir
 });
 
 const SUBSCRIPTIONS = Object.freeze(['ev/+/status', 'ev/+/state', 'ev/+/event']);
@@ -717,6 +722,8 @@ class MqttBridge {
     this._resubscribeTimer = null;
     this._resubscribeDelayMs = DEFAULTS.resubscribeDelayMs;
     this._sweepTimer = null;
+    this._pushKickTimer = null; // sko-2: acilistan sonra tek seferlik alarm push yeniden denemesi
+    this._pushRetryAt = null; // sko-2: son retryStuckPushes cagrisi (dakikada bir)
     this._warned = new Map(); // anahtar -> son uyari zamani
     this._ackWaiters = new Map(); // ackKey(topicId, commandId) -> Set<{ finish(ok) }> (DAIRE-03)
     this._cfgWaiters = new Set(); // Faz 2 F2.D: cfgRev'li bekleyiciler (state rev yankisi; firmware cfg_patch last_id yazmaz)
@@ -1155,13 +1162,13 @@ class MqttBridge {
       // Tembel olusturulan ornek atilir: init() yeniden cagrilirsa taze (durdurulmamis) bir uzlastirici kurulur.
       if (!this._reconcilerInjected) this._reconciler = null;
     }
+    // sko-2 (C12): COMMIT sonrasi baslatilan alarm push'lari servis durdurulmadan once beklenir (en cok alarmDrainMs;
+    // sonra pg havuzu kapanir: yarim kalan satir bir sonraki acilista retryStuckPushes ile yeniden denenir).
+    let alarmsDrained = Promise.resolve();
     if (this._alarms) {
-      try {
-        if (typeof this._alarms.stop === 'function') this._alarms.stop();
-      } catch (_) {
-        /* kapanis engellenmez */
-      }
+      const alarms = this._alarms;
       if (!this._alarmsInjected) this._alarms = null;
+      alarmsDrained = this._drainAlarms(alarms, Math.min(DEFAULTS.alarmDrainMs, timeoutMs));
     }
     if (this._layoutSync) {
       try {
@@ -1176,8 +1183,8 @@ class MqttBridge {
     this.client = null;
     this.connected = false;
     this.connectedSince = null;
-    if (!client) return Promise.resolve();
-    return new Promise((resolve) => {
+    if (!client) return alarmsDrained;
+    const clientEnded = new Promise((resolve) => {
       let done = false;
       const finish = () => {
         if (done) return;
@@ -1195,6 +1202,32 @@ class MqttBridge {
         finish();
       }
     });
+    return Promise.all([alarmsDrained, clientEnded]).then(() => undefined);
+  }
+
+  /** sko-2: alarm servisinin bekleyen islerini (push) en cok `ms` bekler, sonra durdurur. Asla reddetmez. */
+  async _drainAlarms(alarms, ms) {
+    if (typeof alarms.idle === 'function') {
+      let timer = null;
+      try {
+        await Promise.race([
+          Promise.resolve()
+            .then(() => alarms.idle())
+            .catch(() => {}),
+          // unref YOK (bilincli): kapanis bu sinirli bekleyisi beklemeli; push bitince zamanlayici hemen temizlenir
+          new Promise((resolve) => {
+            timer = this.timers.setTimeout(resolve, ms);
+          }),
+        ]);
+      } finally {
+        if (timer) this.timers.clearTimeout(timer);
+      }
+    }
+    try {
+      if (typeof alarms.stop === 'function') alarms.stop();
+    } catch (_) {
+      /* kapanis engellenmez */
+    }
   }
 
   stop(opts) {
@@ -1523,6 +1556,7 @@ class MqttBridge {
           caps: capsNow,
           summary: v.safety.summary,
           lastId: v.lastId || null, // Faz 2 incelemesi R2: yankili firmware'de kuyruk cikarimi last_id ile
+          cfgId: v.safety.cfgId || null, // sko-5 (C6): firmware 1.3.2 state.cfg.safety.id (rev'i ureten cfg_patch)
         });
       }
     } catch (err) {
@@ -1568,8 +1602,17 @@ class MqttBridge {
     if (this._sweepTimer) return;
     this._sweepTimer = this.timers.setInterval(() => {
       this.sweepOffline().catch(() => {});
+      this._retryAlarmPushes(false);
     }, DEFAULTS.sweepIntervalMs);
     if (this._sweepTimer && typeof this._sweepTimer.unref === 'function') this._sweepTimer.unref();
+    // sko-2 (C12): acilistan ~5 sn sonra bir kez (yeniden baslatmada yarim kalan alarm push'lari)
+    if (this._alarmsEnabled && !this._pushKickTimer) {
+      this._pushKickTimer = this.timers.setTimeout(() => {
+        this._pushKickTimer = null;
+        this._retryAlarmPushes(true);
+      }, DEFAULTS.alarmPushKickMs);
+      if (this._pushKickTimer && typeof this._pushKickTimer.unref === 'function') this._pushKickTimer.unref();
+    }
   }
 
   _stopSweeper() {
@@ -1577,6 +1620,26 @@ class MqttBridge {
       this.timers.clearInterval(this._sweepTimer);
       this._sweepTimer = null;
     }
+    if (this._pushKickTimer) {
+      this.timers.clearTimeout(this._pushKickTimer);
+      this._pushKickTimer = null;
+    }
+  }
+
+  /**
+   * sko-2 (C12): acik alarmda yarim kalan/basarisiz push'lari alarm servisine yeniden denetir (dakikada en cok bir;
+   * `force` acilis tetigi). Push FCM'e gider: broker baglantisi gerekmez. Asla firlatmaz.
+   */
+  _retryAlarmPushes(force) {
+    if (!this._alarmsEnabled || this._layoutClosed) return;
+    const t = this.now();
+    if (!force && this._pushRetryAt !== null && t - this._pushRetryAt < DEFAULTS.alarmPushRetryMs) return;
+    const alarms = this._getAlarmService();
+    if (!alarms || typeof alarms.retryStuckPushes !== 'function') return;
+    this._pushRetryAt = t;
+    Promise.resolve()
+      .then(() => alarms.retryStuckPushes({ limit: DEFAULTS.alarmPushRetryBatch }))
+      .catch((err) => this._warnOnce('alarm-push-retry', `Alarm push yeniden deneme hatasi: ${err && err.name ? err.name : 'bilinmiyor'}`));
   }
 
   /**

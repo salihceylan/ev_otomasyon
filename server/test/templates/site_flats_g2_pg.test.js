@@ -80,7 +80,7 @@ test('site/daire/sablon duzeltmeleri gercek PG', { skip: PG_SKIP }, async () => 
     assert.equal(a1.last_write.device_uuid, 'AHBU-G2-0001');
     assert.equal(a1.last_write.via, 'eth');
     assert.ok(a1.last_write.at);
-    assert.deepEqual(Object.keys(a1.last_ok_write).sort(), ['at', 'device_uuid', 'version', 'via']);
+    assert.deepEqual(Object.keys(a1.last_ok_write).sort(), ['at', 'device_uuid', 'template_id', 'version', 'via']); // C2: + template_id
     assert.equal(a1.last_ok_write.version, 1);
     assert.equal(a1.last_ok_write.via, 'usb');
     assert.equal(a1.status, 'written');
@@ -89,10 +89,16 @@ test('site/daire/sablon duzeltmeleri gercek PG', { skip: PG_SKIP }, async () => 
     a1 = await svc.linkFlatDevice(site.id, f1.id, 'AHBU-G2-0002', staff);
     assert.equal(a1.status, 'planned', 'kart degisti: yazildi durumu karta bagli');
     assert.equal(a1.last_ok_write, null);
-    // yeni kart bu sablonla yazilinca written; baska karta gecip geri donmek (yazimi var) durumu korur
+    // yeni kart bu sablonla yazilinca written; C13 (tarama-sunucu-cihaz-site-6): kart ayrilinca 'planned' (kartsiz Yazildi
+    // yok), yeniden baglamak durumu degistirmez; yeni basarili yazim kaydi yine 'Yazildi' yapar
     await svc.recordWrite(staff, { device_uuid: 'AHBU-G2-0002', template_id: t1.id, version: 2, flat_id: f1.id, via: 'lan', result: 'ok' });
-    await svc.linkFlatDevice(site.id, f1.id, null, staff);
+    assert.equal((await svc.listFlats(site.id)).find((f) => f.id === f1.id).status, 'written');
+    a1 = await svc.linkFlatDevice(site.id, f1.id, null, staff);
+    assert.equal(a1.status, 'planned');
     a1 = await svc.linkFlatDevice(site.id, f1.id, 'AHBU-G2-0002', staff);
+    assert.equal(a1.status, 'planned');
+    await svc.recordWrite(staff, { device_uuid: 'AHBU-G2-0002', template_id: t1.id, version: 2, flat_id: f1.id, via: 'lan', result: 'ok' });
+    a1 = (await svc.listFlats(site.id)).find((f) => f.id === f1.id);
     assert.equal(a1.status, 'written');
     // sablon degisimi: written -> planned
     a1 = await svc.updateFlat(site.id, f1.id, { template_id: t2.id }, staff);

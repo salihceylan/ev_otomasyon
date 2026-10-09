@@ -215,7 +215,8 @@ test('kabul: ikinci kullanim / suresi dolmus / iptal edilmis / baslatan artik sa
   const t1 = store.addUser({ email: 't1@example.com' });
   const c1 = (await initiate(T(s1.owner), s1.home.id, { target_identifier: 't1@example.com' })).body.data.transfer_code;
   assert.strictEqual((await accept(T(t1), c1)).status, 200);
-  assert.strictEqual((await accept(T(t1), c1)).status, 410);
+  // hesap-uyelik-5 (C3): ayni kullanici ikinci kez -> 200 already_member (asagidaki ayri test); baska kullanici 410
+  assert.strictEqual((await accept(T(store.addUser({ email: 't1@example.com'.replace('t1', 't1b') })), c1)).status, 410);
 
   const s2 = setupHome();
   const t2 = store.addUser({ email: 't2@example.com' });
@@ -236,12 +237,36 @@ test('kabul: ikinci kullanim / suresi dolmus / iptal edilmis / baslatan artik sa
   assert.strictEqual((await accept(T(t4), c4)).status, 410);
 });
 
+test('hesap-uyelik-5 (C3): ayni kullanici ayni devir koduyla yeniden kabul -> 200 already_member; yazim/rotasyon/kick yok; sahip degilse 410', async () => {
+  const s1 = setupHome();
+  const t1 = store.addUser({ email: 'tekrar@example.com' });
+  const c1 = (await initiate(T(s1.owner), s1.home.id, { target_identifier: 'tekrar@example.com' })).body.data.transfer_code;
+  assert.strictEqual((await accept(T(t1), c1)).status, 200);
+  const snapshot = JSON.stringify({ members: store.members, transfers: store.transfers });
+  const callsBefore = calls.length;
+  const again = await accept(T(t1), c1);
+  assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+  assert.strictEqual(again.body.message, `"${s1.home.name}" dairesinin sahipliği zaten size devredildi.`);
+  assert.strictEqual(again.body.data.already_member, true);
+  assert.deepStrictEqual(again.body.data.home, { id: s1.home.id, name: s1.home.name, address: s1.home.address || null, role: 'owner' });
+  assert.strictEqual(JSON.stringify({ members: store.members, transfers: store.transfers }), snapshot, 'yazim yok');
+  assert.strictEqual(calls.length, callsBefore, "MQTT iptal/kick ve temizlik yok");
+  // artik sahip degil (ev baskasina gecti): 410
+  store.members = store.members.filter((m) => !(m.home_id === s1.home.id && m.user_id === t1.id));
+  assert.strictEqual((await accept(T(t1), c1)).status, 410);
+});
+
 test('kabul: eszamanli iki kabulden yalnizca biri basarili', async () => {
   const { home, owner } = setupHome();
   const target = store.addUser({ email: 'yaris@example.com' });
   const code = (await initiate(T(owner), home.id, { target_identifier: 'yaris@example.com' })).body.data.transfer_code;
   const [a, b] = await Promise.all([accept(T(target), code), accept(T(target), code)]);
-  assert.deepStrictEqual([a.status, b.status].sort(), [200, 410]);
+  // hesap-uyelik-5 (C3): ayni kullanicinin ikinci kabulu ilki bittikten sonra okunursa idempotent 200 already_member,
+  // es zamanli okunursa 410; her iki durumda devir TEK kez yapilir.
+  const real = [a, b].filter((r) => r.status === 200 && r.body.data.already_member !== true);
+  assert.strictEqual(real.length, 1, JSON.stringify([a.body, b.body]));
+  const other = real[0] === a ? b : a;
+  assert.ok(other.status === 410 || (other.status === 200 && other.body.data.already_member === true), JSON.stringify(other.body));
   assert.strictEqual(store.members.filter((m) => m.home_id === home.id).length, 1);
 });
 

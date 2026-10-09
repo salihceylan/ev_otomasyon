@@ -540,6 +540,33 @@ test('R2: last_id yankili firmware kuyrukta rev cikarimini last_id ile yapar; ya
   assert.deepEqual(w2.audits.filter((x) => x.event === 'safety_config_patch').map((x) => x.details.result), ['applied_inferred']);
 });
 
+// sko-5 (sozlesme C6): firmware 1.3.2 state.cfg.safety.id = guncel rev'i ureten bulut cfg_patch kimligi. Araya giren komut
+// last_id'yi degistirse de bas oge uygulandi sayilir; kimlik baskaysa "pano kazanir" korunur; alan yoksa bugunku sonuc.
+test('sko-5: cfgId bas ogenin kimligiyse (last_id baska komut) applied_inferred; conflict push yok', async () => {
+  _resetEmptyCache();
+  const w = world({ caps: CAPS_I, pending: { v: 1, items: [ITEM('q1', 7, { sent_at: new Date(T0).toISOString() }), ITEM('q2', 8), ITEM('q3', 9)] } });
+  const b = bridgeStub({ outcome: { ok: false, timeout: true } });
+  await make(w, b).onLiveState({ ...LIVE(8, CAPS_I), lastId: 'relay-55', cfgId: 'q1' });
+  assert.deepEqual(w.audits.filter((x) => x.event === 'safety_config_patch').map((x) => [x.details.result, x.details.command_id]), [['applied_inferred', 'q1']]);
+  assert.equal(w.audits.filter((x) => x.event === 'safety_config_pending_dropped').length, 0, 'kuyruk dusurulmez');
+  assert.equal(b.pushes.length, 0, 'uygulanamadi push bildirimi yok');
+  assert.deepEqual(w.cfg.pending.items.map((it) => it.id), ['q2', 'q3'], 'sonraki ogeler kuyrukta');
+});
+
+test('sko-5: cfgId baska kimlikse conflict korunur; cfgId yoksa bugunku sonuc (last_id ile)', async () => {
+  _resetEmptyCache();
+  const w = world({ caps: CAPS_I, pending: { v: 1, items: [ITEM('q1', 7, { sent_at: new Date(T0).toISOString() }), ITEM('q2', 8)] } });
+  const b = bridgeStub({ outcome: { ok: false, timeout: true } });
+  await make(w, b).onLiveState({ ...LIVE(8, CAPS_I), lastId: 'relay-55', cfgId: 'baska-1' });
+  assert.equal(w.audits.filter((x) => x.details.result === 'applied_inferred').length, 0);
+  assert.ok(w.audits.find((x) => x.event === 'safety_config_pending_dropped' && x.details.reason === 'conflict'));
+  _resetEmptyCache();
+  const w2 = world({ caps: CAPS_I, pending: { v: 1, items: [ITEM('q1', 7, { sent_at: new Date(T0).toISOString() })] } });
+  const b2 = bridgeStub();
+  await make(w2, b2).onLiveState({ ...LIVE(8, CAPS_I), lastId: 'q1', cfgId: null });
+  assert.deepEqual(w2.audits.filter((x) => x.event === 'safety_config_patch').map((x) => x.details.result), ['applied_inferred']);
+});
+
 // Faz 2 incelemesi RG-2: yapilandirma kuyrugu isi (yanit icin <= 10 sn bekler) ev uzlastirmasinin kuyrugunu (es zamanlilik 2)
 // tikamaz: ayri seritte calisir; whenIdle ikisini de bekler, stop ikisini de bosaltir.
 test('RG-2: yavas yapilandirma kuyrugu isleri ev uzlastirmasini bekletmez (ayri serit)', async () => {

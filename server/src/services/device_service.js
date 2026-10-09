@@ -29,6 +29,21 @@ const { validateCommand, capabilityForCommand, isSafeTarget, KINDS } = require('
 const { endpointRowsFromTemplate } = require('../utils/template_schema');
 // Yalniz saf yardimci (yer tutucu e-posta: telefon-OTP / Apple gizli / silinmis hesap); modul db yuklemez.
 const { isPlaceholderEmail } = require('./account_deletion_service');
+
+/**
+ * tarama-sunucu-cihaz-site-3 (sozlesme C8): telefonla bulunan musterinin hesabinda gercek e-posta yoksa (telefon-OTP yer
+ * tutucusu) personelin sahiplenme onay kodu gonderilemez; acik hata (OTP uretilmez). Musteri kendi uygulamasindan sahiplenir.
+ */
+function assertCustomerHasEmail(user) {
+  if (user && isPlaceholderEmail(user.email)) {
+    throw httpError(
+      400,
+      'Bu müşteri uygulamaya telefonla giriş yapıyor; hesabında e-posta olmadığı için onay kodu gönderilemez. Müşteri panoyu kendi uygulamasından etiketteki karekodla sahiplenmeli.',
+      'VALIDATION',
+      { reason: 'CUSTOMER_EMAIL_REQUIRED' }
+    );
+  }
+}
 const { localKeyFingerprint } = require('../utils/local_key_fp');
 
 // --- Sabitler ---------------------------------------------------------------
@@ -486,7 +501,7 @@ class DeviceService {
   async _detachDeviceAlarms(tx, deviceId) {
     await tx.query(
       `UPDATE alarms SET status = 'lost', cleared_at = CURRENT_TIMESTAMP, cleared_by = 'detached',
-              ack_requested_at = NULL, ack_requested_by = NULL, updated_at = CURRENT_TIMESTAMP
+              ack_requested_at = NULL, ack_requested_by = NULL, ack_requested_sid = NULL, updated_at = CURRENT_TIMESTAMP
         WHERE device_id = $1 AND status NOT IN ('cleared', 'lost')`,
       [deviceId]
     );
@@ -616,6 +631,7 @@ class DeviceService {
           'VALIDATION'
         );
       }
+      assertCustomerHasEmail(targetUser);
       recipient = String(targetUser.email).toLowerCase();
     }
 
@@ -872,6 +888,7 @@ class DeviceService {
           if (!customer || !customer.email) {
             throw httpError(400, 'Bu telefon numarasına bağlı hesap yok. Müşterinin e-posta adresini girin.', 'VALIDATION');
           }
+          assertCustomerHasEmail(customer);
           identifier = String(customer.email).toLowerCase();
         }
         if (customer && customer.id === actorRow.id) {
@@ -1848,6 +1865,20 @@ class DeviceService {
       );
       const newDeviceId = upsert.rows[0].id;
 
+      // 8b) tarama-sunucu-cihaz-site-1 (sozlesme C4): guvenlik yapilandirmasi (sensorler, vanalar, bolgeler) yeni panoya
+      //     AKTARILMAZ (kopya eski cihaz kimliginde kalir; buluttan geri yukleme yok). Eski panonun kopyasinda en az bir
+      //     sensor/eylemci varsa ya da tasinacak bir uc nokta eylemciyse (actuator_type) yanit bunu acikca soyler.
+      const safetyRes = await tx.query(
+        `SELECT (EXISTS (SELECT 1 FROM device_configs c
+                          WHERE c.device_id = $1 AND c.module = 'safety'
+                            AND ((jsonb_typeof(c.body -> 'sensors') = 'array' AND jsonb_array_length(c.body -> 'sensors') > 0)
+                              OR (jsonb_typeof(c.body -> 'actuators') = 'array' AND jsonb_array_length(c.body -> 'actuators') > 0)))
+                 OR EXISTS (SELECT 1 FROM endpoints e
+                             WHERE e.device_id = $1 AND e.home_id = $2 AND e.actuator_type IS NOT NULL)) AS safety_restore_required`,
+        [oldDevice.id, homeId]
+      );
+      const safetyRestore = safetyRes.rows[0] && safetyRes.rows[0].safety_restore_required === true ? 'required' : 'not_required';
+
       // 9) Eski cihazi devreden cikar
       await tx.query(
         `UPDATE devices
@@ -1973,11 +2004,13 @@ class DeviceService {
           endpoints_migrated: moved.rowCount || 0,
           rules_migrated: (rulesMoved.rows || []).length,
           child_lock_carried: priorLocked,
+          safety_restore: safetyRestore,
         },
       });
 
       return {
         ok: true,
+        safetyRestore,
         priorLocked,
         oldDeviceUuid: oldDevice.device_uuid,
         migrated: moved.rowCount || 0,
@@ -1990,6 +2023,12 @@ class DeviceService {
     if (!outcome.ok) throw outcome.error;
 
     const warnings = [];
+    if (outcome.safetyRestore === 'required') {
+      // sozlesme C4: eski uygulama bu uyariyi warnings listesinden zaten gosterir (ilk sirada)
+      warnings.push(
+        'Eski panonun güvenlik ayarları (sensörler, vanalar, bölgeler) yeni panoya aktarılmadı. Servis bu ayarları yeniden yazana kadar su/gaz koruması ÇALIŞMAZ. Yetkili servisi çağırın.'
+      );
+    }
     if (outcome.unlinkedFlats > 0) {
       warnings.push('Yeni kart başka bir daireye bağlıydı; o bağ kaldırıldı ve o daire "Planlandı" durumuna alındı.');
     }
@@ -2004,7 +2043,7 @@ class DeviceService {
     }
 
     const data = {
-      message: 'Pano değişimi tamamlandı. Kanal tanımları yeni panoya aktarıldı.',
+      message: 'Pano değişimi tamamlandı. Kanal adları, kurallar ve panjur süreleri yeni panoya taşındı.',
       old_device_uuid: outcome.oldDeviceUuid,
       new_device_uuid: newUuid,
       migrated_endpoints_count: outcome.migrated,
@@ -2018,6 +2057,8 @@ class DeviceService {
         enabled: outcome.priorLocked,
         sync: outcome.priorLocked ? 'pending_device_online' : 'not_required',
       },
+      // sozlesme C4: 'required' -> servis guvenlik ayarlarini yeni panoya yeniden yazmali (su/gaz korumasi o zamana dek yok)
+      safety_restore: outcome.safetyRestore,
     };
     if (warnings.length > 0) data.warnings = warnings;
     return data;
@@ -2554,7 +2595,17 @@ class DeviceService {
   // ADIM 16: Sistem doktoru (TUM cihazlar)
   // ===========================================================================
 
-  _classifyDevice(device, nowMs) {
+  /**
+   * sko-6 (sozlesme C15): bulut-MQTT koprusu bagli degil ya da yeni baglandi (kalp atislari henuz gelmedi, 120 sn
+   * dolmadi): panonun last_seen'i ilerlemez; eski last_seen evin elektrik/internet arizasi KANITI degildir.
+   */
+  _cloudLinkSuspect(nowMs) {
+    if (!this._bridgeConnected()) return true;
+    const since = this.bridge && Number.isFinite(this.bridge.connectedSince) ? this.bridge.connectedSince : null;
+    return since !== null && nowMs - since < 120 * 1000;
+  }
+
+  _classifyDevice(device, nowMs, { linkSuspect = false } = {}) {
     const lastSeenMs = device.last_seen_at ? new Date(device.last_seen_at).getTime() : 0;
     const seconds = lastSeenMs > 0 ? Math.max(0, Math.floor((nowMs - lastSeenMs) / 1000)) : null;
 
@@ -2577,6 +2628,15 @@ class DeviceService {
         seconds, network_status: 'OK', power_status: 'OK', level: 'ok',
         title: 'Tüm Sistemler Sağlıklı ve Çevrimiçi',
         summary: 'Bulut sunucu, ev modemi ve pano donanımı kesintisiz haberleşiyor. Herhangi bir arıza bulunamadı.',
+        action: null,
+      };
+    }
+    if (linkSuspect) {
+      // C15: sorun bulut tarafinda olabilir; Wi-Fi kurtarma / sigorta onerilmez (kullanici gereksiz ayar degistirmesin)
+      return {
+        seconds, network_status: 'UNKNOWN', power_status: 'UNKNOWN', level: 'warning',
+        title: 'Bulut Bağlantısında Geçici Sorun',
+        summary: 'Sunucumuzun cihazlarla bağlantısında geçici bir sorun var; panonuz büyük olasılıkla çalışıyor. Birkaç dakika sonra yeniden deneyin.',
         action: null,
       };
     }
@@ -2651,10 +2711,13 @@ class DeviceService {
 
     const nowMs = this._now().getTime();
     const rank = { ok: 0, warning: 1, error: 2 };
+    const linkSuspect = this._cloudLinkSuspect(nowMs);
     const perDevice = devRes.rows.map((d) => {
-      const c = this._classifyDevice(d, nowMs);
+      const c = this._classifyDevice(d, nowMs, { linkSuspect });
       return { row: d, c };
     });
+    // C15: durumu bilinmeyen (bulut kesintisi) pano varken genel tablo bulut metnidir ve 'error'a yukseltilmez
+    const unknownCloud = perDevice.find((p) => p.c.network_status === 'UNKNOWN') || null;
     const primary = perDevice[0];
     // Genel seviye: hepsi saglikliysa ok; HICBIRI haberlesmiyorsa (yakin zamanda gorulmemis) error - yalniz hic
     // baglanmamis (NEVER_SEEN) panolardan olusuyorsa warning (kurulum eksik, ariza degil; bireysel-12); aksi halde warning.
@@ -2662,9 +2725,11 @@ class DeviceService {
     const communicating = perDevice.filter((p) => p.c.network_status === 'OK' || p.c.network_status === 'WARNING').length;
     let overall = 'warning';
     if (levels.every((l) => l === 'ok')) overall = 'ok';
-    else if (communicating === 0 && perDevice.some((p) => p.c.network_status !== 'NEVER_SEEN')) overall = 'error';
+    else if (!unknownCloud && communicating === 0 && perDevice.some((p) => p.c.network_status !== 'NEVER_SEEN')) overall = 'error';
     const worst = perDevice.reduce((a, b) => (rank[b.c.level] > rank[a.c.level] ? b : a), primary);
-    const headline = perDevice.length > 1 && overall === 'warning' && communicating > 0
+    const headline = unknownCloud
+      ? { title: unknownCloud.c.title, summary: unknownCloud.c.summary, action: null }
+      : perDevice.length > 1 && overall === 'warning' && communicating > 0
       ? {
           title: 'Bazı Panolar Çevrimdışı',
           summary: `${perDevice.length} panodan ${communicating} tanesi haberleşiyor.`,

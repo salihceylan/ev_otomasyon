@@ -32,6 +32,7 @@ const UID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{2,63}$/; // mqtt_bridge UID_RE ile ay
 const EID_RE = /^[0-9A-Fa-f]{8}-[0-9]{1,5}$/;
 const BN_RE = /^[0-9A-Fa-f]{8}$/;
 const CRC_RE = /^[0-9A-Fa-f]{8}$/;
+const CFG_ID_RE = /^[A-Za-z0-9_.:-]{1,24}$/; // sko-5: state.cfg.safety.id (komut kimligi deseni)
 const TOKEN_RE = /^[a-z][a-z0-9_]{0,23}$/;
 const CAP_RE = /^[a-z][a-z0-9_]{0,11}$/;
 const SENSOR_ID_RE = /^(d([1-9]|[1-3][0-9]|40)|b([1-9]|1[0-6]))$/;
@@ -256,6 +257,9 @@ function parseStateSafety(obj) {
       count();
     }
   }
+  // sko-5 (sozlesme C6): firmware 1.3.2 cfg.safety.id = guncel rev'i ureten bulut cfg_patch kimligi (istege bagli). Ozete
+  // YAZILMAZ (ozet/devices.safety_state bicimi degismez); gecersiz desen sessizce yok sayilir; eski firmware'de null.
+  out.cfgId = cfgRaw && typeof cfgRaw.id === 'string' && CFG_ID_RE.test(cfgRaw.id) ? cfgRaw.id : null;
 
   // zones[] yalniz normal OLMAYAN bolgeleri listeler (sozlesme); listede olmayan bolgenin "normal" sayilabilmesi icin liste TAM olmali.
   // Dizi degilse ya da bir oge dusurulduyse (bilinmeyen durum/ileri surum, gecersiz oge, sinir asimi) zones_complete=false: alarm

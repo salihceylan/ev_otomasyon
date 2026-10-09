@@ -12,7 +12,8 @@
 //                     alarm_cleared; sirasiz alarm_cleared -> mezar tasi, push YOK [O7])
 //                  3) device_audit_logs `safety_<tur>`
 //                  4) COMMIT sonrasi event_ack (pano basina 250 ms birlestirme, <= 8 eid, uid ZORUNLU)
-//                  5) yeni acilan satir icin push (en cok bir kez: push_status pending->claimed->sending->sent)
+//                  5) yeni acilan satir icin push (pending->claimed->sending->sent); acik (latched/fault) alarmda
+//                     yarim kalan/basarisiz push retryStuckPushes ile yeniden denenir: EN AZ bir kez (sko-2, C12)
 //   onLiveState  : CANLI state COMMIT'inden sonra; latched/fault bolge icin satiri olmayan alarmi acar
 //                  (origin=state), kanitli kapanma (ayni bolge normal + mode normal + cfg rev geri gitmedi ->
 //                  cleared/device_state), kanitsiz kayip (caps yok / safety yok / mode safe / rev geri -> lost +
@@ -36,6 +37,8 @@
 
 const crypto = require('crypto');
 const { mergeCfgDumpParts } = require('../utils/safety_payload');
+const { CAPABILITIES } = require('../utils/role_matrix');
+const RA = require('./requester_access');
 
 const ACK_WINDOW_MS = 250;
 const MAX_ACK_EIDS = 8;
@@ -44,6 +47,23 @@ const CFG_DUMP_MAX_PENDING = 64;
 const CFG_GET_MIN_INTERVAL_MS = 60 * 1000;
 const CFG_GET_FORCE_INTERVAL_MS = 5 * 1000; // requestConfig({force}) taban araligi (Faz 2 F2.D)
 const PUSH_RETRY_DELAY_MS = 5 * 1000; // basarisiz alarm push'u BIR kez yeniden denenir (gecici FCM/ag hatasi)
+const ACK_REQUEST_TTL_MS = 24 * 3600 * 1000; // sko-1 (C11): cevrimdisi onay istegi en cok 24 sa bekler
+const PUSH_RETRY_BATCH = 50; // sko-2 (C12): tur basina yeniden talep edilen en cok satir
+// sko-2 (C12): acik (latched/fault) alarmda push EN AZ BIR KEZ teslim edilir: hic talep edilmemis (pending; ornegin
+// COMMIT ile push arasinda yeniden baslatma), 2 dk'dan eski claimed/sending (surec gonderim sirasinda coktu) ve 5'ten az
+// denenmis, 1 dk'dir bekleyen failed satir yeniden talep edilir (CAS). claimed/sending'te coken surec gondermis olabilir:
+// yinelenen push BILINCLI kabul edilir (030 "en cok bir kez" kuralindan sapma; kacirilan gaz alarmi daha kotu).
+// silenced (kullanici onayladi) ve kapali (cleared/lost) alarm yeniden denenmez. Iki push ayni updated_at'i paylasir:
+// ikisi birden yarim kaldiysa once alarm push'u, ariza push'u satir 2 dk degismeden kalinca sonraki turda gider.
+const PUSH_DUE =
+  "status IN ('latched', 'fault') AND (push_status = 'pending' " +
+  "OR (push_status IN ('claimed', 'sending') AND updated_at < CURRENT_TIMESTAMP - INTERVAL '2 minutes') " +
+  "OR (push_status = 'failed' AND push_attempts < 5 AND updated_at < CURRENT_TIMESTAMP - INTERVAL '1 minute'))";
+const FAULT_PUSH_DUE =
+  "status = 'fault' AND (fault_push_status = 'pending' " +
+  "OR (fault_push_status IN ('claimed', 'sending') AND updated_at < CURRENT_TIMESTAMP - INTERVAL '2 minutes'))";
+const PUSH_ROW_COLS =
+  'id, home_id, device_id, zone, kind, status, (SELECT d.device_uuid FROM devices d WHERE d.id = alarms.device_id) AS device_uuid';
 const OPEN_STATUSES = Object.freeze(['latched', 'fault', 'silenced']);
 const LIST_DEFAULT_LIMIT = 50;
 const CLEAN_TTL_MS = 60 * 1000; // "acik alarm yok" onbellegi (onLiveState sorgusu atlanir; olay/acilis gecersiz kilar)
@@ -62,6 +82,7 @@ const SQL = Object.freeze({
     'ON CONFLICT (device_id, aid) DO UPDATE SET home_id = EXCLUDED.home_id, zone = EXCLUDED.zone, kind = EXCLUDED.kind, ' +
     "status = 'latched', origin = EXCLUDED.origin, sources = EXCLUDED.sources, raised_at = CURRENT_TIMESTAMP, " +
     'device_epoch = EXCLUDED.device_epoch, acked_by = NULL, acked_at = NULL, ack_requested_at = NULL, ack_requested_by = NULL, ' +
+    'ack_requested_sid = NULL, ' +
     "cleared_at = NULL, cleared_by = NULL, push_status = 'pending', push_attempts = 0, fault_push_status = NULL, " +
     'updated_at = CURRENT_TIMESTAMP WHERE alarms.home_id <> EXCLUDED.home_id RETURNING id',
   findAlarm:
@@ -88,23 +109,28 @@ const SQL = Object.freeze({
   audit:
     'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
     "VALUES ($1, $2, $3, NULL, 'device', NULL, $4::jsonb)",
+  // sko-1: sunucunun kendi karari (kuyruktaki onay istegi dusuruldu)
+  auditSystem:
+    'INSERT INTO device_audit_logs (event, device_uuid, home_id, actor_user_id, actor_role, ip_address, details) ' +
+    "VALUES ($1, $2, $3, NULL, 'system', NULL, $4::jsonb)",
   // guvenlik-1: yalniz panonun SIMDIKI evine ait acik satirlar uzlastirilir; baska evde acik kalmis satir lost olur.
   openAlarms:
-    'SELECT id, aid, zone, kind, status, ack_requested_at, ack_requested_by FROM alarms ' +
+    'SELECT id, aid, zone, kind, status, ack_requested_at, ack_requested_by, ack_requested_sid FROM alarms ' +
     "WHERE device_id = $1 AND home_id = $2 AND status NOT IN ('cleared', 'lost') ORDER BY id",
   loseOtherHomes:
     "UPDATE alarms SET status = 'lost', cleared_at = CURRENT_TIMESTAMP, cleared_by = 'lost', ack_requested_at = NULL, " +
-    'ack_requested_by = NULL, updated_at = CURRENT_TIMESTAMP ' +
+    'ack_requested_by = NULL, ack_requested_sid = NULL, updated_at = CURRENT_TIMESTAMP ' +
     "WHERE device_id = $1 AND home_id <> $2 AND status NOT IN ('cleared', 'lost') RETURNING id",
   setStatus:
     "UPDATE alarms SET status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('cleared', 'lost') AND status <> $2",
   setLost:
     "UPDATE alarms SET status = 'lost', cleared_at = CURRENT_TIMESTAMP, cleared_by = 'lost', ack_requested_at = NULL, " +
-    "updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('cleared', 'lost') RETURNING id",
-  dropAckRequest: 'UPDATE alarms SET ack_requested_at = NULL, ack_requested_by = NULL WHERE id = $1 AND ack_requested_at IS NOT NULL',
+    "ack_requested_sid = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status NOT IN ('cleared', 'lost') RETURNING id",
+  dropAckRequest:
+    'UPDATE alarms SET ack_requested_at = NULL, ack_requested_by = NULL, ack_requested_sid = NULL WHERE id = $1 AND ack_requested_at IS NOT NULL',
   takeAckRequest:
     'UPDATE alarms SET ack_requested_at = NULL, acked_by = ack_requested_by, acked_at = CURRENT_TIMESTAMP, ' +
-    'updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND ack_requested_at IS NOT NULL RETURNING id',
+    'ack_requested_sid = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND ack_requested_at IS NOT NULL RETURNING id',
   claimPush:
     "UPDATE alarms SET push_status = 'claimed', push_attempts = push_attempts + 1, updated_at = CURRENT_TIMESTAMP " +
     "WHERE id = $1 AND push_status = 'pending' RETURNING id, home_id, device_id, zone, kind, status, (SELECT d.device_uuid FROM devices d WHERE d.id = alarms.device_id) AS device_uuid",
@@ -113,6 +139,15 @@ const SQL = Object.freeze({
     "UPDATE alarms SET fault_push_status = 'claimed', updated_at = CURRENT_TIMESTAMP " +
     "WHERE id = $1 AND fault_push_status = 'pending' RETURNING id, home_id, device_id, zone, kind, status, (SELECT d.device_uuid FROM devices d WHERE d.id = alarms.device_id) AS device_uuid",
   setFaultPush: 'UPDATE alarms SET fault_push_status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
+  // sko-2: yeniden talep (PUSH_DUE / FAULT_PUSH_DUE; listeleme + ayni kosulla CAS: iki ornek ayni satiri alamaz)
+  stuckPushes: `SELECT id FROM alarms WHERE ${PUSH_DUE} ORDER BY id LIMIT $1`,
+  claimRetry:
+    "UPDATE alarms SET push_status = 'claimed', push_attempts = push_attempts + 1, updated_at = CURRENT_TIMESTAMP " +
+    `WHERE id = $1 AND ${PUSH_DUE} RETURNING ${PUSH_ROW_COLS}`,
+  stuckFaultPushes: `SELECT id FROM alarms WHERE ${FAULT_PUSH_DUE} ORDER BY id LIMIT $1`,
+  claimFaultRetry:
+    "UPDATE alarms SET fault_push_status = 'claimed', updated_at = CURRENT_TIMESTAMP " +
+    `WHERE id = $1 AND ${FAULT_PUSH_DUE} RETURNING ${PUSH_ROW_COLS}`,
   deviceUuid: 'SELECT device_uuid FROM devices WHERE id = $1',
   configOf: 'SELECT rev, crc FROM device_configs WHERE device_id = $1 AND module = $2',
   configBody: 'SELECT rev, crc, body, updated_at FROM device_configs WHERE device_id = $1 AND module = $2',
@@ -138,7 +173,7 @@ const SQL = Object.freeze({
     'FROM alarms a JOIN devices d ON d.id = a.device_id JOIN homes h ON h.id = a.home_id ' +
     'WHERE a.id = $1 AND a.home_id = $2',
   requestAck:
-    'UPDATE alarms SET ack_requested_at = CURRENT_TIMESTAMP, ack_requested_by = $3, updated_at = CURRENT_TIMESTAMP ' +
+    'UPDATE alarms SET ack_requested_at = CURRENT_TIMESTAMP, ack_requested_by = $3, ack_requested_sid = $4, updated_at = CURRENT_TIMESTAMP ' +
     "WHERE id = $1 AND home_id = $2 AND status NOT IN ('cleared', 'lost') RETURNING id",
   markAcked:
     'UPDATE alarms SET acked_by = $2, acked_at = COALESCE(acked_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = $1',
@@ -274,6 +309,7 @@ class AlarmService {
     this._cfgVerified = new Map(); // deviceId -> kopyanin esit oldugu dogrulanan `rev|crc`
     this._clean = new Map(); // deviceId -> acik alarmi olmadigi son dogrulama zamani (RV-7)
     this._warnedAt = new Map();
+    this._retrying = null; // sko-2: suren retryStuckPushes turu (tek ucus)
     this.counters = { events: 0, duplicates: 0, unknown: 0, opened: 0, cleared: 0, lost: 0, acks: 0, pushes: 0, pushRetries: 0, errors: 0 };
   }
 
@@ -523,7 +559,7 @@ class AlarmService {
         if (active && z.aid && z.aid === row.aid) {
           const target = z.st === 'fault' ? 'fault' : z.silenced ? 'silenced' : 'latched';
           if (row.status !== target) await this.db.query(SQL.setStatus, [row.id, target]);
-          if (row.ack_requested_at) await this._deliverAckRequest({ topicId, uid, row });
+          if (row.ack_requested_at) await this._deliverAckRequest({ topicId, homeId, uid, row });
           continue;
         }
         if (active && !z.aid) continue; // kimliksiz kilit: karar verilemez
@@ -590,10 +626,24 @@ class AlarmService {
     return Boolean(r && r.rows && r.rows.length > 0);
   }
 
-  /** Cevrimdisiyken istenen onay: yalniz state'teki bolge aid'si satirin aid'siyle AYNIYSA gonderilir [Y-9]. */
-  async _deliverAckRequest({ topicId, uid, row }) {
+  /**
+   * Cevrimdisiyken istenen onay: yalniz state'teki bolge aid'si satirin aid'siyle AYNIYSA gonderilir [Y-9].
+   * sko-1 (sozlesme C11): istek 24 saatten eskiyse ya da isteyen artik yetkili degilse panoya GITMEZ; istek duser ve
+   * device_audit_logs 'alarm_ack_request_dropped' {reason: expired|revoked}.
+   */
+  async _deliverAckRequest({ topicId, homeId, uid, row }) {
     const connected = typeof this._deps.isConnected === 'function' ? this._deps.isConnected() : true;
     if (!connected) return;
+    const reason = await this._ackRequestBlocked(homeId, row);
+    if (reason) {
+      const dropped = await this.db.query(SQL.dropAckRequest, [row.id]);
+      if (dropped && dropped.rowCount === 0) return; // baska ornek zaten dusurdu/iletti
+      await this.db.query(SQL.auditSystem, [
+        'alarm_ack_request_dropped', uid, homeId, JSON.stringify({ alarm_id: Number(row.id), zone: Number(row.zone), reason }),
+      ]);
+      this._log('log', `bekleyen alarm onayi dusuruldu ev=${short(homeId)} (${reason})`);
+      return;
+    }
     const taken = await this.db.query(SQL.takeAckRequest, [row.id]); // CAS: tek gonderim
     if (!taken || !taken.rows || taken.rows.length === 0) return;
     try {
@@ -601,6 +651,22 @@ class AlarmService {
     } catch (err) {
       this._warn('ack-req', `bekleyen alarm onayi iletilemedi (${errKind(err)})`);
     }
+  }
+
+  /**
+   * Kuyruktaki onay istegi neden iletilemez? null = iletilebilir. Kullanici (by): aktif hesap + onay ucunun rol kumesi
+   * (role_matrix safety_ack) ya da super_user; servis oturumu (sid): var, iptal edilmemis, suresi dolmamis; ikisi de
+   * yoksa (eski satir) istekten sonra evde iptal edilen servis oturumu varsa gecersiz (services/requester_access.js).
+   */
+  async _ackRequestBlocked(homeId, row) {
+    const at = row.ack_requested_at ? new Date(row.ack_requested_at).getTime() : NaN;
+    const nowMs = this.now();
+    if (!Number.isFinite(at) || nowMs - at > ACK_REQUEST_TTL_MS) return 'expired';
+    const q = (text, params) => this.db.query(text, params);
+    const ok = row.ack_requested_by
+      ? await RA.userAccessOk(q, homeId, row.ack_requested_by, { roles: CAPABILITIES.safety_ack })
+      : await RA.sessionOk(q, homeId, { sid: row.ack_requested_sid || null, at: new Date(at).toISOString() }, nowMs);
+    return ok ? null : 'revoked';
   }
 
   /** Yapilandirma kopyasi panodan farkliysa sys cfg_get (cihaz basina dakikada en cok bir) [§4.2]. */
@@ -760,6 +826,45 @@ class AlarmService {
     }
   }
 
+  /**
+   * sko-2 (sozlesme C12): acik alarmda yarim kalan ya da basarisiz alarm/ariza push'larini yeniden talep eder (CAS) ve
+   * gonderir. Kopru acilistan ~5 sn sonra bir kez ve dakikada bir cagirir. Tek ucus (suren tur varsa onun sozu doner);
+   * idle() bekler; asla firlatmaz.
+   * @returns {Promise<{claimed:number, sent:number}>}
+   */
+  retryStuckPushes({ limit = PUSH_RETRY_BATCH } = {}) {
+    if (this._retrying) return this._retrying;
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 500) : PUSH_RETRY_BATCH;
+    const run = (async () => {
+      const out = { claimed: 0, sent: 0 };
+      try {
+        for (const [list, claim, set, fault] of [
+          [SQL.stuckPushes, SQL.claimRetry, SQL.setPush, false],
+          [SQL.stuckFaultPushes, SQL.claimFaultRetry, SQL.setFaultPush, true],
+        ]) {
+          const r = await this.db.query(list, [n]);
+          for (const row of (r && r.rows) || []) {
+            const status = await this._pushOnce(row.id, { claim, set, fault });
+            if (status === null) continue; // baska ornek/yol aldi
+            out.claimed += 1;
+            if (status === 'sent') out.sent += 1;
+          }
+        }
+      } catch (err) {
+        this.counters.errors += 1;
+        this._warn('push-retry', `alarm push yeniden deneme hatasi (${errKind(err)})`);
+      }
+      if (out.claimed > 0) this._log('log', `yarim kalan alarm push'u yeniden denendi: ${out.claimed} (gonderilen ${out.sent})`);
+      return out;
+    })();
+    this._retrying = run;
+    run.then(() => {
+      if (this._retrying === run) this._retrying = null;
+    });
+    this._track(run);
+    return run;
+  }
+
   /** sendNotice; firlatirsa null (yeniden deneme karari cagirana). */
   async _trySend(push, args) {
     try {
@@ -840,9 +945,12 @@ class AlarmService {
     return this.db.query(SQL.getAlarm, [alarmId, homeId]).then((r) => (r && r.rows && r.rows[0]) || null);
   }
 
-  /** Cevrimdisi panoya onay istegi kaydi (yalniz ack; vana acma ASLA kuyruga alinmaz). */
-  async requestAck({ alarmId, homeId, userId }) {
-    const r = await this.db.query(SQL.requestAck, [alarmId, homeId, userId || null]);
+  /**
+   * Cevrimdisi panoya onay istegi kaydi (yalniz ack; vana acma ASLA kuyruga alinmaz). sessionId: servis (PIN) oturumu
+   * (kullanici satiri yok); teslimden once oturumun gecerliligi denetlenir (sko-1).
+   */
+  async requestAck({ alarmId, homeId, userId, sessionId = null }) {
+    const r = await this.db.query(SQL.requestAck, [alarmId, homeId, userId || null, sessionId || null]);
     return Boolean(r && r.rows && r.rows.length > 0);
   }
 
@@ -870,6 +978,6 @@ module.exports = {
   AlarmService,
   SQL,
   OPEN_STATUSES,
-  constants: Object.freeze({ ACK_WINDOW_MS, MAX_ACK_EIDS, CFG_DUMP_TTL_MS, CFG_GET_MIN_INTERVAL_MS, CFG_GET_FORCE_INTERVAL_MS, LIST_MAX_LIMIT, PUSH_RETRY_DELAY_MS }),
+  constants: Object.freeze({ ACK_WINDOW_MS, MAX_ACK_EIDS, CFG_DUMP_TTL_MS, CFG_GET_MIN_INTERVAL_MS, CFG_GET_FORCE_INTERVAL_MS, LIST_MAX_LIMIT, PUSH_RETRY_DELAY_MS, ACK_REQUEST_TTL_MS, PUSH_RETRY_BATCH }),
   helpers: { alarmTitle, alarmBody, faultTitle, faultBody, infoText, revOf, intrusionVerdict, intrusionZone },
 };

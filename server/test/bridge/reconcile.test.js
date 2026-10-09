@@ -42,8 +42,8 @@ function makeWorld() {
     w.homes.set(topic, h);
     return h;
   };
-  w.addDevice = (topic, uuid, { live = true, childLock = false, snapshot = null } = {}) => {
-    const d = { id: crypto.randomUUID(), uuid, topic, live, childLock, snapshot };
+  w.addDevice = (topic, uuid, { live = true, childLock = false, snapshot = null, caps } = {}) => {
+    const d = { id: crypto.randomUUID(), uuid, topic, live, childLock, snapshot, caps };
     w.devices.push(d);
     return d;
   };
@@ -97,6 +97,7 @@ function makeWorld() {
             rows: devs.filter((d) => d.snapshot && d.snapshot.runtime_sync === 'pending').map((d) => ({
               home_id: h.id, device_id: d.id, device_uuid: d.uuid, live: d.live,
               marker_home_id: d.snapshot.home_id, marker_replaced_at: d.snapshot.replaced_at, device_count: devs.length,
+              ...(d.caps !== undefined ? { caps: d.caps } : {}),
             })),
           };
         }
@@ -665,6 +666,87 @@ test('panjur: yeni pano degisimi isareti yeniden kurduysa (farkli replaced_at) e
   live(rec, w, TOPIC, d);
   await runTimer(w, rec, timers);
   assert.equal(d.snapshot.runtime_sync, 'pending', 'yeni isaret korunmali');
+});
+
+// sko-3: yanki veren panoda (caps 'intrusion'; firmware last_id/last_rej) set_runtime yalniz PANONUN ONAYIYLA 'synced'.
+const ECHO_CAPS = ['safety', 'actuator', 'event', 'cfg', 'intrusion'];
+function echoRec(w, verdicts) {
+  const order = [];
+  const waits = [];
+  const cancelled = [];
+  const pub = w.publishCommand;
+  w.publishCommand = async (t, c) => { order.push('publish'); return pub(t, c); };
+  const r = makeRec(w, {
+    expectOutcome: (topic, id, ms, opts) => {
+      order.push('wait');
+      waits.push({ topic, id, ms, opts });
+      const v = verdicts.length > 1 ? verdicts.shift() : verdicts[0];
+      return Promise.resolve(typeof v === 'function' ? v() : v);
+    },
+    cancelAck: (t, id) => cancelled.push(id),
+  });
+  return { ...r, order, waits, cancelled };
+}
+
+test('sko-3: yanki veren pano set_runtime REDDEDERSE isaret synced OLMAZ (geri cekilmeyle yeniden denenir); onaylayinca synced', async () => {
+  const w = makeWorld();
+  w.addHome(TOPIC, { requested: null });
+  const d = w.addDevice(TOPIC, 'AHBU-S3-0002', { snapshot: w.markerFor(TOPIC), caps: ECHO_CAPS });
+  w.addShutter(d, 1, 24);
+  w.addShutter(d, 3, 30);
+  const verdicts = [{ ok: true }, { ok: false, rejected: 'bad_cmd' }];
+  const { rec, timers, logger, order, waits } = echoRec(w, verdicts);
+  live(rec, w, TOPIC, d);
+  await runTimer(w, rec, timers, SETTLE_MS);
+  const cmds = runtimeCmds(w).map((p) => p.cmd);
+  assert.deepEqual(cmds.map((c) => c.shutter), [1, 3]);
+  assert.deepEqual(order, ['wait', 'publish', 'wait', 'publish'], 'bekleyici YAYINDAN ONCE kurulur');
+  assert.deepEqual(waits.map((x) => [x.id, x.ms, x.opts]), cmds.map((c) => [c.id, 5000, { uid: 'AHBU-S3-0002' }]));
+  assert.equal(d.snapshot.runtime_sync, 'pending', 'reddedilen komut synced sayilmaz');
+  assert.ok(logger.lines.some((l) => /panjur_suresi .*reddedildi/.test(l)), logger.lines.join('\n'));
+  // geri cekilme sonrasi yalniz onaylanmayan cift yeniden; pano onaylar -> synced
+  verdicts.length = 0;
+  verdicts.push({ ok: true });
+  await runTimer(w, rec, timers, BACKOFF_BASE_MS);
+  assert.deepEqual(runtimeCmds(w).map((p) => p.cmd.shutter), [1, 3, 3]);
+  assert.equal(d.snapshot.runtime_sync, 'synced');
+});
+
+test('sko-3: onay zaman asimi da synced saymaz; yayin hatasinda bekleyici iptal edilir', async () => {
+  const w = makeWorld();
+  w.addHome(TOPIC, { requested: null });
+  const d = w.addDevice(TOPIC, 'AHBU-S3-0002', { snapshot: w.markerFor(TOPIC), caps: ECHO_CAPS });
+  w.addShutter(d, 1, 24);
+  const { rec, timers } = echoRec(w, [{ ok: false, timeout: true }]);
+  live(rec, w, TOPIC, d);
+  await runTimer(w, rec, timers, SETTLE_MS);
+  assert.equal(runtimeCmds(w).length, 1);
+  assert.equal(d.snapshot.runtime_sync, 'pending');
+
+  const w2 = makeWorld();
+  w2.addHome(TOPIC, { requested: null });
+  const d2 = w2.addDevice(TOPIC, 'AHBU-S3-0002', { snapshot: w2.markerFor(TOPIC), caps: ECHO_CAPS });
+  w2.addShutter(d2, 1, 24);
+  w2.failTopics.add(TOPIC);
+  const r2 = echoRec(w2, [{ ok: true }]);
+  live(r2.rec, w2, TOPIC, d2);
+  await runTimer(w2, r2.rec, r2.timers, SETTLE_MS);
+  assert.equal(r2.cancelled.length, 1, 'yayin basarisiz: bekleyici iptal');
+  assert.equal(d2.snapshot.runtime_sync, 'pending');
+});
+
+test('sko-3: yanki vermeyen (caps intrusion yok) ya da caps bilinmeyen pano: bugunku PUBACK davranisi (bekleyici kurulmaz)', async () => {
+  for (const caps of [['safety', 'actuator', 'event', 'cfg'], null, undefined]) {
+    const w = makeWorld();
+    w.addHome(TOPIC, { requested: null });
+    const d = w.addDevice(TOPIC, 'AHBU-S3-0002', { snapshot: w.markerFor(TOPIC), caps });
+    w.addShutter(d, 1, 24);
+    const { rec, timers, waits } = echoRec(w, [{ ok: false, rejected: 'bad_cmd' }]);
+    live(rec, w, TOPIC, d);
+    await runTimer(w, rec, timers, SETTLE_MS);
+    assert.equal(waits.length, 0, JSON.stringify(caps));
+    assert.equal(d.snapshot.runtime_sync, 'synced', JSON.stringify(caps));
+  }
 });
 
 test('cocuk kilidi ve panjur ayni pano degisiminde birlikte uzlastirilir; biri patlarsa digeri calisir', async () => {

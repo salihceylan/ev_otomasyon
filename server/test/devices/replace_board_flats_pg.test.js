@@ -107,6 +107,24 @@ test('pano degisimi + site dairesi (atolye-7/8) gercek PG', { skip: PG_SKIP }, a
     assert.ok(!(r2.warnings || []).some((w) => w.includes('başka bir daireye')));
     assert.deepEqual(await flatRow(fc.id), { device_uuid: 'AHBU-RBF-0004', status: 'written' });
     assert.deepEqual(await flatRow(fd.id), { device_uuid: null, status: 'planned' }, 'ilgisiz daireye dokunulmaz');
+    assert.equal(r2.safety_restore, 'not_required', 'guvenlik yapilandirmasiz pano');
+
+    // --- senaryo 3 (tarama-sunucu-cihaz-site-1, C4): eski panonun guvenlik kopyasinda sensor var -> required + uyari
+    for (const u of ['AHBU-RBF-0005', 'AHBU-RBF-0006']) await inv(u);
+    const c5 = await deviceService.claimDevice({ actor: { userId: ownerRow.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-RBF-0005', setupPin: PIN, homeName: 'Daire A5' });
+    const old5 = (await db.query("SELECT id FROM devices WHERE device_uuid = 'AHBU-RBF-0005'")).rows[0];
+    await db.query(
+      "INSERT INTO device_configs (device_id, module, rev, crc, body) VALUES ($1, 'safety', 4, '0000abcd', $2::jsonb)",
+      [old5.id, JSON.stringify({ sensors: [{ id: 'd3', kind: 'water', zone: 1 }], actuators: 'bozuk' })]
+    );
+    const r3 = await deviceService.replaceBoard({
+      actor: ownerActor, homeId: c5.home_id, oldDeviceUuid: 'AHBU-RBF-0005', newDeviceUuid: 'AHBU-RBF-0006', setupPin: PIN, reason: REASON,
+    });
+    assert.equal(r3.safety_restore, 'required');
+    assert.ok((r3.warnings || []).some((w) => w.startsWith('Eski panonun güvenlik ayarları')), JSON.stringify(r3.warnings));
+    assert.equal(r3.message, 'Pano değişimi tamamlandı. Kanal adları, kurallar ve panjur süreleri yeni panoya taşındı.');
+    const audit = (await db.query("SELECT details FROM device_audit_logs WHERE event = 'board_replaced' AND device_uuid = 'AHBU-RBF-0006'")).rows[0];
+    assert.equal(audit.details.safety_restore, 'required');
   } finally {
     await env.close();
   }

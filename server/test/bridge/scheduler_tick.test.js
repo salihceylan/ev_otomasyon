@@ -293,6 +293,38 @@ test('CEVRIMDISI cihaz atlanir + gunluk; talep geri birakilir, ayni pencerede ci
   assert.equal(w.world.runs[0].attempts, 2);
 });
 
+test('sko-4: yayindan ONCEKI gecici veritabani hatasi yuvayi TUKETMEZ: talep geri birakilir, sonraki dakikada gonderilir', async () => {
+  const w = makeWorld({ rules: [{ id: 7, channel: 3, action: 'on', hour: 8, minute: 30 }] });
+  let failOnce = true;
+  w.db.addRule({
+    match: (t) => t === SQL.devices && failOnce,
+    reply: () => {
+      failOnce = false;
+      return Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' });
+    },
+  });
+  const s = w.makeScheduler();
+  const r1 = await s.runTick(AT_0830);
+  assert.equal(w.world.published.length, 0);
+  assert.equal(w.world.runs[0].status, 'failed');
+  assert.equal(r1.outcomes[0].released, true, 'gecici hata: talep geri birakilir');
+  assert.equal(w.world.rules[0].last_run_at, null);
+  const r2 = await s.runTick(AT_0830 + MIN);
+  assert.equal(r2.sent, 1, 'ayni yuva telafi penceresinde gonderilir');
+  assert.equal(w.world.published.length, 1);
+  assert.equal(w.world.runs[0].status, 'sent');
+});
+
+test('sko-4: yetki sorgusu (SQL.creator) gecici hatasi da yuvayi tuketmez', async () => {
+  const w = makeWorld({ rules: [{ id: 7, channel: 3, action: 'on', hour: 8, minute: 30 }] });
+  let failOnce = true;
+  w.db.addRule({ match: (t) => t === SQL.creator && failOnce, reply: () => { failOnce = false; return new Error('timeout'); } });
+  const s = w.makeScheduler();
+  await s.runTick(AT_0830);
+  assert.equal(w.world.rules[0].last_run_at, null);
+  assert.equal((await s.runTick(AT_0830 + MIN)).sent, 1);
+});
+
 test('CEVRIMDISI cihaz pencere (2 dk) bitene kadar donmezse kural o gun atlanmis kalir', async () => {
   const w = makeWorld({
     rules: [{ id: 7, channel: 3, action: 'on', hour: 8, minute: 30 }],

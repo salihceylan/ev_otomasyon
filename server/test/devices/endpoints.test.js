@@ -255,7 +255,7 @@ test('D12 sure yolu: her satir transaction\'da EN COK BIR KEZ guncellenir (hedef
   assert.ok(ups[0].sql.startsWith('UPDATE endpoints SET name = COALESCE($1, name)'));
   assert.match(ups[0].sql, /shutter_duration_sec = COALESCE\(\$6::int, shutter_duration_sec\)/);
   assert.strictEqual(ups[0].params[5], 32, 'hedefin suresi ilk UPDATE ile yazilir');
-  assert.ok(ups[1].sql.startsWith('UPDATE endpoints SET shutter_duration_sec = $1'));
+  assert.ok(ups[1].sql.startsWith('UPDATE endpoints SET shutter_duration_sec = COALESCE($1::int, shutter_duration_sec)'));
   assert.match(ups[1].sql, /AND id <> \$5$/);
   assert.strictEqual(ups[1].params[4], ctx.ep(2).id, 'cift UPDATE hedef satiri ikinci kez yazmaz');
   // ad/oda/tip yolunda sure parametresi NULL (sure kolonuna dokunulmaz)
@@ -263,6 +263,27 @@ test('D12 sure yolu: her satir transaction\'da EN COK BIR KEZ guncellenir (hedef
   const last = ctx.world.db.log.filter((l) => l.sql.startsWith('UPDATE endpoints SET name')).at(-1);
   assert.strictEqual(last.params[5], null);
   assert.strictEqual(ctx.ep(5).shutter_duration_sec, null);
+});
+
+test('C14: panjur satirina ad/oda gelince ciftin IKI satirina yazilir (kilit sirasi, satir basina tek UPDATE); diger cift ve isik etkilenmez', async () => {
+  const ctx = setup();
+  const r = await ctx.update(ctx.ep(1), { room: 'Yatak Odasi' });
+  assert.strictEqual(r.room, 'Yatak Odasi');
+  assert.strictEqual(ctx.ep(2).room, 'Yatak Odasi', 'ciftin ASAGI satiri da');
+  assert.strictEqual(ctx.ep(3).room, 'Oda', 'baska cift degismez');
+  assert.strictEqual(ctx.ep(5).room, 'Salon', 'isik satiri degismez');
+  const txQ = ctx.world.db.log.filter((l) => l.tx !== null);
+  assert.match(txQ[0].sql, /ORDER BY channel_index ASC FOR UPDATE$/, 'sure yolundaki kilit sirasi');
+  const ups = txQ.filter((l) => l.sql.startsWith('UPDATE endpoints'));
+  assert.strictEqual(ups.length, 2, 'hedef + cift: satir basina tek UPDATE');
+  assert.strictEqual(ups[1].params[4], ctx.ep(1).id, 'cift UPDATE hedefi disarida birakir');
+  // ad + oda + sure birlikte: diger satir TEK UPDATE'te hepsini alir
+  ctx.world.db.log.length = 0;
+  await ctx.update(ctx.ep(4), { name: 'Oda Panjuru', room: 'Calisma', shutter_duration_sec: 33 });
+  for (const ch of [3, 4]) {
+    assert.deepStrictEqual([ctx.ep(ch).name, ctx.ep(ch).room, ctx.ep(ch).shutter_duration_sec], ['Oda Panjuru', 'Calisma', 33], `kanal ${ch}`);
+  }
+  assert.strictEqual(ctx.world.db.log.filter((l) => l.tx !== null && l.sql.startsWith('UPDATE endpoints')).length, 2);
 });
 
 test('D12: ad/oda/tip guncellemesinde kilit sorgusu YOK (tek satir UPDATE)', async () => {

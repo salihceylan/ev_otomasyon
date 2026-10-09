@@ -135,7 +135,7 @@ class TransferService {
 
     const outcome = await db.withTransaction(async (tx) => {
       const tRes = await tx.query(
-        `SELECT t.id, t.home_id, t.from_user_id, t.target_identifier, t.status, t.expires_at,
+        `SELECT t.id, t.home_id, t.from_user_id, t.target_identifier, t.status, t.expires_at, t.accepted_by,
                 h.name AS home_name, h.address AS home_address
            FROM home_transfers t
            JOIN homes h ON h.id = t.home_id
@@ -144,6 +144,20 @@ class TransferService {
         [hashTransferCode(code)]
       );
       const transfer = tRes.rows[0];
+      // hesap-uyelik-5 (sozlesme C3): yaniti kaybolan kabulun yinelenmesi idempotent basaridir (yalniz devri kabul eden ve
+      // hala sahip olan kullanici; yazim / anahtar rotasyonu / MQTT atma YOK). Digerleri icin 410 aynen.
+      if (
+        transfer &&
+        transfer.status === 'COMPLETED' &&
+        transfer.accepted_by &&
+        String(transfer.accepted_by).toLowerCase() === String(newUserId).toLowerCase()
+      ) {
+        const own = await tx.query(`SELECT 1 FROM home_users WHERE home_id = $1 AND user_id = $2 AND role = 'owner'`, [
+          transfer.home_id,
+          newUserId,
+        ]);
+        if (own.rows.length > 0) return { already: true, transfer };
+      }
       if (!transfer || transfer.status !== 'PENDING' || new Date(transfer.expires_at).getTime() <= Date.now()) {
         throw new HttpError(410, GENERIC_INVALID, 'GONE');
       }
@@ -211,6 +225,15 @@ class TransferService {
 
       return { transfer, usernames, service, cleanup, rotation, rotationSvc };
     });
+
+    if (outcome.already) {
+      const a = outcome.transfer;
+      return {
+        message: `"${a.home_name}" dairesinin sahipliği zaten size devredildi.`,
+        home: { id: a.home_id, name: a.home_name, address: a.home_address || null, role: 'owner' },
+        already_member: true,
+      };
+    }
 
     // Commit SONRASI: ayni surecteki servis oturumu onbellegi ve acik MQTT baglantilari.
     invalidateServiceSessionCache();
