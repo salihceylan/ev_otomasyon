@@ -1081,6 +1081,36 @@ Yeni migration'lar `042` → `043` → `044` (sıra: migration'lar → sunucu ko
 | 17B | `mqtt_credentials.client_id`: NULL = bağlama yok (uygulama kimlikleri); cihaz kimliği tek panolu evde `"ESP32S3_" + MAC` (12 hane, büyük harf, ayraçsız; firmware `MqttManager.cpp`, `esp_read_mac(WIFI_STA)`), çok panolu evde / bozuk MAC'te NULL. `044` mevcut satırları çevirir. EMQX kimlik sorgusu (`emqx_config/emqx.conf`) `AND (client_id IS NULL OR client_id = ${clientid})` ister; qa_stack aynı kuralı uygular. REST yanıtlarındaki `client_id` alanı değişmedi. |
 | 18 | `POST /devices/replace-board`: evde güvenlik yapılandırması (bulut kopyası `device_configs` `safety` gövdesinde sensör ya da eylemci/vana) varsa ev sahibi (personel / servis oturumu / süper OLMAYAN) → `403 REPLACE_REQUIRES_SERVICE` "Güvenlik ayarları olan evde pano değişimini yetkili servis yapmalıdır." (işlem geri alınır, PIN sayacı değişmez). Yalnız bölge adı tanımlı gövde sayılmaz (C4 `safety_restore` kuralı ile aynı). |
 
+## 3k. Uygulama bağlantısı doğrulama dosyaları (Android App Links / iOS Universal Links, 2026-10-09)
+
+Android manifestindeki `autoVerify="true"` intent-filter'ı (`https://evotomasyon.gudeteknoloji.com.tr`, `pathPrefix` `/claim`, `/reset-password`,
+`/magic-login`) ve ileride iOS Associated Domains için doğrulama dosyaları Express uygulamasından sunulur (nginx tüm yolları, `/.well-known/*`
+dahil, uygulamaya iletir). Kod: `server/src/utils/app_links.js` (saf fonksiyonlar), bağlama `server/src/server.js` (bireysel-9 sayfasının yanında,
+`notFoundHandler`'dan önce); testler `server/test/app_links/`.
+
+| Yol (`GET` ve `HEAD`) | Yanıt |
+|---|---|
+| `/.well-known/assetlinks.json` | Her zaman `200`, Google Digital Asset Links listesi |
+| `/.well-known/apple-app-site-association`, `/apple-app-site-association` | `APPLE_TEAM_ID` geçerliyse `200` AASA; yoksa / geçersizse yol bağlanmaz, mevcut JSON `404 NOT_FOUND` |
+
+- Ortak: kimliksiz (JWT yok; geçersiz `Authorization` başlığı da `200`), yönlendirmesiz, Express'te hız sınırı yok. Başlıklar: `Content-Type:
+  application/json` (charset parametresi yok), `Cache-Control: public, max-age=3600`, `X-Content-Type-Options: nosniff`; zayıf ETag (`304`
+  desteklenir). Diğer yöntemler ve diğer `/.well-known/*` yolları `404 NOT_FOUND` kalır. Tüm yollardaki CORS kapısı burada da geçerlidir
+  (doğrulayıcılar `Origin` göndermez).
+- Gövdeler `createApp` anında ortamdan **bir kez** üretilir: ortam değişkeni değişince sunucu yeniden başlatılır. Geçersiz değer atlanır ve
+  açılışta değişken başına bir kez `[APP-LINKS]` uyarısıyla (değer dahil; parmak izi ve Team ID gizli değildir) loglanır.
+- `assetlinks.json` (sıkıştırılmış JSON, anahtar sırası sabit):
+  `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"com.ahbu.evotomasyon.ev_otomasyon","sha256_cert_fingerprints":[...]}}]`.
+  Liste: depodaki sabit yeni sürüm imza anahtarı parmak izi
+  `C9:58:0E:1D:E0:39:09:0C:B5:9B:71:B6:EA:F9:58:2A:F2:97:5C:CB:92:2B:8D:BA:77:C1:58:87:E1:AC:E0:8F` (her zaman ilk) + `ANDROID_APP_LINK_CERT_SHA256`
+  ekleri (virgüllü; 32 bayt, iki nokta ayrımlı onaltılık; büyük harfe normalize, geçersiz atlanır, tekrar ayıklanır). Google Play uygulama
+  imzalama kullanılırsa Play'den kurulan uygulama Play'in anahtarıyla imzalıdır: Play Console'daki uygulama imzalama anahtarı sertifikasının
+  SHA-256 değeri bu değişkene eklenmelidir.
+- AASA, yeni (iOS 13+, `appIDs` + `components`) ve eski (`appID` + `paths`) biçim birlikte:
+  `{"applinks":{"apps":[],"details":[{"appIDs":["<TEAM>.com.ahbu.evotomasyon.evOtomasyon"],"components":[{"/":"/claim*"},{"/":"/reset-password*"},{"/":"/magic-login*"}],"appID":"<TEAM>.com.ahbu.evotomasyon.evOtomasyon","paths":["/claim*","/reset-password*","/magic-login*"]}]}}`.
+  `APPLE_TEAM_ID`: 10 karakter `[A-Z0-9]`; baş/son boşluk kırpılır, küçük harf düzeltilmez (geçersiz sayılır). Team ID henüz yok; iOS
+  uygulamasında Associated Domains yetkisi (`applinks:evotomasyon.gudeteknoloji.com.tr`) de henüz tanımlı değil.
+
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 
 `src/DeviceCommand.h` içinde tanımlıdır. Her görev (MQTT, Web, CLI, DI) röle/panjur durumunu **doğrudan değiştirmez**;
@@ -1227,6 +1257,8 @@ Maliyet: enerjileme yazımı başına +2 I2C okuması (~0,5 ms normal), KAPATMA 
 | `PEACE_REMINDER_HOME_ALLOWLIST` (virgüllü ev UUID'leri) | – | doluysa yalnızca bu evler (kademeli açılış). Dolu ama hiçbiri geçerli UUID değilse **kimse** |
 | `PEACE_CATCHUP_MIN` (1–720, varsayılan 60) | – | hedef saatten sonra kaç dakika boyunca (yeniden başlatma/çevrimdışı telafisi) denenir |
 | `ENDPOINT_LAYOUT_SYNC` (`off`\|`0`\|`false` = kapalı; varsayılan **açık**) | – | mqtt_bridge: yerleşim eşitleme (§2.4b) kapatma anahtarı. Kapalıyken uç noktalar tohum şablonunda / son eşitlenen hâlinde kalır |
+| `ANDROID_APP_LINK_CERT_SHA256` (virgüllü SHA-256 parmak izleri) | – | utils/app_links: `/.well-known/assetlinks.json`'a **ek** imza parmak izleri (depodaki sürüm anahtarı her zaman yayınlanır; örneğin Google Play uygulama imzalama anahtarı). Geçersiz değer atlanır, açılışta bir kez uyarı (§3k) |
+| `APPLE_TEAM_ID` (10 karakter `[A-Z0-9]`) | – | utils/app_links: yoksa / geçersizse `apple-app-site-association` yayınlanmaz (`404`; geçersizse açılışta bir kez uyarı) (§3k) |
 
 SMS sağlayıcı: henüz YOK (`authService.setSmsSender` `server.js`'te bağlanmadı; akış denetiminde yeni ortam değişkeni eklenmedi). Bağlanınca `SMS_*` değişkenleri bu tabloya eklenir ve `capabilities.sms_otp` kendiliğinden `true` olur; o zamana kadar üretimde `false` (istemci SMS düğmesini gizler).
 

@@ -41,6 +41,7 @@ const { errorHandler, notFoundHandler, asyncHandler } = require('./middlewares/e
 const { rejectNulBytes } = require('./middlewares/reject_nul');
 const { successResponse } = require('./utils/helpers');
 const { describeFatal, redactSensitive } = require('./utils/fatal_log');
+const { buildAppLinkDocuments } = require('./utils/app_links');
 
 const BODY_LIMIT = '256kb';
 // Zarif kapanis zaman butcesi (plan §5d-5). Havuz/baglanti zaman asimi degerleri (db.js) burada DEGISTIRILMEZ.
@@ -131,6 +132,21 @@ function corsMiddleware() {
       return res.status(403).json({ success: false, message: 'İzin verilmeyen kaynak (origin).', code: 'FORBIDDEN' });
     }
     return corsHandler(req, res, next);
+  };
+}
+
+/**
+ * Uygulama baglantisi dogrulama dosyasi isleyicisi (assetlinks.json / apple-app-site-association): onceden uretilmis
+ * JSON, Content-Type tam olarak `application/json` (Buffer gonderilir: Express charset eklemez), herkese acik onbellek
+ * 1 sa, nosniff. HEAD istegini Express ayni GET rotasiyla karsilar (govdesiz, ayni basliklar).
+ */
+function wellKnownJson(json) {
+  const payload = Buffer.from(json, 'utf8');
+  return function sendWellKnownJson(req, res) {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(200).send(payload);
   };
 }
 
@@ -333,6 +349,18 @@ function createApp(deps = {}) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(APP_LINK_PAGE);
   });
+
+  // --- Uygulama baglantisi dogrulama dosyalari (Android App Links / iOS Universal Links) --------------------------
+  // Google (Digital Asset Links) ve Apple (CDN) dogrulayicilari bu dosyalari kimliksiz ve yonlendirmesiz ceker: JWT /
+  // hiz siniri YOK, dogrudan 200 application/json (HEAD de). Govdeler burada ortamdan BIR KEZ uretilir (utils/app_links;
+  // gecersiz deger kurulumda bir kez uyari); ortam degisince sunucu yeniden baslatilir. APPLE_TEAM_ID yoksa / gecersizse
+  // AASA yollari BAGLANMAZ ve notFoundHandler'a duser (JSON 404 aynen).
+  const appLinkDocs = buildAppLinkDocuments(process.env);
+  for (const warning of appLinkDocs.warnings) console.warn(`[APP-LINKS] ${warning}`);
+  app.get('/.well-known/assetlinks.json', wellKnownJson(appLinkDocs.assetLinks));
+  if (appLinkDocs.appleAppSiteAssociation) {
+    app.get(['/.well-known/apple-app-site-association', '/apple-app-site-association'], wellKnownJson(appLinkDocs.appleAppSiteAssociation));
+  }
 
   // --- Yasal metin sayfalari (kimliksiz; public, max-age=300; bilinmeyen slug 404 HTML) ------------------------------
   // '/yasal', '/yasal/' ve ic ice yollar da tarayiciya JSON degil 404 HTML sayfasi doner (slug yok -> bulunamadi).
