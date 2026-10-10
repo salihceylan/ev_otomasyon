@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 > nul
-set "PATH=%USERPROFILE%\.platformio\penv\Scripts;%PATH%"
 title EK MODUL HAZIRLAMA ARACI
 echo ========================================================
-echo  AHBU Ev Otomasyonu - Ek Modul Hazirlama Araci
+echo  AHBU Ev Otomasyonu - Ek Modul Hazirlama Araci (Python 3.11)
 echo ========================================================
-python ek_modul_hazirla.py
+set "PY=C:\Users\fingonancalime\AppData\Local\Programs\Python\Python311\python.exe"
+"%PY%" ek_modul_hazirla.py
 pause
