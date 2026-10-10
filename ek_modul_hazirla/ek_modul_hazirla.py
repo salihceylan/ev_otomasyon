@@ -145,12 +145,13 @@ def flash_firmware(port, log_cb=print):
         log_cb(f"[HATA] Firmware dosyası bulunamadı: {bin_path}")
         return False
 
-    log_cb(f"[3/3] ESP32'ye flaşlanıyor (Port: {port})...")
+    log_cb(f"[3/3] ESP32'ye flaşlanıyor (Port: {port}, Hız: 115200)...")
+    log_cb("  > İpucu: 'Connecting...' sırasında karttaki BOOT butonuna basılı tutun.")
     cmd = [
         sys.executable, "-m", "esptool",
         "--chip", "esp32",
         "--port", port,
-        "--baud", "460800",
+        "--baud", "115200",
         "--before", "default_reset",
         "--after", "hard_reset",
         "write_flash", "-z",
