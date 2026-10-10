@@ -16,7 +16,9 @@ Standart USB-CH340 adaptörünüzü şu şekilde bağlayın:
 | **RXD** | **TX0** (GPIO 1) | CH340 Alma -> ESP32 Gönderme |
 | **3.3V / 5V** | **VCC / 3.3V** | Besleme (Kart klemensine 12V bağlıysa CH340 VCC bağlanmayabilir, sadece GND, TX, RX yeterlidir) |
 
-> **İpucu:** Firmware yüklerken bağlantı kurulamazsa (Connecting... hatası verirse) kartın üzerindeki **BOOT** butonuna basılı tutun, yükleme başlayınca bırakın.
+> **İndirme modu (önemli):** Yalnız GND/TX/RX bağlıyken adaptör kartı kendisi resetleyemez (DTR/RTS yok). Yüklemeden önce ESP32'yi elle indirme moduna alın: **BOOT'a basılı tutun → RST/EN'e basıp bırakın (ya da 12V'u kesip verin) → BOOT'u bırakın.** Yalnız BOOT'a basılı tutmak yetmez; çip BOOT'u yalnızca reset anında okur. Kart bu modda bekler, sonra uygulamadan yüklemeyi başlatın.
+>
+> **Yükleme bittikten sonra:** Yeni yazılımın çalışması için BOOT'a basmadan RST/EN'e bir kez basın (ya da 12V'u kesip verin).
 
 ---
 
@@ -33,10 +35,12 @@ Kartın sağ üst köşesindeki yeşil klemensler:
 ## 3. Uygulamanın Kullanımı
 
 1. Klasördeki **`ek_modul_hazirla.bat`** dosyasına çift tıklayın (veya terminalden `python ek_modul_hazirla.py` çalıştırın).
-2. **COM Port:** CH340 adaptörünüzün bağlı olduğu COM portunu seçin.
-3. **Cihaz No (Slave ID):** Hangi cihazı hazırlıyorsanız numarasını girin (Örn: `1`).
-4. **"Cihaz Firmware'ini Hazırla ve Kur"** butonuna basın.
-   - Uygulama Cihaz 1 için Modbus RTU Slave kodunu hazırlar, derler ve CH340 üzerinden ESP32'ye flashlar.
+2. **COM Port:** CH340 adaptörünüzün bağlı olduğu COM portunu seçin. 'Yenile', her portun USB kimliğini loga yazar; CH340 `VID:PID 1A86:7523` olarak görünür. Emin değilseniz adaptörü çıkarıp 'Yenile'ye basın: kaybolan port doğru porttur.
+3. Kartı indirme moduna alın (yukarıdaki BOOT → RST adımı) ve **"🔌 Bağlantıyı Test Et"** ile kartın cevap verdiğini görün. Bu adım firmware yazmaz.
+4. **Cihaz No (Slave ID):** Hangi cihazı hazırlıyorsanız numarasını girin (Örn: `1`).
+5. **"Cihaz Firmware'ini Hazırla ve Kur"** butonuna basın.
+   - Uygulama Cihaz 1 için Modbus RTU Slave kodunu hazırlar, derler ve PlatformIO'nun yazdığı dört görüntüyü (bootloader 0x1000, bölüm tablosu 0x8000, boot_app0 0xE000, uygulama 0x10000) CH340 üzerinden ESP32'ye yazar.
+   - Bitince RST/EN'e basın.
 
 ---
 
@@ -44,8 +48,22 @@ Kartın sağ üst köşesindeki yeşil klemensler:
 
 Karttaki röle pinlerini doğrulamak için:
 1. Uygulamadan **"Pin Keşif & Teşhis Yazılımını Kur"** butonuna basın.
-2. Yazılım yüklendikten sonra alttaki komut satırına **`SCAN`** yazıp Gönder'e basın.
+2. Yazılım yüklendikten sonra kartı RST/EN ile yeniden başlatın, alttaki komut satırına **`SCAN`** yazıp Gönder'e basın. Konsol açık kaldıkça karttan gelen satırlar loga akar; yeni yükleme başlarken araç portu kendiliğinden kapatır.
 3. Röleler 1.5 saniye arayla tek tek çekecektir. Çeken rölenin LED'ini ve ekranda yazan GPIO numarasını not edin.
 4. Not ettiğiniz pinleri **`pin_haritasi.json`** dosyasına kaydedin.
 5. Ardından **"Cihaz Firmware'ini Hazırla ve Kur"** butonuna basarak Cihaz 1'i üretime hazır hale getirin!
 
+---
+
+## 5. Sorun Giderme
+
+Araç esptool çıktısının tamamını loga yazar ve bilinen hataların altına `*` ile öneri ekler.
+
+| Logdaki hata | Anlamı / yapılacak |
+|---|---|
+| `No serial data received` | Karttan hiç cevap yok: port doğru mu, TXD→RX0 / RXD→TX0 çapraz mı, GND ortak mı, kart besleniyor mu, kart indirme modunda mı (BOOT → RST)? |
+| `Wrong boot mode detected` | Kart normal açılmış: BOOT basılıyken RST/EN'e bas-bırak. |
+| `PermissionError` / `Erişim engellendi` | Port başka programda açık (seri monitör, Arduino IDE, ikinci araç penceresi). |
+| `FileNotFoundError` | Port yok: adaptör çıkmış ya da COM numarası değişmiş, 'Yenile'. |
+| `Invalid head of packet` / `serial noise` | Gürültü ya da seviye uyumsuzluğu: kısa kablo, adaptörü 3.3V'a al, GND. |
+| Yükleme "BAŞARILI" ama kart eski davranıyor | RST/EN'e basmadınız (kart indirme modunda kaldı). |

@@ -54,7 +54,7 @@ ESP32 modülünün hemen üstündeki 5 delikli header (`o o o o o`):
 | **RXD** | **TX0** (GPIO 1) | CH340 Alır <- ESP32 Gönderir |
 | **3.3V / 5V** | **VCC** | *(Kart klemensine 12V bağlıysa bağlamanıza gerek yoktur)* |
 
-> **Not:** Yükleme esnasında esptool bağlanamazsa kartın üzerindeki **BOOT** butonuna basılı tutun, yükleme yüzdesi başlayınca bırakın.
+> **Not (indirme modu):** Yalnız GND/TX/RX bağlıyken adaptörün DTR/RTS uçları karta gitmez; esptool kartı kendisi resetleyip indirme moduna alamaz. Yüklemeden önce: **BOOT'a basılı tut → RST/EN'e bas-bırak (ya da 12V'u kes-ver) → BOOT'u bırak.** Yalnız BOOT'a basılı tutmak yetmez, çip BOOT'u yalnızca reset anında okur. Yükleme bitince yeni yazılımın çalışması için BOOT'a basmadan RST/EN'e bir kez basın. Kartta düğme yoksa IO0'ı geçici olarak GND'ye köprüleyip besleme kes-ver yapın.
 
 ### B. RS485 Ana Modül Bağlantısı:
 | Ek Modül Klemensi | Ana Modül (Master) |
@@ -83,8 +83,10 @@ ESP32 modülünün hemen üstündeki 5 delikli header (`o o o o o`):
 3. Uygulama otomatik olarak:
    - Cihaz 1'in Modbus ID'sini ayarlar,
    - Firmware'i derler,
-   - CH340 üzerinden ESP32'ye flashlar.
-4. Artık Cihaz 1 ana modüle bağlanmaya hazırdır!
+   - PlatformIO'nun yazdığı dört görüntünün hepsini (bootloader 0x1000, bölüm tablosu 0x8000, boot_app0 0xE000, uygulama 0x10000) CH340 üzerinden ESP32'ye yazar. boot_app0 atlanırsa, kartta OTA ile ikinci bölüme geçmiş eski bir yazılım varsa eski yazılım açılmaya devam eder.
+4. "BAŞARIYLA YÜKLENDİ" görününce RST/EN'e basın. Artık Cihaz 1 ana modüle bağlanmaya hazırdır!
+
+> İlk denemede **"🔌 Bağlantıyı Test Et"** ile (firmware yazmadan) kartın cevap verdiğini doğrulayın. Hata çıkarsa araç esptool çıktısının tamamını ve Türkçe öneriyi loga yazar; ayrıntılı tablo [README.md](README.md) "Sorun Giderme" bölümündedir.
 
 ---
 
@@ -93,3 +95,4 @@ ESP32 modülünün hemen üstündeki 5 delikli header (`o o o o o`):
 Şu an kullanılan "Konya Diafon" kartı bir köprü / geliştirme adımıdır. İleride kendi tasarlayacağımız özel donanım versiyonuna geçtiğimizde:
 - Tek yapılması gereken [pin_haritasi.json](file:///g:/site/ev_otomasyon/ek_modul_hazirla/pin_haritasi.json) dosyasındaki pinleri yeni kartımızın şemasına göre güncellemek olacaktır.
 - `ek_modul_hazirla` uygulaması aynı şekilde çalışmaya devam edecek, Cihaz 1, Cihaz 2, Cihaz 3 üretimleri kesintisiz yürütülecektir.
+
