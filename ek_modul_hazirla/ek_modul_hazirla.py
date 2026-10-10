@@ -91,22 +91,47 @@ static const uint8_t RELAY_PINS[8] = {{ {relays_str} }};
     with open(CONFIG_H_PATH, "w", encoding="utf-8") as f:
         f.write(content)
 
+def find_pio_executable():
+    """PlatformIO çalıştırılabilir dosyasının tam yolunu bulur."""
+    import shutil
+    # 1. PATH kontrolü
+    p = shutil.which("pio")
+    if p and os.path.exists(p):
+        return p
+    # 2. Standart PlatformIO penv dizini
+    user_home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(user_home, ".platformio", "penv", "Scripts", "pio.exe"),
+        os.path.join(user_home, ".platformio", "penv", "Scripts", "pio.cmd"),
+        os.path.join(user_home, ".platformio", "penv", "bin", "pio")
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return "pio"
+
 def build_firmware(log_cb=print):
     """PlatformIO ile firmware'i derler."""
-    log_cb("[1/3] Firmware derleniyor (PlatformIO)...")
-    cmd = ["pio", "run", "-d", FIRMWARE_DIR]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-    for line in iter(p.stdout.readline, ""):
-        line_s = line.strip()
-        if "Compiling" in line_s or "Linking" in line_s or "SUCCESS" in line_s:
-            log_cb(f"  > {line_s}")
-    p.stdout.close()
-    p.wait()
-    if p.returncode == 0:
-        log_cb("[2/3] Derleme BAŞARILI!")
-        return True
-    else:
-        log_cb("[HATA] Derleme başarısız oldu!")
+    pio_cmd = find_pio_executable()
+    log_cb(f"[1/3] Firmware derleniyor ({pio_cmd})...")
+    try:
+        cmd = [pio_cmd, "run", "-d", FIRMWARE_DIR]
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+        for line in iter(p.stdout.readline, ""):
+            line_s = line.strip()
+            if line_s:
+                if any(k in line_s for k in ["Compiling", "Linking", "SUCCESS", "Archiving", "Building", "Generating", "FAILED", "Error", "error"]):
+                    log_cb(f"  > {line_s}")
+        p.stdout.close()
+        p.wait()
+        if p.returncode == 0:
+            log_cb("[2/3] Derleme BAŞARILI!")
+            return True
+        else:
+            log_cb(f"[HATA] Derleme başarısız oldu! (Çıkış kodu: {p.returncode})")
+            return False
+    except Exception as e:
+        log_cb(f"[HATA] Derleme başlatılamadı: {e}")
         return False
 
 def flash_firmware(port, log_cb=print):
