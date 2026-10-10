@@ -91,32 +91,33 @@ static const uint8_t RELAY_PINS[8] = {{ {relays_str} }};
     with open(CONFIG_H_PATH, "w", encoding="utf-8") as f:
         f.write(content)
 
-def find_pio_executable():
-    """PlatformIO çalıştırılabilir dosyasının tam yolunu bulur."""
-    import shutil
-    # 1. PATH kontrolü
-    p = shutil.which("pio")
-    if p and os.path.exists(p):
-        return p
-    # 2. Standart PlatformIO penv dizini
+def get_clean_env():
+    """Python çakışmalarını önleyen izole ortam değişkenleri oluşturur."""
+    env = os.environ.copy()
+    env.pop("PYTHONHOME", None)
+    env.pop("PYTHONPATH", None)
     user_home = os.path.expanduser("~")
-    candidates = [
-        os.path.join(user_home, ".platformio", "penv", "Scripts", "pio.exe"),
-        os.path.join(user_home, ".platformio", "penv", "Scripts", "pio.cmd"),
-        os.path.join(user_home, ".platformio", "penv", "bin", "pio")
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-    return "pio"
+    penv_scripts = os.path.join(user_home, ".platformio", "penv", "Scripts")
+    if os.path.exists(penv_scripts):
+        env["PATH"] = penv_scripts + os.pathsep + env.get("PATH", "")
+    return env
+
+def find_pio_cmd():
+    """PlatformIO komut listesini döndürür."""
+    user_home = os.path.expanduser("~")
+    penv_python = os.path.join(user_home, ".platformio", "penv", "Scripts", "python.exe")
+    if os.path.exists(penv_python):
+        return [penv_python, "-m", "platformio"]
+    return ["pio"]
 
 def build_firmware(log_cb=print):
     """PlatformIO ile firmware'i derler."""
-    pio_cmd = find_pio_executable()
-    log_cb(f"[1/3] Firmware derleniyor ({pio_cmd})...")
+    pio_cmd = find_pio_cmd()
+    log_cb(f"[1/3] Firmware derleniyor ({' '.join(pio_cmd)})...")
     try:
-        cmd = [pio_cmd, "run", "-d", FIRMWARE_DIR]
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
+        cmd = pio_cmd + ["run", "-d", FIRMWARE_DIR]
+        clean_env = get_clean_env()
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env=clean_env)
         for line in iter(p.stdout.readline, ""):
             line_s = line.strip()
             if line_s:
