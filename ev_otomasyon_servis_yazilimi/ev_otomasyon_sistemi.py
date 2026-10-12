@@ -1386,7 +1386,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.btn_print_label.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(4, 0))
 
         table_card, table_frame = theme.card(
-            inv_content, "📊 Sunucu Cihaz Envanteri & Durum Yönetimi (Süper Yönetici)", accent="violet", padx=10, pady=8
+            inv_content, "📊 Sunucu Cihaz Envanteri & Durum Yönetimi", accent="violet", padx=10, pady=8
         )
         table_card.pack(fill=tk.BOTH, expand=True)
 
