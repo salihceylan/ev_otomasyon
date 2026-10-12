@@ -1,0 +1,4 @@
+# Servis / fabrika araci (ev_otomasyon_sistemi.bat eksikse kendisi kurar)
+qrcode>=7.4
+Pillow>=9.0
+pyserial>=3.5

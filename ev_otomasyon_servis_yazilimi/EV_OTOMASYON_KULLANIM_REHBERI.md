@@ -552,7 +552,7 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Önceki Cihaz Tamamlanmadı (yeni kayıt yaparken) | **Hayır** deyin ve önceki kartın provizyonunu bitirin. |
 | İşlem Sürüyor (pencereyi kapatırken) | Kartla işlem sürerken kapatmayın; kart yarım kalabilir. |
 | Meşgul: USB (seri) provizyon sürüyor… | Provizyon bitene kadar flash/MAC okuma yapılamaz; bekleyin veya **Beklemeyi İptal Et**. |
-| Eksik Paket (araç hiç açılmıyor) | IT'ye bildirin: bilgisayarda `qrcode` / `pillow` kurulu değil (Teknik Ek A). |
+| Eksik Paket / `No module named 'qrcode'` (araç hiç açılmıyor) | Aracı `ev_otomasyon_sistemi.bat` ile açın: eksik kütüphaneleri (`requirements.txt`: qrcode, Pillow, pyserial) açılışta kendisi kurar, bunun için internet gerekir. İnternet açıkken de kuramazsa IT'ye bildirin (Teknik Ek A). |
 
 ---
 
@@ -659,7 +659,7 @@ Kurulmuş bir kartın içinde küçük bir web sayfası vardır. **Normal kullan
 
 ### A. Kurulum ve çalıştırma
 
-- Gerekli: **Python 3.11+** (Tkinter ile; `python` komutu PATH'te olmalı), `qrcode`, `Pillow`; flash için **esptool** (PlatformIO paketi, PATH veya `python -m esptool`).
+- Gerekli: **Python 3.11+** (Tkinter ile), `qrcode`, `Pillow`; flash için **esptool** (PlatformIO paketi, PATH veya `python -m esptool`). Başlatıcı `ev_otomasyon_sistemi.bat` önce `py -3` (kurulu en yeni Python 3), yoksa PATH'teki `python` ile açar; `qrcode`/`Pillow` eksikse `requirements.txt`'i `pip` ile bir kez kurar (bilgisayarda birden çok Python varsa PATH'teki ilk Python'da paket eksik olabiliyordu: 2026-10-12).
 - `pyserial` **isteğe bağlıdır**: aracın kendi Python'unda yoksa PlatformIO'nun Python'undaki (`penv`) pyserial kullanılır; hiçbirinde yoksa USB seri provizyon kapanır ve yalnızca güvensiz Wi-Fi yedek yolu kalır. Araç **hiçbir zaman yeni paket kurmaz**.
 - Başlatma: `ev_otomasyon_sistemi.bat` (veya `python ev_otomasyon_sistemi.py`).
 - Dosyalar:
