@@ -33,6 +33,7 @@ from factory_client import (
     SerialUnavailableError,
     SessionExpiredError,
     ETH_NO_KEY,
+    FORBIDDEN_TRANSFER_TEXT,
     TemplateLanWriter,
     TemplateSerialWriter,
     TemplateWriteError,
@@ -59,6 +60,22 @@ def write_record_rejected(exc: BaseException) -> bool:
         return exc.status in _REJECTED_RECORD_STATUSES
     return type(exc) is FactoryError  # record_template_write'ın yerel doğrulaması (geçersiz UID / yol / sonuç)
 GENERAL_SCOPE = "Genel (standart şablonlar)"
+# Servis sorumlusu genel şablonları okur ve kullanır (daireye atar, karta yazar) ama değiştiremez (yalnız kök; sunucu da 403 verir).
+GENERAL_TEMPLATE_SERVICE_TEXT = (
+    "Genel (standart) şablonları yalnızca kök yönetici ekler, değiştirir ve siler; servis sorumlusu bunları okur ve kullanır. "
+    "Kendi şablonunuz için üstteki 'Site' kutusundan sitenizi seçin: yeni şablonu orada ekleyin ya da genel şablonu seçip "
+    "'📑 Çoğalt' ile sitenize kopyalayın."
+)
+SITE_TRANSFER_ROOT_CHOICE = "Kök kapsamına al (hiçbir servise bağlı olmasın)"
+
+
+def service_user_label(user: dict[str, Any]) -> str:
+    """Aktarım penceresinde servis hesabı satırı: ``Ad · e-posta`` (biri yoksa kalanı)."""
+    name = str(user.get("full_name") or "").strip()
+    email = str(user.get("email") or "").strip()
+    return f"{name} · {email}" if name and email else (email or name or "Servis hesabı")
+
+
 SITE_FIELDS = (
     ("name", "Site adı *"),
     ("address", "Adres"),
@@ -294,14 +311,14 @@ class BulkFlatsDialog(_Modal):
 class ChoiceDialog(_Modal):
     """Listeden tek seçim (şablon atama vb.)."""
 
-    def __init__(self, parent: tk.Misc, theme: Any, title: str, prompt: str, choices: list[str]) -> None:
+    def __init__(self, parent: tk.Misc, theme: Any, title: str, prompt: str, choices: list[str], initial: int = 0) -> None:
         super().__init__(parent, theme, title)
         card, body = theme.card(self, title, accent="violet")
         card.pack(fill=tk.BOTH, expand=True)
         theme.label(body, "label.body", text=prompt, wraplength=420, justify="left").pack(anchor="w", pady=(0, 8))
         self.combo = ttk.Combobox(body, state="readonly", width=48, values=choices)
         if choices:
-            self.combo.current(0)
+            self.combo.current(initial if 0 <= initial < len(choices) else 0)
         self.combo.pack(fill=tk.X)
         buttons = theme.frame(body, "frame.surface")
         buttons.pack(fill=tk.X, pady=(12, 0))
@@ -313,8 +330,8 @@ class ChoiceDialog(_Modal):
         self.destroy()
 
     @classmethod
-    def ask(cls, parent: tk.Misc, theme: Any, title: str, prompt: str, choices: list[str]) -> Optional[int]:
-        dialog = cls(parent, theme, title, prompt, choices)
+    def ask(cls, parent: tk.Misc, theme: Any, title: str, prompt: str, choices: list[str], initial: int = 0) -> Optional[int]:
+        dialog = cls(parent, theme, title, prompt, choices, initial)
         dialog.show_modal()
         return dialog.result
 
@@ -986,6 +1003,9 @@ class SiteTemplateTabsMixin:
         theme.button(actions, role="tint.emerald", size="sm", text="➕ Site Ekle", command=self.add_site).pack(side=tk.LEFT, padx=4)
         theme.button(actions, role="tint.sky", size="sm", text="✏️ Siteyi Düzenle", command=self.edit_site).pack(side=tk.LEFT, padx=4)
         theme.button(actions, role="danger", size="sm", text="🗑️ Siteyi Sil", command=self.delete_site).pack(side=tk.LEFT, padx=4)
+        # Kök-yalnız: sitenin servisini değiştirir (servis girişinde görünmez; bkz. ana pencere _apply_root_only_widgets).
+        self.btn_site_transfer = theme.button(actions, role="tint.violet", size="sm", text="🔀 Siteyi Servise Aktar",
+                                              command=self.transfer_selected_site)
         self.sites_status = tk.StringVar(value="Siteleri görmek için giriş yapıp '🔄 Siteleri Yenile'ye basın.")
         theme.label(body, "label.status", textvariable=self.sites_status, anchor="w").pack(fill=tk.X)
         columns = ("name", "place", "contact", "phone", "blocks", "flats", "progress")
@@ -1183,6 +1203,64 @@ class SiteTemplateTabsMixin:
             return
         self._call_server("Site Silinemedi", lambda: self.client.delete_site(site["id"]),
                           lambda _r: (self._clear_flats(), self.refresh_sites()))
+
+    # ---- kapsamlar arası aktarım (YALNIZ kök) ----
+    def _choose_service_owner(self, title: str, prompt: str, root_choice: str, current_id: Any,
+                              on_choice: Callable[[Optional[str], str], None]) -> None:
+        """Kök: servis hesaplarını sunucudan alır (``GET /admin/users?role=service_user``) ve ``root_choice`` + hesaplar arasından
+        seçtirir. ``on_choice(servis_kimliği | None, etiket)``: ``None`` = köke al. Servis girişinde istek HİÇ gönderilmez."""
+        if self.client.is_authenticated and not self.client.is_root:
+            self.ui_warn("Yetki Yok", FORBIDDEN_TRANSFER_TEXT)
+            return
+
+        def chosen(users: Any) -> None:
+            accounts = [u for u in (users or []) if isinstance(u, dict)]
+            labels = [service_user_label(u) for u in accounts]
+            current = str(current_id or "").lower()
+            initial = next((i + 1 for i, u in enumerate(accounts) if str(u.get("id") or "").lower() == current), 0)
+            index = ChoiceDialog.ask(self, self.theme, title, prompt, [root_choice] + labels, initial)
+            if index is None or index < 0:
+                return
+            if index == 0:
+                on_choice(None, root_choice)
+            elif index - 1 < len(accounts):
+                on_choice(str(accounts[index - 1]["id"]), labels[index - 1])
+
+        self._call_server("Servis Hesapları Alınamadı", self.client.list_service_users, chosen,
+                          note="Aktarım için e-posta + parola ile kök yönetici (süper kullanıcı) girişi gerekir.")
+
+    def transfer_selected_site(self) -> None:
+        """'🔀 Siteyi Servise Aktar' (YALNIZ kök): seçili sitenin servisini değiştirir; 'Kök kapsamına al' siteyi hiçbir servise
+        bağlamaz (``PATCH /admin/sites/:siteId/service-owner``)."""
+        if self.client.is_authenticated and not self.client.is_root:
+            self.ui_warn("Yetki Yok", FORBIDDEN_TRANSFER_TEXT)
+            return
+        site = self._selected_site()
+        if site is None:
+            return
+        name = str(site.get("name") or "")
+
+        def chosen(service_id: Optional[str], label: str) -> None:
+            target = f"{label} servis hesabının kapsamına" if service_id else "kök kapsamına"
+            if not self.ui_confirm("Siteyi Servise Aktar", f"'{name}' sitesi {target} aktarılacak.\nSite, daireleri ve site şablonları "
+                                   "artık yalnız o kapsamda yönetilir; önceki servis siteyi göremez. Devam edilsin mi?"):
+                return
+
+            def done(result: Any) -> None:
+                changed = not isinstance(result, dict) or result.get("changed") is not False
+                if not changed:
+                    text = f"'{name}' sitesi zaten bu kapsamda."
+                elif service_id:
+                    text = f"'{name}' sitesi {label} servis hesabının kapsamına aktarıldı."
+                else:
+                    text = f"'{name}' sitesi kök kapsamına alındı."
+                self.ui_info("Site Aktarıldı", text)
+                self.refresh_sites()
+
+            self._call_server("Site Aktarılamadı", lambda: self.client.transfer_site(site["id"], service_id), done)
+
+        self._choose_service_owner("🔀 Siteyi Servise Aktar", f"'{name}' sitesi hangi servisin kapsamında olsun?",
+                                   SITE_TRANSFER_ROOT_CHOICE, site.get("service_owner_id"), chosen)
 
     # ---- daireler ----
     def _clear_flats(self) -> None:
@@ -1393,14 +1471,24 @@ class SiteTemplateTabsMixin:
     def _selected_template(self) -> Optional[dict[str, Any]]:
         return self._selected(self.tpl_tree, self._templates, "şablon")
 
+    def _service_cannot_change(self, tpl: dict[str, Any]) -> bool:
+        """Servis sorumlusu genel (site'siz) şablonu değiştiremez/silemez (yalnız kök; sunucu da 403 verir): True = engellendi."""
+        if self.client.is_service and not tpl.get("site_id"):
+            self.ui_info("Genel Şablon", GENERAL_TEMPLATE_SERVICE_TEXT)
+            return True
+        return False
+
     def new_template(self) -> None:
         site = self._scope_site()
+        if site is None and self.client.is_service:
+            self.ui_info("Genel Şablon", GENERAL_TEMPLATE_SERVICE_TEXT)
+            return
         body = tm.new_template("Yeni Şablon", "2+1", site["id"] if site else None)
         self._edit_and_save(body, None, site)
 
     def edit_template(self) -> None:
         tpl = self._selected_template()
-        if tpl is None:
+        if tpl is None or self._service_cannot_change(tpl):
             return
         self._call_server("Şablon Alınamadı", lambda: self.client.get_template(tpl["id"]),
                           lambda full: self._edit_and_save(_body_of(full), tpl["id"], self._scope_site()))
@@ -1409,19 +1497,29 @@ class SiteTemplateTabsMixin:
         tpl = self._selected_template()
         if tpl is None:
             return
+        target_site_id = tpl.get("site_id")
+        if self.client.is_service and not target_site_id:
+            # Genel şablon servis sorumlusunda değiştirilmez ama KOPYALANABİLİR: kopya seçili sitesinde oluşur.
+            scope_site = self._scope_site()
+            if scope_site is None:
+                self.ui_info("Genel Şablon", GENERAL_TEMPLATE_SERVICE_TEXT)
+                return
+            target_site_id = scope_site["id"]
         name = simpledialog.askstring("Çoğalt", "Yeni şablonun adı:", initialvalue=f"{tpl.get('name', '')} (kopya)", parent=self)
         if not name or not name.strip():
             return
 
         def got(full: Any) -> None:
             body = tm.duplicate_template(_body_of(full), name.strip())
-            self._save_template(body, None, tpl.get("site_id"))
+            if target_site_id != tpl.get("site_id"):
+                body["meta"]["site_id"] = target_site_id
+            self._save_template(body, None, target_site_id)
 
         self._call_server("Şablon Alınamadı", lambda: self.client.get_template(tpl["id"]), got)
 
     def delete_template(self) -> None:
         tpl = self._selected_template()
-        if tpl is None:
+        if tpl is None or self._service_cannot_change(tpl):
             return
         if not self.ui_confirm("Şablonu Sil", f"'{tpl.get('name')}' şablonu listeden kaldırılsın mı?\nSürümleri ve hangi karta "
                                "yazıldığı kaydı sunucuda KALIR (yumuşak silme)."):

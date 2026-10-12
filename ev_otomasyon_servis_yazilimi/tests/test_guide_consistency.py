@@ -6,6 +6,7 @@ personel yanlış yönlendirilir. Bu testler ağ/Tk/donanım kullanmaz: yalnızc
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import unittest
@@ -16,6 +17,16 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _read(name: str) -> str:
     with open(os.path.join(BASE_DIR, name), encoding="utf-8") as handle:
         return handle.read()
+
+
+def _constant(filename: str, name: str) -> str:
+    """Kaynak dosyadaki modül düzeyi METİN sabitini (ast ile; modül yüklenmez, Tk gerekmez) döndürür."""
+    for node in ast.parse(_read(filename)).body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            value = ast.literal_eval(node.value)
+            assert isinstance(value, str), name
+            return value
+    raise AssertionError(f"{filename} içinde {name} sabiti yok")
 
 
 class GuideConsistencyTests(unittest.TestCase):
@@ -95,6 +106,9 @@ class GuideConsistencyTests(unittest.TestCase):
         "Alarmı Onayla (USB)",
         # 2026-10-09 (sozlesme-5): envanter araması ve sayfalama
         "Daha fazla",
+        # 2026-10-12: servis sorumlusu kendi kapsamında süper; kapsamlar arası aktarım yalnız kökte
+        "Servise Aktar",
+        "Siteyi Servise Aktar",
     )
 
     # Bölüm 4b'nin alıntıladığı kart/araç mesajları (template_model.ERROR_TEXTS ve PDF).
@@ -158,6 +172,15 @@ class GuideConsistencyTests(unittest.TestCase):
         "Daire Şablonu Değişti",
         "Daire Şablonu Farklı",
         "Daire Değişti",
+        # 2026-10-12: servis kapsamı ve aktarım
+        "İptal Edilmiş Kart",
+        "Aktarılamaz",
+        "Aktarıldı",
+        "Site Aktarıldı",
+        "Kart Aktarılamadı",
+        "Site Aktarılamadı",
+        "Servis Hesapları Alınamadı",
+        "Genel Şablon",
     )
 
     # Rehberin 6. adımda sıraladığı ilerleme satırları (başlangıç parçaları).
@@ -306,6 +329,55 @@ class GuideConsistencyTests(unittest.TestCase):
     def test_markdown_has_a_single_title_and_balanced_code_fences(self):
         self.assertEqual(len(re.findall(r"(?m)^# ", self.guide)), 1)
         self.assertEqual(self.guide.count("```") % 2, 0)
+
+    # 2026-10-12: servis sorumlusu "KENDİ kapsamında süper"; ekran metinleri rehberde BİREBİR anlatılır.
+    SCOPE_TEXTS = (
+        ("ev_otomasyon_sistemi.py", "SERVICE_INVENTORY_NOTE"),
+        ("ev_otomasyon_sistemi.py", "SERVICE_REVOKED_TEXT"),
+        ("ev_otomasyon_sistemi.py", "SERVICE_NOT_YOUR_STOCK_HINT"),
+        ("ev_otomasyon_sistemi.py", "SERVICE_REGISTER_CONFLICT_HINT"),
+        ("ev_otomasyon_sistemi.py", "TRANSFER_INSTALLED_CARD_TEXT"),
+        ("ev_otomasyon_sistemi.py", "TRANSFER_ROOT_CHOICE"),
+        ("site_template_ui.py", "SITE_TRANSFER_ROOT_CHOICE"),
+        ("site_template_ui.py", "GENERAL_TEMPLATE_SERVICE_TEXT"),
+        ("factory_client.py", "FORBIDDEN_DEFAULT_TEXT"),
+        ("factory_client.py", "FORBIDDEN_ROOT_ONLY_TEXT"),
+        ("factory_client.py", "FORBIDDEN_REVOKE_TEXT"),
+        ("factory_client.py", "FORBIDDEN_TRANSFER_TEXT"),
+        ("factory_client.py", "FORBIDDEN_GLOBAL_TEMPLATE_TEXT"),
+        ("factory_client.py", "FORBIDDEN_OTHER_STOCK_TEXT"),
+        ("factory_client.py", "ROOT_STOCK_TEXT"),
+    )
+
+    def test_service_scope_screen_texts_are_quoted_in_the_guide_verbatim(self):
+        for filename, name in self.SCOPE_TEXTS:
+            with self.subTest(sabit=name):
+                text = _constant(filename, name)
+                self.assertGreater(len(text), 5)
+                self.assertIn(text, self.guide, f"rehberde birebir yok: {name}")
+
+    def test_guide_explains_the_scope_difference_between_service_and_root(self):
+        for needle in ("KENDİ kapsamında süper", "kendi stoğuna", "Kök stoğu", "Servise Aktar", "Siteyi Servise Aktar",
+                       "iptal etme (REVOKED)", "Kapsam: kendi stoğunuz", "Servis** sütunu", "\"service_user_id\": \"<uuid>\" | null",
+                       "/service-owner", "Yetki ve kapsam (servis sorumlusu / süper kullanıcı)"):
+            with self.subTest(gerekli=needle):
+                self.assertIn(needle, self.guide)
+
+    def test_old_super_user_only_inventory_texts_are_gone_from_the_tool_and_the_guide(self):
+        for stale in ("envanter kaydı, durum değiştirme ve silme yalnızca süper kullanıcıya açıktır",
+                      "fabrika kaydı (envantere kaydet), askıya alma, aktif etme, silme ve etiket yenileme yalnızca süper kullanıcıya açıktır",
+                      "Etiket yenileme yalnız süper kullanıcı hesabıyla", "envantere kayıt ve etiket yenileme yalnız"):
+            with self.subTest(eski=stale):
+                self.assertNotIn(stale, self.source)
+                self.assertNotIn(stale, self.guide)
+        for stale in ("düğmeleri onun için kapalıdır", "fabrika kaydı yalnız süper kullanıcı)",
+                      "fabrika kaydı ve etiket yenileme yalnızca süper kullanıcıya açıktır"):
+            with self.subTest(eski_rehber=stale):
+                self.assertNotIn(stale, self.guide)
+
+    def test_login_dialog_intro_describes_the_scoped_roles(self):
+        self.assertIn("servis sorumlusu kartları kendi stoğuna", self.source)
+        self.assertIn("iptal ve servisler arası aktarım yalnız süper kullanıcı", self.source)
 
 
 if __name__ == "__main__":

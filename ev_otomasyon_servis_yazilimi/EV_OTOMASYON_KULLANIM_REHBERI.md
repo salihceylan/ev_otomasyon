@@ -1,7 +1,8 @@
 # AHBU Ev Otomasyonu — Fabrika / Servis Aracı Kullanım Rehberi
 
-**Kimler için:** Fabrikada yeni röle/pano kartlarını hazırlayan personel (**süper kullanıcı**) ve site/şablon/karta yazım işini
-yapan **servis sorumlusu**. Teknik bilgi gerekmez; adımları sırayla uygulamanız yeterlidir.
+**Kimler için:** Fabrikada yeni röle/pano kartlarını hazırlayan, site/şablon/karta yazım işini yapan personel: **süper kullanıcı**
+(kök: bütün sistem) ve **servis sorumlusu** (KENDİ kapsamında süper: kendi stoğu ve kendi siteleri). Teknik bilgi gerekmez; adımları
+sırayla uygulamanız yeterlidir.
 Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, testler) en sonda "Teknik Ek" bölümündedir.
 
 > **Güncel durum (2026-10-09):** 1. sekmede seçili firmware `version_info.json`'a göre **v1.3.2**'dir (v1.3.1'in üstüne: bulut
@@ -12,6 +13,12 @@ Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, test
 > yazımı ve bireysel sahiplenme için kartta v1.3.0+ gerekir. Kartta daha yeni bir sürüm çalışırken eski bir imaj (ör. v1.2.1)
 > seçilirse araç sormadan yazmaz: **"Güncelle (ayarlar korunur)"** kipinde **"Sürüm Düşürme Engellendi"** der (Gözat... ile v1.3.0+
 > uygulama imajını seçin: `v1.3.1\app_0x10000_v1.3.1.bin` ya da `v1.3.0\app_0x10000_v1.3.0.bin`), birleşik imajda **"Sürüm Düşürme"** diye sorar.
+
+> **Yetki modeli (2026-10-12):** **Servis sorumlusu KENDİ kapsamında süper kullanıcı gibi çalışır.** Kartı **kendi stoğuna** kaydeder,
+> tabloda yalnız **kendi kartlarını** görür; askıya alma, aktif etme, stoktaki kartı silme, etiket yenileme ve kendi sitelerini/şablonlarını
+> yönetme ona açıktır (firmware yükleme ve provizyon zaten bu bilgisayarda yerel yapılır). **Yalnız süper kullanıcıda (kök) kalanlar:** kartı
+> iptal etme (REVOKED), kartı ya da siteyi başka servise **aktarma**, Genel şablonları değiştirme. Başka servisin kartı ve siteleri servis
+> sorumlusuna görünmez. Ayrıntı: Bölüm 3 "Roller".
 
 **Aracı açmak için:** `ev_otomasyon_servis_yazilimi` klasöründeki **`ev_otomasyon_sistemi.bat`** dosyasına çift tıklayın.
 
@@ -27,7 +34,7 @@ Teknik ayrıntılar (kurulum, ortam değişkenleri, seri komutlar, derleme, test
 
 Bir kartı müşteriye gönderilecek hâle getirmek için beş iş yapar:
 
-1. **Sunucuya giriş** yapar (yetkili "süper kullanıcı" ya da "servis sorumlusu" hesabıyla; fabrika kaydı yalnız süper kullanıcı).
+1. **Sunucuya giriş** yapar (yetkili "süper kullanıcı" ya da "servis sorumlusu" hesabıyla; servis sorumlusu kartı KENDİ stoğuna kaydeder).
 2. Kartı sunucudaki **envantere kaydeder**; kartın seri numarasını, 6 haneli **PIN**'ini ve gizli anahtarını üretir.
 3. Kartın **etiketini** hazırlar. Etiketin üzerinde **iki karekod** vardır: **1) Daireye bağla (uygulama)** ve **2) Kurulum Wi-Fi'sine bağlan (telefon kamerası)**.
 4. Kartın içine **yazılımı (firmware)** yükler.
@@ -50,6 +57,9 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 | **Firmware / Flash** | Kartın içinde çalışan yazılım / bu yazılımı karta yükleme işlemi. |
 | **COM Port** | Bilgisayarın USB'ye takılı kartı gördüğü "kapı" (`COM3`, `COM7` gibi). |
 | **Envanter** | Sunucudaki cihaz stok listesi. Her kart burada bir satırdır. |
+| **Süper kullanıcı (kök)** | Her şeyi görür ve yapar: bütün servislerin kartları ve siteleri, kartı iptal etme (REVOKED), kartı/siteyi servislere aktarma, Genel şablonlar. |
+| **Servis sorumlusu** | KENDİ kapsamında süper kullanıcı gibidir: kendi stoğuna kart kaydeder, yalnız kendi kartlarını ve sitelerini görür/yönetir. Başka servisin verisini görmez. |
+| **Kendi stoğu / Kök stoğu** | Servis sorumlusunun fabrika aracından kaydettiği kartlar onun **kendi stoğudur**. Hiçbir servise bağlı olmayan (köke ait) kartlar **Kök stoğu**'dur; envanter tablosunun **Servis** sütunu (yalnız süper kullanıcıda) bunu böyle yazar. |
 
 ---
 
@@ -59,7 +69,7 @@ Sonunda etiketi karta yapıştırırsınız. Müşteri kartı daha sonra uygulam
 
 - Windows bilgisayar, **internet bağlantısı** olan normal ağa bağlı. (Araç IT tarafından kurulmuş olmalı — bkz. Teknik Ek.)
 - Hazırlanacak kart ve **USB-C VERİ kablosu**. (Yalnızca şarj eden kablolar çalışmaz; kart bilgisayarda "COM port" olarak görünmelidir.)
-- **Süper kullanıcı hesabı** (kart kaydı, etiket yenileme, envanter durumu) ya da **servis sorumlusu hesabı** (siteler, şablonlar, karta yazım, sunucudaki anahtarla yeniden provizyon) — e-posta + parola. Yöneticiniz verir. Parolayı kimseyle paylaşmayın; araç parolanızı **hiçbir zaman kaydetmez**. İsterseniz **Beni hatırla** ile yalnızca *şifreli oturum anahtarı* bu bilgisayarda saklanır ve araç bir sonraki açılışta kendiliğinden girer (ortak bilgisayarda işareti kaldırın).
+- **Süper kullanıcı hesabı** (kök: bütün stok, aktarım, iptal) ya da **servis sorumlusu hesabı** (kendi stoğuna kart kaydı, kendi kartlarının durumu ve etiketi, kendi siteleri, şablonlar, karta yazım, sunucudaki anahtarla yeniden provizyon) — e-posta + parola. Yöneticiniz verir. Parolayı kimseyle paylaşmayın; araç parolanızı **hiçbir zaman kaydetmez**. İsterseniz **Beni hatırla** ile yalnızca *şifreli oturum anahtarı* bu bilgisayarda saklanır ve araç bir sonraki açılışta kendiliğinden girer (ortak bilgisayarda işareti kaldırın).
 - İsteğe bağlı: etiket yazıcısı.
 
 #### Kurallar (7 ALTIN KURAL)
@@ -94,11 +104,17 @@ Altında **5 sekme** vardır:
 | **4. Siteler** | Site ekle/düzenle/sil, daireleri toplu üret, daireye şablon ata, kartı daireye bağla, ilerleme. (Bölüm 4b) |
 | **5. Şablonlar** | Kurulum şablonu düzenleyici, sürüm geçmişi, karta yazım (USB / Ethernet), kablolama şeması PDF. (Bölüm 4b) |
 
-**Roller:** **süper kullanıcı** her şeyi yapar. **Servis sorumlusu** giriş yapabilir (giriş penceresinin başlığı **"Sunucuya Giriş (süper kullanıcı / servis sorumlusu)"**); şeritte **"(servis sorumlusu)"** yazar. Siteleri, şablonları ve karta yazımı kullanır, envanter listesini görür, **Sunucudaki Anahtarla Yeniden Provizyon (USB)** yapabilir; ama **SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET**, **Askıya Al (Kilit)**, **Aktif Et (Stok)**, **Envanterden Sil** ve **Etiketi Yeniden Bas (USB)** düğmeleri onun için kapalıdır (fabrika kaydı ve etiket yenileme yalnızca süper kullanıcıya açıktır).
+**Roller:** **süper kullanıcı** (kök) her şeyi yapar: bütün servislerin kartlarını ve sitelerini görür, kartı iptal edebilir (REVOKED), kartı ve siteyi bir servise **aktarır**. **Servis sorumlusu** giriş yapabilir (giriş penceresinin başlığı **"Sunucuya Giriş (süper kullanıcı / servis sorumlusu)"**); şeritte **"(servis sorumlusu)"** yazar ve **KENDİ kapsamında süper** çalışır: **SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET** ile kartı **kendi stoğuna** kaydeder; envanter tablosu yalnız **kendi kartlarını** gösterir; **Askıya Al (Kilit)**, **Aktif Et (Stok)**, **Envanterden Sil** (stoktaki kendi kartı) ve **Etiketi Yeniden Bas (USB)** onun için açıktır; siteleri ve şablonları **kendi sitelerinde** tam yetkiyle yönetir, karta yazım ve **Sunucudaki Anahtarla Yeniden Provizyon (USB)** kullanır. Firmware yükleme (1. sekme) ve provizyon bu bilgisayarda yerel yapıldığı için iki rolde de açıktır. Servis sorumlusu girişinde 2. sekmede şu not görünür:
 
-**Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. Sunucu listeyi 100'er kayıtla verir: durum satırı **"Gösterilen X / Toplam Y"** yazar, kalan kayıtlar için **Daha fazla**'ya basın. Eski bir kartı bulmak için tablonun üstündeki kutuya UID'yi, seri numarasını ya da MAC'i yazıp **Ara**'ya (ya da Enter'a) basın; kutu boşken bütün liste gelir, liste yenilenince arama korunur. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz ve bir **daireye bağlı** kart **silinemez** ("Kart bir daireye bağlı; önce daireden ayırın.").
+> ℹ️ Servis sorumlusu olarak giriş yaptınız: kartları KENDİ stoğunuza kaydedersiniz; yalnızca kendi kartlarınızı görür, askıya alır / aktif eder, silersiniz ve etiketini yenilersiniz (firmware yükleme ve provizyon zaten yereldir). Kartı iptal etme (REVOKED) ve kartın ya da sitenin başka servise aktarılması yalnızca kök yöneticiye (süper kullanıcı) aittir.
 
-**Etiketi Yeniden Bas (USB)** (yalnız süper kullanıcı): etiketi kaybolan/bozulan **stoktaki** kart USB'de takılıyken basılır. Araç kartın kimliğini seri `STATUS` ile okur, sunucuda **yeni kurulum PIN'i** üretir (eski etiketteki PIN geçersiz olur), kartın **mevcut yerel anahtarını** sunucudan alır (anahtar **değişmez**; alma işlemi kayda geçer), **yeni AP parolası** üretip karta USB'den yazar (`RESETKEY` + `FACTORYINIT`), `STATUS` ile doğrular ve iki karekodlu yeni etiketi önizlemeye koyar ("Etiket Yenilendi"). Kart stokta değilse ya da bir daireye bağlıysa sunucu reddeder ve nedeni gösterilir; karta yazma başarısız olursa **etiket basılmaz** (yeniden deneyin, yeni PIN üretilir).
+**Servis sorumlusuna kapalı olanlar (yalnız süper kullanıcı):** kartı **iptal etme (REVOKED)** ve iptal edilmiş kartın durumunu değiştirme (araçta iptal düğmesi yoktur; iptal edilmiş kartta servis **Askıya Al** ya da **Aktif Et** derse araç **"İptal Edilmiş Kart"** penceresinde *"Bu kart iptal edilmiş (REVOKED); iptal edilmiş kartın durumunu yalnızca kök yönetici değiştirir."* der); kartı ya da siteyi başka servise **aktarma** (**Servise Aktar** ve **Siteyi Servise Aktar** düğmeleri ile envanter tablosundaki **Servis** sütunu servis girişinde görünmez); **Genel** şablonları değiştirme (Bölüm 4b.2). Kök stoğundaki ya da başka servisin stoğundaki kart servis sorumlusunun tablosunda görünmez.
+
+**Envanter tablosundaki "Durum" sütunu (2. sekme, altta):** `IN_STOCK` = stokta (müşteriye gitmemiş), `CLAIMED` = müşteri uygulamadan eşlemiş, `INSTALLED` = sahada devreye alınmış, `SUSPENDED` = askıda (kilitli), `REVOKED` = iptal. **Listeyi Yenile** tabloyu sunucudan yeniden çeker. Sunucu listeyi 100'er kayıtla verir: durum satırı **"Gösterilen X / Toplam Y"** yazar, kalan kayıtlar için **Daha fazla**'ya basın. Eski bir kartı bulmak için tablonun üstündeki kutuya UID'yi, seri numarasını ya da MAC'i yazıp **Ara**'ya (ya da Enter'a) basın; kutu boşken bütün liste gelir, liste yenilenince arama korunur. **Askıya Al (Kilit)**, **Aktif Et (Stok)** ve **Envanterden Sil** düğmeleri e-posta + parola ile giriş ister. Silme için ayrıca cihazın UID'sini aynen yazarak onaylarsınız; eşlenmiş (`CLAIMED`/`INSTALLED`) cihaz ve bir **daireye bağlı** kart **silinemez** ("Kart bir daireye bağlı; önce daireden ayırın."). Süper kullanıcı girişinde tabloda ayrıca **Servis** sütunu vardır: kartın stok sahibi servisin e-posta adresi, hiçbir servise bağlı değilse **"Kök stoğu"**. Servis sorumlusunda bu sütun görünmez, tablo yalnız kendi kartlarını listeler ve durum satırının sonuna **"Kapsam: kendi stoğunuz"** yazılır.
+
+**Etiketi Yeniden Bas (USB)** (süper kullanıcı; servis sorumlusu yalnız KENDİ stoğundaki kart için - başka kartta sunucu "Cihaz bulunamadı." der ve araç nedenini açıklar): etiketi kaybolan/bozulan **stoktaki** kart USB'de takılıyken basılır. Araç kartın kimliğini seri `STATUS` ile okur, sunucuda **yeni kurulum PIN'i** üretir (eski etiketteki PIN geçersiz olur), kartın **mevcut yerel anahtarını** sunucudan alır (anahtar **değişmez**; alma işlemi kayda geçer), **yeni AP parolası** üretip karta USB'den yazar (`RESETKEY` + `FACTORYINIT`), `STATUS` ile doğrular ve iki karekodlu yeni etiketi önizlemeye koyar ("Etiket Yenilendi"). Kart stokta değilse ya da bir daireye bağlıysa sunucu reddeder ve nedeni gösterilir; karta yazma başarısız olursa **etiket basılmaz** (yeniden deneyin, yeni PIN üretilir).
+
+**Servise Aktar** (yalnız süper kullanıcı; 2. sekme): tablodan **stoktaki** bir kartı seçip düğmeye basın. Araç sunucudan etkin servis sorumlusu hesaplarını alıp listeler (açılışta kartın şimdiki sahibi seçili gelir); listenin ilk satırı **"Kök stoğuna al (hiçbir servise bağlı olmasın)"** kartı köke alır. Seçince onay sorulur (*"… kartı … servis hesabının stoğuna aktarılacak. Önceki servis bu kartı artık göremez ve yönetemez. Devam edilsin mi?"*), sonuç **"Aktarıldı"** penceresinde yazar (*"… kartı … servis hesabının stoğuna aktarıldı."* / *"… kartı kök stoğuna alındı."* / *"… kartı zaten bu stokta."*) ve tablo yenilenir. Müşteride kurulu kart (`CLAIMED`/`INSTALLED`, daireye bağlı) aktarılmaz: araç **"Aktarılamaz"** penceresinde *"Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın."* der (kurulu kartın sahibi evin servisidir; daire aktarımı bu araçta yoktur). **Siteyi Servise Aktar** (4. Siteler sekmesi, yalnız süper kullanıcı) seçili sitenin servisini aynı şekilde değiştirir (**"Kök kapsamına al (hiçbir servise bağlı olmasın)"** = köke al; sonuç **"Site Aktarıldı"**); site, daireleri ve site şablonları artık yalnız o kapsamda yönetilir. Servis hesapları listelenemezse ya da hesap kullanıma kapalıysa sunucu iletisi gösterilir (**"Servis Hesapları Alınamadı"**, **"Kart Aktarılamadı"**, **"Site Aktarılamadı"**).
 
 ---
 
@@ -112,12 +128,12 @@ Her kart için aynı 8 adımı uygulayın.
 2. Üstteki **Sunucuya Giriş** düğmesine basın.
 3. Açılan pencerede:
    - **Sunucu adresi:** olduğu gibi bırakın (yönetici başka bir adres vermediyse).
-   - **E-posta** ve **Parola:** süper kullanıcı hesabınızı yazın. (Parolayı görmek için yandaki göz düğmesine basabilirsiniz.)
+   - **E-posta** ve **Parola:** süper kullanıcı ya da servis sorumlusu hesabınızı yazın. (Parolayı görmek için yandaki göz düğmesine basabilirsiniz.)
    - **Beni hatırla** (varsayılan işaretli): işaretliyse parola değil, yalnızca *şifreli oturum anahtarı* ve e-postanız bu bilgisayarda saklanır; araç bir sonraki açılışta **kendiliğinden** girer. **Ortak bilgisayarda işareti kaldırın.**
    - **Giriş Yap**'a basın.
-4. **Ne görmelisiniz?** Şeritte e-posta adresiniz ve **(süper kullanıcı)** yazar, **Sunucuya Giriş** düğmesi **Hesap Değiştir**'e dönüşür; **2. sekmedeki** tablo envanteri listeler. **Beni hatırla** işaretliyse bir sonraki açılışta giriş penceresi çıkmaz: araç kayıtlı oturumla sessizce girer (Günlükte "Kayıtlı oturum sessizce açıldı"; şeritte "hatırlanıyor"). Oturum artık geçerli değilse kayıt silinir ve eskisi gibi **Sunucuya Giriş** beklenir.
+4. **Ne görmelisiniz?** Şeritte e-posta adresiniz ve **(süper kullanıcı)** ya da **(servis sorumlusu)** yazar, **Sunucuya Giriş** düğmesi **Hesap Değiştir**'e dönüşür; **2. sekmedeki** tablo envanteri listeler. **Beni hatırla** işaretliyse bir sonraki açılışta giriş penceresi çıkmaz: araç kayıtlı oturumla sessizce girer (Günlükte "Kayıtlı oturum sessizce açıldı"; şeritte "hatırlanıyor"). Oturum artık geçerli değilse kayıt silinir ve eskisi gibi **Sunucuya Giriş** beklenir.
 
-> Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Kart kaydı (bu 8 adım) **süper kullanıcı** hesabı ister; servis sorumlusu hesabı siteler/şablonlar/karta yazım ve sunucudaki anahtarla yeniden provizyon içindir.
+> Giriş olmazsa Bölüm 7'deki **"Giriş"** tablosuna bakın. Kart kaydı (bu 8 adım) süper kullanıcı ya da servis sorumlusu hesabıyla yapılır: süper kullanıcı kartı **kök stoğuna**, servis sorumlusu **kendi stoğuna** kaydeder (başka servis o kartı göremez). Servis sorumlusunda aynı UID/MAC için kayıt çakışması çıkarsa kart kök stoğunda ya da başka bir servisin stoğunda kayıtlı olabilir (Bölüm 7, "Yetki ve kapsam").
 
 ### Adım 2 — Kartı bağlayın ve kimliğini okuyun
 
@@ -236,6 +252,8 @@ Provizyon bittikten sonra kartın kurulum ağı (`AHBU-XXXXXX`, parolalı) yakla
 Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **daire tipi şablonu** hazırlanır; atölyede şablon karta
 **USB** ya da **Ethernet** ile yazılır; kartla birlikte **kablolama şeması (PDF)** sahaya gider. Bu bölüm **süper kullanıcı** ve
 **servis sorumlusu** içindir. Tek daire kurulumunda da aynı şablonlar kullanılabilir (sitesi olmayan **Genel** şablonlar).
+Servis sorumlusu **yalnız kendi sitelerini** görür ve yönetir (siteyi açan servis sahibidir); başka servisin siteleri listelenmez ve
+siteyi başka servise aktarmak yalnız süper kullanıcıdadır (**Siteyi Servise Aktar**).
 
 ### 4b.1 Site oluşturma (4. Siteler sekmesi)
 
@@ -247,6 +265,7 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
 3. Daireyi seçip **Şablon Ata** ile şablonunu, **Kart Bağla** ile kartın UID'sini (`AHBU-S3-XXXXXX`; boş = bağlantıyı kaldır) girin.
    Şablon eski karta yazılmışken kart değiştirilirse araç **"Şablon yeni karta yeniden yazılmalı"** uyarır. Yalnız **stoktaki** kart
    bağlanır; kart pano değişimiyle bu daireye takıldıysa bağlantı sunucuda otomatik taşınır, değilse süper kullanıcı bağlayabilir.
+   Başka bir servisin stoğundaki kart bağlanamaz (araç *"Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz. Kartın sahibini yalnızca kök yönetici değiştirir."* der).
    Başka bir daireye bağlı kart için "Kart bir daireye bağlı; önce daireden ayırın." denir. **Kuruldu** ya da **Teslim edildi**
    durumundaki dairenin kartını değiştirmeyi/ayırmayı sunucu reddederse (yalnız Pano Değişimi ile ya da süper kullanıcı) araç
    sunucunun iletisini gösterir.
@@ -263,6 +282,9 @@ Toplu (site) kurulumlarda sahadaki işi azaltmak için ofiste **site** ve **dair
 1. Üstten **Site**'yi (ya da **Genel**) seçip **Şablonları Yenile**'ye basın. **Yeni Şablon** / **Şablonu Düzenle** düzenleyiciyi açar;
    **Çoğalt** aynı içeriği yeni adla kopyalar; **Sürüm Geçmişi** eski sürümleri listeler (eski sürümler değişmez);
    **Şablonu Sil** listeden kaldırır (sürümler ve yazım kayıtları sunucuda kalır).
+   Servis sorumlusu **Genel** şablonları okur ve kullanır (daireye atar, karta yazar) ama **Yeni Şablon**, **Şablonu Düzenle** ya da
+   **Şablonu Sil** ile değiştiremez; **Genel** kapsamda bu düğmelere basınca araç **"Genel Şablon"** penceresinde şunu der:
+   *"Genel (standart) şablonları yalnızca kök yönetici ekler, değiştirir ve siler; servis sorumlusu bunları okur ve kullanır. Kendi şablonunuz için üstteki 'Site' kutusundan sitenizi seçin: yeni şablonu orada ekleyin ya da genel şablonu seçip '📑 Çoğalt' ile sitenize kopyalayın."* Kopya seçili sitenizde oluşur; kopyayı serbestçe düzenleyebilirsiniz.
 2. Düzenleyicide: şablon adı, daire tipi, **Ek modül (RS485) var** + kanal + adres (**Kanalları Uygula** tabloları büyütür/küçültür).
    Yalnız adresi değiştirdiyseniz düğmeye basmanız gerekmez. Kutu/kanal sayısını değiştirip **Kanalları Uygula**'ya basmadan
    kaydederseniz araç uygulamayı sorar; "Hayır" derseniz kayıt durur ("Ek modül değişikliği uygulanmadı: Kanalları Uygula
@@ -432,7 +454,7 @@ aracın belleğinde yoksa, kartı yeniden kaydetmek **gerekmez** (yeniden kayıt
 | **Etiket** | PIN ve AP parolası **yalnızca etikettedir**. Etiket **yalnızca cihaz üzerinde veya elde** saklanır; fotoğrafı (karekodlar dahil) WhatsApp/e-posta/sosyal medya ile **paylaşılmaz**. Etiketi karta yapıştırın; basılı fazla/bozuk etiketleri **parçalayın**. |
 | **2. karekod (Wi-Fi)** | Karekodun içinde kartın kurulum ağı adı ve **parolası** vardır: karekodu okutan herkes kartın ağına bağlanabilir. Bu yüzden etiket, 1. karekodla (PIN) birlikte aynı gizlilikte korunur. Telefon kamerasıyla yalnızca **kendi elinizdeki** etiketi okutun. |
 | **PNG etiket dosyası** | Yazdırdıktan sonra silin (Çöp Kutusu'nu da boşaltın). Araç dosyayı kendiliğinden diske yazmaz. |
-| **Hesap** | Süper kullanıcı parolanızı kimseyle paylaşmayın; araç parolayı **kaydetmez**. **Beni hatırla** yalnızca şifreli oturum anahtarını (bu Windows kullanıcısına bağlı) saklar; ortak bilgisayarda işaretlemeyin. Ayrılırken **Oturumu Kapat** (hatırlanan oturumu siler ve sunucuda iptal eder). |
+| **Hesap** | Süper kullanıcı / servis sorumlusu parolanızı kimseyle paylaşmayın (servis hesabı kendi stoğundaki bütün kartlara ve sitelere erişir); araç parolayı **kaydetmez**. **Beni hatırla** yalnızca şifreli oturum anahtarını (bu Windows kullanıcısına bağlı) saklar; ortak bilgisayarda işaretlemeyin. Ayrılırken **Oturumu Kapat** (hatırlanan oturumu siler ve sunucuda iptal eder). |
 | **Bir kez gösterilen bilgi** | PIN/anahtar kaybolursa **geri alınamaz** (sunucuda yalnızca özeti vardır). Çözüm: kaydı (yalnızca Durum'u `IN_STOCK` ise) **Envanterden Sil** ile silip kartı yeniden kaydetmek. Silme, cihaz UID'sini yazarak onaylanır; eşlenmiş cihaz silinemez. |
 | **Panoya kopyalama** | "Anahtarı kopyala / AP parolasını kopyala" 45 sn sonra panodan silinir; yine de başka yere yapıştırmayın. |
 | **Wi-Fi yedek yolu** | Yalnızca kontrollü ortamda, USB mümkün değilse (Bölüm 5). |
@@ -449,7 +471,7 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Gördüğünüz mesaj | Anlamı | Ne yapmalı? |
 |---|---|---|
 | E-posta veya parola hatalı. | Giriş bilgisi yanlış. | Bilgileri kontrol edin (Caps Lock?). Çok denerseniz hesap kısa süre kilitlenir. |
-| Bu araç yalnızca süper kullanıcı veya servis sorumlusu hesabıyla çalışır (bu hesabın rolü: …) | Hesabınız yetkili değil. | Yöneticinizden süper kullanıcı (kart kaydı) ya da servis sorumlusu (site/şablon) hesabı isteyin. |
+| Bu araç yalnızca süper kullanıcı veya servis sorumlusu hesabıyla çalışır (bu hesabın rolü: …) | Hesabınız yetkili değil. | Yöneticinizden süper kullanıcı (kök) ya da servis sorumlusu (kendi stoğu ve siteleri) hesabı isteyin. |
 | Çok fazla istek/deneme yapıldı… N saniye sonra tekrar deneyin. / …geçici olarak kilitlendi. | Çok sayıda deneme yapıldı. | Belirtilen süre kadar bekleyin, sonra tekrar deneyin. |
 | Hesap dondurulmuş. / Hesap henüz etkinleştirilmemiş (davet bekliyor). | Hesap kullanıma kapalı. | Sistem yöneticisine başvurun. |
 | Sunucuya ulaşılamadı… (… cihazın kurulum Wi-Fi ağına bağlıysa internet yoktur…) | İnternet yok veya bilgisayar kartın Wi-Fi'sine bağlı. | Bilgisayarı **normal internetli ağa** geri alın; tekrar deneyin. |
@@ -458,10 +480,25 @@ Aracın gösterdiği mesajlar sade Türkçedir; ham teknik ayrıntı göstermez.
 | Sunucunun güvenlik sertifikası doğrulanamadı… / Güvenli bağlantı (TLS) kurulamadı. | Bilgisayarın tarih/saati yanlış veya ağ filtreli. | Tarih/saati düzeltin; sürerse IT'ye bildirin. **Asla** güvenlik uyarısını geçmeye çalışmayın. |
 | Sunucuda beklenmeyen bir hata oluştu… (Hata ref: …) | Sunucu tarafında sorun. | Biraz sonra tekrar deneyin; sürerse **Hata ref** kodunu IT'ye iletin. |
 | Oturum süresi doldu / Oturum geçersiz veya sonlandırılmış… | Oturum kapandı. | **Sunucuya Giriş** ile yeniden giriş yapın. |
-| [UYARI] Kayıtlı oturum artık geçerli değil; kayıt silindi. Yeniden giriş yapın. | Hatırlanan oturum sunucuda sona ermiş ya da iptal edilmiş (ör. başka yerden "tüm cihazlardan çıkış", uzun süre kullanılmadı) ya da hesap artık süper kullanıcı değil. | **Sunucuya Giriş** ile yeniden giriş yapın. |
+| [UYARI] Kayıtlı oturum artık geçerli değil; kayıt silindi. Yeniden giriş yapın. | Hatırlanan oturum sunucuda sona ermiş ya da iptal edilmiş (ör. başka yerden "tüm cihazlardan çıkış", uzun süre kullanılmadı) ya da hesap artık süper kullanıcı / servis sorumlusu değil. | **Sunucuya Giriş** ile yeniden giriş yapın. |
 | [UYARI] Kayıtlı oturum şimdi denetlenemedi (ağ/sunucu); kayıt korundu… | İnternet yok ya da sunucu geçici olarak yanıt vermiyor; kayıt SİLİNMEDİ. | Bağlantıyı düzeltip aracı yeniden açın ya da **Sunucuya Giriş** ile elle girin. |
 | [UYARI] Kayıtlı oturum başka bir sunucu adresine ait… | Kayıt farklı bir sunucu (ör. QA adresi) için alınmış; oturum anahtarı başka sunucuya GÖNDERİLMEZ. | Doğru sunucu adresiyle giriş yapın. |
 | Düz http yalnızca yerel test (127.0.0.1) için kabul edilir… | Sunucu adresi güvenli değil (http://). | Adresi `https://…` olarak yazın; yönetici verdiyse onu kullanın. |
+
+### Yetki ve kapsam (servis sorumlusu / süper kullanıcı)
+
+| Gördüğünüz mesaj | Anlamı | Ne yapmalı? |
+|---|---|---|
+| Bu işlem için yetkiniz yok. Servis sorumlusu yalnızca kendi stoğundaki kartları, kendi sitelerini ve şablonlarını yönetir; kartı iptal etme (REVOKED), servisler arası aktarım ve genel şablonları değiştirme yalnızca kök yöneticiye (süper kullanıcı) aittir. | Genel yetki reddi (HTTP 403). | İşlemi kök yöneticiye (süper kullanıcı) yaptırın. |
+| Kartı iptal etme (REVOKED) ve iptal edilmiş kartın durumunu değiştirme yalnızca kök yöneticiye aittir; servis sorumlusu kendi kartını askıya alabilir ya da aktif edebilir. | Kartı iptal etmek ya da iptal edilmiş kartın durumunu değiştirmek yalnız kökte. | Kartı iptal/geri alma için kök yöneticiye başvurun. |
+| Kartı, siteyi ya da daireyi başka servise (veya köke) aktarma yalnızca kök yöneticiye aittir. / Bu işlem yalnızca kök yöneticiye (süper kullanıcı) aittir; servis sorumlusu yapamaz. | Aktarım ve kök-yalnız işlemler servis sorumlusuna kapalı. | Kök yöneticiye başvurun. |
+| Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz. Kartın sahibini yalnızca kök yönetici değiştirir. | Kart başka servisin stoğunda (Kart Bağla). | Doğru kartı seçin; sahibini kök yönetici değiştirir. |
+| Genel (standart) şablonları yalnızca kök yönetici değiştirebilir; servis sorumlusu bunları okur ve kullanır. Değiştirmek için şablonu kendi sitenize 'Çoğalt' ile kopyalayın. | Genel şablon değişikliği yalnız kökte. | Şablonu kendi sitenize **Çoğalt** ile kopyalayıp onu düzenleyin. |
+| "Cihaz bulunamadı." + Servis sorumlusu yalnızca KENDİ stoğundaki kartları yönetir. Kart kök stoğunda ya da başka bir servisin stoğunda olabilir (kartın sahibini yalnızca kök yönetici değiştirir); listeyi yenileyip kontrol edin. | Kart sizin stoğunuzda değil (sunucu başka kapsamdaki kartın varlığını söylemez). | Listeyi yenileyin; kart kök stoğundaysa ya da başka servisteyse kök yöneticiye başvurun. |
+| "Mükerrer Cihaz Uyarısı" + Servis sorumlusu olarak yalnızca KENDİ stoğunuzdaki kartları görürsünüz: bu UID/MAC kök stoğunda ya da başka bir servisin stoğunda kayıtlı olabilir. Listenizde yoksa kök yöneticiye başvurun. | Aynı UID/MAC başka kapsamda kayıtlı olabilir. | Listenizde yoksa kök yöneticiye başvurun. |
+| "İptal Edilmiş Kart": Bu kart iptal edilmiş (REVOKED); iptal edilmiş kartın durumunu yalnızca kök yönetici değiştirir. | Servis iptal edilmiş kartın durumunu değiştiremez. | Kök yöneticiye başvurun. |
+| "Aktarılamaz": Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın. | Kurulu kartın sahibi evinin servisidir. | Kartı değil daireyi aktarın (bu araçta yok). |
+| "Servis sorumlusu hesabı bulunamadı." / "Servis sorumlusu hesabı aktif değil." | Seçilen servis hesabı silinmiş ya da dondurulmuş. | Listeyi yeniden açıp etkin bir hesap seçin. |
 
 ### Kayıt (2. sekme)
 
@@ -565,7 +602,13 @@ Evet. 2. sekmede kaydı yapın, sonra 3. sekmede **Seri (USB) ile Provizyonla (�
 Firmware yükleme yaklaşık 30–60 sn; provizyon kartın yeniden başlamasını beklediği için birkaç on saniye sürer (kart yanıt vermezse araç en çok yaklaşık yarım dakika bekler). Süreler gerçek kartla ölçülmemiştir.
 
 **Etiketi kaybettim / bozuldu. Yeniden basabilir miyim?**
-Aynı etiketi hayır: PIN yalnızca bir kez gösterilir. Kart stokta ise (Durum `IN_STOCK`) ve hiçbir daireye bağlı değilse, kart USB'de takılıyken 2. sekmede **Etiketi Yeniden Bas (USB)**'a basın (süper kullanıcı): sunucu **yeni PIN** üretir, araç karta **yeni AP parolası** yazar, kartın yerel anahtarı **değişmez**; yeni etiket iki karekodla hazırlanır. Eski etiketi imha edin.
+Aynı etiketi hayır: PIN yalnızca bir kez gösterilir. Kart stokta ise (Durum `IN_STOCK`) ve hiçbir daireye bağlı değilse, kart USB'de takılıyken 2. sekmede **Etiketi Yeniden Bas (USB)**'a basın (süper kullanıcı; servis sorumlusu yalnız kendi stoğundaki kart için): sunucu **yeni PIN** üretir, araç karta **yeni AP parolası** yazar, kartın yerel anahtarı **değişmez**; yeni etiket iki karekodla hazırlanır. Eski etiketi imha edin.
+
+**Servis sorumlusuyum; bazı kartları tabloda görmüyorum. Neden?**
+Tablo yalnız **kendi stoğunuzdaki** kartları gösterir (sunucu listeyi sizin için süzer). Kök stoğundaki ya da başka servisin kartı görünmez; kartın sahibini yalnız süper kullanıcı değiştirir. Aynı UID/MAC'i kaydetmeye çalışırsanız "Mükerrer Cihaz Uyarısı" çıkar ve araç kartın başka kapsamda olabileceğini söyler.
+
+**Bir kartı ya da siteyi başka servise nasıl veririm?**
+Yalnız süper kullanıcı: 2. sekmede stoktaki kartı seçip **Servise Aktar**, 4. sekmede siteyi seçip **Siteyi Servise Aktar** (Bölüm 3, "Roller"). Müşteride kurulu kart aktarılmaz (sahibi evinin servisidir).
 
 **Kurulu (provizyonlu, şablonlu) bir kartın yazılımını nasıl güncellerim?**
 Firmware Yükleyici sekmesinde **Güncelle (ayarlar korunur)** kipini seçin: yalnız uygulama imajı (`app_0x10000_v<sürüm>.bin`) yazılır; anahtar, AP parolası, Wi-Fi, bulut kimliği, şablon ve güvenlik ayarları korunur, etiket geçerli kalır. **Birleşik imaj** bunların hepsini siler (araç önce sorar). Kipin varsayılan dosyası `version_info.json`'daki sürümün (v1.3.2) uygulama imajıdır. Elle daha eski bir imaj (ör. v1.2.1) seçilirse ve kartta v1.3.0+ çalışıyorsa bu sürüm düşürme olur, araç yazmaz (**"Sürüm Düşürme Engellendi"**); **Gözat...** ile v1.3.0+ uygulama imajını (`v1.3.1\app_0x10000_v1.3.1.bin` ya da `v1.3.0\app_0x10000_v1.3.0.bin`) seçin.
@@ -710,7 +753,9 @@ Firmware seri CLI'sı (115200 baud, CR/LF; docs/CONTRACTS.md §3c). Araç şu s�
 
 ### D. Kullanılan sunucu uçları
 
-`POST /api/v1/auth/login` (+ `refresh`, `logout`), `POST /api/v1/admin/inventory/register` (yanıt: `local_key` + PIN'li `qr_claim_url`, **bir kez**), `GET /api/v1/admin/inventory`, `PATCH /api/v1/admin/inventory/:uid/status`, `DELETE /api/v1/admin/inventory/:uid`, `POST /api/v1/admin/inventory/:uid/reissue-label` (yalnız süper kullanıcı JWT'si; yanıt yeni `setup_pin` + `qr_claim_url`; `local_key` **yok**, anahtar değişmez; daireye bağlı kartta 409 `DEVICE_LINKED_TO_FLAT`), `GET /api/v1/admin/inventory/:uid/local-key` (sunucudaki anahtarla yeniden provizyon ve etiket yenileme; denetim kaydı + oran sınırı; değer maskelenir). Hata biçimi `{success:false, message, code}`; ham gövde kullanıcıya gösterilmez. Süper kullanıcı / servis sorumlusu JWT'si (15 dk, otomatik yenilenir) veya isteğe bağlı `x-api-key` (yalnız kayıt ve liste).
+`POST /api/v1/auth/login` (+ `refresh`, `logout`), `POST /api/v1/admin/inventory/register` (süper kullanıcı: kök stoğuna; servis sorumlusu: kendi stoğuna; yanıt: `local_key` + PIN'li `qr_claim_url`, **bir kez**), `GET /api/v1/admin/inventory`, `PATCH /api/v1/admin/inventory/:uid/status`, `DELETE /api/v1/admin/inventory/:uid`, `POST /api/v1/admin/inventory/:uid/reissue-label` (süper kullanıcı ya da servis sorumlusu JWT'si - servis yalnız kendi stoğundaki kartta; yanıt yeni `setup_pin` + `qr_claim_url`; `local_key` **yok**, anahtar değişmez; daireye bağlı kartta 409 `DEVICE_LINKED_TO_FLAT`), `GET /api/v1/admin/inventory/:uid/local-key` (sunucudaki anahtarla yeniden provizyon ve etiket yenileme; denetim kaydı + oran sınırı; değer maskelenir). Hata biçimi `{success:false, message, code}`; ham gövde kullanıcıya gösterilmez. Süper kullanıcı / servis sorumlusu JWT'si (15 dk, otomatik yenilenir) veya isteğe bağlı `x-api-key` (yalnız kayıt ve liste). Envanter uçları servis JWT'siyle de çalışır; sunucu listeyi ve işlemleri servisin kendi kartlarıyla sınırlar (başka kapsamdaki kart 404, iptal/REVOKED 403).
+
+Kapsam / aktarım uçları (**yalnız süper kullanıcı JWT'si**; servis sorumlusu ve API anahtarı 403 alır, araç bu durumlarda istek göndermeden de reddeder): `GET /api/v1/admin/users?role=service_user&is_active=true&limit=100&offset=N` (aktarım hedefi servis hesapları; sayfalı), `PATCH /api/v1/admin/inventory/:uid/service-owner` ve `PATCH /api/v1/admin/sites/:siteId/service-owner`, gövde `{"service_user_id": "<uuid>" | null}` (`null` = köke al; alan zorunlu; kurulu kartta 409). Envanter listesi öğelerinde `service_owner_id` ve `service_owner_email` gelir (boş = kök stoğu).
 
 **Yerel anahtar izi (firmware v1.3.1):** `lk_fp` = HMAC-SHA256(anahtar = yerel anahtar, ileti = `ahbu-lk-fp/1|` + büyük harfli UID) çıktısının küçük harf hex ilk 8 karakteri. Kart tam `GET /api/status`'ta (Ethernet'te `X-Device-Key` başlığı tam durumu ister) ve seri `STATUS`'ta (`- Anahtar izi: <8 hex|yok>` satırı, `Bootstrap:` satırından hemen sonra) bildirir; araç aynı formülle hesaplayıp karşılaştırır (`factory_client.local_key_fingerprint`). İz anahtarı geri vermez; yine de loglanmaz.
 
@@ -720,7 +765,7 @@ Site / şablon (CONTRACTS §3e; süper kullanıcı + servis sorumlusu JWT'si, AP
 `POST /api/v1/templates/validate` (422 `TEMPLATE_INVALID` + şablon kodu + alan yolu), `PUT /api/v1/templates/:id {body, base_version}`
 (eşzamanlı düzenlemede 409 `TEMPLATE_CHANGED` + `current_version`), `PATCH …/flats/:flatId {status:"handed_over"}` (Teslim Edildi;
 yalnız ileri, aksi 409 `INVALID_STATUS_TRANSITION`), `POST /api/v1/template-writes` (`via` usb|eth; yanıtta
-`warning:"DEVICE_LINKED_ELSEWHERE"` olabilir). Ethernet şablon yazımı sunucudan anahtar **istemez** (kart Ethernet'te anahtarsız).
+`warning:"DEVICE_LINKED_ELSEWHERE"` olabilir). Ethernet şablon yazımı sunucudan anahtar **istemez** (kart Ethernet'te anahtarsız). Kapsam: servis sorumlusu yalnız kendi sitelerini/dairelerini/şablonlarını görür ve yönetir; Genel (site'siz) şablonları okur ve kullanır, değiştirmeye kalkarsa 403.
 Karta: seri `TPL BEGIN <bayt> <crc32>` → `TPL DATA <base64 ≤150>` → `TPL COMMIT` (`OK tpl_applied <id> <sürüm>` | `ERR <kod> [yol]`)
 → `TPL STATUS`; LAN `POST /api/template/apply` (`X-Device-Key`) → `GET /api/template`. Şablon biçimi ve kodlar:
 `docs/contracts/template/README.md`; araç doğrulayıcısı `template_model.py`, PDF `wiring_pdf.py`, arayüz `site_template_ui.py`.
@@ -761,7 +806,7 @@ python -m unittest discover -s tests -v
 python -m py_compile ev_otomasyon_sistemi.py
 ```
 
-`tests/test_session_store.py` (Beni hatırla deposu: DPAPI gidiş-dönüşü [yalnız Windows], bozuk/başka kullanıcı dosyası, rotasyon yazımı, sessiz geri yükleme sonuçları) ve `tests/test_tool_theme.py` (tema/kontrast/tercih) dahildir; testler gerçek `%APPDATA%\AHBU` içeriğine dokunmaz.
+`tests/test_session_store.py` (Beni hatırla deposu: DPAPI gidiş-dönüşü [yalnız Windows], bozuk/başka kullanıcı dosyası, rotasyon yazımı, sessiz geri yükleme sonuçları) ve `tests/test_tool_theme.py` (tema/kontrast/tercih) ile `tests/test_service_scope.py` (servis sorumlusu kapsamı: düğmeler, aktarım gövdesi, 403 iletileri, Genel şablon kuralı) dahildir; testler gerçek `%APPDATA%\AHBU` içeriğine dokunmaz.
 
 Testler gerçek ağa/COM porta/esptool'a **çıkmaz** (sahte HTTP, sahte seri port, gizli Tk penceresi). Gerçek kartla denenmesi gerekenler (doğrulanmadı): flash sonrası USB'nin yeniden numaralanma süresi, gerçek `STATUS`/`FACTORYINIT` zamanlaması, esptool çıktısından MAC okuma, yazdırma, gerçek telefon kamerasıyla 2. karekodun okunması.
 
@@ -780,7 +825,7 @@ Testler gerçek ağa/COM porta/esptool'a **çıkmaz** (sahte HTTP, sahte seri po
 ### G. Güvenlik tasarımı (özet)
 
 - Kodda **sabit** API anahtarı/parola yoktur; parola yalnızca giriş penceresinden alınır, saklanmaz, loglanmaz.
-- **Beni hatırla** (kullanıcının açık onayıyla; `session_store.py`): yalnızca **refresh token**, Windows **DPAPI** ile (CryptProtectData, kullanıcı kapsamı, uygulamaya özel entropi; `ctypes`, yeni paket yok) şifrelenip `%APPDATA%\AHBU\factory_session.dat` dosyasına yazılır; sunucu adresi + e-posta (gizli değil) `servis_araci_ayarlar.json` içindedir. **Parola ve erişim token'ı ASLA yazılmaz.** DPAPI yoksa (Windows dışı) token yazılmaz, yalnız kimlik hatırlanır. Sunucu refresh token'ı **tek kullanımlık** döndürdüğünden (rotasyon) her yenilemede yeni token ANINDA yazılır; yazılamazsa eski dosya silinir (kapalı-hata). Token yalnızca şifreli yükteki **sunucu adresine** gönderilir; rol yine `super_user` olmalıdır (değilse oturum iptal edilir, kayıt silinir). Pencere kapanışında hatırlanan oturum sunucuda iptal EDİLMEZ; **Oturumu Kapat** kaydı siler ve sunucuda iptal eder; **Beni hatırla** işaretsiz giriş de eski kaydı siler.
+- **Beni hatırla** (kullanıcının açık onayıyla; `session_store.py`): yalnızca **refresh token**, Windows **DPAPI** ile (CryptProtectData, kullanıcı kapsamı, uygulamaya özel entropi; `ctypes`, yeni paket yok) şifrelenip `%APPDATA%\AHBU\factory_session.dat` dosyasına yazılır; sunucu adresi + e-posta (gizli değil) `servis_araci_ayarlar.json` içindedir. **Parola ve erişim token'ı ASLA yazılmaz.** DPAPI yoksa (Windows dışı) token yazılmaz, yalnız kimlik hatırlanır. Sunucu refresh token'ı **tek kullanımlık** döndürdüğünden (rotasyon) her yenilemede yeni token ANINDA yazılır; yazılamazsa eski dosya silinir (kapalı-hata). Token yalnızca şifreli yükteki **sunucu adresine** gönderilir; rol yine `super_user` ya da `service_user` olmalıdır (değilse oturum iptal edilir, kayıt silinir). Pencere kapanışında hatırlanan oturum sunucuda iptal EDİLMEZ; **Oturumu Kapat** kaydı siler ve sunucuda iptal eder; **Beni hatırla** işaretsiz giriş de eski kaydı siler.
 - TLS doğrulaması her zaman açık; yönlendirme izlenmez; düz http yalnızca loopback.
 - `local_key` ve PIN'li karekod adresi sunucudan **bir kez** gelir; bellekte tutulur; diske yalnızca kullanıcı **Etiketi Kaydet** derse etiket görseli olarak yazılır.
 - AP parolası etikette yalnızca **metinde ve 2. karekodda** bulunur (1. karekodda ve loglarda yoktur); 2. karekodun metni gizli değer sayılır (maskelenir, loglanmaz, yalnızca etiket görseline gider).

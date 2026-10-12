@@ -3,7 +3,8 @@
 AHBU Ev Otomasyon Sistemi - Servis ve Üretim (Fabrika) Aracı
 
 1. Firmware Yükleyici (Waveshare ESP32-S3 Flasher)
-2. Envanter kaydı + Karekod/Etiket üretimi   (sunucu: süper kullanıcı e-posta + parola). Etiket İKİ karekod taşır:
+2. Envanter kaydı + Karekod/Etiket üretimi   (sunucu: süper kullanıcı ya da servis sorumlusu e-posta + parola; servis kartı KENDİ
+   stoğuna kaydeder ve yalnız kendi kartlarını yönetir, iptal ve servisler arası aktarım yalnız kök). Etiket İKİ karekod taşır:
    1) Daireye bağla (PIN'li claim adresi, uygulama okur) ve 2) Kurulum Wi-Fi'sine bağlan (standart Wi-Fi karekodu
    ``WIFI:T:WPA;S:<AP SSID>;P:<ap_pass>;;``, telefon kamerası okur; ap_pass yalnızca metinde ve bu karekodda)
 3. Cihaz provizyonu (flash sonrası): TERCİHEN USB (seri) `FACTORYINIT` (anahtar kablosuz ağdan geçmez);
@@ -73,6 +74,7 @@ from factory_client import (  # noqa: E402
     DEFAULT_DEVICE_HOST,
     DEFAULT_SERVER_URL,
     ENV_SERVER_URL,
+    FORBIDDEN_TRANSFER_TEXT,
     LABEL_TEXT_PATTERN,
     PIN_PATTERN,
     UID_PATTERN,
@@ -81,6 +83,7 @@ from factory_client import (  # noqa: E402
     DeviceRecord,
     FactoryError,
     ProvisionError,
+    ROOT_STOCK_TEXT,
     RelayBackend,
     SecretScrubber,
     SerialProvisioner,
@@ -153,6 +156,23 @@ TEMPLATE_AFTER_PROVISION_HINT = (
 )
 LABEL_PLACEHOLDER_TEXT = "Henüz etiket üretilmedi.\nSoldaki formdan 'SUNUCU ENVANTERİNE KAYDET' düğmesine basın."
 INVENTORY_PAGE_SIZE = 100        # sunucu sayfası en çok 100 kayıt (sozlesme-5: 'Daha fazla' sonraki sayfayı ekler)
+# Servis sorumlusu = KENDİ kapsamında süper; kök (süper kullanıcı) = her şey. Ekran metinleri (rehberde birebir anlatılır):
+SERVICE_INVENTORY_NOTE = (
+    "ℹ️ Servis sorumlusu olarak giriş yaptınız: kartları KENDİ stoğunuza kaydedersiniz; yalnızca kendi kartlarınızı görür, askıya "
+    "alır / aktif eder, silersiniz ve etiketini yenilersiniz (firmware yükleme ve provizyon zaten yereldir). Kartı iptal etme "
+    "(REVOKED) ve kartın ya da sitenin başka servise aktarılması yalnızca kök yöneticiye (süper kullanıcı) aittir."
+)
+SERVICE_NOT_YOUR_STOCK_HINT = (
+    "Servis sorumlusu yalnızca KENDİ stoğundaki kartları yönetir. Kart kök stoğunda ya da başka bir servisin stoğunda olabilir "
+    "(kartın sahibini yalnızca kök yönetici değiştirir); listeyi yenileyip kontrol edin."
+)
+SERVICE_REGISTER_CONFLICT_HINT = (
+    "Servis sorumlusu olarak yalnızca KENDİ stoğunuzdaki kartları görürsünüz: bu UID/MAC kök stoğunda ya da başka bir servisin "
+    "stoğunda kayıtlı olabilir. Listenizde yoksa kök yöneticiye başvurun."
+)
+SERVICE_REVOKED_TEXT = "Bu kart iptal edilmiş (REVOKED); iptal edilmiş kartın durumunu yalnızca kök yönetici değiştirir."
+TRANSFER_INSTALLED_CARD_TEXT = "Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın."
+TRANSFER_ROOT_CHOICE = "Kök stoğuna al (hiçbir servise bağlı olmasın)"
 # Provizyon bekleme süreleri (sn): flash sonrası kullanıcı bilgisayarı kurulum ağına bağlarken
 PROVISION_WAIT_AFTER_FLASH_S = 180
 PROVISION_WAIT_MANUAL_S = 12
@@ -236,6 +256,16 @@ def increment_version_str(ver_str: str) -> str:
         except ValueError:
             pass
     return f"{ver_str}.1"
+
+
+def inventory_owner_text(item: Any) -> str:
+    """Envanter tablosundaki 'Servis' hücresi: kartın stok sahibi servisin e-postası; boşsa (servise bağlı değil) 'Kök stoğu'."""
+    if not isinstance(item, dict):
+        return ROOT_STOCK_TEXT
+    email = str(item.get("service_owner_email") or "").strip()
+    if email:
+        return email
+    return "Servis (e-posta yok)" if item.get("service_owner_id") else ROOT_STOCK_TEXT
 
 
 def format_serial_badge(serial_val: Any) -> str:
@@ -709,8 +739,8 @@ class ServerLoginDialog(tk.Toplevel):
 
         card, body = theme.card(self, "🔐 Sunucuya Giriş (süper kullanıcı / servis sorumlusu)", accent="cyan", padx=16, pady=14)
         card.pack(fill=tk.BOTH, expand=True)
-        intro = note or ("Süper kullanıcı ya da servis sorumlusu hesabıyla giriş yapın (envantere kayıt ve etiket yenileme yalnız "
-                         "süper kullanıcı).")
+        intro = note or ("Süper kullanıcı ya da servis sorumlusu hesabıyla giriş yapın (servis sorumlusu kartları kendi stoğuna "
+                         "kaydeder; iptal ve servisler arası aktarım yalnız süper kullanıcı).")
         theme.label(
             body,
             "label.muted",
@@ -1022,13 +1052,20 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             sys.stderr.write(f"[HATA-AYIKLAMA] {type(err).__name__}\n")
         return f"Beklenmeyen bir hata oluştu ({type(err).__name__}). İşlemi tekrar deneyin."
 
-    def _handle_error(self, title: str, err: BaseException) -> None:
+    def _handle_error(self, title: str, err: BaseException, hint: str = "") -> None:
         if isinstance(err, SessionExpiredError):
             self.update_session_bar()
             self._set_inventory_placeholder("Oturum kapandı. Yeniden giriş yapın.")
             self.ui_warn(title, f"{err}\nYeniden giriş için 'Sunucuya Giriş' düğmesini kullanın.")
         else:
-            self.ui_error(title, self._error_text(err))
+            self.ui_error(title, self._error_text(err) + hint)
+
+    def _scope_hint(self, err: BaseException) -> str:
+        """Servis sorumlusu başka kapsamdaki (kök stoğu / başka servis) bir karta dokununca sunucu 404 verir (varlık sızdırılmaz):
+        kullanıcıya olası nedeni söyler."""
+        if self.client.is_service and isinstance(err, ApiError) and err.status == 404:
+            return "\n\n" + SERVICE_NOT_YOUR_STOCK_HINT
+        return ""
 
     # =========================================================================
     # Arayüz iskeleti
@@ -1134,20 +1171,37 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self._apply_role_permissions()
 
     def _apply_role_permissions(self) -> None:
-        """İP-3.1: servis sorumlusu envanter kaydı / durum değiştirme / silme YAPAMAZ (sunucu da reddeder); düğmeler kapanır."""
-        allowed = not self.client.is_authenticated or self.client.can_manage_inventory
+        """Rol/kapsam: süper kullanıcı (kök) ve servis sorumlusu (KENDİ stoğunda; sunucu listeyi ve işlemleri süzer) fabrika kaydı,
+        askıya alma / aktif etme, silme ve etiket yenileme yapabilir. Kök-yalnız öğeler (iptal, 'Servise Aktar', 'Servis' sütunu)
+        servise açılmaz; sunucu da reddeder."""
+        client = self.client
+        allowed = not client.is_authenticated or client.can_manage_inventory
         state = tk.NORMAL if allowed else tk.DISABLED
         for widget in (self.btn_register_device, self.btn_suspend, self.btn_activate, self.btn_delete_device):
             if not (widget is self.btn_register_device and self._register_busy):
                 widget.config(state=state)
-        # Etiket yenileme yalnız süper kullanıcı JWT'siyle (sunucu API anahtarını ve servis sorumlusunu reddeder).
-        reissue_allowed = not self.client.is_authenticated or self.client.user_role == "super_user"
+        # Etiket yenileme JWT ister (süper kullanıcı ya da servis sorumlusu); sunucu API anahtarını reddeder.
+        reissue_allowed = not client.is_authenticated or client.is_root or client.is_service
         self.btn_reissue_label.config(state=tk.NORMAL if reissue_allowed else tk.DISABLED)
-        self.inv_role_note.set(
-            "" if allowed else "ℹ️ Servis sorumlusu olarak giriş yaptınız: fabrika kaydı (envantere kaydet), askıya alma, aktif etme, "
-            "silme ve etiket yenileme yalnızca süper kullanıcıya açıktır. Envanter listesini görebilir; siteler, şablonlar, karta yazım "
-            "ve sunucudaki anahtarla yeniden provizyon kullanılabilir."
-        )
+        self.inv_role_note.set(SERVICE_INVENTORY_NOTE if client.is_service else "")
+        self._apply_root_only_widgets()
+
+    def _apply_root_only_widgets(self) -> None:
+        """Kök-yalnız öğeler: envanterde 'Servis' sütunu (bütün stoğu gören kök / kök-eşdeğer API anahtarı) ve 'Servise Aktar'
+        düğmeleri (envanter + siteler; yalnız süper kullanıcı JWT'si). Servis girişinde bunlar görünmez."""
+        client = self.client
+        show_column = client.is_authenticated and client.sees_all_stock
+        visible = self._inv_columns if show_column else tuple(c for c in self._inv_columns if c != "service")
+        self.inv_tree.configure(displaycolumns=visible)
+        show_transfer = client.is_authenticated and client.is_root
+        for button in (self.btn_transfer_device, getattr(self, "btn_site_transfer", None)):
+            if button is None:
+                continue
+            managed = button.winfo_manager() == "pack"
+            if show_transfer and not managed:
+                button.pack(side=tk.LEFT, padx=4)
+            elif not show_transfer and managed:
+                button.pack_forget()
 
     # =========================================================================
     # SEKME 1: FİRMWARE YÜKLEYİCİ (FLASHER)
@@ -1352,6 +1406,10 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             table_action_row, role="tint.cyan", size="sm", text="🏷️ Etiketi Yeniden Bas (USB)", command=self.reissue_label_via_usb
         )
         self.btn_reissue_label.pack(side=tk.LEFT, padx=4)
+        # Kök-yalnız: stoktaki kartın sahibi olan servisi değiştirir (servis girişinde görünmez; bkz. _apply_root_only_widgets).
+        self.btn_transfer_device = theme.button(
+            table_action_row, role="tint.violet", size="sm", text="🔀 Servise Aktar", command=self.transfer_selected_device
+        )
 
         # sozlesme-5: sunucu listesi sayfalıdır (en çok 100); arama ve 'Daha fazla' ilk sayfanın dışındaki kartlara ulaştırır.
         search_row = theme.frame(table_frame, "frame.surface")
@@ -1374,7 +1432,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.inv_role_note = tk.StringVar(value="")
         theme.label(table_frame, "label.note.amber", textvariable=self.inv_role_note, anchor="w", justify="left", wraplength=900).pack(fill=tk.X)
 
-        columns = ("serial_no", "device_uuid", "mac_address", "model", "status", "created_at", "claimed_at")
+        columns = ("serial_no", "device_uuid", "mac_address", "model", "status", "service", "created_at", "claimed_at")
+        self._inv_columns = columns  # 'service' (Servis) sütunu yalnız kök girişinde görünür (displaycolumns)
         self.inv_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=6, selectmode="browse")
         headings = {
             "serial_no": ("Sıra No", 65, "center"),
@@ -1382,6 +1441,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             "mac_address": ("MAC Adresi", 140, "center"),
             "model": ("Model", 180, "w"),
             "status": ("Durum", 95, "center"),
+            "service": ("Servis", 190, "w"),
             "created_at": ("Kayıt Tarihi", 130, "center"),
             "claimed_at": ("Daire Eşleme Tarihi", 130, "center"),
         }
@@ -2410,7 +2470,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         return {"mac": mac, "uid": uid, "pin": pin, "model": model, "batch": batch}
 
     def register_device_and_generate_label(self) -> None:
-        """Cihazı sunucu envanterine kaydeder ve etiket üretir (süper kullanıcı oturumu gerekir)."""
+        """Cihazı sunucu envanterine kaydeder ve etiket üretir (süper kullanıcı: kök stoğuna; servis sorumlusu: KENDİ stoğuna)."""
         form = self._read_registration_form()
         if form is None:
             return
@@ -2421,7 +2481,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         ):
             return
         self.ensure_login(lambda: self._start_registration(form),
-                          note="Cihazı sunucu envanterine kaydetmek için süper kullanıcı hesabıyla giriş yapın.")
+                          note="Cihazı sunucu envanterine kaydetmek için süper kullanıcı ya da servis sorumlusu hesabıyla giriş yapın.")
 
     def _start_registration(self, form: dict[str, str]) -> None:
         if self._register_busy:
@@ -2444,7 +2504,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
                         f"{err}\n\nBu cihaz daha önce kaydedilmiş olabilir (ör. yarıda kalan bir deneme). PIN ve yerel anahtar "
                         "yeniden gösterilemez; gerekirse envanter tablosundan 'Stokta' durumundaki kaydı silip yeniden kaydedin. "
                         "Yeniden kayıtta yeni anahtar üretilir: kart önceden provizyonlandıysa USB ile RESETKEY gerekir "
-                        "(3. sekmede 'Seri (USB) ile Provizyonla' bunu sorar).",
+                        "(3. sekmede 'Seri (USB) ile Provizyonla' bunu sorar)."
+                        + (("\n\n" + SERVICE_REGISTER_CONFLICT_HINT) if self.client.is_service else ""),
                     )
                 else:
                     self._handle_error("Kayıt Başarısız", err)
@@ -2570,7 +2631,8 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             "silinir ve bir daha GÖSTERİLEMEZ.\n\nDevam edilsin mi?",
         ):
             return
-        self.ensure_login(lambda: self._reissue_probe(port), note="Etiket yenilemek için süper kullanıcı hesabıyla giriş yapın.")
+        self.ensure_login(lambda: self._reissue_probe(port),
+                          note="Etiket yenilemek için süper kullanıcı ya da servis sorumlusu hesabıyla giriş yapın.")
 
     def _set_reissue_busy(self, busy: bool) -> None:
         self._prov_busy = busy
@@ -2581,8 +2643,9 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             self._apply_role_permissions()
 
     def _reissue_probe(self, port: str) -> None:
-        if self.client.user_role != "super_user":
-            self.ui_error("Yetki Yok", "Etiket yenileme yalnız süper kullanıcı hesabıyla (e-posta + parola) yapılır.")
+        if not (self.client.is_root or self.client.is_service):
+            self.ui_error("Yetki Yok", "Etiket yenileme e-posta + parola ile süper kullanıcı ya da servis sorumlusu hesabıyla yapılır "
+                          "(API anahtarı yetmez).")
             return
         self._set_reissue_busy(True)
         self._prov_clear_log()
@@ -2641,6 +2704,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             self._set_reissue_busy(False)
             if err is not None:
                 text = provision_error_text(err) if isinstance(err, ProvisionError) else self._error_text(err)
+                text += self._scope_hint(err)
                 if stage["reissued"]:
                     text += ("\n\nSunucuda yeni PIN üretildi: eski etiket artık geçersiz. 'Etiketi Yeniden Bas (USB)'yu yeniden "
                              "deneyin (yeni PIN üretilir); kart provizyonsuz kaldıysa yeniden yazılır.")
@@ -2747,6 +2811,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         self.inv_status_var.set(
             f"Gösterilen {len(self._inv_items)} / Toplam {total}{search_note}   |   Stokta: {stats.get('in_stock', '-')}   |   "
             f"Sahiplenilmiş: {stats.get('claimed', '-')}   |   Askıda: {stats.get('suspended', '-')}   |   İptal: {stats.get('revoked', '-')}"
+            + ("   |   Kapsam: kendi stoğunuz" if self.client.is_service else "")
         )
 
     @staticmethod
@@ -2770,6 +2835,7 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
                     str(item.get("mac_address") or ""),
                     str(item.get("model") or ""),
                     status,
+                    inventory_owner_text(item),
                     self._format_server_date(item.get("created_at")),
                     claimed,
                 ),
@@ -2789,10 +2855,22 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
             return None
         return uid
 
+    def _inventory_item(self, uid: str) -> Optional[dict[str, Any]]:
+        """Tablodaki (yüklü sayfalardaki) kartın sunucu kaydı; yoksa None."""
+        return next((i for i in self._inv_items if isinstance(i, dict) and str(i.get("device_uuid") or "").upper() == uid), None)
+
+    def _service_revoked_block(self, uid: str) -> bool:
+        """Servis sorumlusu iptal edilmiş (REVOKED) kartın durumunu değiştiremez (yalnız kök; sunucu da 403 verir): True = engellendi."""
+        item = self._inventory_item(uid)
+        if self.client.is_service and item is not None and str(item.get("status") or "").upper() == "REVOKED":
+            self.ui_info("İptal Edilmiş Kart", SERVICE_REVOKED_TEXT)
+            return True
+        return False
+
     def suspend_selected_device(self) -> None:
         """Seçilen cihazı askıya alır (SUSPENDED)."""
         uid = self._selected_uid()
-        if uid is None:
+        if uid is None or self._service_revoked_block(uid):
             return
         if not self.ui_confirm("Onay", f"Cihaz ({uid}) askıya alınacaktır.\nAskıdaki cihazlar sahada daireye tanımlanamaz.\nDevam edilsin mi?"):
             return
@@ -2801,21 +2879,21 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
     def activate_selected_device(self) -> None:
         """Seçilen cihazı tekrar aktif stok durumuna getirir."""
         uid = self._selected_uid()
-        if uid is not None:
+        if uid is not None and not self._service_revoked_block(uid):
             self._change_status(uid, "IN_STOCK")
 
     def _change_status(self, uid: str, new_status: str) -> None:
         def run() -> None:
             def done(_result: Any, err: Optional[BaseException]) -> None:
                 if err is not None:
-                    self._handle_error("Durum Güncellenemedi", err)
+                    self._handle_error("Durum Güncellenemedi", err, self._scope_hint(err))
                     return
                 self.ui_info("Başarılı", f"Cihaz durumu '{new_status}' olarak güncellendi.")
                 self.refresh_inventory_list()
 
             self.run_background(lambda: self.client.update_status(uid, new_status), done)
 
-        self.ensure_login(run, note="Durum değişikliği için e-posta + parola ile süper kullanıcı girişi gerekir.")
+        self.ensure_login(run, note="Durum değişikliği için e-posta + parola ile süper kullanıcı ya da servis sorumlusu girişi gerekir.")
 
     def delete_selected_device(self) -> None:
         """Seçilen cihazı envanterden siler (cihaz UID'si yazılarak onaylanır)."""
@@ -2832,14 +2910,52 @@ class EvOtomasyonServisApp(SiteTemplateTabsMixin, tk.Tk):
         def run() -> None:
             def done(_result: Any, err: Optional[BaseException]) -> None:
                 if err is not None:
-                    self._handle_error("Silinemedi", err)
+                    self._handle_error("Silinemedi", err, self._scope_hint(err))
                     return
                 self.ui_info("Silindi", f"Cihaz ({uid}) envanterden silindi.")
                 self.refresh_inventory_list()
 
             self.run_background(lambda: self.client.delete_device(uid), done)
 
-        self.ensure_login(run, note="Silme işlemi için e-posta + parola ile süper kullanıcı girişi gerekir.")
+        self.ensure_login(run, note="Silme işlemi için e-posta + parola ile süper kullanıcı ya da servis sorumlusu girişi gerekir.")
+
+    def transfer_selected_device(self) -> None:
+        """'🔀 Servise Aktar' (YALNIZ kök): seçili STOKTAKİ kartın sahibi olan servisi değiştirir; 'Kök stoğuna al' kartı hiçbir
+        servise bağlamaz (``PATCH /admin/inventory/:uuid/service-owner``). Kurulu (daireye bağlı) kart evinin servisini izler:
+        kartı değil daireyi aktarmak gerekir (sunucu 409). Servis girişinde düğme görünmez; yine de çağrılırsa istek gitmez."""
+        if self.client.is_authenticated and not self.client.is_root:
+            self.ui_warn("Yetki Yok", FORBIDDEN_TRANSFER_TEXT)
+            return
+        uid = self._selected_uid()
+        if uid is None:
+            return
+        item = self._inventory_item(uid) or {}
+        if str(item.get("status") or "").upper() in ("CLAIMED", "INSTALLED") or item.get("claimed_home_id"):
+            self.ui_info("Aktarılamaz", TRANSFER_INSTALLED_CARD_TEXT)
+            return
+
+        def chosen(service_id: Optional[str], label: str) -> None:
+            target = f"{label} servis hesabının stoğuna" if service_id else "kök stoğuna"
+            if not self.ui_confirm("Servise Aktar", f"{uid} kartı {target} aktarılacak.\nÖnceki servis bu kartı artık göremez ve "
+                                   "yönetemez. Devam edilsin mi?"):
+                return
+
+            def done(result: Any) -> None:
+                changed = not isinstance(result, dict) or result.get("changed") is not False
+                if not changed:
+                    text = f"{uid} kartı zaten bu stokta."
+                elif service_id:
+                    text = f"{uid} kartı {label} servis hesabının stoğuna aktarıldı."
+                else:
+                    text = f"{uid} kartı kök stoğuna alındı."
+                self.ui_info("Aktarıldı", text)
+                self.refresh_inventory_list()
+
+            self._call_server("Kart Aktarılamadı", lambda: self.client.transfer_inventory(uid, service_id), done)
+
+        self._choose_service_owner(
+            "🔀 Servise Aktar", f"{uid} kartının stoğu hangi servise ait olsun?", TRANSFER_ROOT_CHOICE,
+            item.get("service_owner_id"), chosen)
 
     # =========================================================================
     # SEKME 1 (FLASHER) YARDIMCI VE ÇALIŞTIRMA METOTLARI

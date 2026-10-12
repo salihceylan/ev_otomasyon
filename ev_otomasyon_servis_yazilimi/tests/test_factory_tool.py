@@ -2679,10 +2679,16 @@ class AppSmokeTests(unittest.TestCase):
         self.assertIn("BOOT'a basmadan", error[2])
         self.assertNotIn("GET /api/v1/admin/inventory/%s/local-key" % UID, self.api.paths())
 
-    def test_usb_label_reissue_is_only_for_the_super_user(self):
+    def test_usb_label_reissue_is_open_to_the_service_user_but_not_to_the_api_key(self):
+        # Servis sorumlusu KENDİ stoğundaki kartın etiketini yenileyebilir (sunucu kapsamı uygular); API anahtarı yetmez.
         self.api.login_role = "service_user"
         self.patch_login()
         self.app.login_clicked()
+        self.assertEqual(str(self.app.btn_reissue_label.cget("state")), "normal")
+        self.app.client._env = {fc.ENV_API_KEY: std_secrets.token_hex(20)}
+        self.patch_login(tool.LoginRequest("api_key", fc.DEFAULT_SERVER_URL))
+        self.app.login_clicked()
+        self.assertEqual(self.app.client.auth_mode, "api_key")
         self.assertEqual(str(self.app.btn_reissue_label.cget("state")), "disabled")
 
     def test_server_key_reprovision_button_works_without_a_record(self):

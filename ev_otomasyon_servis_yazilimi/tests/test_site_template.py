@@ -336,7 +336,11 @@ class ServerClientSiteTests(unittest.TestCase):
         client, api = self.client()
         self.assertTrue(client.is_authenticated)
         self.assertEqual(client.role_text, "servis sorumlusu")
-        self.assertFalse(client.can_manage_inventory)
+        # Servis sorumlusu KENDİ kapsamında süper: envanteri yönetir (sunucu kapsamı uygular); kök değildir
+        self.assertTrue(client.can_manage_inventory)
+        self.assertTrue(client.is_service)
+        self.assertFalse(client.is_root)
+        self.assertFalse(client.sees_all_stock)
         self.assertNotIn("POST /api/v1/auth/logout", api.paths())
 
     def test_other_roles_are_still_rejected(self):
@@ -1014,12 +1018,14 @@ class SiteTemplateAppTests(base.AppSmokeTests):
         self.assertEqual(titles[4], "📐 5. Şablonlar")
         self.assert_no_callback_errors()
 
-    def test_service_user_sees_role_and_inventory_actions_are_disabled(self):
+    def test_service_user_sees_role_and_inventory_actions_are_open_for_the_own_stock(self):
         self.login_as("service_user")
         self.assertIn("servis sorumlusu", self.app.lbl_session.cget("text"))
-        for button in (self.app.btn_register_device, self.app.btn_suspend, self.app.btn_activate, self.app.btn_delete_device):
-            self.assertEqual(str(button.cget("state")), "disabled")
-        self.assertIn("yalnızca süper kullanıcıya açıktır", self.app.inv_role_note.get())
+        for button in (self.app.btn_register_device, self.app.btn_suspend, self.app.btn_activate, self.app.btn_delete_device,
+                       self.app.btn_reissue_label):
+            self.assertEqual(str(button.cget("state")), "normal")
+        self.assertIn("KENDİ stoğunuza", self.app.inv_role_note.get())
+        self.assertIn("yalnızca kök yöneticiye", self.app.inv_role_note.get())
         self.login_as("super_user")
         self.assertIn("süper kullanıcı", self.app.lbl_session.cget("text"))
         self.assertEqual(str(self.app.btn_delete_device.cget("state")), "normal")

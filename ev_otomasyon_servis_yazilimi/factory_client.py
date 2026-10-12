@@ -90,8 +90,10 @@ _ERROR_REF_PATTERN = re.compile(r"^[0-9a-f]{6,24}$")
 _DETAIL_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 _FIELD_PATH_PATTERN = re.compile(r"^[A-Za-z0-9_.\[\]]{1,64}$")
 _RESOURCE_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
-# Aracı kullanabilen roller (İP-3.1): süper kullanıcı (her şey) ve servis sorumlusu (site/şablon/karta yazım; envanter kaydı,
-# durum değiştirme ve silme YOK - sunucu da reddeder).
+_UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# Aracı kullanabilen roller: süper kullanıcı (kök: her şey) ve servis sorumlusu (KENDİ kapsamında süper: kendi stoğuna kart
+# kaydeder; kendi kartlarını listeler / askıya alır / aktif eder / siler / etiketini yeniler; kendi sitelerini ve şablonlarını
+# yönetir). Yalnız kökte kalanlar: kartı iptal etme (REVOKED), kapsamlar arası aktarım, genel şablonları değiştirme.
 TOOL_ROLES = ("super_user", "service_user")
 ROLE_TEXT = {"super_user": "süper kullanıcı", "service_user": "servis sorumlusu", "api_key": "API anahtarı"}
 
@@ -510,6 +512,36 @@ DEVICE_NOT_IN_STOCK_TEXT = (  # yalnız daireye kart bağlama (PUT /sites/:id/fl
 # Sözleşme 13: daireye bağlı kart silinemez, REVOKED -> IN_STOCK yapılamaz, etiketi yenilenemez (409 DEVICE_LINKED_TO_FLAT).
 DEVICE_LINKED_TO_FLAT_TEXT = "Kart bir daireye bağlı; önce daireden ayırın."
 
+# 403 (yetki) iletileri: sunucunun ham metni ASLA gösterilmez; yalnız tanınan durumlar için aracın kendi Türkçe metni kullanılır
+# (servis sorumlusu kendi kapsamında süper; iptal, servisler arası aktarım ve genel şablonları değiştirme yalnız kök).
+FORBIDDEN_DEFAULT_TEXT = (
+    "Bu işlem için yetkiniz yok. Servis sorumlusu yalnızca kendi stoğundaki kartları, kendi sitelerini ve şablonlarını yönetir; "
+    "kartı iptal etme (REVOKED), servisler arası aktarım ve genel şablonları değiştirme yalnızca kök yöneticiye (süper kullanıcı) aittir."
+)
+FORBIDDEN_ROOT_ONLY_TEXT = "Bu işlem yalnızca kök yöneticiye (süper kullanıcı) aittir; servis sorumlusu yapamaz."
+FORBIDDEN_REVOKE_TEXT = (
+    "Kartı iptal etme (REVOKED) ve iptal edilmiş kartın durumunu değiştirme yalnızca kök yöneticiye aittir; "
+    "servis sorumlusu kendi kartını askıya alabilir ya da aktif edebilir."
+)
+FORBIDDEN_TRANSFER_TEXT = "Kartı, siteyi ya da daireyi başka servise (veya köke) aktarma yalnızca kök yöneticiye aittir."
+FORBIDDEN_GLOBAL_TEMPLATE_TEXT = (
+    "Genel (standart) şablonları yalnızca kök yönetici değiştirebilir; servis sorumlusu bunları okur ve kullanır. "
+    "Değiştirmek için şablonu kendi sitenize 'Çoğalt' ile kopyalayın."
+)
+FORBIDDEN_OTHER_STOCK_TEXT = (
+    "Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz. Kartın sahibini yalnızca kök yönetici değiştirir."
+)
+# Sunucunun (tanınan) 403 iletisine göre aracın kendi metni; sıra önemlidir (özelden genele).
+_FORBIDDEN_PATTERNS = (
+    (re.compile(r"(?i)servis sorumlusu veya"), FORBIDDEN_DEFAULT_TEXT),
+    (re.compile(r"(?i)iptal|revoked"), FORBIDDEN_REVOKE_TEXT),
+    (re.compile(r"(?i)aktar"), FORBIDDEN_TRANSFER_TEXT),
+    (re.compile(r"(?i)genel .*şablon"), FORBIDDEN_GLOBAL_TEMPLATE_TEXT),
+    (re.compile(r"(?i)başka bir servis sorumlusunun stoğunda"), FORBIDDEN_OTHER_STOCK_TEXT),
+    (re.compile(r"(?i)kök yönetici|süper yönetici"), FORBIDDEN_ROOT_ONLY_TEXT),
+)
+ROOT_STOCK_TEXT = "Kök stoğu"  # envanter tablosunda servise bağlı olmayan kart (service_owner_id boş)
+
 
 def friendly_api_error(
     status: int,
@@ -557,15 +589,18 @@ def friendly_api_error(
         }.get(code or "", "Kimlik doğrulaması başarısız. Lütfen yeniden giriş yapın.")
 
     if status == 403:
-        return {
+        known = {
             "ACCOUNT_DISABLED": "Hesap dondurulmuş. Sistem yöneticisine başvurun.",
             "ACCOUNT_PENDING": "Hesap henüz etkinleştirilmemiş (davet bekliyor). Önce hesabı etkinleştirin.",
             "REAUTH_REQUIRED": "Bu hassas işlem için parola ile yeniden doğrulama gerekiyor.",
             "SERVICE_SESSION_FORBIDDEN": "Servis PIN oturumu bu işlem için yeterli değil; e-posta + parola ile giriş yapın.",
-        }.get(
-            code or "",
-            "Bu işlem için yetkiniz yok (envanter kaydı, durum değiştirme ve silme yalnızca süper kullanıcıya açıktır).",
-        )
+        }
+        if (code or "") in known:
+            return known[code or ""]
+        for pattern, text in _FORBIDDEN_PATTERNS:  # kapsam / kök-yalnız ayrımı: sunucu iletisi tanınırsa özel açıklama
+            if safe and pattern.search(safe):
+                return text
+        return FORBIDDEN_DEFAULT_TEXT
 
     if status == 423:
         return f"Çok sayıda hatalı deneme nedeniyle geçici olarak kilitlendi. {wait} sonra tekrar deneyin."
@@ -1085,7 +1120,7 @@ class ServerClient:
     def register_device(
         self, *, uid: str, mac: str, pin: str, model: str, batch_no: str
     ) -> RegistrationResult:
-        """Cihazı envantere kaydeder (süper kullanıcı JWT veya API anahtarı)."""
+        """Cihazı envantere kaydeder (süper kullanıcı: kök stoğu; servis sorumlusu JWT'si: KENDİ stoğu; API anahtarı: kök stoğu)."""
         data = self.request(
             "POST",
             "/admin/inventory/register",
@@ -1120,10 +1155,22 @@ class ServerClient:
     def _require_jwt(self) -> None:
         if self._api_key:
             raise ApiError(
-                "Bu işlem e-posta + parola ile süper kullanıcı girişi gerektirir (API anahtarı yetmez).",
+                "Bu işlem e-posta + parola ile giriş (süper kullanıcı ya da servis sorumlusu) gerektirir (API anahtarı yetmez).",
                 status=403,
                 code="FORBIDDEN",
             )
+
+    def _require_root(self) -> None:
+        """Kök-yalnız uçlar (kapsamlar arası aktarım, servis hesabı listesi): API anahtarı ve servis sorumlusu İSTEK
+        GÖNDERİLMEDEN reddedilir (sunucu da 403 verir). Oturum yoksa ``request`` oturum hatasını yükseltir."""
+        if self._api_key:
+            raise ApiError(
+                "Aktarım e-posta + parola ile kök yönetici (süper kullanıcı) girişi gerektirir (API anahtarı yetmez).",
+                status=403,
+                code="FORBIDDEN",
+            )
+        if self.is_authenticated and self.user_role != "super_user":
+            raise ApiError(FORBIDDEN_TRANSFER_TEXT, status=403, code="FORBIDDEN")
 
     @staticmethod
     def _uid_segment(uid: str) -> str:
@@ -1141,7 +1188,8 @@ class ServerClient:
         return self.request("DELETE", f"/admin/inventory/{self._uid_segment(uid)}")
 
     def reissue_label(self, uid: str) -> LabelReissue:
-        """Etiketi yeniden üretir (yalnız süper kullanıcı JWT'si; yalnız stoktaki ve daireye bağlı olmayan kart, aksi 409): sunucu
+        """Etiketi yeniden üretir (süper kullanıcı ya da servis sorumlusu JWT'si - servis YALNIZ kendi stoğundaki kartta, başka
+        kartta 404; yalnız stoktaki ve daireye bağlı olmayan kart, aksi 409): sunucu
         yeni kurulum PIN'i üretir (eski etiketteki PIN geçersiz olur). Yerel anahtar DEĞİŞMEZ (sözleşme 13). PIN ve karekod
         adresi ``SecretScrubber``'a eklenir."""
         self._require_jwt()
@@ -1173,9 +1221,25 @@ class ServerClient:
         return ROLE_TEXT.get(self.user_role, self.user_role or "bilinmiyor")
 
     @property
-    def can_manage_inventory(self) -> bool:
-        """Envanter kaydı / durum / silme yalnız süper kullanıcı (ve kayıt için API anahtarı); servis sorumlusu YAPAMAZ."""
+    def is_root(self) -> bool:
+        """Kök yönetici (süper kullanıcı) girişi: bütün kapsamlar, servis sütunu ve aktarım yalnız burada."""
+        return self.user_role == "super_user"
+
+    @property
+    def is_service(self) -> bool:
+        """Servis sorumlusu girişi: KENDİ kapsamında süper (kendi stoğu / siteleri); iptal ve aktarım yok."""
+        return self.user_role == "service_user"
+
+    @property
+    def sees_all_stock(self) -> bool:
+        """Envanter listesi bütün stoğu mu döndürür (kök ya da kök-eşdeğer API anahtarı)? Servis yalnız kendi kartlarını görür."""
         return self.user_role in ("super_user", "api_key")
+
+    @property
+    def can_manage_inventory(self) -> bool:
+        """Envanter kaydı / durum / silme: süper kullanıcı (tümü) ve servis sorumlusu (KENDİ stoğunda; sunucu kapsamı uygular);
+        API anahtarı kayıt ve liste için. İptal (REVOKED), aktarım ve genel şablon değişikliği yalnız kök (sunucu da reddeder)."""
+        return self.user_role in ("super_user", "service_user", "api_key")
 
     # ---- site / daire / şablon uçları (CONTRACTS §3e; requireServiceManager) ----
     @staticmethod
@@ -1354,6 +1418,55 @@ class ServerClient:
             raise ApiError("Sunucu kartın yerel anahtarını vermedi.", status=200, code="BAD_RESPONSE")
         self._track(key)
         return key
+
+    # ---- kapsamlar arası aktarım (YALNIZ kök; servis sorumlusu 403) ------------------------------------------
+    MAX_SERVICE_USERS = 500  # sayfalı servis hesabı listesi üst sınırı (100'erli sayfalar)
+
+    @staticmethod
+    def _service_target(service_user_id: Any) -> Optional[str]:
+        """Aktarım hedefi: ``None`` = kök stoğu/kapsamı; aksi halde servis hesabının kimliği (UUID)."""
+        if service_user_id is None or service_user_id == "":
+            return None
+        text = str(service_user_id).strip().lower()
+        if not _UUID_PATTERN.match(text):
+            raise FactoryError("Geçersiz servis sorumlusu kimliği.")
+        return text
+
+    def list_service_users(self) -> list[dict[str, Any]]:
+        """Aktarım hedefi olabilecek servis hesapları (``GET /admin/users?role=service_user&is_active=true``; yalnız kök).
+        Dönüş: ``[{"id", "email", "full_name"}]``; dondurulmuş / davet bekleyen hesap listelenmez (sunucu da reddeder)."""
+        self._require_root()
+        users: list[dict[str, Any]] = []
+        offset, total = 0, None
+        while offset < self.MAX_SERVICE_USERS:
+            data = self.request(
+                "GET", "/admin/users", query={"role": "service_user", "is_active": "true", "limit": 100, "offset": offset}
+            )
+            page = self._items(data, "users")
+            for user in page:
+                ident = str(user.get("id") or "").strip().lower()
+                active = user.get("is_active") is not False and user.get("account_status") in (None, "active")
+                if user.get("role") == "service_user" and active and _UUID_PATTERN.match(ident):
+                    users.append({"id": ident, "email": str(user.get("email") or ""), "full_name": str(user.get("full_name") or "")})
+            offset += len(page)
+            total = data.get("total") if isinstance(data.get("total"), int) and not isinstance(data.get("total"), bool) else None
+            if not page or total is None or offset >= total:
+                break
+        return users
+
+    def transfer_inventory(self, uid: str, service_user_id: Optional[str]) -> dict[str, Any]:
+        """``PATCH /admin/inventory/:uuid/service-owner {"service_user_id": <uuid>|null}``: STOKTAKİ kartın sahibini değiştirir
+        (``None`` = kök stoğu). Kurulu (daireye bağlı) kartta sunucu 409 verir: kart evinin servisini izler. Yalnız kök."""
+        self._require_root()
+        body = {"service_user_id": self._service_target(service_user_id)}
+        return self.request("PATCH", f"/admin/inventory/{self._uid_segment(uid)}/service-owner", body=body)
+
+    def transfer_site(self, site_id: str, service_user_id: Optional[str]) -> dict[str, Any]:
+        """``PATCH /admin/sites/:siteId/service-owner {"service_user_id": <uuid>|null}``: sitenin servisini değiştirir
+        (``None`` = kök kapsamı). Yalnız kök."""
+        self._require_root()
+        body = {"service_user_id": self._service_target(service_user_id)}
+        return self.request("PATCH", f"/admin/sites/{self._id_segment(site_id, 'site')}/service-owner", body=body)
 
 
 # ---------------------------------------------------------------------------
