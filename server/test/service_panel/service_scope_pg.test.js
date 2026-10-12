@@ -377,6 +377,17 @@ test('PG kapsam - HTTP: ev erisimi (72 saat sonra da), baska servis 403, uyelik/
   const rules = await api('get', `/api/v1/homes/${HA.id}/scheduled-rules`, svcA.token);
   assert.equal(rules.status, 200);
   assert.equal((await api('get', `/api/v1/homes/${HA.id}/scheduled-rules`, svcB.token)).status, 403);
+
+  // service_scope_admin: yalniz isteyen servis sorumlusunun KENDI kapsamindaki evde true (istemci uye yonetimini buna gore
+  // gosterir); musteride, kokun evindeki eski servis uyeliginde ve baska servisin evinde false
+  await h.member(HR, svcA, 'service_user');
+  const svcHomes = (await api('get', '/api/v1/homes', svcA.token)).body.data;
+  assert.equal(svcHomes.find((x) => x.id === HA.id).service_scope_admin, true, 'kendi kapsamindaki ev');
+  // HA'daki servis uyeliginin eski kurulum penceresi 5 gun once doldu: kapsam sahibi icin yok sayilir (listelenir, acik)
+  assert.equal(svcHomes.find((x) => x.id === HA.id).access_state, 'active');
+  assert.equal(svcHomes.find((x) => x.id === HA.id).valid_until, null);
+  assert.equal(svcHomes.find((x) => x.id === HR.id).service_scope_admin, false, 'kokun evindeki servis uyeligi kapsam vermez');
+  assert.equal((await api('get', '/api/v1/homes', buyer.token)).body.data[0].service_scope_admin, false, 'musteride false');
   void q;
 });
 

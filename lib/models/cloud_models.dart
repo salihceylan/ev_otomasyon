@@ -260,6 +260,7 @@ class HomeModel {
     this.accessStartsIn,
     this.accessExpiresIn,
     this.service,
+    this.serviceScopeAdmin = false,
   });
 
   /// Ev UUID'si (**String**; `int` ev kimliği yoktur).
@@ -297,6 +298,11 @@ class HomeModel {
   /// Evin servisi (`service: {name, phone}`; yalnız ekleme, eski sunucu vermez). `null` = servis yok (ev kök yönetici
   /// kapsamında ya da sunucu bilgi vermedi). Müşteri ekranında salt okunur "Servisiniz" kartını besler.
   final HomeServiceInfo? service;
+
+  /// Bu ev, oturumdaki servis sorumlusunun KENDİ kapsamında mı (`service_scope_admin`; sunucu yalnız isteyen kullanıcı
+  /// için hesaplar, servis kimliği gönderilmez). `true` ise servis bu evde kapsamlı süperdir: üye/misafir yönetimi
+  /// görünür. Kökün evindeki eski servis üyeliğinde, müşteride ve eski sunucuda `false`.
+  final bool serviceScopeAdmin;
 
   HomeRole get homeRole => HomeRole.parse(role);
   bool get isOwnerRole => homeRole == HomeRole.owner;
@@ -340,6 +346,7 @@ class HomeModel {
       accessStartsIn: _nonNegative(json['access_starts_in']),
       accessExpiresIn: _nonNegative(json['access_expires_in']),
       service: HomeServiceInfo.tryParse(json['service']),
+      serviceScopeAdmin: asBool(json['service_scope_admin']) ?? false,
     );
   }
 
@@ -360,6 +367,7 @@ class HomeModel {
         'is_expired': serverMarkedExpired,
         'access_state': accessState.wire,
         if (service != null) 'service': service!.toJson(),
+        if (serviceScopeAdmin) 'service_scope_admin': true,
       };
 
   HomeModel copyWith({String? role, bool? serverMarkedExpired, HomeAccessState? accessState}) =>
@@ -377,6 +385,7 @@ class HomeModel {
         accessStartsIn: accessStartsIn,
         accessExpiresIn: accessExpiresIn,
         service: service,
+        serviceScopeAdmin: serviceScopeAdmin,
       );
 }
 

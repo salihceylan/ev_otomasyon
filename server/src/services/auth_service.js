@@ -469,15 +469,23 @@ class AuthService {
   async listHomesForUser(userId) {
     // Servis sorumlusu kapsami (045): evin servisi (ad + telefon) ayni sorguda. Migration 045 uygulanmamis bir veritabaninda
     // (kolon yok, 42703) GIRIS BOZULMAZ: servis bilgisiz sorguya dusulur (rolling deploy / geri alma).
+    // Evin kapsam sahibi servis (homes.service_owner_id = kendisi): sunucu onu bu evde SURESIZ kapsamli super sayar
+    // (requireHomeAccess). Uyeliginde eski bir kurulum penceresi (installer_expires_at) kalmis olsa da ev listelenir ve
+    // pencere yok sayilir; aksi halde erisebildigi evi listede goremez.
+    const scopeOwner = "(hu.role = 'service_user' AND u.role = 'service_user' AND h.service_owner_id = hu.user_id)";
     const homesSql = (withService) =>
       `SELECT h.id, h.name, h.address, h.mqtt_username,
               COALESCE(to_jsonb(h) ->> 'timezone', 'Europe/Istanbul') AS timezone,
-              hu.role, hu.valid_from, hu.valid_until, hu.installer_expires_at${withService ? ',\n              su.full_name AS service_name, su.phone AS service_phone' : ''}
+              hu.role, hu.valid_from, hu.valid_until, ${withService
+                ? `CASE WHEN ${scopeOwner} THEN NULL ELSE hu.installer_expires_at END AS installer_expires_at,
+              su.full_name AS service_name, su.phone AS service_phone,
+              ${scopeOwner} AS service_scope_admin`
+                : 'hu.installer_expires_at'}
          FROM home_users hu
          JOIN homes h ON h.id = hu.home_id
          JOIN users u ON u.id = hu.user_id${withService ? '\n         LEFT JOIN users su ON su.id = h.service_owner_id' : ''}
         WHERE hu.user_id = $1
-          AND NOT (hu.role = 'service_user' AND hu.installer_expires_at IS NOT NULL AND hu.installer_expires_at <= NOW())
+          AND NOT (hu.role = 'service_user' AND hu.installer_expires_at IS NOT NULL AND hu.installer_expires_at <= NOW()${withService ? `\n                   AND NOT ${scopeOwner}` : ''})
           -- uyelik-13: personel rolunden dusurulmus hesabin kalmis servis uyeligi listelenmez (erisim zaten yok)
           AND NOT (hu.role = 'service_user' AND u.role NOT IN ('service_user', 'super_user'))
         ORDER BY h.name ASC`;
@@ -517,6 +525,10 @@ class AuthService {
         // Servis sorumlusu kapsami (045): evin servisi, SALT OKUNUR ve yalniz ad + telefon (e-posta DEGIL). Kok kapsamindaki
         // ev (service_owner_id NULL) icin null. Musteri servisi kaldiramaz; degisikligi yalniz kok yapar.
         service: row.service_name ? { name: row.service_name, phone: row.service_phone || null } : null,
+        // Bu ev, isteyen servis sorumlusunun KENDI kapsaminda mi (homes.service_owner_id = kendisi)? Oyleyse sunucu onu
+        // bu evde kapsamli super sayar (requireHomeAccess); istemci uye/misafir yonetimini yalniz bu evlerde gosterir.
+        // Servis kimligi (uuid) musteriye gonderilmez; yalniz isteyen kullanicinin kendisi icin bu bayrak.
+        service_scope_admin: row.service_scope_admin === true,
       };
     });
   }

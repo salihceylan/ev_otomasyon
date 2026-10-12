@@ -116,6 +116,7 @@ class Capabilities {
   /// [guestValidUntil] / [guestValidFrom]: misafir penceresi (yalnızca `guest` için anlamlı).
   /// [hasActiveHome]: aktif ev var mı (varsayılan: [homeRole] verilmişse true). Süper
   /// kullanıcı evin üyesi olmadan da (açık istisna) ev bağlamında işlem yapabilir.
+  /// [serviceScopeAdmin]: aktif ev servis sorumlusunun KENDİ kapsamında mı (`HomeModel.serviceScopeAdmin`).
   factory Capabilities({
     String? globalRole,
     String? homeRole,
@@ -123,6 +124,7 @@ class Capabilities {
     DateTime? guestValidFrom,
     DateTime? now,
     bool? hasActiveHome,
+    bool serviceScopeAdmin = false,
   }) {
     final authenticated = globalRole != null && globalRole.trim().isNotEmpty;
     final g = authenticated ? GlobalRole.parse(globalRole) : null;
@@ -135,6 +137,7 @@ class Capabilities {
       guestValidFrom: guestValidFrom,
       now: now ?? DateTime.now(),
       hasActiveHome: hasActiveHome ?? (h != null),
+      serviceScopeAdmin: serviceScopeAdmin,
     );
   }
 
@@ -265,6 +268,7 @@ class Capabilities {
     required DateTime? guestValidFrom,
     required DateTime now,
     required bool hasActiveHome,
+    required bool serviceScopeAdmin,
   }) {
     if (!authenticated || g == null || g == GlobalRole.unknown) {
       return const Capabilities.none();
@@ -307,10 +311,10 @@ class Capabilities {
     final childLock = homeAccess && notGuest;
     final calibrate = homeAccess && isManagerLike; // owner, staff, session, super (resident ✖)
     final rules = homeAccess && (isSuper || isStaffHome || isOwner || isResident); // session ✖
-    // Üye/misafir yönetimi: ev sahibi, süper ve (servis sorumlusu kapsamı, migration 045) evin servisi. Servis kendi
-    // evinde süresiz kapsamlı süperdir (sunucu: MEMBERS listesinde `super_user` var). Karar sunucudadır: başkasının
-    // (ya da sahipsiz) evinde sunucu 403 döner ve ileti gösterilir.
-    final invite = homeAccess && (isSuper || isOwner || isStaffHome);
+    // Üye/misafir yönetimi: ev sahibi, süper ve (servis sorumlusu kapsamı, migration 045) YALNIZ kendi kapsamındaki
+    // evde servis (`service_scope_admin`; sunucu orada onu kapsamlı süper sayar). Kökün ya da başka servisin evindeki
+    // servis üyeliği bu yetkiyi vermez: seçenekler hiç görünmez (sunucu da 403 döner).
+    final invite = homeAccess && (isSuper || isOwner || (isStaffHome && serviceScopeAdmin));
     final transfer = homeAccess && isOwner; // super ✖
     final servicePin = homeAccess && isOwner; // yalnızca ev sahibi
     final commission = homeAccess && (isSuper || isStaffHome || isSession);

@@ -628,6 +628,7 @@ class AutomationState extends ChangeNotifier {
       guestValidFrom: home?.guestValidFrom,
       now: now,
       hasActiveHome: home != null,
+      serviceScopeAdmin: home?.serviceScopeAdmin ?? false,
     );
     _capsMemo = built;
     _capsUser = user;

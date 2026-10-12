@@ -573,10 +573,15 @@ function createWorld({ clock = createClock() } = {}) {
     }).map((m) => {
       const h = homeById(m.home_id);
       const svc = h.service_owner_id ? s.users.find((x) => x.id === h.service_owner_id) : null;
+      const scopeAdmin = m.role === 'service_user' && (s.users.find((x) => x.id === m.user_id) || {}).role === 'service_user'
+        && h.service_owner_id === m.user_id;
       return {
         id: h.id, name: h.name, address: h.address || null, mqtt_username: h.mqtt_username, timezone: 'Europe/Istanbul', role: m.role,
-        valid_from: m.valid_from, valid_until: m.valid_until, installer_expires_at: m.installer_expires_at,
+        valid_from: m.valid_from, valid_until: m.valid_until,
         service_name: svc ? svc.full_name : null, service_phone: svc ? svc.phone || null : null,
+        service_scope_admin: scopeAdmin,
+        // kapsam sahibi servis: eski kurulum penceresi yok sayilir (sunucu orada suresiz kapsamli super)
+        installer_expires_at: scopeAdmin ? null : m.installer_expires_at,
       };
     })
   );

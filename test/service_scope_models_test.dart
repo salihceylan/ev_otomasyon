@@ -204,12 +204,31 @@ void main() {
     });
 
     test('servis sorumlusu kendi evinde üye ve misafir yönetir; ev sahibine özel devir ve servis PIN ✖', () {
-      final c = caps('service_user', 'service_user');
+      final c = Capabilities(globalRole: 'service_user', homeRole: 'service_user', serviceScopeAdmin: true, now: now);
       expect(c.canInvite, isTrue);
       expect(c.canManageMembers, isTrue);
       expect(c.canTransferOwnership, isFalse);
       expect(c.canGenerateServicePin, isFalse);
       expect(c.canArm, isFalse, reason: 'hırsız alarmı kurma servis rollerinde yok (değişmez karar)');
+    });
+
+    test('kapsamı dışındaki evde (kökün evinde eski servis üyeliği) servis üye/misafir yönetimi görmez', () {
+      final c = caps('service_user', 'service_user');
+      expect(c.hasHomeAccess, isTrue, reason: 'kurulum ve cihaz işleri sürer');
+      expect(c.canInvite, isFalse);
+      expect(c.canManageMembers, isFalse);
+      // bayrak yalnız evdeki servis üyeliğiyle anlam taşır: ev sahibine ve sakine etkisi yok
+      expect(Capabilities(globalRole: 'user', homeRole: 'owner', serviceScopeAdmin: false, now: now).canInvite, isTrue);
+      expect(Capabilities(globalRole: 'user', homeRole: 'resident', serviceScopeAdmin: true, now: now).canInvite, isFalse);
+    });
+
+    test('HomeModel service_scope_admin ayrıştırılır; yoksa false, toJson ile gidiş-dönüş korunur', () {
+      final mine = HomeModel.fromJson(<String, dynamic>{'id': 'h1', 'name': 'A', 'role': 'service_user', 'service_scope_admin': true});
+      expect(mine.serviceScopeAdmin, isTrue);
+      expect(HomeModel.fromJson(mine.toJson()).serviceScopeAdmin, isTrue);
+      expect(mine.copyWith(role: 'service_user').serviceScopeAdmin, isTrue);
+      final other = HomeModel.fromJson(<String, dynamic>{'id': 'h2', 'name': 'B', 'role': 'service_user'});
+      expect(other.serviceScopeAdmin, isFalse, reason: 'eski sunucu bayrağı vermez: güvenli taraf');
     });
 
     test('servis ev bağlamı olmadan (üyelik yok) ev yetkisi almaz; envanter yetkisi küreseldir', () {

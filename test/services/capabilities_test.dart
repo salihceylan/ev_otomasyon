@@ -65,7 +65,7 @@ void main() {
   });
 
   test('kalıcı servis personeli (evde service_user)', () {
-    final caps = Capabilities(globalRole: 'service_user', homeRole: 'service_user', now: now);
+    final caps = Capabilities(globalRole: 'service_user', homeRole: 'service_user', serviceScopeAdmin: true, now: now);
     expectExactly('staff', caps, <String>{
       'isAuthenticated',
       'isStaff',
@@ -73,7 +73,8 @@ void main() {
       ...groupAndLock,
       'canCalibrate',
       'canManageRules',
-      // Servis kapsamı (045): evin servisi kendi evinde üye / misafir yönetir; devir ✖ ve servis PIN ✖ (yalnız ev sahibi)
+      // Servis kapsamı (045): evin servisi KENDİ kapsamındaki evde (service_scope_admin) üye / misafir yönetir; kapsamı
+      // dışındaki evde ✖ (service_scope_models_test). Devir ✖ ve servis PIN ✖ (yalnız ev sahibi).
       'canInvite',
       'canManageMembers',
       'canClaimDevice',
