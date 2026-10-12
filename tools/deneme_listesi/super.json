@@ -1,7 +1,7 @@
 {
  "rol": "super",
  "baslik": "Süper Kullanıcı Deneme Listesi",
- "aciklama": "Bu liste yalnız süper kullanıcının yapabildiği işleri kapsar. Süper kullanıcı servis sorumlusunun yapabildiği her işi de yapabilir; o işler Servis Sorumlusu deneme listesindedir ve burada tekrar edilmez.",
+ "aciklama": "Bu liste yalnız süper kullanıcının (kök yönetici) yapabildiği işleri kapsar. Süper kullanıcı servis sorumlusunun yapabildiği her işi de yapabilir; o işler Servis Sorumlusu deneme listesindedir ve burada tekrar edilmez. 2026-10-12'den beri servis sorumlusu kendi kapsamında süperdir: kendi stoğuna kart kaydeder, kendi kartlarını askıya alır / siler / etiketini yeniler (U1, U4, U7'deki işler servis için yalnız kendi stoğunda geçerlidir). Bütün stok ve daireler, kök stoğu, kartı iptal etme (REVOKED) ve servisler arası aktarım (\"Servisi Değiştir\", \"🔀 Servise Aktar\") yalnız köktedir (U10).",
  "bolumler": [
   {
    "id": "U1",
@@ -728,11 +728,11 @@
       "Onay ekranındaki uyarıyı okuyup onaylayın",
       "O hesapla girip \"Abonelerim & Cihaz Atama\"ya bakmayı deneyin"
      ],
-     "beklenen": "Onay ekranında \"Dairelerdeki servis üyelikleri kaldırılır.\" yazar; değişiklikten sonra hesap müşteri olur ve servis ekranlarını göremez.",
+     "beklenen": "Onay ekranında \"Dairelerdeki servis üyelikleri kaldırılır.\" yazar; değişiklikten sonra hesap müşteri olur ve servis ekranlarını göremez. O servisin daireleri, kartları ve siteleri kök kapsamına düşer: müşterilerin \"Servisiniz\" kartı kaybolur, kartlar envanterde \"Servis: Kök stoğu\" görünür.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "en az bir dairede servis üyeliği olan deneme servis sorumlusu hesabı",
      "yeni": true,
-     "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:604"
+     "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:604; server/src/services/admin_user_service.js (rol değişimi)"
     },
     {
      "id": "U6.19",
@@ -917,11 +917,11 @@
       "Dairede birden çok pano varsa \"Hangi pano?\" listesinden birini seçin.",
       "Yarım kayıt sorusu çıkarsa \"Kaldığınız Yerden Devam\"ı seçin."
      ],
-     "beklenen": "Kurulum sihirbazı o pano için 5. adımdan (ağ bağlantısı) açılır; telefonda yarım kayıt varsa önce \"Bu panonun yarım kalmış kurulumu var\" sorusu gelir. Bu düğme yalnız süper kullanıcıda vardır.",
+     "beklenen": "Kurulum sihirbazı o pano için 5. adımdan (ağ bağlantısı) açılır; telefonda yarım kayıt varsa önce \"Bu panonun yarım kalmış kurulumu var\" sorusu gelir. Bu düğme servis sorumlusunda da vardır, ama yalnız onun kapsamındaki dairelerde.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "Panosu bağlanmış ama devreye alınmamış bir deneme dairesi",
-     "yeni": false,
-     "kaynak": "lib/ui/pages/service_subscribers_page.dart:575; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:257"
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:591; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:257"
     },
     {
      "id": "U8.03",
@@ -1022,6 +1022,201 @@
      "on_kosul": "Süper hesapta seçili daire yok",
      "yeni": false,
      "kaynak": "lib/ui/pages/system_doctor_dialog.dart:321"
+    }
+   ]
+  },
+  {
+   "id": "U10",
+   "baslik": "Servis kapsamları ve aktarım (yalnız kök, 2026-10-12)",
+   "maddeler": [
+    {
+     "id": "U10.01",
+     "baslik": "Abonelerde her dairenin servisi görünür",
+     "adimlar": [
+      "Menüden \"Tüm Aboneler & Atamalar\"ı açın; daire kartlarına bakın."
+     ],
+     "beklenen": "Her kartta \"Servis: <servis sorumlusunun adı>\" ya da servissiz dairede \"Servis: Kök (servissiz)\" satırı ve \"Servisi Değiştir\" düğmesi vardır.",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "En az bir servisin kurduğu ve bir servissiz (müşterinin kendi kurduğu) daire",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:697; lib/ui/pages/service_subscribers_page.dart:631"
+    },
+    {
+     "id": "U10.02",
+     "baslik": "Daireyi başka bir servise aktarma (\"Servisi Değiştir\")",
+     "adimlar": [
+      "Bir dairenin kartında \"Servisi Değiştir\"e basın.",
+      "\"Servisi Değiştir\" penceresinde \"Mevcut servis: …\" satırını okuyun; \"Servis ara\" kutusuyla bir servis sorumlusunu bulup seçin; \"Devam\".",
+      "Onay adımındaki metni okuyup \"Aktar\"a basın."
+     ],
+     "beklenen": "Onay adımında '<daire> (#…): \"<eski servis>\" kapsamından \"<yeni servis>\" kapsamına aktarılacak.', \"Dairedeki kartlar da bu servisin stoğuna geçer.\" ve \"Önceki servisin dairedeki üyeliği ve uygulama bağlantı kimlikleri iptal edilir. Tek panolu dairede panonun bulut kimliği ve yerel anahtarı da yenilenir.\" yazar. Sonuçta \"Daire yeni servis sorumlusunun kapsamına aktarıldı.\" (kart taşındıysa ardından \"N kart yeni servisin stoğuna geçti.\") bildirimi çıkar ve satır yeni servisin adını gösterir. Yeni servis daireyi kendi \"Abonelerim\"inde görür, eski servis artık görmez.",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Deneme dairesi (QA Daire 1 gibi turun dayandığı daireyi aktarmayın: pano kimliği yenilenir); iki aktif servis hesabı",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_owner_dialog.dart:240; server/src/services/service_scope_service.js (transferHome)"
+    },
+    {
+     "id": "U10.03",
+     "baslik": "Daireyi köke alma (\"Kök (servissiz)\")",
+     "adimlar": [
+      "Servisi olan bir dairede \"Servisi Değiştir\"e basın.",
+      "\"Kök (servissiz)\" seçeneğini seçip \"Devam\" → \"Aktar\"."
+     ],
+     "beklenen": "Onay adımında \"Daire kök yönetici kapsamına alınır; hiçbir servis sorumlusu bu daireyi yönetemez.\" yazar. Sonuçta \"Daire kök yönetici kapsamına alındı.\" (kart taşındıysa \"N kart kök stoğuna geçti.\") bildirimi çıkar; satırda \"Servis: Kök (servissiz)\" görünür; ev sahibinin Ayarlar'ındaki \"Servisiniz\" kartı kaybolur.",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Servisi olan deneme dairesi",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_owner_dialog.dart:245"
+    },
+    {
+     "id": "U10.04",
+     "baslik": "Mevcut servisi yeniden seçmek aktarım yapmaz",
+     "adimlar": [
+      "\"Servisi Değiştir\" penceresinde listeye bakın; \"Mevcut\" etiketli seçeneği seçin."
+     ],
+     "beklenen": "Mevcut servis (ya da servissiz dairede \"Kök (servissiz)\") \"Mevcut\" etiketiyle işaretlidir; onu seçince \"Devam\" pasif kalır. Yalnız aktif servis hesapları listelenir: dondurulmuş ya da davet bekleyen hesap çıkmaz (hiç yoksa \"Aktif servis sorumlusu hesabı yok.\").",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_owner_dialog.dart:182; lib/ui/pages/service_setup/panel/service_owner_dialog.dart:334; lib/ui/pages/service_setup/panel/service_owner_dialog.dart:411"
+    },
+    {
+     "id": "U10.05",
+     "baslik": "Envanterde kartın servisi görünür",
+     "adimlar": [
+      "Menüden \"Cihaz Envanteri\"ni açıp kartlara bakın."
+     ],
+     "beklenen": "Her kartta \"Servis: <servisin e-postası>\" ya da \"Servis: Kök stoğu\" satırı vardır. Süper kullanıcının kaydettiği kartlar kök stoğundadır; servis sorumlusunun kaydettikleri onun stoğundadır.",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Biri süper kullanıcının, biri bir servisin kaydettiği iki kart",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:230"
+    },
+    {
+     "id": "U10.06",
+     "baslik": "Stoktaki kartı başka servisin stoğuna aktarma",
+     "adimlar": [
+      "Stoktaki (daireye bağlı olmayan) bir kartta \"Servisi Değiştir\"e basın.",
+      "Bir servis sorumlusunu seçip \"Devam\" → \"Aktar\"."
+     ],
+     "beklenen": "Onay adımında \"Kart bu servisin stoğuna geçer; önceki servis artık bu kartı göremez ve yönetemez.\" yazar. Sonuçta \"Kart yeni servis sorumlusunun stoğuna aktarıldı.\" bildirimi çıkar ve satır \"Servis: <yeni servisin e-postası>\" olur. Kart yeni servisin \"Cihaz Envanteri\"nde görünür, eskisinde görünmez.",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Stokta deneme kartı; aktif bir servis hesabı",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:991; lib/ui/pages/service_setup/panel/service_owner_dialog.dart:256"
+    },
+    {
+     "id": "U10.07",
+     "baslik": "Kartı kök stoğuna alma",
+     "adimlar": [
+      "Bir servisin stoğundaki kartta \"Servisi Değiştir\" → \"Kök (servissiz)\" (alt yazı \"Kart kök stoğunda kalır\") → \"Devam\" → \"Aktar\"."
+     ],
+     "beklenen": "Onay adımında \"Kart kök stoğuna alınır; servis sorumluları bu kartı yalnızca kurabilir, yönetemez.\" yazar. Sonuçta \"Kart kök stoğuna alındı.\" çıkar; satır \"Servis: Kök stoğu\" olur.",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Bir servisin stoğunda deneme kartı",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_owner_dialog.dart:254"
+    },
+    {
+     "id": "U10.08",
+     "baslik": "Kurulu kartın servisi ayrıca değiştirilemez",
+     "adimlar": [
+      "\"Devrede / Aktif\" süzgecinde bir kartın düğmelerine bakın."
+     ],
+     "beklenen": "Kurulu kartta \"Servisi Değiştir\" düğmesi yoktur; altında \"Kurulu kartın servisi dairesini izler. Servisi değiştirmek için Aboneler ekranından daireyi aktarın.\" yazar. (Sunucu bu kartın aktarımını 409 ile reddeder: \"Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın.\")",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Bir daireye bağlanmış kart",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:774; server/src/services/service_scope_service.js (transferInventory)"
+    },
+    {
+     "id": "U10.09",
+     "baslik": "Servis yazılımında \"Servis\" sütunu",
+     "adimlar": [
+      "Servis yazılımına süper kullanıcı olarak girin; 2. sekmede \"🔄 Listeyi Yenile\"."
+     ],
+     "beklenen": "Envanter tablosunda \"Servis\" sütunu vardır: servise ait kartta servisin e-postası, servissiz kartta \"Kök stoğu\" yazar. Tablonun altında \"🔀 Servise Aktar\" düğmesi görünür. (Servis sorumlusu girişinde ikisi de görünmez.)",
+     "rol_notu": "süper kullanıcı (servis yazılımı)",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1444; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:261; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1189"
+    },
+    {
+     "id": "U10.10",
+     "baslik": "Servis yazılımında kartı servise aktarma (\"🔀 Servise Aktar\")",
+     "adimlar": [
+      "Tablodan stoktaki bir kartı seçip \"🔀 Servise Aktar\"a basın.",
+      "\"<UID> kartının stoğu hangi servise ait olsun?\" listesinden bir servisi (\"Ad · e-posta\") seçip onaylayın.",
+      "\"Servise Aktar\" sorusuna \"Evet\" deyin."
+     ],
+     "beklenen": "Soru \"<UID> kartı <servis> servis hesabının stoğuna aktarılacak. Önceki servis bu kartı artık göremez ve yönetemez.\" der. Sonuçta \"Aktarıldı\" penceresinde \"<UID> kartı <servis> servis hesabının stoğuna aktarıldı.\" yazar; \"Servis\" sütunu güncellenir.",
+     "rol_notu": "süper kullanıcı (servis yazılımı)",
+     "on_kosul": "Stokta deneme kartı; aktif bir servis hesabı",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2922"
+    },
+    {
+     "id": "U10.11",
+     "baslik": "Servis yazılımında kartı kök stoğuna alma",
+     "adimlar": [
+      "\"🔀 Servise Aktar\" listesinde \"Kök stoğuna al (hiçbir servise bağlı olmasın)\" seçeneğini seçip onaylayın."
+     ],
+     "beklenen": "\"Aktarıldı\" penceresinde \"<UID> kartı kök stoğuna alındı.\" yazar; \"Servis\" sütununda \"Kök stoğu\" görünür. Kart zaten oradaysa \"<UID> kartı zaten bu stokta.\" yazar.",
+     "rol_notu": "süper kullanıcı (servis yazılımı)",
+     "on_kosul": "Bir servisin stoğunda deneme kartı",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:175; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2950"
+    },
+    {
+     "id": "U10.12",
+     "baslik": "Servis yazılımında kurulu kart aktarılamaz",
+     "adimlar": [
+      "Daireye bağlı (CLAIMED) bir kartı seçip \"🔀 Servise Aktar\"a basın."
+     ],
+     "beklenen": "\"Aktarılamaz\" penceresinde \"Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın.\" yazar; servis listesi açılmaz.",
+     "rol_notu": "süper kullanıcı (servis yazılımı)",
+     "on_kosul": "Bir daireye bağlanmış kart",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:174; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2933"
+    },
+    {
+     "id": "U10.13",
+     "baslik": "Servis yazılımında siteyi servise aktarma (\"🔀 Siteyi Servise Aktar\")",
+     "adimlar": [
+      "\"🏢 4. Siteler\" sekmesinde bir site seçip \"🔀 Siteyi Servise Aktar\"a basın.",
+      "\"'<site>' sitesi hangi servisin kapsamında olsun?\" listesinden bir servis seçin (ya da \"Kök kapsamına al (hiçbir servise bağlı olmasın)\") ve onaylayın.",
+      "Aktarılan servis hesabıyla servis yazılımına girip \"🔄 Siteleri Yenile\"ye basın."
+     ],
+     "beklenen": "Soru \"Site, daireleri ve site şablonları artık yalnız o kapsamda yönetilir; önceki servis siteyi göremez.\" der. Sonuçta \"Site Aktarıldı\" penceresinde \"'<site>' sitesi <servis> servis hesabının kapsamına aktarıldı.\" (köke alınınca \"… kök kapsamına alındı.\") yazar. Yeni servis siteyi listesinde görür, eski servis görmez.",
+     "rol_notu": "süper kullanıcı (servis yazılımı)",
+     "on_kosul": "Deneme sitesi; aktif bir servis hesabı",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1232"
+    },
+    {
+     "id": "U10.14",
+     "baslik": "Süper kullanıcının kaydettiği kart kök stoğuna girer",
+     "adimlar": [
+      "Servis yazılımında süper kullanıcı olarak yeni bir kart kaydedin (U1.03); \"🔄 Listeyi Yenile\"."
+     ],
+     "beklenen": "Kartın \"Servis\" sütununda \"Kök stoğu\" yazar. Servis sorumluları bu kartı envanterlerinde görmez, ama sihirbazda kurabilirler (kurulunca kart evin servisine geçer).",
+     "rol_notu": "süper kullanıcı (servis yazılımı)",
+     "on_kosul": "Kaydedilmemiş deneme kartı",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2472; server/src/services/inventory_service.js (registerDevice)"
+    },
+    {
+     "id": "U10.15",
+     "baslik": "Kartı iptal etme ve iptal edilmiş kartı stoğa alma yalnız kökte",
+     "adimlar": [
+      "Servis sorumlusunun stoğundaki iptal edilmiş bir kartı \"Cihaz Envanteri\"nde bulun.",
+      "\"Stoğa Al\"a basın ve kimliği yazarak onaylayın."
+     ],
+     "beklenen": "Süper kullanıcıda \"Stoğa Al\" düğmesi vardır ve kart stoğa alınır; aynı kartta servis sorumlusu \"İptal edilmiş kartı stoğa almak yalnızca süper yöneticiye aittir.\" notunu görür (S20.06).",
+     "rol_notu": "süper kullanıcı",
+     "on_kosul": "Bir servisin stoğunda iptal edilmiş kart",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:902"
     }
    ]
   }

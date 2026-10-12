@@ -154,7 +154,7 @@ test('tohumlama IDEMPOTENT: gercek yigin (gomulu PG + broker + simulator + gerce
         assert.equal(s.unchanged, 0, 'temiz veritabaninda atlanacak (zaten var) adim olmamali');
         assert.ok(s.applied >= 15, `yapilan adim sayisi ${s.applied}`);
         assert.equal(s.verified, 3);
-        assert.match(up.out, /Tohumlama\s+tamam\s+\(20\/20 adim: \d+ yapildi, 0 atlandi \(zaten var\), 3 dogrulandi\)/);
+        assert.match(up.out, /Tohumlama\s+tamam\s+\(21\/21 adim: \d+ yapildi, 0 atlandi \(zaten var\), 3 dogrulandi\)/);
 
         const acc = accounts();
         const staff = (await sql('SELECT role, must_change_password, account_status FROM users WHERE email = $1', [acc.users.staff.email])).rows[0];
@@ -165,6 +165,15 @@ test('tohumlama IDEMPOTENT: gercek yigin (gomulu PG + broker + simulator + gerce
         assert.equal(res.status, 200, 'accounts.json parolasiyla giris');
         assert.equal(dataOf(res).user.must_change_password, false);
         assert.equal(dataOf(res).user.role, 'service_user');
+        // servis kapsami (migration 045): ev 1 ve evdeki kurulu kart qa.servis'in; ev 2 ve stoktaki kartlar kok (NULL)
+        const staffId = dataOf(res).user.id;
+        const homeOwners = (await sql('SELECT id, service_owner_id FROM homes')).rows;
+        assert.equal(homeOwners.find((h) => h.id === acc.homes.home1.id).service_owner_id, staffId, 'ev 1 servisi qa.servis');
+        assert.equal(homeOwners.find((h) => h.id === acc.homes.home2.id).service_owner_id, null, 'ev 2 kok kapsaminda');
+        const cardOwners = (await sql('SELECT UPPER(device_uuid) AS uid, service_owner_id FROM device_inventory')).rows;
+        assert.equal(cardOwners.find((c) => c.uid === String(acc.devices.home1.uid).toUpperCase()).service_owner_id, staffId);
+        assert.ok(cardOwners.filter((c) => c.uid !== String(acc.devices.home1.uid).toUpperCase()).every((c) => c.service_owner_id === null),
+          'ev 1 disindaki kartlar kok stogunda');
 
         const rules = (await sql('SELECT label FROM scheduled_rules')).rows.map((r) => r.label);
         assert.equal(rules.length, 4);
@@ -222,7 +231,7 @@ test('tohumlama IDEMPOTENT: gercek yigin (gomulu PG + broker + simulator + gerce
 
         const r = await cli(['seed'], { timeoutMs: 240000 });
         assert.equal(r.code, 0, r.out.slice(-2000));
-        assert.match(r.out, /Tohumlama\s+tamam\s+\(20\/20 adim: [1-9]\d* yapildi, /, r.out.slice(-1200));
+        assert.match(r.out, /Tohumlama\s+tamam\s+\(21\/21 adim: [1-9]\d* yapildi, /, r.out.slice(-1200));
         const stepsDone = r.out.split('\n').filter((l) => l.startsWith('YAPILDI')).map((l) => l.split(/\s+/)[1]);
         for (const name of ['servis_personeli', 'kullanici_owner2', 'kullanici_guest_valid', 'aile_uyesi', 'misafir_gecerli', 'misafir_suresi_dolmus',
           'servis_personeli_uyeligi', 'zamanli_kurallar', 'servis_pin', 'home1_simulator']) {

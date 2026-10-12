@@ -1,13 +1,36 @@
 # Servis Sorumlusu Akışı
 
 > Kimin için: servis sorumlusu ve süper kullanıcı (ofis, atölye, saha, teslim). Kaynak: kodun kendisi, 2026-10-09
-> (2026-10-09 akşam: sahip kararları, karekodun uygulamayı açması, firmware v1.3.2 kartta denendi). Ekrandaki düğme ve
+> (2026-10-09 akşam: sahip kararları, karekodun uygulamayı açması, firmware v1.3.2 kartta denendi; 2026-10-12: servis sorumlusu
+> kendi kapsamında süper, Bölüm 0 başı ve `docs/CONTRACTS.md` §3l). Ekrandaki düğme ve
 > mesajlar tırnak içinde, koddaki gibi. Kullanıcı tarafı ayrı belgede: `DAIRE_KULLANICISI_AKISI.md`. Açık kalan konular en sonda
 > (Bölüm 9).
 
 ---
 
-## 0. Bu sürümde değişenler (2026-10-09)
+## 0. Bu sürümde değişenler (2026-10-12; önceki: 2026-10-09)
+
+**2026-10-12: servis sorumlusu kendi kapsamında süper (kiracılık; sunucu migration 045, uygulama, servis yazılımı):**
+
+1. **Kök ve kapsam:** süper kullanıcı (kök yönetici) her şeyi yönetir. Her servis sorumlusu KENDİ müşterilerinin, dairelerinin,
+   kartlarının ve sitelerinin süper kullanıcısıdır; süre sınırı yoktur. Başka servisin dairesini, kartını, sitesini ve müşterisini
+   görmez, değiştiremez ("Bu daireye erişim yetkiniz bulunmamaktadır." ya da kayıt hiç görünmez).
+2. **Kayıt kuran servise aittir:** sihirbazla müşteriye bağladığınız ya da acil sıfırlamayla devraldığınız daire, servis yazılımında
+   kaydettiğiniz kart ve açtığınız site sizin kapsamınıza girer. Kurulan kart evin servisinin stoğuna geçer; stoğa dönen kart o
+   servisin stoğunda kalır. Servisler arası ya da köke aktarımı yalnız süper kullanıcı yapar ("Servisi Değiştir", "🔀 Servise
+   Aktar", "🔀 Siteyi Servise Aktar"; Bölüm 6.2b).
+3. **72 saatlik kurulum yetkisi kalktı:** sihirbazın 4. adımı artık "Bu dairede kalıcı servis yetkiniz var." der; "Kurulumu sürdür",
+   Home Admin atama, acil sıfırlama ve pano değişimi kendi dairelerinizde süresizdir.
+4. **Servis yazılımında kendi stoğunuz:** kartı kendi stoğunuza kaydeder, etiketini basar, askıya alır / aktif eder, siler ve
+   etiketini yenilersiniz (Bölüm 3.1). Kartı iptal etme (REVOKED) ve iptal edilmiş kartın durumunu değiştirme yalnız süper kullanıcı.
+5. **Uygulamada kendi stoğunuz:** "Cihaz Envanteri"nde (konsoldaki "Pano Envanteri" sayacı ya da "Yönetim araçları") kendi kartlarınızı
+   askıya alır / stoğa alır, etiketini yeniden üretir, PIN kilidini kaldırır, silersiniz.
+6. **Kendi dairenizde aile / misafir yönetimi:** profil → "Aile & Misafir Yönetimi" açıktır. Ev sahibi sizi evden çıkaramaz ("Servis
+   sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar."); daire devri ve Home Admin devri sizi korur.
+7. **Müşteriler:** "Servis Hesapları"nda açtığınız ve dairelerinizde üye olan müşteriler görünür.
+8. **Müşteri sizi görür:** ev sahibi ve sakin Ayarlar'da "Servisiniz: <adınız> · <telefonunuz>" kartını görür; kaldıramaz.
+9. **Genel şablonlar** size salt okunurdur; kendi sitenize "📑 Çoğalt" ile kopyalarsınız (Bölüm 2.3).
+10. **Sonraya bırakılan:** servis hesaplarına iki adımlı doğrulama yok (risk kabul edildi; Bölüm 9).
 
 **Sahip kararlarıyla gelenler (2026-10-09 öğleden sonra; ayrıntı `docs/denetim/2026-10-09-kararlar.md`):**
 
@@ -16,7 +39,8 @@
    PIN'iyle ya da süper kullanıcı olarak yaparsınız (Bölüm 6.1).
 2. **Ethernet'te sınır yok (karar):** kablolu panoda yerel istekler anahtarsız tam yetkili kalır (gaz vanası ve alarm dahil), şablon
    yazımında kart kimliği denetlenmez; müşteri uygulaması da kablolu panoyu anahtarsız yönetir.
-3. **Personel her kartın yerel anahtarını okuyabilir** (değişmedi); yasal metinler buna göre düzeltildi (taslak sürüm 2).
+3. **Personel her kartın yerel anahtarını okuyabilir** (değişmedi); yasal metinler buna göre düzeltildi (taslak sürüm 2). (2026-10-12'den
+   beri servis sorumlusu yalnız kendi stoğundaki / kapsamındaki kartın ve kök stoğundaki kartın anahtarını okur.)
 4. **Erişim bitince panonun bulut kimliği yenilenir:** üye çıkarma/ayrılma, devir kabulü ve **her servis oturumunun bitişi**. Tek
    panolu evde ve v1.3.0+ panoda; pano yeni kimliği kendisi alır (Bölüm 7, madde 3). EMQX'te cihaz kimliği panonun istemci
    kimliğine (`ESP32S3_<MAC>`) bağlıdır: aynı kimlikle başka bir istemci bağlanamaz.
@@ -33,8 +57,9 @@
     adres `400 host_not_allowed`. v1.3.2 kartta denendi ve servis yazılımında seçili sürüm.
 11. **Değişmeyenler (kararlarınız):** kablosuz sensör "yakında" olarak kapalı kalır; e-postasız müşteri panosunu kendi karekoduyla
     sahiplenir (e-posta/SMS sistemi gelene kadar); personel süper kullanıcının dondurduğu hesabı açabilir.
-12. **Aboneler ve Servis Yönetimi'nde iki karar:** "Kurulumu sürdür" artık servis sorumlusuna da açık (yarım kalan dairede, 72 saatlik
-    kurulum penceresi sürerken; bitmişse "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin."); süper
+12. **Aboneler ve Servis Yönetimi'nde iki karar:** "Kurulumu sürdür" artık servis sorumlusuna da açık (yarım kalan dairede; o gün 72
+    saatlik kurulum penceresi sürerken, 2026-10-12'den beri kendi dairelerinizde süresiz; daire sizin değilse "Bu dairede servis
+    yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin."); süper
     kullanıcı hesap kartında başka hesaplar için "Rol Değiştir" ve "Kalıcı Sil" düğmelerini görür (Bölüm 6.3).
 
 **Aynı gün sabah gelenler:**
@@ -70,17 +95,20 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 | İş | Süper kullanıcı | Servis sorumlusu | Geçici servis (PIN) |
 |---|---|---|---|
 | Servis yazılımına giriş | Evet | Evet | Hayır |
-| Kartı envantere kaydetme, askıya alma, silme | Evet | Hayır | Hayır |
-| Site, daire, şablon ekleme/düzenleme/silme | Evet | Evet | Hayır |
+| Kartı envantere kaydetme, askıya alma / aktif etme, etiket yenileme, silme | Evet (bütün kartlar; kaydı kök stoğuna) | Evet (yalnız kendi stoğu; 2026-10-12) | Hayır |
+| Kartı iptal etme (REVOKED), iptal edilmiş kartı stoğa alma | Evet | Hayır | Hayır |
+| Daire, kart ya da siteyi başka servise / köke aktarma ("Servisi Değiştir") | Evet (yalnız kök) | Hayır | Hayır |
+| Site, daire, şablon ekleme/düzenleme/silme | Evet | Evet (kendi siteleri; genel şablonlar salt okunur) | Hayır |
 | Şablonu karta yazma, PDF üretme | Evet | Evet | Hayır |
 | Kurulmuş / teslim edilmiş dairenin kartını değiştirme ya da ayırma (pano değişimi dışında) | Evet | Hayır | Hayır |
 | Panoyu müşteriye bağlama (sahiplendirme) | Evet | Evet | **Hayır** |
-| Sihirbazla kurulum ve test | Evet | Evet (müşteri evinde 72 saat) | Evet (yalnız o ev, 2 saat) |
+| Sihirbazla kurulum ve test | Evet | Evet (kendi dairelerinde, süresiz) | Evet (yalnız o ev, 2 saat) |
+| Dairede aile / misafir yönetimi | Evet | Evet (kendi dairelerinde) | Hayır |
 | Sihirbazda şablon uygulama | Evet | Evet | Hayır |
 | Pano değişimi | Evet | Evet | Evet |
-| Acil sıfırlama | Evet | Evet (kurduğu ya da devraldığı evler, süre sınırı yok) | Hayır |
+| Acil sıfırlama | Evet | Evet (kendi dairelerinde: kurduğu ya da devraldığı evler, süre sınırı yok) | Hayır |
 | Evin yerel anahtarını okuma | **Hayır** | Evet | Evet |
-| Herhangi bir envanter kartının anahtarını okuma (servis yazılımı) | Evet | Evet | Hayır |
+| Envanter kartının anahtarını okuma (servis yazılımı) | Evet (her kart) | Evet (kendi stoğu ve kök stoğu; 2026-10-12) | Hayır |
 | Hırsız alarmını kurma/çözme | Hayır | Hayır | Hayır |
 | Gaz vanasını uzaktan açma | Hayır (kimse) | Hayır | Hayır |
 
@@ -92,15 +120,20 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 1. Servis yazılımını açın. Sekmeler: "⚡ 1. Firmware Yükleyici (Flasher)", "🏷️ 2. Karekod Üret & Etiket Bas (Envanter)",
    "📡 3. Cihaz Provizyonu (USB / Wi-Fi)", "🏢 4. Siteler", "📐 5. Şablonlar".
 2. "🔐 Sunucuya Giriş" → e-posta + parola. "Beni hatırla" işaretliyse sonraki açılışta oturum kendiliğinden açılır.
-3. Servis sorumlusuysanız envanter kayıt/askı/silme düğmeleri pasiftir (not çıkar). Envanter listesi 100'er kayıtla gelir: UID ya
+3. Servis sorumlusuysanız envanter kayıt, askıya alma / aktif etme, silme ve etiket yenileme düğmeleri açıktır ama yalnız KENDİ
+   stoğunuzda çalışır ("ℹ️ Servis sorumlusu olarak giriş yaptınız: kartları KENDİ stoğunuza kaydedersiniz; …" notu; durum satırının
+   sonunda "Kapsam: kendi stoğunuz"); tabloda yalnız kendi kartlarınız vardır. Envanter listesi 100'er kayıtla gelir: UID ya
    da seri no ile arayın, sonraki sayfa için "⬇️ Daha fazla" (durum satırı "Gösterilen X / Toplam Y").
 
 ### 2.2 Site ve daireler (4. sekme)
 1. "🔄 Siteleri Yenile" → "➕ Site Ekle": "Site adı *", adres, il, ilçe, sorumlu adı, sorumlu telefonu, e-posta, blok sayısı,
-   daire sayısı, not.
+   daire sayısı, not. Servis sorumlusu yalnız kendi açtığı (ya da süper kullanıcının kendisine aktardığı) siteleri görür; açtığı site
+   onun kapsamına girer.
 2. Siteyi seçin → "🧱 Toplu Daire Üret": blok (A), ilk–son daire no, isteğe bağlı daire tipi ve şablon (en çok 500;
    var olan blok+no atlanır). Her blok için tekrarlayın.
-3. Daire seçip "📐 Şablon Ata", "🔗 Kart Bağla" (yalnız **stoktaki** kart; bir kart tek daireye). Kuruldu ya da Teslim edildi
+3. Daire seçip "📐 Şablon Ata", "🔗 Kart Bağla" (yalnız **stoktaki** kart; bir kart tek daireye; servis sorumlusu başka servisin
+   stoğundaki kartı bağlayamaz: "Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz. Kartın sahibini yalnızca kök
+   yönetici değiştirir."). Kuruldu ya da Teslim edildi
    dairenin kartını yalnız Pano Değişimi ya da süper kullanıcı değiştirir/ayırır; aksi halde sunucu "Kurulmuş ya da teslim edilmiş
    dairenin kartı yalnız Pano Değişimi ile ya da yönetici tarafından değiştirilebilir." der. Yazıldı dairede kart ayrılırsa daire
    Planlandı'ya döner.
@@ -109,7 +142,10 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
    "Son yazım" sütunu dairenin şablonundan başka bir şablonun yazımını "(farklı şablon)" diye işaretler.
 
 ### 2.3 Şablon (5. sekme)
-1. "Site:" seçin (ya da "Genel (standart şablonlar)") → "➕ Yeni Şablon" ya da "📑 Çoğalt".
+1. "Site:" seçin (ya da "Genel (standart şablonlar)") → "➕ Yeni Şablon" ya da "📑 Çoğalt". Genel şablonları yalnız süper kullanıcı
+   ekler, değiştirir ve siler; servis sorumlusu onları okur ve kullanır (denerse "Genel Şablon" penceresi: "Genel (standart) şablonları
+   yalnızca kök yönetici ekler, değiştirir ve siler; servis sorumlusu bunları okur ve kullanır. …"); kendi sitenizi seçip genel şablonu
+   "📑 Çoğalt" ile sitenize kopyalayın (site seçiliyken liste genel şablonları da gösterir).
 2. Üst satır: ad, daire tipi, "Ek modül (RS485) var" + kanal + adres → **"↔ Kanalları Uygula"ya mutlaka basın**.
 3. "⚡ Röle Çıkışları": ad, oda, tip ("Lamba/Priz", "Panjur (çift)" — tek numaralı röle Yukarı, sonraki Aşağı, aynı süre;
    "Darbe" — ms), bağlanacak yük. Lamba satırında "💡" → "Parlaklık ayarı yapılacak mı?" → dimmer kaynağı/adres/kanal ve
@@ -126,9 +162,11 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 
 ## 3. Atölye: kartı hazırlama (servis yazılımı)
 
-### 3.1 Kayıt ve etiket (yalnız süper kullanıcı, 2. sekme)
+### 3.1 Kayıt ve etiket (2. sekme; süper kullanıcı: kök stoğuna, servis sorumlusu: kendi stoğuna)
 1. Kart USB'de → "📡 Karttan MAC Oku" (UID = `AHBU-S3-` + MAC son 6) → "🎲 Rastgele PIN Üret".
-2. "☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET": sunucu yerel anahtarı **bir kez** verir; AP parolası araçta üretilir.
+2. "☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET": sunucu yerel anahtarı **bir kez** verir; AP parolası araçta üretilir. Servis
+   sorumlusunun kaydettiği kart onun stoğuna girer (2026-10-12); kart kök stoğunda ya da başka servisin stoğunda zaten kayıtlıysa
+   "Mükerrer Cihaz Uyarısı" sonunda "Servis sorumlusu olarak yalnızca KENDİ stoğunuzdaki kartları görürsünüz: …" der.
 3. Etiket: "1) Daireye bağla" karekodu (uygulama, UID+PIN) ve "2) Kurulum Wi-Fi'sine bağlan" karekodu (telefon kamerası).
    "💾 Etiketi Kaydet (PNG)" / "🖨️ Yazdır". Etiket gizlidir (PIN + parola içerir).
 
@@ -196,14 +234,19 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
    üstüne gelir, kilit açılınca aynı adımda devam edilir (bellekteki pano anahtarı korunur). Çıkış yaparsanız sihirbaz kapanır.
 
 ### 5.3 Adımlar
-1. **Hazırlık:** "Bağlantıyı Doğrula" (oturum + sunucu).
-2. **Cihazı Tanı:** "Etiketi Tara (Karekod)" ya da seri no + PIN → stok durumu denetlenir. (PIN oturumunda dairedeki pano seçilir.)
+1. **Hazırlık:** "Bağlantıyı Doğrula" (oturum + sunucu). Servis sorumlusunda not: "Servis sorumlusu hesabı: müşteriye bağladığınız ve
+   devraldığınız dairelerde süresiz yetkiniz vardır."
+2. **Cihazı Tanı:** "Etiketi Tara (Karekod)" ya da seri no + PIN → stok durumu denetlenir: kendi stoğunuzdaki kartta "Sunucuda stokta
+   görünüyor: kuruluma uygun."; kök stoğundaki kartı envanterinizde göremediğiniz için "Bu hesapla stok durumu görüntülenemiyor. …"
+   (kurulum yine yapılır). Başka servisin stoğundaki kart 3. adımda reddedilir: "Cihaz kuruluma uygun değil" / "Bu cihaz başka bir
+   servis sorumlusunun stoğunda; kurulum yapamazsınız." (PIN oturumunda dairedeki pano seçilir.)
 3. **Müşteri:** müşterinin e-postası/telefonu → "Kod Gönder" → müşteriye 6 haneli kod (15 dk) → kodu yazın. Müşteri uygulamaya
    yalnız telefonla (SMS) giriş yapıyorsa hesabında e-posta yoktur ve kod gönderilemez: "Bu müşteri uygulamaya telefonla giriş
    yapıyor; hesabında e-posta olmadığı için onay kodu gönderilemez. Müşteri panoyu kendi uygulamasından etiketteki karekodla
    sahiplenmeli." Müşteri panoyu kendisi sahiplenir, kurulum için size servis PIN'i verir.
 4. **Daireye Bağla:** özet → "Daireye Bağla" → onay. Sunucu evi açar/seçer (site dairesiyse ad "<site> <blok>-<no>",
-   kanallar şablondan), müşteri hesabı yoksa açar ve davet gönderir, size 72 saat yetki verir. Yanlış PIN'de
+   kanallar şablondan), müşteri hesabı yoksa açar ve davet gönderir; daire ve kart sizin kapsamınıza girer ve süresiz yetkiniz olur
+   ("Bu dairede kalıcı servis yetkiniz var."; eski 72 saatlik yetki 2026-10-12'de kalktı). Yanlış PIN'de
    "Kurulum PIN'i hatalı" + kalan hak → 2. adıma döner.
 5. **Ağ (Wi-Fi ya da Ethernet):**
    1. **Wi-Fi:** telefonu kurulum ağına (`AHBU-XXXXXX`, etiketin 2. karekodu) bağlayın → "Bağlandım: Panoyu Kontrol Et" →
@@ -254,14 +297,34 @@ bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
 ### 6.2 Acil sıfırlama
 1. Cihaz kimliği + en az 15 karakter gerekçe + isteğe bağlı yeni sahip; UID yazılarak onay.
 2. Eski ailenin yetkileri biter; cihaz stoğa ya da yeni sahibe geçer. Yeni kurulum PIN'i bir kez gösterilir.
+3. Servis sorumlusu yalnız kendi kapsamındaki dairenin panosunu sıfırlar (süre sınırı yok); başka servisin ya da kökün dairesinde
+   "Bu cihazın dairesinde servis yetkiniz yok. Süper yönetici ile iletişime geçin.". Stoğa alınan pano evin servisinin stoğunda kalır;
+   servisin yaptığı devirde sahipsiz ev onun kapsamına girer, süper kullanıcının devrinde evin servisi değişmez.
+
+### 6.2b Kapsamlar arası aktarım (yalnız süper kullanıcı)
+1. **Daire:** "Tüm Aboneler & Atamalar"da her kartta "Servis: <ad>" ya da "Servis: Kök (servissiz)" ve "Servisi Değiştir". Pencerede
+   "Mevcut servis: …", "Servis ara" ve "Yeni servis" listesi ("Kök (servissiz)" + aktif servis hesapları; mevcut olan "Mevcut" etiketli,
+   seçilince "Devam" pasif) → "Devam" → onay ('… "<eski>" kapsamından "<yeni>" kapsamına aktarılacak.', "Dairedeki kartlar da bu
+   servisin stoğuna geçer." ya da "Daire kök yönetici kapsamına alınır; hiçbir servis sorumlusu bu daireyi yönetemez.", "Önceki servisin
+   dairedeki üyeliği ve uygulama bağlantı kimlikleri iptal edilir. Tek panolu dairede panonun bulut kimliği ve yerel anahtarı da
+   yenilenir.") → "Aktar". Sonuç: "Daire yeni servis sorumlusunun kapsamına aktarıldı." / "Daire kök yönetici kapsamına alındı."
+   (taşınan kart sayısıyla).
+2. **Stoktaki kart:** "Cihaz Envanteri"nde "Servis: <e-posta>" / "Servis: Kök stoğu" satırı ve "Servisi Değiştir" (aynı pencere;
+   "Kart yeni servis sorumlusunun stoğuna aktarıldı." / "Kart kök stoğuna alındı."). Kurulu kartta düğme yoktur: "Kurulu kartın servisi
+   dairesini izler. Servisi değiştirmek için Aboneler ekranından daireyi aktarın."
+3. **Servis yazılımı:** kök girişinde envanter tablosunda "Servis" sütunu, "🔀 Servise Aktar" (ilk seçenek "Kök stoğuna al (hiçbir
+   servise bağlı olmasın)"; kurulu kartta "Aktarılamaz": "Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın.") ve
+   sitelerde "🔀 Siteyi Servise Aktar" ("Kök kapsamına al (hiçbir servise bağlı olmasın)").
+4. Servis sorumlusu bu düğmeleri görmez; sunucu da reddeder.
 
 ### 6.3 Abone ve hesap yönetimi
 1. "Servis Yönetimi" (hesap/müşteri ekle, dondur, davet), "Abonelerim & Cihaz Atama" ("Home Admin Ata" / "Yöneticiyi Devret").
    Aboneler listesindeki "Kurulumu sürdür" yarım kalan (devreye alınmamış, panosu olan) dairede **süper kullanıcıya ve servis
    sorumlusuna** görünür; sihirbazı mevcut cihaz kipinde 5. adımdan (Wi-Fi) açar ve yarım kaydı sorar (Bölüm 5.1, madde 5).
-   Servis sorumlusunun listesinde yalnız kendi kurulum penceresi (sahiplendirmeden sonra 72 saat) süren daireler bulunur; pencere
-   bitince daire listeden düşer, liste eskiyse dokununca "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile
-   girin." çıkar ve sihirbaz açılmaz. Müşteri PIN'i verince "Yetkili Servis Girişi (PIN)" ile 2 saatliğine girilir ("Mevcut
+   Servis sorumlusunun listesinde yalnız kendi kapsamındaki (sahiplendirdiği ya da devraldığı) daireler bulunur, süre sınırı yoktur
+   (2026-10-12; eskiden 72 saatlik kurulum penceresi). Süper kullanıcı daireyi başka servise ya da köke aktarırsa daire listeden düşer;
+   liste eskiyse dokununca "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin." çıkar ve sihirbaz
+   açılmaz. Müşteri PIN'i verince "Yetkili Servis Girişi (PIN)" ile 2 saatliğine girilir ("Mevcut
    cihazlarım" → "Bağlantıyı yeniden kur", Bölüm 5.1). Müşteri ve misafir bu ekranı hiç açamaz.
 2. Dondurma: etkin hesap "askıda" olur; davet bekleyen hesap dondurulup çözülünce "davet bekliyor" kalır. Silinmiş hesapta
    dondurma, rol ve parola işlemi yapılamaz ("Silinmiş hesap üzerinde bu işlem yapılamaz.").
@@ -317,6 +380,13 @@ bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
 | "Bu müşteri uygulamaya telefonla giriş yapıyor; …" | Müşteri hesabında e-posta yok | Müşteri kendi karekoduyla sahiplenip servis PIN'i versin |
 | "Bu panoda kablosuz sensör desteklenmiyor; kaldırın." | Panoda kayıtlı kablosuz sensör | 7. adımda kaldırın |
 | "Bulut Bağlantısında Geçici Sorun" (Sistem Doktoru) | Sunucu ile panolar arasında geçici kesinti | Birkaç dakika bekleyin; Wi-Fi ayarına dokunmayın |
+| "Bu cihaz başka bir servis sorumlusunun stoğunda; kurulum yapamazsınız." | Kart başka servisin stoğunda | Kendi stoğunuzdaki ya da kök stoğundaki kartı kullanın; kartın sahibini süper kullanıcı değiştirir |
+| "Yeni pano başka bir servis sorumlusunun stoğunda; bu dairede kullanılamaz." | Pano değişiminde başka servisin kartı | Aynı |
+| "Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz. …" (Kart Bağla) | Başka servisin kartı | Aynı |
+| "Bu cihazın dairesinde servis yetkiniz yok. Süper yönetici ile iletişime geçin." | Daire sizin kapsamınızda değil | Süper kullanıcıya başvurun ya da müşterinin servis PIN'iyle girin |
+| "İptal edilmiş kartı stoğa almak yalnızca süper yöneticiye aittir." / "Bu kart iptal edilmiş (REVOKED); …" | İptal edilmiş kart | Süper kullanıcıya başvurun |
+| "Genel (standart) şablonları yalnızca kök yönetici ekler, değiştirir ve siler; …" | Genel şablonu değiştirme denemesi | "📑 Çoğalt" ile kendi sitenize kopyalayın |
+| "Servis sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar." | Ev sahibi servisi çıkarmayı denedi | Servis değişikliği yalnız süper kullanıcıda |
 
 ---
 
@@ -340,7 +410,12 @@ bölge adı tanımlı (sensörsüz, vanasız) evde ev sahibi de yapabilir.
 9. **Bulut kimliği yenileme yalnız tek panolu evde** (çok panolu evde ve v1.3.0 öncesi panoda atlanır, sunucu günlüğüne yazılır).
 10. **Kısa bir açık pencere:** erişimi biten kişi panonun eski yerel anahtarını biliyorsa, pano yeni bulut kimliğini alıp anahtar
     değişimi tamamlanana kadar panonun yerine kimlik isteyebilir (teknik bilgi gerekir; pano çevrimiçiyse kısa sürer). İzleniyor.
-11. **Sonraya bırakılanlar (kararlarınız):** servis PIN'i ve giriş uçlarına toplu saldırıya karşı CAPTCHA; sözleşme onayı ve zorunlu
+11. **Servis kapsamı (2026-10-12):** servis hesaplarına iki adımlı doğrulama sonraya bırakıldı (risk kabul edildi: bir servis hesabı
+    ele geçirilirse o servisin bütün müşterileri etkilenir). Servis, servis yazılımında kayıt sırasında başka kapsamdaki bir kartın
+    varlığını "zaten kayıtlı" yanıtından sezebilir (sahibi ve içeriği görünmez). Kendi sitesinde daire durumunu geri alma gibi işlemler
+    şimdilik yalnız süper kullanıcıda (karar bekliyor). Canlıda eski kayıtlar kuran servise atandı; iki ev de süper kullanıcı (kök)
+    kapsamında kaldı.
+12. **Sonraya bırakılanlar (kararlarınız):** servis PIN'i ve giriş uçlarına toplu saldırıya karşı CAPTCHA; sözleşme onayı ve zorunlu
     şifre değişiminin sunucuda da zorlanması (şimdilik izleniyor); e-posta sistemi kurulunca e-postasız müşteri sahiplenmesi; etiket
     karekodunun iPhone'da uygulamayı doğrudan açması için Apple Team ID (Android'de 2026-10-09'dan beri açıyor); yasal metinlerdeki
     şirket bilgileri ve hukuk kararları (proje sonunda).

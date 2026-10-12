@@ -464,16 +464,17 @@
         },
         {
           "id": "D3.05",
-          "baslik": "Kurulumu yapan servis personeli üye listesinde görünür",
+          "baslik": "Kurulumu yapan servis personeli üye listesinde görünür, kaldırılamaz",
           "adimlar": [
             "Üst çubuktan \"Aile & Misafir Yönetimi\"ni açın.",
-            "\"Kayıtlı Kişiler & Yetkiler\" listesine bakın."
+            "\"Kayıtlı Kişiler & Yetkiler\" listesine bakın.",
+            "Servis personelinin kartındaki \"Yetkiyi İptal Et\"e dokunup onaylayın."
           ],
-          "beklenen": "Kurulumu yapan kişi \"SERVİS PERSONELİ\" etiketiyle görünür; kartındaki \"Yetkiyi İptal Et\" ile erişimi hemen kaldırılabilir.",
+          "beklenen": "Kurulumu yapan kişi \"SERVİS PERSONELİ\" etiketiyle görünür (süre sınırı yoktur). Onaylayınca \"Servis sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar.\" iletisi çıkar ve kişi listede kalır. Servis değişikliği için yöneticiye (süper kullanıcı) başvurulur.",
           "rol_notu": "ev sahibi",
-          "on_kosul": "Son 72 saat içinde servis kurulumu yapılmış ev",
-          "yeni": false,
-          "kaynak": "lib/ui/pages/family/family_members_page.dart:583"
+          "on_kosul": "Servis sorumlusunun kurduğu ev",
+          "yeni": true,
+          "kaynak": "lib/ui/pages/family/family_members_page.dart:583; server/src/services/invitation_service.js (removeHomeMember)"
         },
         {
           "id": "D3.06",
@@ -2161,6 +2162,19 @@
           "on_kosul": "Servis PIN'iyle açılmış bir oturum (servis personeli ya da ikinci telefon)",
           "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:276"
+        },
+        {
+          "id": "D12.10",
+          "baslik": "Devirden sonra evin servisi kalır",
+          "adimlar": [
+            "Servisin kurduğu evi devredin (D12.01–D12.02).",
+            "Yeni sahibin \"Aile & Misafir Yönetimi\" listesine ve \"Cihaz & Sistem Ayarları\"ndaki \"Servisiniz\" kartına bakın."
+          ],
+          "beklenen": "Eski sahip ve aile üyeleri listeden çıkar; evin servis personeli (\"SERVİS PERSONELİ\") kalır ve yeni sahip de aynı \"Servisiniz: …\" kartını görür. Daire devri evin servisini değiştirmez.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Servisin kurduğu ev; yeni sahibin hesabı",
+          "yeni": true,
+          "kaynak": "server/src/services/transfer_service.js (devir kabulü)"
         }
       ]
     },
@@ -2267,6 +2281,57 @@
           "on_kosul": "Su/gaz sensörü ya da vanası tanımlı ev, yeni pano etiketi",
           "yeni": true,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:19"
+        },
+        {
+          "id": "D13.09",
+          "baslik": "Ayarlar'da \"Servisiniz\" kartı",
+          "adimlar": [
+            "Üst çubuktaki \"Cihaz Ayarları\" simgesine dokunun.",
+            "\"Cihaz & Sistem Ayarları\" sayfasının en üstündeki kartlara bakın."
+          ],
+          "beklenen": "\"Servisiniz: <servisin adı> · <telefonu>\" yazan bir kart vardır (telefon kayıtlı değilse yalnız ad); altında \"Bu bilgi salt okunurdur; servis değişikliğini yalnızca yönetici yapabilir.\" yazar. Kartta kaldırma ya da değiştirme düğmesi yoktur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Servisin kurduğu ev, bulut modu",
+          "yeni": true,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:77; lib/ui/widgets/settings/info_cards.dart:108; lib/ui/pages/device_settings_page.dart:69"
+        },
+        {
+          "id": "D13.10",
+          "baslik": "Servis telefonunu kopyalama",
+          "adimlar": [
+            "\"Servisiniz\" kartının sağındaki kopyala simgesine (\"Servis telefonunu kopyala\") dokunun.",
+            "Telefonun arama ekranına yapıştırın."
+          ],
+          "beklenen": "\"Servis telefonu panoya kopyalandı.\" bildirimi çıkar; yapıştırılan numara karttaki telefondur.",
+          "rol_notu": "ev sahibi, aile üyesi",
+          "on_kosul": "Servisin telefonu kayıtlı ev",
+          "yeni": true,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:118"
+        },
+        {
+          "id": "D13.11",
+          "baslik": "Servissiz evde \"Servisiniz\" kartı yoktur",
+          "adimlar": [
+            "Panoyu kendiniz sahiplendiğiniz (ya da yöneticinin servissiz bıraktığı) evde \"Cihaz & Sistem Ayarları\"nı açın."
+          ],
+          "beklenen": "\"Servisiniz\" kartı görünmez.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Panoyu kendiniz kurduğunuz ev",
+          "yeni": true,
+          "kaynak": "lib/ui/widgets/settings/info_cards.dart:86"
+        },
+        {
+          "id": "D13.12",
+          "baslik": "Servis değişince kart güncellenir",
+          "adimlar": [
+            "Yönetici evinizin servisini değiştirsin (\"Servisi Değiştir\") ya da köke alsın.",
+            "Uygulamayı yenileyin (ev listesi yeniden yüklensin) ve \"Cihaz & Sistem Ayarları\"na bakın."
+          ],
+          "beklenen": "Kart yeni servisin adını ve telefonunu gösterir; köke alındıysa kart kaybolur. Siz kartı değiştiremezsiniz.",
+          "rol_notu": "ev sahibi",
+          "on_kosul": "Servisin kurduğu ev; yöneticinin (süper kullanıcı) aktarımı",
+          "yeni": true,
+          "kaynak": "server/src/services/auth_service.js (homes service)"
         }
       ]
     },
@@ -2499,6 +2564,18 @@
           "on_kosul": "Aile üyesi hesabı",
           "yeni": false,
           "kaynak": "lib/ui/widgets/settings/info_cards.dart:76"
+        },
+        {
+          "id": "D15.13",
+          "baslik": "Misafire \"Servisiniz\" kartı görünmez",
+          "adimlar": [
+            "Misafir hesabıyla \"Cihaz & Sistem Ayarları\"nı açın."
+          ],
+          "beklenen": "\"Servisiniz\" kartı görünmez (yalnız ev sahibi ve aile üyesi görür).",
+          "rol_notu": "misafir",
+          "on_kosul": "Servisin kurduğu evde misafir hesabı",
+          "yeni": true,
+          "kaynak": "lib/ui/pages/device_settings_page.dart:68"
         }
       ]
     }

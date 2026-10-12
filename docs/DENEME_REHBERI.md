@@ -99,7 +99,7 @@ node run.js up --stage2
 - **Windows masaüstü** ya da **USB'li gerçek telefon** (`adb reverse`) kullanacaksanız `up` satırını şöyle yazın: `node run.js up --stage2 --public-host 127.0.0.1`
 - **Emülatör ile Windows ya da USB'li telefon birlikte:** yığın uygulamalara tek bir MQTT adresi bildirir. Yığını `--public-host 127.0.0.1` ile başlatın ve emülatör için `adb -s emulator-5554 reverse tcp:1883 tcp:1883` çalıştırın; yoksa emülatördeki uygulama "Canlı izleme kesik" kalır. İki Android cihaz bağlıyken her `adb` komutuna `-s <kimlik>` ekleyin (kimlikler: `adb devices`). En kolayı ikinci cihaz olarak Chrome'u kullanmaktır (§3.4; MQTT kullanmaz).
 - Yığın zaten çalışıyorsa `up` yeni seçenekleri uygulamaz ("QA yigini zaten calisiyor." der): önce `node run.js down`.
-- **Tekrarlanan `up --stage2` güvenlidir.** Tohumlama idempotenttir; hiçbir şeyi çoğaltmaz (özet satırı `0 yapildi, 17 atlandi`). Yalnız tohumdan sapanı onarır: süresi dolan servis PIN'ini ve 24 saatlik misafiri yeniler. Uygulamada değiştirdiğiniz tohum hesap parolalarını da `accounts.json` değerine **geri alır**. Değiştirdiğiniz parolayı korumak için `--no-seed` ekleyin.
+- **Tekrarlanan `up --stage2` güvenlidir.** Tohumlama idempotenttir; hiçbir şeyi çoğaltmaz (özet satırı `0 yapildi, 18 atlandi`). Yalnız tohumdan sapanı onarır: süresi dolan servis PIN'ini ve 24 saatlik misafiri yeniler. Uygulamada değiştirdiğiniz tohum hesap parolalarını da `accounts.json` değerine **geri alır**. Değiştirdiğiniz parolayı korumak için `--no-seed` ekleyin.
 - **Her `up` JWT sırrını yeniler.** Uygulamanın oturumu refresh token ile kendiliğinden sürer. Servis PIN oturumu ve yenilemesi başarısız olan oturumlar ise girişe döner (§8). Sırları korumak için `--keep-secrets` ekleyin.
 
 **Beklenen `up` çıktısı** (satır kalıbı; PID, yol ve sayılar değişir):
@@ -116,14 +116,14 @@ QA yigini: READY  (daemon PID …)
   SMTP cukuru    127.0.0.1:2525  -> …
   Migration      tamam  (scripts/migrate.js)
   REST API       http://127.0.0.1:5000/api/v1  emulator: …  PID …
-  Tohumlama      tamam  (20/20 adim: 17 yapildi, 0 atlandi (zaten var), 3 dogrulandi)
+  Tohumlama      tamam  (21/21 adim: 18 yapildi, 0 atlandi (zaten var), 3 dogrulandi)
 
 Emulator (Android) icin:
   flutter run -d emulator-5554 --dart-define=API_BASE_URL=http://10.0.2.2:5000/api --dart-define=MQTT_TLS=false --dart-define=DEVICE_AP_HOST=10.0.2.2:8081
 …
 ```
 
-Aynı yığında sonraki `up --stage2`'lerde tohum satırı `tamam  (20/20 adim: 0 yapildi, 17 atlandi (zaten var), 3 dogrulandi)` olur. Tohum bir parolayı geri aldıysa altında `Tohumlama notu: … geri alindi` satırı çıkar.
+Aynı yığında sonraki `up --stage2`'lerde tohum satırı `tamam  (21/21 adim: 0 yapildi, 18 atlandi (zaten var), 3 dogrulandi)` olur (yeni adım `servis_kapsami_ev1`, 2026-10-12: "QA Daire 1"i ve panosunu `qa.servis`'in kapsamına alır; sunucuda migration 045 yoksa "atlandi" der). Tohum bir parolayı geri aldıysa altında `Tohumlama notu: … geri alindi` satırı çıkar.
 
 Çıkış kodları:
 
@@ -176,7 +176,7 @@ Servis PIN'i ("QA Daire 1") 2 saat geçerlidir ve tek kullanımlıktır: servis 
 | Anahtar | E-posta | Rol | Not |
 |---------|---------|-----|------|
 | `super` | `qa.super@example.com` | Süper Yönetici | |
-| `staff` | `qa.servis@example.com` | Servis Sorumlusu | Süper yönetici tarafından **parolayla** açılır. QA tohumu zorunlu şifre değişimini kapatır: ilk girişte doğrudan "Yetkili Servis Konsolu" açılır ("Şifrenizi Değiştirin" sayfası **çıkmaz**). "QA Daire 1"de servis üyeliği vardır |
+| `staff` | `qa.servis@example.com` | Servis Sorumlusu | Süper yönetici tarafından **parolayla** açılır. QA tohumu zorunlu şifre değişimini kapatır: ilk girişte doğrudan "Yetkili Servis Konsolu" açılır ("Şifrenizi Değiştirin" sayfası **çıkmaz**). "QA Daire 1"in servisidir (servis kapsamı, migration 045: tohum `homes.service_owner_id` ve daireye bağlı kartın `device_inventory.service_owner_id` alanlarını bu hesaba yazar; süresiz servis üyeliği vardır). "QA Daire 2" ve stoktaki iki pano kök kapsamındadır: bu hesap onları "Cihaz Envanteri"nde ve aboneler listesinde görmez (stok panolarını yine kurabilir) |
 | `owner1` | `qa.sahip1@example.com` | Ev Sahibi | "QA Daire 1" (pano `AHBU-S3-0A0002` = simülatör `home1`), 4 zamanlı kural, servis PIN'i |
 | `owner2` | `qa.sahip2@example.com` | Ev Sahibi | "QA Daire 2 (baska ev)" (pano `AHBU-S3-0A0004`, simülatörsüz): başka evin verisine erişim (IDOR) denemeleri |
 | `resident` | `qa.aile@example.com` | Aile Üyesi | "QA Daire 1" |
@@ -469,7 +469,7 @@ python ev_otomasyon_sistemi.py
 
 **QA'ya kayıt yalnız aracı denemek içindir:** kayıt, etiket, flash ve USB provizyonu (kontrol listesi 4.5–4.8). QA'ya kaydedilen kart QA sunucusuna bağlanamaz (§1 ortam kuralı). Kartla bulut adımları canlı dağıtımdan sonra yapılır; kart o zaman canlı sunucuya kaydedilip yeniden provizyonlanır. Araç kartta eski anahtar bulursa "Kartta Eski Anahtar Var" penceresinde anahtarı sıfırlayıp (`RESETKEY`) yeniden provizyon yapmayı önerir; bu yol kartta denenmedi.
 
-1. "🔐 Sunucuya Giriş" → "🔐 Süper Kullanıcı Girişi" ("Sunucu adresi:", "E-posta:", "Parola:") → "✓ Giriş Yap" (araç yalnız süper yönetici hesabıyla çalışır; kayıtlı oturumla zaten girişliyse düğme "🔄 Hesap Değiştir" olarak gelir ve aynı pencereyi açar).
+1. "🔐 Sunucuya Giriş" → "🔐 Sunucuya Giriş (süper kullanıcı / servis sorumlusu)" ("Sunucu adresi:", "E-posta:", "Parola:") → "✓ Giriş Yap" (araç süper yönetici ve servis sorumlusu hesabıyla çalışır; başka rolde "Bu araç yalnızca süper kullanıcı veya servis sorumlusu hesabıyla çalışır (bu hesabın rolü: …)." der. Süper yönetici kartı kök stoğuna, servis sorumlusu KENDİ stoğuna kaydeder (servis kapsamı, 2026-10-12; kontrol listesi Aşama 34). Kayıtlı oturumla zaten girişliyse düğme "🔄 Hesap Değiştir" olarak gelir ve aynı pencereyi açar).
 2. Kartı USB-C veri kablosuyla bağlayın; "⚡ 1. Firmware Yükleyici (Flasher)" sekmesinde "COM Port:" seçin ("🔄 Portları Yenile").
 3. "🏷️ 2. Karekod Üret & Etiket Bas (Envanter)" sekmesinde "📡 Karttan MAC Oku" → UID ve kurulum PIN'i dolar → "☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET" → "Cihaz Envantere Eklendi!".
 4. "💾 Etiketi Kaydet (PNG)" / "🖨️ Yazdır (Barkod / Termal)".
@@ -574,6 +574,7 @@ Ağ ne zaman açık (süreli pencere; firmware `ApPolicy`): kurulum ağı sürek
 | **31** | Dayanıklılık | QA | Canlı; gerçek panoyla | İkinci cihaz |
 | **32** | Servis PIN'i & yetki sınırları | QA | Canlı | İkinci cihaz |
 | **33** | Pano yerleşimi → uç noktalara otomatik eşitleme (WP-L) & uygulamanın sessiz yenilemesi | QA (`home1`; yerleşim `POST /api/config` ile; Aşama 14'ten ÖNCE; 33.8(a) QA'da yapılamaz) | Gerçek pano + canlı (panonun web sayfasındaki "Kanal Ayarları" cihaz anahtarı ister; 33.8(a) yalnız burada ya da sunucuyu kendiniz başlatıyorsanız) | Uygulama sürümü: WP-L istemci yenilemesi içeren (ana ağaçta `c91c973` ve sonrası; eski bir derlemede, Chrome'da ya da "Canlı izleme kesik" iken "Yenile"); ek modül maddesi `home1`'in ek modül ayarıyla yapılır, stok panosu kullanılmaz |
+| **34** | Servis kapsamı (kiracılık): kendi stoğu, kendi daireleri, "Servisi Değiştir", "Servisiniz" kartı | QA (Aşama 14'ten ÖNCE; 34.4 tur sonunda; daire aktarımı "QA Daire 2 (baska ev)" ile, "QA Daire 1" ile DEĞİL) | Canlı | İkinci servis hesabı (Aşama 2); 34.7–34.9 için fabrika aracı (34.7 kaydı için kaydedilmemiş gerçek kart) |
 
 QA'ya bağlanan emülatör, Windows ve web şunları yapamaz: gerçek radyo ve elektrik, kamera/karekod, biyometrik, derin bağlantıya dokunma, iOS. Kamera/karekod ve biyometrik, USB'li gerçek telefonu QA'ya bağlayarak yapılabilir (§3.2). Gerçek panonun buluta bağlanması ise QA'da hiç yapılamaz (§1 ortam kuralı).
 

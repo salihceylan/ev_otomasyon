@@ -1,7 +1,7 @@
 {
  "rol": "servis",
  "baslik": "Servis Sorumlusu Deneme Listesi",
- "aciklama": "Servis sorumlusunun (servis personeli) uygulamada ve servis yazılımında yapabildiği işlerin tek tek denenecek listesi: ofis, atölye, saha, teslim sihirbazı, pano değişimi, acil sıfırlama, abone ve hesap yönetimi, Wi-Fi değişikliği ve servis PIN'iyle erişim. Yalnız süper kullanıcının yapabildiği işler (kart kaydı, etiket basma, firmware yükleme, kalıcı silme vb.) ayrı listededir.",
+ "aciklama": "Servis sorumlusunun (servis personeli) uygulamada ve servis yazılımında yapabildiği işlerin tek tek denenecek listesi: ofis, atölye, saha, teslim sihirbazı, pano değişimi, acil sıfırlama, abone ve hesap yönetimi, Wi-Fi değişikliği ve servis PIN'iyle erişim. 2026-10-12'den beri servis sorumlusu KENDİ kapsamında (kendi stoğu, kurduğu ya da devraldığı daireler, kendi müşterileri ve siteleri) süper kullanıcı gibidir ve süre sınırı yoktur: kendi stoğuna kart kaydeder, kartlarını askıya alır, etiketini yeniler, siler (S20). Yalnız kök yöneticinin (süper kullanıcı) yapabildiği işler (servis hesapları, kapsamlar arası aktarım \"Servisi Değiştir\", kartı iptal etme, kalıcı silme vb.) ayrı listededir.",
  "bolumler": [
   {
    "id": "S1",
@@ -70,16 +70,16 @@
     },
     {
      "id": "S1.06",
-     "baslik": "Cihaz envanteri yalnız görüntülenir",
+     "baslik": "Cihaz envanteri: kendi stoğunuzu yönetirsiniz",
      "adimlar": [
       "\"Yönetim araçları\" altında \"Cihaz Envanteri\"'ne dokunun.",
-      "Bir pano kartına bakın."
+      "Kendi stoğunuzdaki, stokta (IN_STOCK) duran bir pano kartına bakın."
      ],
-     "beklenen": "\"Cihaz Envanteri\" kartının alt yazısı \"Stoğunuzdaki panolar ve karekodları\"dır; açılan listede panolarda yalnız \"Karekod Gör\" düğmesi vardır, \"Askıya Al\", \"Etiketi Yeniden Üret\" ve \"Envanterden Sil\" düğmeleri görünmez.",
+     "beklenen": "\"Cihaz Envanteri\" kartının alt yazısı \"Stoğunuzdaki panolar, karekod ve etiket yönetimi\"dir. Listede yalnız kendi stoğunuzdaki kartlar (servis yazılımında kendi hesabınızla kaydettikleriniz ve dairelerinizde kurulu olanlar) bulunur. Stoktaki kartta \"Karekod Gör\", \"Askıya Al\", \"Etiketi Yeniden Üret\" ve \"Envanterden Sil\" düğmeleri vardır; \"Servisi Değiştir\" düğmesi ve \"Servis:\" satırı görünmez (yalnız süper kullanıcıda).",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Stoğunuzda en az bir pano",
-     "yeni": false,
-     "kaynak": "lib/ui/pages/device_inventory_page.dart:664"
+     "on_kosul": "Stoğunuzda en az bir pano (servis yazılımında kendi hesabınızla kaydedilmiş: S20.08)",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_tool_cards.dart:98; lib/ui/pages/device_inventory_page.dart:700"
     },
     {
      "id": "S1.07",
@@ -167,16 +167,17 @@
     },
     {
      "id": "S2.04",
-     "baslik": "Fabrika kaydı düğmeleri kapalı",
+     "baslik": "Fabrika kaydı düğmeleri açık (kendi stoğunuz)",
      "adimlar": [
       "Servis sorumlusu olarak giriş yapın.",
-      "\"2. Karekod Üret & Etiket Bas (Envanter)\" sekmesine geçin."
+      "\"2. Karekod Üret & Etiket Bas (Envanter)\" sekmesine geçin.",
+      "\"🔄 Listeyi Yenile\"ye basın."
      ],
-     "beklenen": "\"☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\", askıya alma, aktif etme, silme ve etiket yenileme düğmeleri pasiftir; \"Servis sorumlusu olarak giriş yaptınız\" ile başlayan bilgi notu görünür.",
+     "beklenen": "\"☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\", \"⏸️ Askıya Al (Kilit)\", \"▶️ Aktif Et (Stok)\", \"🗑️ Envanterden Sil\" ve \"🏷️ Etiketi Yeniden Bas (USB)\" basılabilir. \"ℹ️ Servis sorumlusu olarak giriş yaptınız: kartları KENDİ stoğunuza kaydedersiniz; …\" ile başlayan not görünür. Durum satırının sonunda \"Kapsam: kendi stoğunuz\" yazar; tabloda \"Servis\" sütunu ve \"🔀 Servise Aktar\" düğmesi YOKTUR.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "",
-     "yeni": false,
-     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1147"
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:160; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1174"
     },
     {
      "id": "S2.05",
@@ -232,11 +233,11 @@
       "\"🏢 4. Siteler\" sekmesine geçin.",
       "\"🔄 Siteleri Yenile\"'ye basın."
      ],
-     "beklenen": "Site listesi dolar; durum satırında toplam site sayısı yazar.",
+     "beklenen": "Site listesi dolar; yalnız sizin açtığınız (ya da süper kullanıcının size aktardığı) siteler görünür, başka servisin ve süper kullanıcının siteleri görünmez. Durum satırında toplam site sayısı yazar.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "",
-     "yeni": false,
-     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:96"
+     "yeni": true,
+     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:96; server/src/services/site_template_service.js (listSites)"
     },
     {
      "id": "S3.02",
@@ -532,6 +533,19 @@
      "on_kosul": "Şablonu atanmış daire",
      "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:338"
+    },
+    {
+     "id": "S3.25",
+     "baslik": "Başka servisin stoğundaki kart daireye bağlanamaz",
+     "adimlar": [
+      "Kartsız bir daire seçip \"🔗 Kart Bağla\"ya basın.",
+      "Başka bir servis sorumlusunun stoğundaki kartın UID'sini yazıp onaylayın."
+     ],
+     "beklenen": "\"Kart Bağlanamadı\" penceresinde \"Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz. Kartın sahibini yalnızca kök yönetici değiştirir.\" yazar; kart bağlanmaz. Kendi stoğunuzdaki ya da kök stoğundaki kart bağlanır (S3.11).",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Başka bir servis hesabının kaydettiği stok kartı (UID'sini süper kullanıcıdan öğrenin)",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:531"
     }
    ]
   },
@@ -766,6 +780,33 @@
      "on_kosul": "",
      "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:338"
+    },
+    {
+     "id": "S4.19",
+     "baslik": "Genel şablon servis sorumlusuna salt okunurdur",
+     "adimlar": [
+      "\"📐 5. Şablonlar\" sekmesinde \"Site:\" kutusunda \"Genel (standart şablonlar)\"ı seçip \"🔄 Şablonları Yenile\"ye basın.",
+      "Bir genel şablon seçip \"✏️ Şablonu Düzenle\" ya da \"🗑️ Şablonu Sil\" düğmesine basın.",
+      "\"Site:\" Genel seçiliyken \"➕ Yeni Şablon\"a basın."
+     ],
+     "beklenen": "Genel şablonlar listelenir ve okunur, ama üç denemede de \"Genel Şablon\" penceresi çıkar: \"Genel (standart) şablonları yalnızca kök yönetici ekler, değiştirir ve siler; servis sorumlusu bunları okur ve kullanır. Kendi şablonunuz için üstteki 'Site' kutusundan sitenizi seçin: …\". Düzenleyici açılmaz, şablon silinmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Sunucuda en az bir genel şablon (süper kullanıcının eklediği)",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:64; ev_otomasyon_servis_yazilimi/site_template_ui.py:1474"
+    },
+    {
+     "id": "S4.20",
+     "baslik": "Genel şablonu kendi sitenize çoğaltma",
+     "adimlar": [
+      "\"Site:\" kutusunda kendi sitenizi seçip \"🔄 Şablonları Yenile\"ye basın (liste sitenizin şablonlarıyla birlikte genel şablonları da gösterir); bir genel şablon seçin.",
+      "\"📑 Çoğalt\"a basın, yeni adı yazıp onaylayın."
+     ],
+     "beklenen": "Kopya sizin sitenizde oluşur ve sizin sitenizin şablonu olarak düzenlenebilir; genel şablon değişmez. Site seçili değilse çoğaltma yerine \"Genel Şablon\" penceresi çıkar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "En az bir genel şablon ve sizin açtığınız bir site",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1496"
     }
    ]
   },
@@ -1242,11 +1283,11 @@
      "adimlar": [
       "1. adımda \"Bağlantıyı Doğrula\"'ya dokunun."
      ],
-     "beklenen": "\"Oturumunuz geçerli ve sunucuya ulaşıldı.\" yazar; \"Kalıcı servis personeli hesabı: kurulum yetkiniz müşteriye bağladığınız daire için süreli verilir.\" notu görünür; \"Devam\" açılır.",
+     "beklenen": "\"Oturumunuz geçerli ve sunucuya ulaşıldı.\" yazar; \"Servis sorumlusu hesabı: müşteriye bağladığınız ve devraldığınız dairelerde süresiz yetkiniz vardır.\" notu görünür; \"Devam\" açılır.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "İnternet",
-     "yeni": false,
-     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:196"
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_1_preparation.dart:67"
     },
     {
      "id": "S8.02",
@@ -1255,11 +1296,11 @@
       "2. adımda \"Etiketi Tara (Karekod)\"'a dokunun.",
       "Etiketteki 1. karekodu okutun."
      ],
-     "beklenen": "\"Cihaz bilgisi alındı\" kartı ve \"Sunucuda stokta görünüyor: kuruluma uygun.\" satırı görünür; PIN gizli gösterilir.",
+     "beklenen": "\"Cihaz bilgisi alındı\" kartı görünür; PIN gizli gösterilir. Kart kendi stoğunuzdaysa \"Sunucuda stokta görünüyor: kuruluma uygun.\" yazar. Kök stoğundaki kartı (süper kullanıcının kaydettiği) envanterinizde göremediğiniz için \"Bu hesapla stok durumu görüntülenemiyor. …\" yazar; kurulum yine yapılabilir (uygunluğu sunucu kod gönderirken denetler).",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Stoktaki pano ve etiketi",
-     "yeni": false,
-     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:197"
+     "on_kosul": "Kendi stoğunuzdaki ya da kök stoğundaki pano ve etiketi",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_2_identify.dart:228; lib/ui/pages/service_setup/logic/identify_logic.dart:140"
     },
     {
      "id": "S8.03",
@@ -1347,11 +1388,11 @@
       "\"Daireye Bağla\"'ya dokunun.",
       "\"Cihaz daireye bağlansın mı?\" sorusuna \"Evet, Bağla\" deyin."
      ],
-     "beklenen": "\"Cihaz müşterinin dairesine bağlandı.\" yazar; \"Bu daire için kurulum yetkiniz\" ile başlayan satır yetkinin bitiş tarihini (yaklaşık 72 saat sonrası) gösterir.",
+     "beklenen": "\"Cihaz müşterinin dairesine bağlandı.\" yazar; altında \"Bu dairede kalıcı servis yetkiniz var.\" satırı görünür (eski \"Bu daire için kurulum yetkiniz … tarihine kadar geçerlidir.\" satırı ve 72 saat sınırı yoktur). Daire sizin kapsamınıza girer: \"Abonelerim & Cihaz Atama\"da süresiz görünür, kart da sizin stoğunuza geçer.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "2. ve 3. adımları tamamlanmış kurulum",
-     "yeni": false,
-     "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:202"
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/steps/step_4_claim.dart:203; server/src/services/device_service.js (claim)"
     },
     {
      "id": "S8.10",
@@ -2073,6 +2114,20 @@
      "on_kosul": "",
      "yeni": false,
      "kaynak": "lib/ui/pages/replace_board_dialog.dart:642"
+    },
+    {
+     "id": "S12.12",
+     "baslik": "Başka servisin stoğundaki kart yeni pano olarak kullanılamaz",
+     "adimlar": [
+      "Kendi dairenizde \"Pano Değişimi\" formunu açın; eski panoyu seçin.",
+      "\"Yeni pano kimliği\" ve \"Kurulum PIN'i\" alanlarına BAŞKA bir servis sorumlusunun stoğundaki kartın bilgilerini yazın.",
+      "\"Eski Panonun Ayarlarını Yeni Panoya Aktar\" → \"Panoyu Değiştir\"."
+     ],
+     "beklenen": "\"Yeni pano başka bir servis sorumlusunun stoğunda; bu dairede kullanılamaz.\" iletisi çıkar; değişim yapılmaz, kartın PIN deneme sayacı artmaz. Kendi stoğunuzdaki ya da kök stoğundaki kartla değişim yapılır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kendi dairenizde kurulu pano; başka servis hesabının stoğundaki bir kartın UID'si ve PIN'i",
+     "yeni": true,
+     "kaynak": "server/src/services/device_service.js (replaceBoard); lib/ui/pages/replace_board_dialog.dart:281"
     }
    ]
   },
@@ -2169,15 +2224,15 @@
     },
     {
      "id": "S13.08",
-     "baslik": "Başkasının kurduğu ev sıfırlanamaz",
+     "baslik": "Başka servisin dairesindeki pano sıfırlanamaz",
      "adimlar": [
-      "Sizin kurmadığınız ve devralmadığınız bir evin panosunu sıfırlamayı deneyin."
+      "Başka bir servis sorumlusunun kapsamındaki (ya da servissiz, kök kapsamındaki) bir dairenin panosunu sıfırlamayı deneyin."
      ],
-     "beklenen": "Sunucu reddeder; hata kutusunda \"Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir\" notu görünür.",
+     "beklenen": "Sunucu reddeder: \"Bu cihazın dairesinde servis yetkiniz yok. Süper yönetici ile iletişime geçin.\" Hata kutusunda \"Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir\" notu görünür. O dairede eskiden kalma bir servis üyeliğiniz olsa da sonuç aynıdır.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Başka bir teknisyenin kurduğu ev",
-     "yeni": false,
-     "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52"
+     "on_kosul": "Başka servisin kapsamındaki ya da kök kapsamındaki (müşterinin kendi kurduğu) panolu daire",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52; server/src/services/device_service.js (emergencyReset)"
     },
     {
      "id": "S13.09",
@@ -2217,11 +2272,11 @@
      "adimlar": [
       "Konsolda \"Abonelerim & Cihaz Atama\"'ya dokunun."
      ],
-     "beklenen": "\"Toplam Abone\", \"Home Admin Var\", \"Atama Bekleyen\" sayaçları ve devreye aldığınız daireler listelenir.",
+     "beklenen": "\"Toplam Abone\", \"Home Admin Var\", \"Atama Bekleyen\" sayaçları ve yalnız kendi kapsamınızdaki (kurduğunuz ya da devraldığınız) daireler listelenir; süre sınırı yoktur. Kartlarda \"Servis:\" satırı ve \"Servisi Değiştir\" düğmesi yoktur (yalnız süper kullanıcıda).",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "",
-     "yeni": false,
-     "kaynak": "lib/ui/pages/service_subscribers_page.dart:315"
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:315; lib/ui/pages/service_subscribers_page.dart:419"
     },
     {
      "id": "S14.02",
@@ -2317,26 +2372,26 @@
      "baslik": "\"Kurulumu sürdür\" servis sorumlusuna da görünür ve sihirbazı açar",
      "adimlar": [
       "Servis sorumlusu hesabıyla \"Abonelerim & Cihaz Atama\" ekranını açın",
-      "Son 72 saatte sizin sahiplendirdiğiniz, kurulumu yarım kalmış (devreye alınmamış) dairenin satırında \"Kurulumu sürdür\"e basın"
+      "Sizin sahiplendirdiğiniz ya da devraldığınız (ne zaman olduğu fark etmez), kurulumu yarım kalmış (devreye alınmamış) dairenin satırında \"Kurulumu sürdür\"e basın"
      ],
      "beklenen": "Kurulum sihirbazı o dairenin panosuyla 5. adımdan (Wi-Fi) açılır; dairede birden çok pano varsa önce \"Hangi pano?\" sorulur. Devreye alınmış dairede ya da müşteri hesabında düğme görünmez.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "son 72 saatte sizin sahiplendirdiğiniz, devreye alınmamış daire",
+     "on_kosul": "Sizin kapsamınızdaki, devreye alınmamış daire (72 saat sınırı yok)",
      "yeni": true,
      "kaynak": "lib/ui/pages/service_subscribers_page.dart:591"
     },
     {
      "id": "S14.10",
-     "baslik": "Kurulum süresi dolmuş dairede \"Kurulumu sürdür\" yetki iletisi verir",
+     "baslik": "Başka servise aktarılan dairede \"Kurulumu sürdür\" yetki iletisi verir",
      "adimlar": [
-      "\"Abonelerim & Cihaz Atama\" ekranı açıkken dairenin 72 saatlik kurulum süresi dolsun (ya da başka servisin dairesini deneyin)",
-      "\"Kurulumu sürdür\"e basın"
+      "\"Abonelerim & Cihaz Atama\" ekranı açıkken süper kullanıcı o daireyi \"Servisi Değiştir\" ile başka bir servise ya da \"Kök (servissiz)\"e aktarsın",
+      "Listeyi yenilemeden \"Kurulumu sürdür\"e basın"
      ],
-     "beklenen": "\"Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin.\" iletisi çıkar, sihirbaz açılmaz. Liste yenilenince süresi dolan daire listeden düşer; o dairede çalışmak için müşterinin Servis PIN'iyle girilir.",
+     "beklenen": "\"Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin.\" iletisi çıkar, sihirbaz açılmaz. Liste yenilenince daire listeden düşer; o dairede çalışmak için müşterinin Servis PIN'iyle girilir.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "kurulum süresi (72 saat) dolmuş daire",
+     "on_kosul": "Kapsamınızdaki devreye alınmamış daire; aktarımı yapacak süper kullanıcı",
      "yeni": true,
-     "kaynak": "lib/ui/pages/service_subscribers_page.dart:65"
+     "kaynak": "lib/ui/pages/service_subscribers_page.dart:67"
     }
    ]
   },
@@ -2350,11 +2405,11 @@
      "adimlar": [
       "Servis Paneli'nde \"Yönetim araçları\" altında \"Servis Hesapları\"'na dokunun."
      ],
-     "beklenen": "Sayfa başlığı \"Servis ve Saha Konsolu\"; \"Hesaplar\" ve \"Görevler ve Araçlar\" sekmeleri görünür; not yalnız oluşturduğunuz müşteri hesaplarını yönetebileceğinizi söyler.",
+     "beklenen": "Sayfa başlığı \"Servis ve Saha Konsolu\"; \"Hesaplar\" ve \"Görevler ve Araçlar\" sekmeleri görünür; bilgi kutusunda \"Servis sorumlusu ve yönetici hesaplarını yalnızca süper yönetici tanımlayabilir. Burada kendi müşterilerinizi (açtığınız ve dairelerinizdeki hesaplar) görür ve yönetirsiniz.\" yazar.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "",
-     "yeni": false,
-     "kaynak": "lib/ui/pages/service_management_page.dart:374"
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_management_page.dart:456"
     },
     {
      "id": "S15.02",
@@ -2865,6 +2920,231 @@
      "on_kosul": "",
      "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:613"
+    }
+   ]
+  },
+  {
+   "id": "S20",
+   "baslik": "Kendi kapsamınız: stok, daireler, müşteriler (servis kapsamı, 2026-10-12)",
+   "maddeler": [
+    {
+     "id": "S20.01",
+     "baslik": "Konsoldaki \"Pano Envanteri\" sayacı kendi stoğunuzu açar",
+     "adimlar": [
+      "Servis konsolunda \"Pano Envanteri\" (\"STOK & PANO\") sayacına dokunun."
+     ],
+     "beklenen": "\"Cihaz Envanteri\" sayfası açılır ve yalnız kendi stoğunuzdaki kartlar listelenir. (Menüde [☰] ayrı bir \"Cihaz Envanteri\" satırı yoktur; envantere bu sayaçtan ya da \"Servis Paneli\" → \"Yönetim araçları\" → \"Cihaz Envanteri\"nden girilir.)",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "lib/ui/dashboard/console_dashboards.dart:367; lib/ui/widgets/super_user_drawer.dart:85"
+    },
+    {
+     "id": "S20.02",
+     "baslik": "Uygulamada kendi kartınızı askıya alma ve yeniden stoğa alma",
+     "adimlar": [
+      "\"Cihaz Envanteri\"nde stoktaki kendi kartınızda \"Askıya Al\"a basın; \"Cihaz askıya alınsın mı?\" sorusunda \"Askıya Al\".",
+      "Aynı kartta \"Stoğa Al\"a basın; \"Cihaz stoğa alınsın mı?\" sorusunda \"Stoğa Al\"."
+     ],
+     "beklenen": "Önce \"… durumu güncellendi: Askıda.\" sonra \"… durumu güncellendi: Stokta.\" bildirimi çıkar; kartın durumu buna göre değişir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kendi stoğunuzda, hiçbir daireye bağlı olmayan deneme kartı",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:896"
+    },
+    {
+     "id": "S20.03",
+     "baslik": "Uygulamada kendi kartınızın etiket PIN'ini yeniden üretme",
+     "adimlar": [
+      "Stoktaki kendi kartınızda \"Etiketi Yeniden Üret\"e basın.",
+      "\"Etiket yeniden üretilsin mi?\" penceresinde kartın kimliğini yazıp \"Yeniden Üret\"e basın.",
+      "Açılan pencereyi okuyup kapatın; eski etiketteki PIN'le kurulumu deneyin."
+     ],
+     "beklenen": "\"Yeni Etiket Bilgileri\" penceresinde yeni \"Kurulum PIN\" ve karekod bir kez görünür; eski PIN artık kabul edilmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kendi stoğunuzda, etiketi kaybolmuş deneme kartı",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:1031"
+    },
+    {
+     "id": "S20.04",
+     "baslik": "Kendi kartınızın kurulum PIN kilidini kaldırma",
+     "adimlar": [
+      "Kartın altında \"Kurulum PIN'i hatalı denemeler nedeniyle … saatine kadar kilitli.\" notunu görün.",
+      "\"PIN Kilidini Kaldır\"a basın; \"PIN kilidi kaldırılsın mı?\" sorusunda \"Kilidi Kaldır\"."
+     ],
+     "beklenen": "\"…: PIN kilidi kaldırıldı.\" bildirimi çıkar ve kilit notu kaybolur; PIN ve etiket değişmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kendi stoğunuzda, art arda yanlış PIN girildiği için kilitlenmiş kart",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:1007"
+    },
+    {
+     "id": "S20.05",
+     "baslik": "Stoktaki kendi kartınızı envanterden silme",
+     "adimlar": [
+      "Kendi kartınızda \"Envanterden Sil\"e basın.",
+      "\"Cihaz envanterden silinsin mi?\" penceresinde kartın kimliğini yazıp \"Evet, Sil\"e basın."
+     ],
+     "beklenen": "\"… envanterden silindi.\" bildirimi çıkar ve kart listeden kalkar. Daireye bağlı (devredeki) kartta düğme yoktur.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kendi stoğunuzda, kullanılmayacak deneme kartı",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:961"
+    },
+    {
+     "id": "S20.06",
+     "baslik": "İptal edilmiş (REVOKED) kartı stoğa alamazsınız",
+     "adimlar": [
+      "\"Cihaz Envanteri\"nde durumu iptal edilmiş olan kendi kartınıza bakın (ör. pano değişiminde çıkarılan eski pano)."
+     ],
+     "beklenen": "Kartta \"Stoğa Al\" düğmesi yoktur; altında \"İptal edilmiş kartı stoğa almak yalnızca süper yöneticiye aittir.\" yazar.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kendi stoğunuzda iptal edilmiş kart (pano değişimiyle çıkarılan eski pano iptal edilir ve evin servisinin stoğunda kalır)",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:783"
+    },
+    {
+     "id": "S20.07",
+     "baslik": "\"Servisi Değiştir\" ve \"Servis:\" satırı servis sorumlusunda görünmez",
+     "adimlar": [
+      "\"Cihaz Envanteri\"ndeki kartlara bakın.",
+      "\"Abonelerim & Cihaz Atama\"daki daire kartlarına bakın."
+     ],
+     "beklenen": "İki ekranda da \"Servisi Değiştir\" düğmesi ve \"Servis: …\" satırı yoktur (kapsamlar arası aktarım yalnız kök yöneticide).",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/device_inventory_page.dart:748; lib/ui/pages/service_subscribers_page.dart:631"
+    },
+    {
+     "id": "S20.08",
+     "baslik": "Servis yazılımında kendi stoğunuza kart kaydı",
+     "adimlar": [
+      "Servis sorumlusu olarak giriş yapın; kartı USB ile takıp 2. sekmede \"📡 Karttan MAC Oku\".",
+      "\"☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\"e basın.",
+      "\"🔄 Listeyi Yenile\"ye basın; uygulamada \"Cihaz Envanteri\"ne de bakın."
+     ],
+     "beklenen": "\"Cihaz Envantere Eklendi!\" penceresi çıkar ve etiket üretilir. Kart sizin stoğunuza kaydedilir: tabloda ve uygulamadaki \"Cihaz Envanteri\"nde görünür; başka servisler görmez, süper kullanıcının \"Servis\" sütununda e-postanız yazar.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "USB'ye takılı, daha önce kaydedilmemiş kart",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2472; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md"
+    },
+    {
+     "id": "S20.09",
+     "baslik": "Servis yazılımında kendi kartınızı askıya alma, aktif etme, silme",
+     "adimlar": [
+      "Tablodan kendi kartınızı seçip \"⏸️ Askıya Al (Kilit)\"e basın ve onaylayın.",
+      "Aynı kartta \"▶️ Aktif Et (Stok)\"a basın.",
+      "Artık kullanılmayacak deneme kartında \"🗑️ Envanterden Sil\"e basıp UID'yi yazarak onaylayın."
+     ],
+     "beklenen": "Her adımda \"Başarılı\" (\"Cihaz durumu 'SUSPENDED' / 'IN_STOCK' olarak güncellendi.\") ve \"Silindi\" pencereleri çıkar; tablo yenilenir.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kendi stoğunuzda deneme kartı",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2870"
+    },
+    {
+     "id": "S20.10",
+     "baslik": "Servis yazılımında kendi kartınızın etiketini yeniden basma",
+     "adimlar": [
+      "Kendi stoktaki kartınızı USB ile takın; 2. sekmede \"🏷️ Etiketi Yeniden Bas (USB)\"a basıp onaylayın."
+     ],
+     "beklenen": "\"Etiket Yenilendi\" penceresi çıkar ve yeni PIN'li etiket önizlemede belirir (süper kullanıcıdaki U4.06 ile aynı akış).",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "USB'ye takılı, kendi stoğunuzda, hiçbir daireye bağlı olmayan provizyonlu kart",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2645"
+    },
+    {
+     "id": "S20.11",
+     "baslik": "Servis yazılımında iptal edilmiş kartın durumu değiştirilemez",
+     "adimlar": [
+      "Tabloda durumu REVOKED olan kendi kartınızı seçip \"⏸️ Askıya Al (Kilit)\" ya da \"▶️ Aktif Et (Stok)\"a basın."
+     ],
+     "beklenen": "\"İptal Edilmiş Kart\" penceresinde \"Bu kart iptal edilmiş (REVOKED); iptal edilmiş kartın durumunu yalnızca kök yönetici değiştirir.\" yazar; sunucuya istek gitmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kendi stoğunuzda iptal edilmiş kart",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:173; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2862"
+    },
+    {
+     "id": "S20.12",
+     "baslik": "Başka stoğa geçmiş karta işlem yapılamaz (servis yazılımı)",
+     "adimlar": [
+      "Tabloyu yükleyin; süper kullanıcı listedeki kartınızı başka servise ya da kök stoğuna aktarsın.",
+      "Listeyi yenilemeden o kartı seçip \"⏸️ Askıya Al (Kilit)\"e basın."
+     ],
+     "beklenen": "\"Durum Güncellenemedi\" penceresinde \"Cihaz bulunamadı.\" ve altında \"Servis sorumlusu yalnızca KENDİ stoğundaki kartları yönetir. Kart kök stoğunda ya da başka bir servisin stoğunda olabilir …\" yazar. Liste yenilenince kart tablodan düşer.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Kendi stoğunuzda deneme kartı; aktarımı yapacak süper kullanıcı",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:165; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:1063"
+    },
+    {
+     "id": "S20.13",
+     "baslik": "Başka stokta kayıtlı kartı yeniden kaydetmek",
+     "adimlar": [
+      "Kök stoğunda ya da başka bir servisin stoğunda kayıtlı bir kartı USB'ye takıp \"📡 Karttan MAC Oku\".",
+      "\"☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET\"e basın."
+     ],
+     "beklenen": "\"Mükerrer Cihaz Uyarısı\" penceresi çıkar; sonunda \"Servis sorumlusu olarak yalnızca KENDİ stoğunuzdaki kartları görürsünüz: bu UID/MAC kök stoğunda ya da başka bir servisin stoğunda kayıtlı olabilir. Listenizde yoksa kök yöneticiye başvurun.\" yazar. Kartın sahibi ve içeriği gösterilmez.",
+     "rol_notu": "servis sorumlusu (servis yazılımı)",
+     "on_kosul": "Süper kullanıcının ya da başka bir servisin kaydettiği kart",
+     "yeni": true,
+     "kaynak": "ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:169; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:2501"
+    },
+    {
+     "id": "S20.14",
+     "baslik": "Başka servisin stoğundaki kartla kurulum yapılamaz",
+     "adimlar": [
+      "Sihirbazda 2. adımda başka bir servis sorumlusunun stoğundaki kartın seri no ve PIN'ini girin.",
+      "3. adımda müşterinin e-postasını yazıp \"Kod Gönder\"e basın."
+     ],
+     "beklenen": "\"Cihaz kuruluma uygun değil\" uyarısı ve \"Bu cihaz başka bir servis sorumlusunun stoğunda; kurulum yapamazsınız.\" gerekçesi çıkar; müşteriye kod gönderilmez, kartın PIN sayacı artmaz.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Başka servis hesabının stoğundaki kart (UID ve PIN)",
+     "yeni": true,
+     "kaynak": "server/src/services/device_service.js (requestClaimOtp, claim); lib/ui/pages/service_setup/logic/customer_logic.dart:229"
+    },
+    {
+     "id": "S20.15",
+     "baslik": "Kendi dairenizde aile üyesi / misafir yönetimi",
+     "adimlar": [
+      "Kendi kapsamınızdaki daire aktifken (Servis Paneli → \"Mevcut cihazlarım\" altında \"Daire: …\") sağ üstteki profil simgesine dokunun.",
+      "\"Aile & Misafir Yönetimi\"ni açın; \"Yeni Birey / Misafir Davet Et (QR Üret)\" ile bir misafir kodu üretin.",
+      "Listede bir aile üyesinin ya da misafirin kartındaki \"Yetkiyi İptal Et\"e basıp onaylayın."
+     ],
+     "beklenen": "Davet kodu üretilir; üye çıkarılınca '\"<ad>\" kullanıcısının yetkisi iptal edildi.' yazar. Ev sahibinin kartında \"Yetkiyi İptal Et\" yoktur. Başka servisin ya da kökün dairesinde sunucu 403 iletisi gösterilir.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Kapsamınızdaki (kurduğunuz) daire aktif; evde deneme amaçlı bir aile üyesi ya da misafir. Aktif daireyi değiştirme yolu bu listede doğrulanmadı.",
+     "yeni": true,
+     "kaynak": "lib/models/capabilities.dart:313; lib/ui/widgets/user_profile_dialog.dart:149; lib/ui/pages/family/family_members_page.dart:603"
+    },
+    {
+     "id": "S20.16",
+     "baslik": "Servis Hesapları'nda kendi müşterileriniz",
+     "adimlar": [
+      "\"Servis Paneli\" → \"Yönetim araçları\" → \"Servis Hesapları\" (\"Müşteri hesaplarınız\") sayfasını açın."
+     ],
+     "beklenen": "Listede kendi hesabınız, sizin açtığınız müşteriler ve sizin dairelerinizde üye olan müşteriler (sizin açmadıklarınız da) görünür; başka servisin müşterileri ve servis/süper hesapları görünmez.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Dairenizde, başkasının açtığı (ör. kendisi kayıt olmuş) bir üye",
+     "yeni": true,
+     "kaynak": "lib/ui/pages/service_setup/panel/service_tool_cards.dart:126; server/src/utils/tenant_scope.js (customerScopeSql)"
+    },
+    {
+     "id": "S20.17",
+     "baslik": "Sihirbaz sonunda daire süresiz sizde kalır",
+     "adimlar": [
+      "Bir daireyi sihirbazla bağlayın (S8.09); 72 saatten sonra \"Abonelerim & Cihaz Atama\"yı ve acil sıfırlamayı yeniden açın."
+     ],
+     "beklenen": "Daire listede kalır; \"Kurulumu sürdür\", Home Admin atama ve acil sıfırlama süre sınırı olmadan çalışır.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "Sizin 72 saatten önce sahiplendirdiğiniz deneme dairesi",
+     "yeni": true,
+     "kaynak": "server/src/middlewares/auth_middleware.js (requireHomeAccess 2b)"
     }
    ]
   }

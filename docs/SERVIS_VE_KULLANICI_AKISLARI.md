@@ -4,6 +4,11 @@
 > (2026-10-08, düzeltmeler sonrası). Bu belge ayrıntılı başvuru olarak kalır. Bölüm 12'deki 1, 2, 3 ve 6. maddeler
 > 2026-10-08'de düzeltildi (pano bulut kimliğini kendisi alıyor; yanlış PIN mesajı; sihirbazda Ethernet; Ethernet'li
 > panoda kurulum ağı döngüsü). 4. madde (bildirim) Android için Firebase'siz yapılıyor.
+>
+> **2026-10-12, servis sorumlusu kapsamı (kiracılık, migration 045):** servis sorumlusu kendi müşterilerinin, dairelerinin,
+> kartlarının ve sitelerinin süresiz süper kullanıcısıdır; kök yönetici (süper kullanıcı) her şeyi yönetir ve kayıtları servisler
+> arasında yalnız o aktarır. 72 saatlik kurulum yetkisi kalktı. Bu belgede 2.1, 2.2, 4.1, 4.2, 4.4, 5.1, 7.6, 8.2, 8.3, 9.7, 9.8, 11 ve
+> 12/10 buna göre güncellendi; sözleşme `docs/CONTRACTS.md` §3l.
 
 > Kaynak: kodun kendisi (2026-10-08, commit `b79cc2b` sonrası). Ekrandaki düğme ve mesaj metinleri koddaki gibi tırnak içinde
 > verildi. Belge koddan dört ayrı inceleme ile çıkarıldı; akışı etkileyen iddialar ayrıca elle doğrulandı. Kodda olmayan bir şey
@@ -43,8 +48,8 @@
 ### 2.1 Roller
 | Rol | Kim | Nasıl girer |
 |---|---|---|
-| Süper kullanıcı (`super_user`) | Siz | E-posta + parola |
-| Servis sorumlusu (`service_user`) | Kalıcı servis personeli | E-posta + parola |
+| Süper kullanıcı (`super_user`) | Siz (kök yönetici: her şey) | E-posta + parola |
+| Servis sorumlusu (`service_user`) | Kalıcı servis personeli; kendi kapsamında (kendi stoğu, daireleri, müşterileri, siteleri) süper | E-posta + parola |
 | Geçici servis oturumu (`service_session`) | Ev sahibinin PIN verdiği teknisyen | 6 haneli PIN (2 saat, tek ev) |
 | Ev sahibi (`owner`) | Daire sahibi | E-posta + parola / Google / Apple / SMS |
 | Ev üyesi (`resident`) | Aile | Davet koduyla katılır |
@@ -58,10 +63,16 @@
 5. **Güvenlik ayarı değiştirme, panjur kalibrasyonu, pano değişimi:** süper kullanıcı, servis, geçici servis, ev sahibi.
 6. **Devreye alma (teslim):** süper kullanıcı, servis, geçici servis.
 7. **Evin yerel anahtarını okuma (ev üzerinden):** servis, geçici servis, ev sahibi, ev üyesi. **Süper kullanıcı okuyamaz.**
-8. **Herhangi bir envanter kartının anahtarını okuma (servis yazılımı ucu):** süper kullanıcı ve servis sorumlusu, müşteri
-   kartları dahil; her okuma kayıt altına alınır, kişi başı saatte en çok 60 (2026-10-08 kararı).
-9. **Servis sorumlusunun bir eve erişimi:** müşteri adına kurduğu evde 72 saat geçerli kurulum yetkisi.
-10. **Servis yazılımına giriş:** süper kullanıcı ve servis sorumlusu. Envantere kayıt/askıya alma/silme yalnız süper kullanıcı.
+8. **Envanter kartının anahtarını okuma (servis yazılımı ucu):** süper kullanıcı her kartı; servis sorumlusu 2026-10-12'den beri
+   yalnız kendi stoğundaki / kapsamındaki kartı ve kök stoğundaki kartı (eskiden müşteri kartları dahil her kartı okuyordu); her
+   okuma kayıt altına alınır, kişi başı saatte en çok 60.
+9. **Servis sorumlusunun bir eve erişimi:** kurduğu ya da devraldığı ev onun kapsamına girer (`homes.service_owner_id`) ve
+   orada süresiz, süper kullanıcı gibi yetkilidir (üye/misafir yönetimi dahil; hırsız alarmı ve gaz vanası açma yine yok; devir ve
+   servis PIN'i ev sahibinde). Eski 72 saatlik kurulum yetkisi kalktı. Başka servisin evine erişemez.
+10. **Servis yazılımına giriş:** süper kullanıcı ve servis sorumlusu. Servis sorumlusu kartı KENDİ stoğuna kaydeder ve yalnız
+    kendi kartlarını askıya alır / aktif eder / siler / etiketini yeniler; kartı iptal etme (REVOKED) yalnız kök.
+11. **Kapsamlar arası aktarım** (daire, kart, site başka servise ya da köke) ve servis hesapları yönetimi yalnız kök yöneticide.
+    Kayıt kuran servise aittir. Müşteri evinin servisini Ayarlar'da "Servisiniz: Ad · telefon" kartında görür, kaldıramaz.
 
 ---
 
@@ -145,7 +156,10 @@
    şifreli saklanır, parola saklanmaz. Sonraki açılışta sessizce oturum açılır.
 3. Yalnız süper kullanıcı ve servis sorumlusu girebilir; başkası "Bu araç yalnızca süper kullanıcı veya servis sorumlusu
    hesabıyla çalışır" uyarısı alır.
-4. Servis sorumlusunda envantere kaydetme/askıya alma/silme düğmeleri pasiftir ve bunu anlatan bir not çıkar.
+4. Servis sorumlusunda (2026-10-12'den beri) envantere kaydetme, askıya alma / aktif etme, silme ve etiket yenileme düğmeleri
+   açıktır ama yalnız KENDİ stoğunda çalışır: "ℹ️ Servis sorumlusu olarak giriş yaptınız: kartları KENDİ stoğunuza kaydedersiniz; …"
+   notu çıkar, durum satırında "Kapsam: kendi stoğunuz" yazar. Kök (süper kullanıcı) girişinde envanter tablosunda "Servis" sütunu
+   ("Kök stoğu" ya da servisin e-postası) ve "🔀 Servise Aktar" düğmesi, sitelerde "🔀 Siteyi Servise Aktar" vardır.
 5. "🚪 Oturumu Kapat" hatırlanan oturumu da siler.
 
 ### 4.2 Site açma (4. sekme)
@@ -154,6 +168,8 @@
    "Not". Site adı en çok 120 karakter.
 3. "✏️ Siteyi Düzenle", "🗑️ Siteyi Sil" (yumuşak silme; dairesine kart bağlı site silinemez).
 4. Liste sütunu "İlerleme": Planlandı / Yazıldı / Kuruldu / Teslim edildi sayıları.
+5. **Kapsam (2026-10-12):** servis sorumlusu yalnız kendi açtığı (ya da kökün kendisine aktardığı) siteleri görür ve yönetir;
+   açtığı site onun kapsamına girer. Siteyi başka servise ya da köke yalnız kök aktarır ("🔀 Siteyi Servise Aktar").
 
 ### 4.3 Daireler
 1. Siteyi seçince "🏠 Daireler (seçili site)" listesi dolar.
@@ -161,7 +177,8 @@
    var olan blok+no atlanır.
 3. "📐 Şablon Ata": daireye şablon seçilir.
 4. "🔗 Kart Bağla": kartın UID'si (`AHBU-S3-XXXXXX`) yazılır; boş bırakılırsa bağlantı kalkar. Yalnız **stoktaki** kart
-   bağlanabilir; bir kart yalnız bir daireye bağlanır.
+   bağlanabilir; bir kart yalnız bir daireye bağlanır. Servis sorumlusu başka servisin stoğundaki kartı bağlayamaz ("Bu kart başka
+   bir servis sorumlusunun stoğunda; daireye bağlanamaz. Kartın sahibini yalnızca kök yönetici değiştirir.").
 5. "💾 Karta Yaz", "📄 Kablolama Şeması (PDF)", "🗑️ Daireyi Sil" (kartı bağlı daire silinemez).
 6. Durumlar: **Planlandı** (ilk) → **Yazıldı** (şablon karta yazılınca, sunucu kendisi geçirir) → **Kuruldu** (kart bir
    müşteriye sahiplenilince) → **Teslim edildi** (bkz. Bölüm 12, madde 14).
@@ -189,12 +206,15 @@
    kaydedilir. İçerik değişmediyse sürüm artmaz.
 9. "📑 Çoğalt" (yeni ad sorar), "🕘 Sürüm Geçmişi" (eski sürümler değişmez), "🗑️ Şablonu Sil" (yumuşak silme; bu şablona
    atanmış dairelerin şablonu boşaltılır).
+10. **Genel şablonlar (2026-10-12):** servis sorumlusu genel (standart) şablonları okur ve kullanır ama ekleyemez, değiştiremez,
+    silemez ("Genel Şablon" penceresi: "Genel (standart) şablonları yalnızca kök yönetici ekler, değiştirir ve siler; …");
+    kendi sitesini seçip genel şablonu "📑 Çoğalt" ile sitesine kopyalar.
 
 ---
 
 ## 5. Atölye: kartı hazırlama (servis yazılımı)
 
-### 5.1 Kaydet ve etiket (2. sekme, yalnız süper kullanıcı)
+### 5.1 Kaydet ve etiket (2. sekme; süper kullanıcı: kök stoğuna, servis sorumlusu: KENDİ stoğuna, 2026-10-12)
 1. Kart USB ile takılı. "📡 Karttan MAC Oku" → MAC ve UID dolar (UID = `AHBU-S3-` + MAC'in son 6 hanesi).
 2. "🎲 Rastgele PIN Üret" (6 hane), model ve parti alanları.
 3. "☁️ SUNUCU ENVANTERİNE KAYDET & KAREKOD ÜRET": sunucu kartı kaydeder ve **yerel anahtarı bir kez** verir; AP parolası
@@ -203,7 +223,10 @@
    Wi-Fi'sine bağlan" (telefon kamerası; ağ adı + AP parolası). Ortada UID, PIN, ağ adı, AP parolası, MAC. Kırmızı uyarı:
    etiket gizlidir. Şablon yazıldıysa alt satırda daire bilgisi.
 5. "💾 Etiketi Kaydet (PNG)", "🖨️ Yazdır".
-6. Envanter tablosu: "🔄 Listeyi Yenile", "⏸️ Askıya Al", "▶️ Aktif Et", "🗑️ Envanterden Sil" (UID'yi yazarak onay).
+6. Envanter tablosu: "🔄 Listeyi Yenile", "⏸️ Askıya Al (Kilit)", "▶️ Aktif Et (Stok)", "🗑️ Envanterden Sil" (UID'yi yazarak onay).
+   Servis sorumlusu tabloda yalnız kendi kartlarını görür; iptal edilmiş (REVOKED) kartın durumunu yalnız kök değiştirir. Kökte
+   "Servis" sütunu ve stoktaki kart için "🔀 Servise Aktar" (kurulu kart evinin servisini izler: "Kurulu kartın sahibi evinin
+   servisidir; kartı değil daireyi aktarın.").
 
 ### 5.2 Firmware yükleme (1. sekme)
 1. COM port seçilir. "🚀 Bizim Geliştirdiğimiz Yazılım" seçili (şu an v1.2.1; v1.3.0 klasörde hazır ama seçili değil).
@@ -297,7 +320,10 @@
 1. Özet; isteğe bağlı daire adı → "Daireye Bağla" → onay ("Bu işlem geri alınamaz").
 2. Sunucu: müşterinin boş evi varsa onu kullanır, yoksa yeni ev açar. Kart bir site dairesine bağlıysa ev adı
    "<site> <blok>-<no>" olur ve cihaz listesi kartın şablonundan oluşur. Müşterinin hesabı yoksa açılır ve davet e-postası
-   gider. Teknisyene 72 saat kurulum yetkisi verilir. Tek kullanımlık bulut kimliği üretilir.
+   gider. Ev, bağlayan servis sorumlusunun kapsamına girer ve servis süresiz yetki alır (sonuçta "Bu dairede kalıcı servis
+   yetkiniz var."; eski 72 saatlik kurulum yetkisi 2026-10-12'de kalktı; süper kullanıcı bağlarsa evin servisi değişmez).
+   Servis yalnız kendi stoğundaki ya da kök stoğundaki kartı kurar; başka servisin stoğundaki kart reddedilir ("Bu cihaz başka
+   bir servis sorumlusunun stoğunda; kurulum yapamazsınız."). Tek kullanımlık bulut kimliği üretilir.
 3. Yanıt kopsa bile "Tekrar dene" önce cihazın bağlanıp bağlanmadığını sunucudan kontrol eder (çift kayıt olmaz).
 
 ### 7.7 Adım 5 — Wi-Fi Kurulumu (internet gerekmez)
@@ -365,7 +391,9 @@
 4. "Yeni Panoyu Şimdi Bağla" → sihirbaz 5. adımdan başlar.
 
 ### 8.2 Acil servis sıfırlaması
-1. Yalnız süper kullanıcı ve servis sorumlusu (servis sorumlusu yalnız kurduğu ya da devraldığı evlerde; süre sınırı yok).
+1. Yalnız süper kullanıcı ve servis sorumlusu (servis sorumlusu yalnız kendi kapsamındaki, yani kurduğu ya da devraldığı evlerde;
+   süre sınırı yok; başka servisin evinde "Bu cihazın dairesinde servis yetkiniz yok. Süper yönetici ile iletişime geçin.").
+   Servisin devrettiği sahipsiz ev onun kapsamına girer; stoğa alınan pano evin servisinin stoğunda kalır.
 2. Cihaz kimliği, en az 15 karakter gerekçe, isteğe bağlı yeni sahip. UID yazılarak onaylanır.
 3. Eski ailenin tüm yetkileri biter; cihaz stoğa döner ya da yeni sahibe devredilir. Yeni kurulum PIN'i bir kez gösterilir.
 4. Yeni sahibe devredildiyse (servis sorumlusu için) "Panoyu şimdi bağla" → sihirbaz 5. adım.
@@ -373,7 +401,16 @@
 ### 8.3 Abone ve hesap yönetimi
 1. "Servis Yönetimi": "Hesaplar" (hesap/müşteri ekle, dondur, davet yeniden gönder) ve "Görevler ve Araçlar".
 2. "Abonelerim & Cihaz Atama": aboneler listesi, "Home Admin Ata" / "Yöneticiyi Devret" (mevcut sahibe kod gider; süper
-   kullanıcı gerekçeyle zorla atayabilir).
+   kullanıcı gerekçeyle zorla atayabilir). Servis sorumlusu yalnız kendi kapsamındaki daireleri görür (süresiz). Devirde evin
+   servisinin üyeliği korunur.
+3. **Servis kapsamı (2026-10-12):** servis sorumlusu "Cihaz Envanteri"nde (konsoldaki "Pano Envanteri" sayacından ya da "Yönetim
+   araçları"ndan) kendi kartlarını askıya alır / stoğa alır, etiketini yeniden üretir, PIN kilidini kaldırır, siler; iptal edilmiş
+   kartı stoğa alamaz ("İptal edilmiş kartı stoğa almak yalnızca süper yöneticiye aittir."). "Servis Hesapları"nda kendi
+   müşterilerini (açtığı ve dairelerinde üye olan hesaplar) yönetir. Kendi dairesinde "Aile & Misafir Yönetimi"ni kullanır.
+4. **Kök (süper kullanıcı):** abonelerde "Servis: <ad>" / "Servis: Kök (servissiz)", envanterde "Servis: <e-posta>" / "Servis:
+   Kök stoğu" satırı ve "Servisi Değiştir" penceresi (daire ve stoktaki kart; "Kök (servissiz)" seçeneğiyle köke alma). Daire
+   aktarılınca dairedeki kartlar da yeni servise geçer, önceki servisin üyeliği kalkar; kurulu kartın servisi ayrıca değiştirilmez
+   (daire aktarılır).
 
 ### 8.4 Wi-Fi kurtarma (modem/şifre değişince)
 Bölüm 9.3 ile aynı sihirbaz; servis panelinde de kart olarak var.
@@ -441,10 +478,11 @@ Bölüm 9.3 ile aynı sihirbaz; servis panelinde de kart olarak var.
 6. **Telefona anlık bildirim bu sürümde YOK** (uygulamada Firebase yok); uyarılar uygulama açılınca görünür.
 
 ### 9.7 Aile ve paylaşım
-1. **Davet (yalnız sahip):** "Erişim Paylaş & Davet Et" → aile üyesi kodu (24 saat, tek kullanım) ya da süreli misafir
+1. **Davet (sahip; 2026-10-12'den beri evin servisi de):** "Erişim Paylaş & Davet Et" → aile üyesi kodu (24 saat, tek kullanım) ya da süreli misafir
    kodu (2/4/8/24/48/72 saat). Evde en çok 20 açık davet.
 2. **Katılma:** "Kod ile Bir Eve Katıl" → kod → önizleme → "Eve Katıl".
-3. **Üyeler:** "Aile & Misafir Yönetimi" → "Yetkiyi İptal Et". Son sahip kaldırılamaz.
+3. **Üyeler:** "Aile & Misafir Yönetimi" → "Yetkiyi İptal Et". Son sahip kaldırılamaz. Evin servis personeli ("SERVİS PERSONELİ")
+   kaldırılamaz: "Servis sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar." (daire devrinde de kalır).
 4. **Misafir süresi bitince:** "Erişiminiz sona erdi".
 5. **Devir:** sahip "48 Saatlik Devir Kodu & QR Üret"; yeni sahip kodu girip "DEVRAL" yazar. Eski sahip dahil tüm üyeler
    erişimini kaybeder. Devir iptal edilebilir.
@@ -456,6 +494,10 @@ Bölüm 9.3 ile aynı sihirbaz; servis panelinde de kart olarak var.
    Doktoru, Wi-Fi kurtarma, Pano Değişimi, IP/anahtar, telemetri), Otomasyon (gece bildirimi, zamanlı kurallar), Aile.
 2. **Sistem Doktoru** (misafir hariç): bulut bağlantısı, ev modemi/internet, pano gücü ve donanım katmanlarını denetler;
    gerekirse Wi-Fi kurtarmayı önerir.
+3. **"Servisiniz" kartı (2026-10-12; ev sahibi ve aile üyesi, bulut modu):** sayfanın başında "Servisiniz: <servisin adı> · <telefon>"
+   ve "Bu bilgi salt okunurdur; servis değişikliğini yalnızca yönetici yapabilir."; telefon yanındaki düğmeyle kopyalanır ("Servis
+   telefonu panoya kopyalandı."). Kaldırma/değiştirme yoktur; evin servisi yoksa (müşteri panoyu kendisi kurduysa) kart çizilmez;
+   misafirde görünmez.
 
 ---
 
@@ -490,15 +532,16 @@ kaydedilir.
 
 | İş | Nerede | Kim |
 |---|---|---|
-| Site / daire / şablon | Servis yazılımı 4-5. sekme | Süper kullanıcı, servis sorumlusu |
-| Envantere kayıt, etiket | Servis yazılımı 2. sekme | Süper kullanıcı |
+| Site / daire / şablon | Servis yazılımı 4-5. sekme | Süper kullanıcı (hepsi), servis sorumlusu (kendi siteleri; genel şablonlar salt okunur) |
+| Envantere kayıt, etiket | Servis yazılımı 2. sekme | Süper kullanıcı (kök stoğu), servis sorumlusu (kendi stoğu) |
+| Kapsamlar arası aktarım (daire, kart, site) | Uygulama "Servisi Değiştir" / servis yazılımı "🔀 Servise Aktar", "🔀 Siteyi Servise Aktar" | Yalnız kök (süper kullanıcı) |
 | Firmware yükleme | Servis yazılımı 1. sekme (USB) | Atölye |
 | Provizyon | Servis yazılımı 3. sekme / sihirbaz 5. adım | Atölye / servis |
 | Şablon yazma | Servis yazılımı "Karta Yaz" (USB/Ethernet) / sihirbaz 7. adım (Wi-Fi) | Atölye / servis |
 | Kablolama | Sahada, PDF şemaya göre | Saha ekibi |
 | Müşteriye bağlama ve devreye alma | Uygulama, servis sihirbazı | Servis sorumlusu (PIN oturumu bağlayamaz) |
 | Wi-Fi değişikliği | Uygulama, Wi-Fi kurtarma sihirbazı | Ev sahibi ya da servis |
-| Aile/misafir/devir | Uygulama | Ev sahibi |
+| Aile/misafir/devir | Uygulama | Ev sahibi (aile/misafir yönetimi evin servisinde de; devir yalnız ev sahibi) |
 
 ---
 
@@ -524,7 +567,8 @@ Her madde koddan çıkarıldı. "Doğrulandı" yazanlar ayrıca elle kontrol edi
    gevşetmesi anahtarsız ve deneme sınırı olmadan yapılabilir. (2026-10-08 kararınız; bilgi için.)
 9. **Ethernet'le şablon yazımında kart kimliği denetlenmiyor.** Yanlış IP girilirse başka bir karta yazılır ve kayıt
    girilen UID'ye işlenir. (Kararınız; bilgi için.)
-10. **Servis sorumlusu her müşteri panosunun anahtarını alabiliyor** (kayıt + saatte 60 sınırı ile). (Kararınız.)
+10. **Servis sorumlusu her müşteri panosunun anahtarını alabiliyor** (kayıt + saatte 60 sınırı ile). (Kararınız.) 2026-10-12'den
+    beri servis kapsamıyla daraldı: servis yalnız kendi stoğundaki / kapsamındaki kartın ve kök stoğundaki kartın anahtarını alır.
 11. **Servis yazılımında eskimiş metinler:** "Karta Yaz" penceresindeki Ethernet açıklamaları hâlâ "yerel anahtar sunucudan
     alınır" diyor ve UID'yi "anahtar için" zorunlu tutuyor; giriş penceresi başlığı "Süper Kullanıcı Girişi"; envanter notu
     "süper kullanıcı hesabıyla giriş yapın"; bir ipucu var olmayan "Provizyonu Başlat" düğmesini anıyor.

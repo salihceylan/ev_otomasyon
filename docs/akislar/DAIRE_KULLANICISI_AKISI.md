@@ -1,12 +1,25 @@
 # Daire Kullanıcısı Akışı
 
 > Kimin için: ev sahibi, ev üyesi (aile), misafir ve panoyu kendisi kuran bireysel kullanıcı. Kaynak: kodun kendisi,
-> 2026-10-09 (commit `8912b20` ve 2026-10-09 gece düzeltmeleri sonrası). Ekrandaki düğme ve mesajlar tırnak içinde, koddaki gibi.
+> 2026-10-09 (commit `8912b20` ve 2026-10-09 gece düzeltmeleri sonrası; 2026-10-12: "Servisiniz" kartı ve servis kapsamı, Bölüm 0
+> başı). Ekrandaki düğme ve mesajlar tırnak içinde, koddaki gibi.
 > Servis tarafı ayrı belgede: `SERVIS_SORUMLUSU_AKISI.md`. Açık kalan konular en sonda (Bölüm 10).
 
 ---
 
-## 0. Bu sürümde değişenler (2026-10-09)
+## 0. Bu sürümde değişenler (2026-10-12; önceki: 2026-10-09)
+
+**2026-10-12: evin servisi (servis sorumlusu kapsamı):**
+
+1. **"Servisiniz" kartı:** panonuzu yetkili servis kurduysa (ya da yönetici evinizi bir servise bağladıysa) "Cihaz & Sistem Ayarları"nın
+   başında "Servisiniz: <servisin adı> · <telefonu>" yazar; altında "Bu bilgi salt okunurdur; servis değişikliğini yalnızca yönetici
+   yapabilir.". Telefonu yanındaki düğmeyle kopyalayabilirsiniz ("Servis telefonu panoya kopyalandı."). Ev sahibi ve aile üyesi görür,
+   misafir görmez; panoyu kendiniz kurduysanız (servis yoksa) kart çıkmaz (Bölüm 9).
+2. **Servisi kaldıramazsınız:** evin servis personeli üye listesinde "SERVİS PERSONELİ" olarak kalır; "Yetkiyi İptal Et" denenirse
+   "Servis sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar." görünür. Servisi yalnız yönetici (süper
+   kullanıcı) değiştirir (Bölüm 8.3).
+3. **Evin servisi süresizdir:** kurulumdan sonra 72 saatle sınırlı değildir; evinizde aile / misafir yönetimini de yapabilir. Daire
+   devrinde servis kalır (Bölüm 8.4).
 
 **Sahip kararlarıyla gelenler (2026-10-09 öğleden sonra; ayrıntı `docs/denetim/2026-10-09-kararlar.md`):**
 
@@ -63,6 +76,7 @@ kurulum PIN'inde "Geçersiz kurulum PIN kodu. Kalan deneme hakkı: N"; Android'd
 | Aile/misafir davet etme, devir, servis PIN'i | Evet | Hayır | Hayır |
 | Panoyu sahiplenme | Evet (evi olmayan kullanıcı da) | Evet | Hayır |
 | Alarm bildirimi | Evet | Evet | Hayır |
+| Evin servisini görme ("Servisiniz" kartı, salt okunur) | Evet | Evet | Hayır |
 
 Misafir erişimi en çok 72 saattir; süre bitince "Erişiminiz sona erdi" görünür. Başlangıç ve bitiş sunucunun saatine göredir
 (telefonun saati ileri ya da geri olsa da değişmez).
@@ -108,6 +122,8 @@ Misafir erişimi en çok 72 saattir; süre bitince "Erişiminiz sona erdi" gör�
    görür. Panoyu kendi uygulamanızdan etiketteki karekodla sahiplenin (Bölüm 4.2), kurulum için servise geçici PIN verin (Bölüm 8.5).
 3. Hesabınız yoksa açılır ve etkinleştirme e-postası gelir.
 4. Servis kurulumu bitirip teslim ettiğinde uygulamada evinizi hazır bulursunuz (site dairesiyse ev adı ör. "Güneş Sitesi A-12").
+5. Kurulumu yapan servis evinizin servisi olur (süre sınırı yoktur): Ayarlar'da "Servisiniz: …" kartında görünür, üye listesinde
+   "SERVİS PERSONELİ" olarak kalır ve sizin tarafınızdan kaldırılamaz; servis değişikliğini yalnız yönetici yapar.
 
 ---
 
@@ -250,7 +266,9 @@ hatadan sonra uygulama ev listesini yeniden çeker. Kodu başka biri kullandıys
 
 ### 8.3 Üyeler
 "Aile & Misafir Yönetimi" → "Yetkiyi İptal Et". Son sahip kaldırılamaz. Bekleyen (henüz kullanılmamış) davetler aynı
-ekranda listelenir ve iptal edilebilir.
+ekranda listelenir ve iptal edilebilir. Evin servis personeli ("SERVİS PERSONELİ") kaldırılamaz: "Servis sorumlusu evden çıkarılamaz;
+servis değişikliğini yalnızca kök yönetici yapar." (2026-10-12). Evin servisi de bu ekrandan aile üyesi / misafir davet edip
+çıkarabilir.
 
 Sahip ya da aile üyesi (misafir değil) evden çıkarılınca sunucu, **tek panolu evde** panonun yerel anahtarını kendiliğinden
 değiştirir: çıkarılan kişinin bildiği anahtar geçersiz olur. Pano çevrimiçiyken birkaç saniyede tamamlanır; yerel moddaki
@@ -265,7 +283,7 @@ ayrılınca panonun yerel anahtarı ve bulut kimliği yukarıdaki gibi değişir
 
 ### 8.4 Ev devri
 Sahip "48 Saatlik Devir Kodu & QR Üret" → yeni sahip kodu girip "DEVRAL" yazar → "Daireyi Devral". Eski sahip dahil tüm
-üyeler erişimini kaybeder. "Devir İşlemini İptal Et" ile vazgeçilebilir. Devir kabul edilince panonun yerel anahtarı da
+üyeler erişimini kaybeder (evin servisi kalır; yeni sahip de aynı "Servisiniz" kartını görür). "Devir İşlemini İptal Et" ile vazgeçilebilir. Devir kabul edilince panonun yerel anahtarı da
 değişir (8.3'teki gibi). Kabul tamamlandığı hâlde yanıt kaybolduysa yeni sahip aynı kodu yeniden denediğinde
 "<ev adı> dairesinin sahipliği zaten size devredildi." görünür (ev adı tırnak içinde; önizlemede "Bu daireyi zaten devraldınız.")
 ve ev seçilir. Devirden (ya da acil sıfırlama / Home Admin atamasından) sonra yeni sahip yalnız o andan sonraki ve hâlâ açık alarmları
@@ -288,6 +306,10 @@ atarsa) aynı anda istenen PIN ve davet kodu üretilmez: "Bu işlem için yetkin
    arasındaysa "Bulut Bağlantısında Geçici Sorun" der ve Wi-Fi ya da sigorta önermez: birkaç dakika sonra yeniden deneyin.
 3. "Pano Değişimi": kanal adları, kurallar ve panjur süreleri yeni panoya taşınır; **su/gaz sensörü ve vana ayarları taşınmaz**.
    Evde bunlar varsa sonuç ekranı "Güvenlik ayarları (su/gaz sensörü, vana) yeni panoya aktarılmadı. Yetkili servisi çağırın." der.
+4. **"Servisiniz" kartı (2026-10-12; ev sahibi ve aile üyesi, bulut modu):** sayfanın en üstünde "Servisiniz: <servisin adı> · <telefon>"
+   (telefon kayıtlı değilse yalnız ad) ve "Bu bilgi salt okunurdur; servis değişikliğini yalnızca yönetici yapabilir."; kopyala düğmesi
+   telefonu panoya alır ("Servis telefonu panoya kopyalandı."). Kaldırma ya da değiştirme düğmesi yoktur; servisi olmayan evde ve
+   misafirde kart görünmez. Yönetici servisi değiştirirse kart ev listesi yenilenince (ör. uygulamayı kapatıp açınca) güncellenir.
 
 ---
 

@@ -59,6 +59,7 @@ Ek hata kodları (A paketi gerçekleşmesi, 2026-10-01):
 | 403 | `ACCOUNT_PENDING` | Hesap etkinleştirme (davet) bekliyor |
 | 403 | `REAUTH_REQUIRED` | Hassas işlem için mevcut parola ile yeniden doğrulama gerekli |
 | 405 | `METHOD_NOT_ALLOWED` | |
+| 409 | `SERVICE_OWNER_CANNOT_LEAVE` | Evin servis sorumlusu kendi kapsamındaki evden `members/me` ile ayrılamaz (servis kapsamı, §3l) |
 | 410 | `GONE` | Kod/bağlantı süresi doldu veya zaten kullanıldı |
 | 413 | `PAYLOAD_TOO_LARGE` | Gövde 256 KB sınırını aştı |
 | 500 | `INTERNAL` | Beklenmeyen sunucu hatası (ayrıntı istemciye dönmez) |
@@ -77,7 +78,7 @@ Ek hata kodları (A paketi gerçekleşmesi, 2026-10-01):
 - `GET /homes` her ev için ek olarak `mqtt_topic_id`, `access_state` (`active` | `expired` | `not_started`; sunucu gerçekleşmesi, istemci hepsini tanır) ve (misafirse) `valid_until` döner.
   **Erişim penceresi (C5, 2026-10-09):** her ev öğesinde ayrıca `access_starts_in` (yanıt anındaki SUNUCU saatine göre `valid_from`'a kalan
   tamsayı saniye, ≥ 0, yukarı yuvarlanır; `valid_from` yoksa `null`) ve `access_expires_in` (misafirde `valid_until`'e, `service_user`'da
-  `installer_expires_at`'e kalan tamsayı saniye, ≥ 0, aşağı yuvarlanır; diğer rollerde `null`). Servis PIN oturumunun ev listesinde ikisi de
+  `installer_expires_at`'e kalan tamsayı saniye, ≥ 0, aşağı yuvarlanır; servisin kendi kapsamındaki evde `installer_expires_at` boştur, §3l; diğer rollerde `null`). Servis PIN oturumunun ev listesinde ikisi de
   `null`. Mevcut alanlar değişmez. Uygulama saat farkını (`sunucuNow − yerelNow`) bunlardan hesaplayıp saklar (`server_clock_skew_ms`) ve misafir
   başlangıç/bitiş kararlarını bu farkla düzeltilmiş saatle verir; alanlar yoksa (eski sunucu) yerel saat.
 - Servis personeli kullanıcı oluştururken **parola veremez**; hesap `pending_invite` olur, etkinleştirme e-postası gider. Yeni: `POST /admin/users/:id/send-reset`.
@@ -89,7 +90,7 @@ Ek hata kodları (A paketi gerçekleşmesi, 2026-10-01):
   dondurduğu hesabı çözebilmesi açık karar maddesidir (§3i).
 - Servis oturumu yönetimi (ev sahibi): `GET /homes/:id/service-sessions`, `POST /homes/:id/service-access/revoke`. Servis PIN listesi **PIN değerini göstermez**
   (PIN yalnızca üretim anında bir kez döner).
-- Envanter kaydı (`/admin/inventory/register`): süper kullanıcı JWT'si veya `ADMIN_API_KEY` (≥ 32 karakter) ile; yanıt `local_key` ve PIN'li `qr_claim_url` değerini **yalnızca bir kez** döner.
+- Envanter kaydı (`/admin/inventory/register`): süper kullanıcı JWT'si (kart kök stoğuna), servis sorumlusu JWT'si (2026-10-12: kart servisin KENDİ stoğuna, §3l) veya `ADMIN_API_KEY` (≥ 32 karakter; kök stoğuna) ile; yanıt `local_key` ve PIN'li `qr_claim_url` değerini **yalnızca bir kez** döner.
 - Servis oturumu token'ı yalnızca **kendi evine** atıf yapan isteklerde (yol segmenti, gövde veya sorguda `home_id`) kabul edilir; ayrıca `/homes`, `/auth/me`, `/auth/logout` serbesttir.
 - Devir kodu yalnızca özet olarak saklandığı için `transfer-status` kodu **tekrar göstermez** (üretim anında bir kez döner).
 - Commissioning uçları (`/commissioning`, `/commissioning-status`) `service_routes`'tan kaldırıldı; B paketinin `home_device_routes`'u sağlar.
@@ -140,7 +141,10 @@ kimliği panoya ileten yetkili bir kanal ister (`sys` konusunda iki aşamalı `s
 - Yanıt: `{ "access_token", "expires_in": 7200, "scope": "home_service", "home": { "id", "name" } }` — **refresh token yok**.
 - Token `role: "service_session"`, `home_id` ve `sid` taşır. Bu token **yalnızca o evin** uçlarına girer; global rol değildir, kullanıcı satırı oluşturmaz.
 - IP başına 10 deneme / 15 dk; aşımında `429 RATE_LIMITED`.
-- Kalıcı servis personeli (`users.role='service_user'`) e-posta+parola ile girer; yalnızca `home_users` kaydı (rol `service_user`) olan evlere erişir.
+- Kalıcı servis personeli (`users.role='service_user'`) e-posta+parola ile girer. **Servis kapsamı (2026-10-12, §3l):** kendi kapsamındaki evde
+  (`homes.service_owner_id` = kendisi) üyelik ve süre aranmadan "kapsamlı süper" olarak erişir; sahipsiz (kök kapsamındaki) evde yalnız
+  `home_users` kaydı (rol `service_user`) varsa eski kuralla (kurulum penceresi dahil) erişir; evin servisi başka bir servis sorumlusuysa kalan
+  eski üyeliği GEÇERSİZDİR (`403`).
 
 ### 1.4 Rol / yetki matrisi (sunucu tarafında ZORUNLU)
 
@@ -154,16 +158,17 @@ Rol kaynakları: global `users.role` ∈ {`user`,`service_user`,`super_user`}; e
 | Çocuk kilidi / huzur bildirimi ayarı | ✔ | ✔ | ✔ | ✔ | ✔ | ✖ |
 | Panjur kalibrasyonu, kanal adı/oda | ✔ | ✔ | ✔ | ✔ | ✖ | ✖ |
 | Zamanlı kural oluştur/düzenle | ✔ | ✔ | ✖ | ✔ | ✔ | ✖ |
-| Üye davet / çıkar | ✔ | ✖ | ✖ | ✔ | ✖ | ✖ |
+| Üye davet / çıkar | ✔ | ✔ (yalnız kendi kapsamındaki ev, §3l; evin servisini yalnız kök çıkarır) | ✖ | ✔ | ✖ | ✖ |
 | Daire devri | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | Servis PIN üret | ✖ | ✖ | ✖ | ✔ | ✖ | ✖ |
 | Cihaz sahiplen (claim) | ✔ | ✔** | ✖ | ✔ | ✔ | ✖ |
 | Devreye alma (commissioning) | ✔ | ✔ | ✔ | ✖ | ✖ | ✖ |
 | Pano değişimi | ✔ | ✔ | ✔ | ✔ | ✖ | ✖ |
 | Acil sıfırlama | ✔ | ✔*** | ✖ | ✖ | ✖ | ✖ |
-| Envanter oluştur/sil/durum | ✔ | ✖ | ✖ | ✖ | ✖ | ✖ |
-| Envanter listele | ✔ | ✔ (yalnız kendi stoku) | ✖ | ✖ | ✖ | ✖ |
-| Yönetici hesapları (admin panel) | ✔ | ✖ | ✖ | ✖ | ✖ | ✖ |
+| Envanter oluştur/sil/durum | ✔ | ✔ (yalnız kendi stoğu; REVOKED ✖; 2026-10-12, §3l) | ✖ | ✖ | ✖ | ✖ |
+| Envanter listele | ✔ | ✔ (yalnız kendi stoğu: `service_owner_id` = kendisi) | ✖ | ✖ | ✖ | ✖ |
+| Yönetici hesapları (admin panel) | ✔ | ✖ (yalnız kendi müşterileri, §3l) | ✖ | ✖ | ✖ | ✖ |
+| Kapsamlar arası aktarım (`PATCH …/service-owner`), servis özeti | ✔ (kök) | ✖ | ✖ | ✖ | ✖ | ✖ |
 | Güvenlik: vanayı kapat / sireni-fanı sustur (`actuator_close`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |
 | Güvenlik: alarmı onayla / sustur (`safety_ack`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✖ |
 | Güvenlik: su vanasını aç, siren/fan/diğer aç (`actuator_control`) | ✔ | ✔ | ✔ | ✔ | ✔ | ✖ |
@@ -171,12 +176,19 @@ Rol kaynakları: global `users.role` ∈ {`user`,`service_user`,`super_user`}; e
 | Güvenlik: bölge testi (`safety_test`), güvenlik yapılandırması (`safety_config`) | ✔ | ✔ | ✔ | ✔ | ✖ | ✖ |
 | Güvenlik: hırsız alarmı kur / çöz (`safety_arm`, Faz 2) | ✖ | ✖ | ✖ | ✔ | ✔ | ✖ |
 
-\* staff = `home_users` kaydı olan kalıcı servis personeli (yalnız o evler). **İstisna (kullanıcı kararı 2026-10-08, K-Ş4):** `GET /admin/inventory/:uuid/local-key`
-(§3e) ev üyeliği aramaz: global rolü `service_user` ya da `super_user` olan her hesaba HER envanter kartının (müşterinin sahiplendiği kart dahil)
-yerel anahtarını döndürür (Ethernet şablon yazımı için; denetim kaydı + oran sınırı). **Sahip kararı 6 (2026-10-09): davranış KORUNUR**
-(süresiz, müşteri kartları dahil); yasal metinler buna göre düzeltildi (§3j). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
+\* staff = kalıcı servis personeli (`service_user`). **Servis kapsamı (2026-10-12, migration 045, §3l):** kendi kapsamındaki evde
+(`homes.service_owner_id` = kendisi) üyelik ve süre aranmadan "kapsamlı süper"dir (uç izin listesinde `super_user` varsa onun, yoksa `service_user`'ın
+satırı uygulanır); hırsız alarmı (`safety_arm`), gaz vanası açma ve ev sahibi-yalnız uçlar (devir, servis PIN'i) yine ✖. Sahipsiz (kök kapsamındaki)
+evde yalnız `home_users` kaydı varsa eski kuralla erişir; başka servisin evinde ✖. **İstisna (kullanıcı kararı 2026-10-08, K-Ş4):**
+`GET /admin/inventory/:uuid/local-key` (§3e) ev üyeliği aramaz. 2026-10-08 / 2026-10-09 (sahip kararı 6) kararıyla global rolü `service_user` ya da
+`super_user` olan her hesaba HER envanter kartının yerel anahtarını döndürüyordu; **2026-10-12'den beri** `service_user` yalnız kendi stoğundaki /
+kendi kapsamındaki kartın ya da kök stoğundaki (`service_owner_id` boş, `IN_STOCK`) kartın anahtarını alır; başka servisin kartı ve kökteki kurulu
+kart `404` "Bu cihaz envanterde kayıtlı değil." (denetim kaydı yazılmaz). Süper kullanıcı her kartı alır (Ethernet şablon yazımı için; denetim
+kaydı + oran sınırı). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
 \*\*\* Gerekçe ≥ 15 karakter + cihaz UUID'sinin yazarak teyidi + denetim kaydı (IP dahil). Servis personeli kendisini yeni sahip yapamaz.
-Staff'in ev üyeliği claim/devirde verilir; kurulum penceresi (`installer_expires_at`, 72 saat) kontrol/izleme erişimini sınırlar, ama acil sıfırlama (panoyu evden kaldırma: stoğa alma / devir) bu pencereyi ARAMAZ: servis üyeliği olan evde süresizdir (sahip kararı 2026-10-12). İstemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
+Staff'in ev üyeliği claim/devirde **süresiz** verilir ve ev onun kapsamına girer (`homes.service_owner_id`, §3l): 72 saatlik kurulum penceresi
+(`installer_expires_at`) servisin kendi evinde aranmaz; yalnız sahipsiz (kök) evde kalmış eski süreli üyeliklerde geçerlidir. Acil sıfırlama (panoyu
+evden kaldırma: stoğa alma / devir) servisin kendi kapsamındaki evde (sahipsiz evde: servis üyeliği varsa) süresizdir (sahip kararı 2026-10-12). İstemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
 
 Misafir (`guest`) için her istekte `valid_from <= now <= valid_until` doğrulanır; dışındaysa `403 GUEST_EXPIRED`.
 
@@ -190,7 +202,7 @@ Tüm uçlar `/api/v1/...` altındadır (eski `/api/...` takma adı korunur).
 | Uç | Not |
 |---|---|
 | `GET /auth/capabilities` | **Kimliksiz.** `data: {sms_otp, google, apple}` (boolean); IP başına 120/15 dk, `no-store`. Eski sunucuda `404` (istemci "yetenek yok" sayar). Ayrıntı §1.1b. |
-| `GET /homes` | Her ev: `{ id, name, role, timezone, mqtt_topic_id }`. `role` = ev bazlı rol. Ek alanlar (`address`, `valid_from`, `valid_until`, `access_state`, `is_expired`, `access_starts_in`, `access_expires_in`): §1.1b. |
+| `GET /homes` | Her ev: `{ id, name, role, timezone, mqtt_topic_id }`. `role` = ev bazlı rol. Ek alanlar (`address`, `valid_from`, `valid_until`, `access_state`, `is_expired`, `access_starts_in`, `access_expires_in`): §1.1b. **2026-10-12:** her evde `service: {name, phone} \| null` (evin servisi; e-posta yok; `null` = kök kapsamı); `/auth/me`, giriş ve yenileme yanıtlarındaki ev listesinde de (§3l). |
 | `POST /homes/:homeId/mqtt-credentials` | Üyelik + misafir süresi doğrulanır. Yanıt: `{ host, port, username, password, client_id, expires_at, topic_id }`. **Salt-okunur** (yalnızca `state`/`status` abonelik) kimlik; süre = `min(12 saat, misafir bitişi)`. İstemci süre dolmadan yeniler. |
 | `POST /devices/:id/command` gövde `{ home_id, command }` | Üyelik + rol matrisi + şema doğrulaması. Yanıt `{ delivered, device_online, command_id }`. Çevrimdışıysa `409 DEVICE_OFFLINE`. **Buluttan tüm komutlar bu uçtan geçer; uygulama MQTT'ye doğrudan yayın yapmaz.** Toplu `all_lights_off` / `all_off` (DAIRE-01): evde `type='plug'` uç noktası VARSA toplu komut yayınlanmaz; "Hepsini Kapat" (§1.5b close-all) ile AYNI kuralla yalnız canlı anlık görüntüdeki AÇIK ışık röleleri için `{relay:N, state:false, id}` sırayla yayınlanır (16'lık gruplar arası 150 ms; çok panolu evde ortak numaralar atlanır). Yanıt `{ delivered:true, device_online:true, command_id: ilk komut \| null, command_ids[], no_change?:true (açık lamba yoktu, komut gönderilmedi), skipped_count? }`; bu yolda istemcinin `id`'si kullanılmaz; canlı anlık görüntü yoksa `409 DEVICE_OFFLINE`. Evde priz yoksa davranış aynıdır (tek toplu komut, istemci `id`'si korunur). |
 | `GET /homes/:homeId/devices` | `[{ device_uuid, name, online, last_seen_at, firmware }]` |
@@ -213,10 +225,10 @@ Push belirteci uçları (`/me/push-tokens`) hem `/api/v1/me/push-tokens` hem esk
 - **Cihaz kimliği (`device_credential`)**: `{host, port, mqtt_server, mqtt_port, username, password, client_id, topic_id}` — parola **tek seferlik** gösterilir (24 karakter);
   `mqtt_server` **DNS adıdır** (= `MQTT_PUBLIC_HOST`), firmware `POST /api/mqtt/config`'e bunu yazar. `host`/`port` geriye uyum için aynı değerlerdir. `client_id` bilgilendiricidir (firmware gerçekte `ESP32S3_<MAC>` kullanır; broker yetkisi yalnız `username`'e dayanır).
   Yeni uç: `POST /homes/:homeId/devices/:uuid/mqtt-credential` (cihaz kimliğini yeniden üretir; tek seferlik parola; yalnız owner/staff/service_session/super).
-- **Claim yanıtı:** `{home_id, home_name, device_uuid, device_credential, customer_account?, technician_access_expires_at?, warnings?}`; gövdede `home_id` **kabul edilmez**. Servis personeline claim/devirde **72 saatlik** `home_users(service_user)` üyeliği verilir; servis hesabı cihaz sahibi olamaz.
-- **Acil sıfırlama yanıtı:** `UNCLAIMED` → `setup_pin` (tek sefer); `REASSIGNED` → `new_owner`, `device_credential`; ortak alanlar `local_key_publish` (`published|pending|failed|skipped`), `child_lock_reset` (`published|failed|skipped_offline|skipped`), `local_key` (yalnız `skipped|failed`), `warnings`, `partial` (yalnız gerçek uyarı varsa; `pending` tek başına uyarı/partial üretmez, fx2 S-1).
+- **Claim yanıtı:** `{home_id, home_name, device_uuid, device_credential, customer_account?, service_owner_id, technician_access_unlimited?, warnings?}`; gövdede `home_id` **kabul edilmez**. **2026-10-12 (servis kapsamı, §3l):** servis personeli sahiplendirince ev onun kapsamına girer (`service_owner_id` = kendisi, ev sahipsizse) ve **süresiz** `home_users(service_user)` üyeliği alır (`installer_expires_at` boş); yanıtta `technician_access_unlimited: true` döner, `technician_access_expires_at` artık DÖNMEZ (eski 72 saatlik pencere kalktı). `super_user` sahiplendirince evin servisi değişmez; müşteri kendisi sahiplenirse ev ve kart kök kapsamında kalır (`service_owner_id: null`). Servis hesabı cihaz sahibi olamaz. Servis yalnız kendi stoğundaki ya da kök stoğundaki kartı kurar; başka servisin stoğundaki kart `403` "Bu cihaz başka bir servis sorumlusunun stoğunda; kurulum yapamazsınız." (`POST /devices/claim/request-otp` dahil; PIN sayacına dokunulmaz).
+- **Acil sıfırlama yanıtı:** `UNCLAIMED` → `setup_pin` (tek sefer); `REASSIGNED` → `new_owner`, `device_credential`; ortak alanlar `service_owner_id` (evin servisi, `null` = kök; 2026-10-12, §3l), `local_key_publish` (`published|pending|failed|skipped`), `child_lock_reset` (`published|failed|skipped_offline|skipped`), `local_key` (yalnız `skipped|failed`), `warnings`, `partial` (yalnız gerçek uyarı varsa; `pending` tek başına uyarı/partial üretmez, fx2 S-1).
   REVOKED/SUSPENDED cihazı yalnız `super_user` sıfırlar.
-  **Yerel anahtar (SERVIS-01/K1/K2, migration `032`):** her sıfırlama yeni anahtar üretir. Pano ŞU AN iletilebiliyorsa (`is_online` VE köprü broker'a bağlı) yeni anahtar commit ile geçerli olur ve `ev/{t}/sys set_local_key` ile iletilir → `published`; yayın başarısızsa telafi: geçerli anahtar eskisine, yeni anahtar bekleyene çekilir → `pending`. İletilemiyorsa (pano çevrimdışı ya da köprü kopuk) `devices.local_key_enc` ve envanter anahtarı DEĞİŞMEZ (panodaki gerçek anahtar; yerel anahtar ucu bunu verir, "Panoyu şimdi bağla" sihirbazı 6. adımda LAN'dan bununla bağlanıp yeni `device_credential`'ı yazar. **İstisna (M4-02):** yerel anahtar ucu `super_user`'a KAPALIDIR (rol matrisi `local_key`: STAFF, SESSION, OWNER, RESIDENT) ve süper yöneticinin yaptığı devir personele 72 saatlik üyelik VERMEZ (yalnız `service_user` aktöre verilir). Bu yüzden süperin yaptığı `REASSIGNED`'da "Panoyu şimdi bağla" süper hesabıyla 6. adımı geçemez; pano yeni sahibin uygulamasından alınan servis PIN'iyle (servis girişi) bağlanır. Devir tüm üyelikleri sildiği için süperin devrinden sonra evde personel üyeliği kalmaz; personel hesabıyla bağlama yalnız devri personelin kendisi yaptığında (72 saatlik kurulum penceresi içinde) mümkündür), yeni anahtar `devices.local_key_pending_enc`'de bekler → `pending`; köprü uzlaştırıcısı pano buluta bağlanınca iletir (aşağıda "Birikmiş sunucu işleri").
+  **Yerel anahtar (SERVIS-01/K1/K2, migration `032`):** her sıfırlama yeni anahtar üretir. Pano ŞU AN iletilebiliyorsa (`is_online` VE köprü broker'a bağlı) yeni anahtar commit ile geçerli olur ve `ev/{t}/sys set_local_key` ile iletilir → `published`; yayın başarısızsa telafi: geçerli anahtar eskisine, yeni anahtar bekleyene çekilir → `pending`. İletilemiyorsa (pano çevrimdışı ya da köprü kopuk) `devices.local_key_enc` ve envanter anahtarı DEĞİŞMEZ (panodaki gerçek anahtar; yerel anahtar ucu bunu verir, "Panoyu şimdi bağla" sihirbazı 6. adımda LAN'dan bununla bağlanıp yeni `device_credential`'ı yazar. **İstisna (M4-02):** yerel anahtar ucu `super_user`'a KAPALIDIR (rol matrisi `local_key`: STAFF, SESSION, OWNER, RESIDENT) ve süper yöneticinin yaptığı devir süper yöneticiye üyelik VERMEZ. Bu yüzden süperin yaptığı `REASSIGNED`'da "Panoyu şimdi bağla" süper hesabıyla 6. adımı geçemez; pano yeni sahibin uygulamasından alınan servis PIN'iyle (servis girişi) ya da ev bir servisin kapsamındaysa o servisin kendi hesabıyla bağlanır. 2026-10-12'den beri (servis kapsamı, §3l) devir evin servisinin (`homes.service_owner_id`) süresiz servis üyeliğini yeniden açar ve servis personelinin yaptığı devir sahipsiz evi onun kapsamına alır; diğer üyelikler silinir. Personel hesabıyla bağlama, ev o personelin kapsamındaysa süre sınırı olmadan mümkündür), yeni anahtar `devices.local_key_pending_enc`'de bekler → `pending`; köprü uzlaştırıcısı pano buluta bağlanınca iletir (aşağıda "Birikmiş sunucu işleri").
   `pending` iken yanıtta `local_key` YOKTUR ve bekleyen anahtar için `warnings`'e uyarı EKLENMEZ; `pending` tek başına `partial:true` yapmaz (fx2 S-1: bekleyen anahtar hata değildir, uzlaştırıcı otomatik iletir; istemci bilgi notunu `local_key_publish`'ten üretir). Başka gerçek uyarı (ör. çocuk kilidi, EMQX) varsa `partial` onlar yüzünden `true` olur. (fx2 öncesi sunucu "Yeni yerel anahtar şu an panoya iletilemedi (pano ya da bulut bağlantısı yok). …" uyarısını ekleyip `partial:true` dönüyordu.) `local_key` yalnız `skipped` (ev/konu ya da cihaz kaydı yok: anahtar hemen değişir) ve `failed` (yayın + telafi başarısız; telafi CAS'ı arada başka yazım görürse hiçbir şey değiştirmez) durumlarında bir kez döner; ağ üzerinden yazılamaz. `failed` uyarısı (fx2 S-3): "Yeni yerel anahtar panoya iletilemedi; anahtar yalnız bu yanıtta gösterilir. Panoya seri konsoldan RESETKEY ve ardından FACTORYINIT ile (fabrika aracı) yazılabilir." (istemci yönergesiyle aynı; eski "yerinde elle yazılmalıdır" metni kaldırıldı).
   **Çocuk kilidi (M1-03):** komut ŞU AN gönderilebiliyorsa (pano `is_online` VE köprü bağlı) `set_child_lock false` yayınlanır, DB durumu sıfırlanır → `published`. Gönderilemiyorsa `skipped_offline` ve uyarı NEDENE göredir: köprü kopuksa "Bulut bağlantısı yok; …", pano çevrimdışıysa "Pano çevrimdışı; …" + "çocuk kilidi sıfırlama komutu gönderilemedi." Devirde (`REASSIGNED`) bu durumda `homes.child_lock_requested=FALSE, child_lock_requested_at=NOW()` NİYETİ yazılır ve cihazın bildirdiği `child_lock_enabled` KORUNUR (uzlaştırıcı niyeti bildirilen durumla karşılaştırır; durum FALSE'a çekilseydi niyet hemen "karşılandı" sayılıp silinirdi). Pano bağlanıp kilitli bildirirse uzlaştırıcı `set_child_lock false` gönderir; uyarı sonu "Kilit, pano bağlandığında otomatik kaldırılacak." Stoğa dönüşte (`UNCLAIMED`) ev bağı kalmadığı için niyet yazılmaz, DB durumu sıfırlanır; uyarı sonu "Pano yerelde kilitli kalmış olabilir." `skipped_offline` artık yalnız `child_lock_reset` içindir (eski sunucu `skipped_offline` + `local_key` dönebilir; istemci aynı yönergeyle gösterir). REASSIGNED'da eski cihaz MQTT kimliği yine silinir; çevrimdışı pano yeni kimliği sihirbazla (mevcut anahtarla, LAN'dan) alır. İstemci `pending`'i bilgi notu olarak gösterir; uygulanamaz "panoya yerinde yazılmalıdır" yönergesi kaldırıldı.
 - **Pano değişimi yanıtı:** `message`, `old_device_uuid`, `new_device_uuid`, `migrated_endpoints_count`, `home_id`, `device_credential`, `shutter_runtimes`, `runtime_sync`, `child_lock` (`pending_device_online` olabilir: cihaz çevrimiçi olunca yeniden uygulanır), `warnings?`.
@@ -291,23 +303,23 @@ Push belirteci uçları (`/me/push-tokens`) hem `/api/v1/me/push-tokens` hem esk
 
 Hepsi `/api/v1/...` altındadır (eski `/api/...` takma adı da vardır); başarı gövdesi `{success:true, message?, data}`, hata gövdesi §1.1 (`{success:false, message, code, ...ek alanlar}`). Kişisel veri/gizli içeren yanıtlar `Cache-Control: no-store`. Migration'lar: `027`, `028`, `029`.
 
-- **`GET /service/subscribers?q=&limit=&offset=`** — JWT + global rol `service_user` | `super_user` (servis PIN oturumu, owner, resident, misafir `403`). Kapsam EV bazlıdır: süper tüm evleri, staff yalnız `home_users`'ta SÜRESİ DOLMAMIŞ `service_user` üyeliği olan evleri görür; iletişim bilgisi yalnız kapsamdaki evler için döner.
+- **`GET /service/subscribers?q=&limit=&offset=`** — JWT + global rol `service_user` | `super_user` (servis PIN oturumu, owner, resident, misafir `403`). Kapsam EV bazlıdır: süper tüm evleri, staff yalnız kendi kapsamındaki evleri (`homes.service_owner_id` = kendisi; 2026-10-12, süre sınırı yok, §3l; eskiden: süresi dolmamış `service_user` üyeliği olan evler) görür; iletişim bilgisi yalnız kapsamdaki evler için döner.
   `q` ≤ 64 karakter (ev adı, adres, sahip adı/e-posta/telefon, cihaz UID; `% _ \` kaçışlıdır), `limit` 1..100 (varsayılan 50), `offset` 0..1 000 000 (taşan/geçersiz değer sınıra çekilir, `500` üretmez). Yanıt `data`:
-  `{subscribers:[{home_id, home_name, home_address|null, owner:{full_name, email|null, phone|null, account_status}|null, device_count, online_count, commissioned_count, commissioned_at|null, last_seen_at|null, device_uuids[≤10], created_at}], total, count, limit, offset}`.
+  `{subscribers:[{home_id, home_name, home_address|null, owner:{full_name, email|null, phone|null, account_status}|null, device_count, online_count, commissioned_count, commissioned_at|null, last_seen_at|null, device_uuids[≤10], created_at, service_owner_id|null, service_owner_name|null}], total, count, limit, offset}` (`service_owner_*` 2026-10-12: evin servisi; `null` = kök kapsamı).
   Yer tutucu e-postalar (telefon/Apple hesapları) sızdırılmaz (`email:null`). Hız sınırı kullanıcı başına 120/dk.
-- **`POST /service/subscribers/:homeId/assign-admin/request-otp`** gövde `{full_name, email|phone}` — staff (yalnız kendi evi) / süper. Evin sahibi YOKSA yanıt `{otp_required:false, message}` (kod gerekmez). Sahibi varsa sahibin e-postasına 6 haneli kod gider (kod HEDEF KİŞİYE bağlıdır): `{otp_required:true, message, owner_hint (maskeli e-posta), expires_in:900, resend_after:60}`
+- **`POST /service/subscribers/:homeId/assign-admin/request-otp`** gövde `{full_name, email|phone}` — staff (yalnız kendi kapsamındaki ev; aksi `403` "Bu daire sizin servis kapsamınızda değil.") / süper. Evin sahibi YOKSA yanıt `{otp_required:false, message}` (kod gerekmez). Sahibi varsa sahibin e-postasına 6 haneli kod gider (kod HEDEF KİŞİYE bağlıdır): `{otp_required:true, message, owner_hint (maskeli e-posta), expires_in:900, resend_after:60}`
   (`debug_code` yalnız `ALLOW_DEBUG_OTP=true` geliştirmede). Hatalar: `400 VALIDATION`; `403 FORBIDDEN` (ev yetkisi yok, kendini atama, servis/süper hesabı hedef); `404 NOT_FOUND`; `409` `MULTIPLE_OWNERS` | `OWNER_UNREACHABLE` | `CONFLICT` (hedef zaten tek sahip, hesap pasif/silinmiş);
   `429 RATE_LIMITED` (+`resend_after`, `Retry-After`: 60 sn bekleme; 15 dk'da 5 hatalı kod denemesi); `503 DELIVERY_FAILED` (e-posta gitmedi; yeni kod geçersiz kılınır ve bekleme kalkar. Ev başına TEK kod tutulduğundan yeni istek önceki kodun yerine geçmiştir: şifre sıfırlama / telefon OTP'deki "eski kod geçerli kalır" kuralı burada YOKTUR). Hız sınırları: IP başına 10/15 dk, kullanıcı+ev başına 5/saat.
 - **`POST /service/subscribers/:homeId/assign-admin`** gövde `{full_name, email|phone, otp_code?, force?, reason?}` — TEK gerçek transaction. Modlar: `no_owner` (sahip yok: kod gerekmez, mevcut üyeler korunur; yalnız servis PIN/oturumları iptal edilir), `owner_consent` (sahibin kodu zorunlu), `forced` (yalnız süper, `force:true` + gerekçe 15..500 karakter; sahip rızası aranmaz, sahibe bildirim gider, denetim kaydı).
-  Sahip varsa (`owner_consent` ve `forced`) daire DEVRİ uygulanır: tüm üyelikler kalkar [işlemi yapan staff'in kendi servis üyeliği hariç], hedef TEK owner olur, servis PIN/oturumları ve evin uygulama MQTT kimlikleri iptal edilir, davet/kural/devir temizliği yapılır. Hedef hesap yoksa `pending_invite` hesap açılır (telefonla yeni hesap açılamaz: e-posta zorunlu) ve etkinleştirme e-postası gider. Yanıt `data`:
+  Sahip varsa (`owner_consent` ve `forced`) daire DEVRİ uygulanır: tüm üyelikler kalkar [evin servisinin servis üyeliği hariç: işlemi yapan staff'in kendisi ya da işlemi süper yaptıysa `homes.service_owner_id`; 2026-10-12], hedef TEK owner olur, servis PIN/oturumları ve evin uygulama MQTT kimlikleri iptal edilir, davet/kural/devir temizliği yapılır. Hedef hesap yoksa `pending_invite` hesap açılır (telefonla yeni hesap açılamaz: e-posta zorunlu) ve etkinleştirme e-postası gider. Yanıt `data`:
   `{home_id, home_name, mode, new_owner:{id, full_name, email|null, phone|null, account_status}, account_created, invite_sent, previous_owner_count, revoked:{memberships, service_pins, service_sessions, app_credentials}, message, warnings?, partial?}` (kısmi başarısızlıkta HTTP 200 + `warnings` + `partial:true`).
   Hatalar: `400 OWNER_CONSENT_REQUIRED` (kod yok/geçersiz/başka kişi için istenmiş), `400 VALIDATION` + `remaining_attempts` (hatalı kod; başarısız deneme sayacı commit edilir), `429 RATE_LIMITED` (+`Retry-After`), `403 FORBIDDEN` (zorla atama yalnız süper; kendini/servis hesabını atama), `404`, `409` `MULTIPLE_OWNERS` | `CONFLICT`. Hız sınırları: kullanıcı başına 10/15 dk, ev başına 10/saat.
 - **`DELETE /auth/account`** gövde `{password}` ya da (hiç parola belirlememiş Google/Apple/telefon hesabı) `{confirm:"SİL"}` ("sil/Sil/SIL/SİL" kabul) — JWT (servis PIN oturumu `403`), 5/15 dk. Yumuşak silme + anonimleştirme TEK transaction'da: e-posta `deleted+<id>@deleted.invalid` olur (ESKİ e-posta serbest kalır: aynı adresle yeniden kayıt mümkün), telefon/google_id/apple_id `NULL`, ad "Silinmiş Kullanıcı", `account_status='deleted'`, `deleted_at` dolu;
   tüm oturumlar/refresh belirteçleri, push belirteçleri, tüm evlerdeki uygulama MQTT kimlikleri, ev üyelikleri, bekleyen davet/devir/servis PIN'leri ve iletişim bilgisi taşıyan tek kullanımlık kodlar iptal edilir; denetim kaydı (`details.released_homes` dahil). Yanıt `data`: `{deleted:true, deleted_at, released_memberships, released_homes, message, warnings?}`.
-  Hatalar: `400 INVALID_CREDENTIALS` (yanlış parola), `400 VALIDATION` (parolasız hesapta "SİL" yok), `403 REAUTH_REQUIRED` (parolalı hesapta yalnız `confirm` gönderildi), `403 FORBIDDEN` (staff/süper kendi hesabını bu uçtan silemez), `404`, **`409 SOLE_OWNER`** yalnız tek sahibi olduğu VE başka üyesi ya da panosu olan daireler varsa; gövdede yalnız bunlar `homes:[{id, name, other_member_count, device_count}]` (önce daire devri; engel varsa hiçbir şey silinmez).
+  Hatalar: `400 INVALID_CREDENTIALS` (yanlış parola), `400 VALIDATION` (parolasız hesapta "SİL" yok), `403 REAUTH_REQUIRED` (parolalı hesapta yalnız `confirm` gönderildi), `403 FORBIDDEN` (staff/süper kendi hesabını bu uçtan silemez), `404`, **`409 SOLE_OWNER`** yalnız tek sahibi olduğu VE başka üyesi ya da panosu olan daireler varsa (2026-10-12: evin `service_user` üyelikleri "başka üye" sayılmaz); gövdede yalnız bunlar `homes:[{id, name, other_member_count, device_count}]` (önce daire devri; engel varsa hiçbir şey silinmez).
   **Boş daire (UYELIK-03):** üyesiz VE panosuz tek-sahipli daireler engel değildir: aynı transaction'da, üyelik silindikten sonra yönetici kalıcı silme sırasıyla silinir (evin MQTT kimlikleri, cihaz kimliği dahil [kick COMMIT sonrası], servis PIN/oturumları, ev temizliği `keepEndpoints:false`, `DELETE FROM homes`); sayısı `released_homes` (her başarılı yanıtta; yoksa `0`). İstemci SOLE_OWNER'ı önceden hesaplamaz; `released_homes > 0` ise "Hesabınız silindi. Üyesi ve panosu olmayan N daireniz de kaldırıldı." der (`data` içini ve üst düzeyi okur; eski sunucuda `0`).
-- **`POST /admin/inventory/:uid/reissue-label`** — YALNIZ `super_user` JWT'si (API anahtarı ve staff KABUL EDİLMEZ), yalnız `IN_STOCK` + daireye bağlı/claim edilmemiş/devreye alınmamış cihaz. Yeni kurulum PIN'i + yeni `local_key` üretilir (`local_key` şifreli saklanır, eski PIN geçersizleşir, kilit/sayaç sıfırlanır); yanıt `data`:
-  `{device, setup_pin, local_key, qr_claim_url (PIN'li), message}` — gizli değerler **yalnız bu yanıtta** (`no-store`). Sahipsiz cihaz kaydındaki bekleyen yerel anahtar (`devices.local_key_pending_enc`, §1.5b) temizlenir (migration `032` tetikleyicisi `trg_devices_pending_key_superseded`): yeni etiket anahtarı esastır. Hatalar: `400 VALIDATION` (geçersiz UID), `403`, `404 NOT_FOUND`, `409 CONFLICT` (IN_STOCK değil / daireye bağlı), `429 RATE_LIMITED` (kullanıcı başına 20/saat), `503 SERVICE_UNAVAILABLE` (`LOCAL_KEY_SECRET` yok; anahtar üretilemez).
+- **`POST /admin/inventory/:uid/reissue-label`** — `super_user` JWT'si; 2026-10-12'den beri `service_user` JWT'si de, YALNIZ kendi stoğundaki kartta (başka kart `404 NOT_FOUND`, §3l; API anahtarı KABUL EDİLMEZ), yalnız `IN_STOCK` + daireye bağlı/claim edilmemiş/devreye alınmamış cihaz. Yeni kurulum PIN'i üretilir (eski PIN geçersizleşir, kilit/sayaç sıfırlanır); yerel anahtar (`local_key`) DEĞİŞMEZ (denetim kaydı `key_changed:false`); yanıt `data`:
+  `{device, setup_pin, qr_claim_url (PIN'li), message}` — yeni PIN **yalnız bu yanıtta** (`no-store`); ileti "Etiket yeniden üretildi. Eski PIN artık geçersiz; yeni PIN yalnızca şimdi gösterilir. Yerel anahtar değişmedi.". Hatalar: `400 VALIDATION` (geçersiz UID), `403`, `404 NOT_FOUND`, `409 CONFLICT` (IN_STOCK değil / daireye bağlı ya da devreye alınmış: "… Acil sıfırlama kullanın."), `429 RATE_LIMITED` (kullanıcı başına 20/saat).
 - **`POST /homes/join-preview`** gövde `{code}` — davet/devir kodunu **TÜKETMEDEN** önizler (giriş yapmış kullanıcı; servis PIN oturumu hariç). Yanıt `data`: `{kind:"invitation"|"transfer", is_transfer, home_name, resident_count, role, expires_at, already_member?, guest_valid_from?, guest_valid_until?}`.
   Bulunamayan/kullanılmış/süresi dolmuş kod AYNI yanıttır: `410 GONE` (numaralandırma ayrımı yok; istemci 404/405'i "uç yok" sayar); devir kodu yalnız HEDEF hesaba önizlenir (`403`), hedef kimlik hiçbir yanıtta dönmez; `400 VALIDATION` (biçim), kendi dairenizi kendinize devir `400`. Hız sınırı: IP başına 30/15 dk, kullanıcı başına 10/15 dk.
 - **Davet / devir kodunun yinelenmesi (C3, 2026-10-09):** yanıtı kaybolan katılımın ya da devrin yinelenmesi kodun kendi kullanıcısı için
@@ -732,7 +744,7 @@ yapılandırma bozuk/silinmişse pano güvenli kipte açılır ve kilit maskesin
 ## 3. Firmware yerel HTTP API (LAN / AP)
 
 - Kimlik: `X-Device-Key: <local_key>`. `local_key` 8–32 karakter, NVS'te saklanır. Sunucuda şifreli tutulur (`devices.local_key_enc`, AES-256-GCM, `LOCAL_KEY_SECRET`).
-  Sunucu anahtarı değiştirmek istediğinde (acil sıfırlama) pano erişilemiyorsa `devices.local_key_enc` panodaki gerçek anahtar olarak kalır; yenisi `local_key_pending_enc`'de bekler ve pano buluta bağlanınca `sys set_local_key` ile iletilip takas edilir (§1.5b; `GET …/local-key` her zaman geçerli anahtarı döner). Etiket yeniden üretimi sahipsiz kayıttaki bekleyeni temizler (migration `032` tetikleyicisi); claim ve pano değişimi bekleyene dokunmaz (envanterdeki gerçek anahtarı kullanır).
+  Sunucu anahtarı değiştirmek istediğinde (acil sıfırlama) pano erişilemiyorsa `devices.local_key_enc` panodaki gerçek anahtar olarak kalır; yenisi `local_key_pending_enc`'de bekler ve pano buluta bağlanınca `sys set_local_key` ile iletilip takas edilir (§1.5b; `GET …/local-key` her zaman geçerli anahtarı döner). Etiket yeniden üretimi yerel anahtara dokunmaz (yalnız PIN'i yeniler); claim ve pano değişimi bekleyene dokunmaz (envanterdeki gerçek anahtarı kullanır).
 - **CORS başlığı yoktur.** JSON gövdeli POST'larda `Content-Type: application/json` zorunlu.
 - Anahtarsız / yanlış anahtar: `401 {"error":"unauthorized"}`. 5 yanlış deneme → 60 sn `423 {"error":"locked","retry_after":60}`.
 - Anahtarsız erişilebilen tek uç: `GET /api/status` **kısıtlı** özet → `{ "device":…, "name":…, "fw":…, "provisioned":bool, "wifi_connected":bool }`. **TEK İSTİSNA (§3d):** Wi-Fi servis akışı uçları (`GET /api/wifi/scan`, `POST /api/wifi/connect`, `GET /api/wifi/status`) **AP kaynaklı** anahtarsız erişime de açıktır (istemci SoftAP arayüzünde + AP şu an WPA2 + geçerli `ap_pass` + cihaz provizyonlu); diğer HER uç yalnız anahtarla çalışır.
@@ -859,11 +871,15 @@ Etiketteki 2. karekod (`WIFI:T:WPA;S:AHBU-<MAC6>;P:<ap_pass>;;`) **telefon kamer
 (ortak örnekler `docs/contracts/template/fixtures/`). Burada yalnız uçlar ve alanlar listelenir.
 
 **REST (sunucu, `/api/v1`; hepsi `requireServiceManager`: `service_user` + `super_user`; servis PIN oturumu 403).**
+**Kapsam (2026-10-12, §3l):** servis sorumlusu yalnız kendi sitelerini (`sites.service_owner_id` = kendisi), onların daire ve şablonlarını görür /
+yönetir; başka servisin ve kök kapsamındaki siteler `404` "Site bulunamadı.". Genel (site'siz) şablonları okur ve kullanır, değiştiremez / silemez /
+yeni genel şablon açamaz (`403` "Genel (standart) şablonları yalnızca kök yönetici değiştirebilir."). Daireye başka servisin stoğundaki kartı
+bağlayamaz (`403` "Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz."). Servisin açtığı site onun kapsamına girer.
 Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message, path?}`.
 
 | Uç | Gövde / sonuç |
 |---|---|
-| `GET /sites` · `POST /sites` | Site: `id, name, address, city, district, contact_name, contact_phone, contact_email, block_count, flat_count, notes, created_at, updated_at` (+ liste satırında `flat_stats {planned, written, installed, handed_over}`) |
+| `GET /sites` · `POST /sites` | Site: `id, name, address, city, district, contact_name, contact_phone, contact_email, block_count, flat_count, notes, created_at, updated_at` (+ liste satırında `flat_stats {planned, written, installed, handed_over}`; 2026-10-12: listede `service_owner_id`, `service_owner_email`, ayrıntıda `service_owner_id`; `null` = kök kapsamı) |
 | `GET/PATCH/DELETE /sites/:siteId` | DELETE yumuşak (`deleted_at`); dairesine kart bağlı site silinemez (409 `SITE_HAS_DEVICES`) |
 | `GET /sites/:siteId/flats` | Daire: `id, site_id, block, number, flat_type, template_id, device_uuid, status (planned\|written\|installed\|handed_over), last_write {template_id, version, via, at, result, error_code, device_uuid}` (son yazım), `last_ok_write {template_id, version, via, at, device_uuid}` (dairenin KARTIYLA son başarılı yazım; `template_id` C2, 2026-10-09: araç dairenin güncel şablonundan farklı yazımı "(farklı şablon)" diye işaretler) |
 | `POST /sites/:siteId/flats/bulk` | `{block, from, to, flat_type?, template_id?}` → oluşturulanlar (var olan blok+no atlanır) |
@@ -877,7 +893,7 @@ Yanıt zarfı her zamanki `{success, data}`; hata `{success:false, code, message
 | `GET /templates/:id/versions` · `GET /templates/:id/versions/:version` | sürüm listesi (`version, sha256, created_at, created_by`) · gövde |
 | `POST /templates/validate` | `{body}` → `{ok:true}` ya da 422 `{code:"TEMPLATE_INVALID", error:"<şablon kodu>", path}` |
 | `POST /template-writes` | `{device_uuid, template_id, version, flat_id?, via:"usb"\|"eth"\|"lan", result:"ok"\|"error", error_code?}` (`error_code` `[a-z0-9_.:-]{1,48}`; servis yazılımı kendi kodu `tpl_incomplete`'i de gönderebilir); `ok` ise `planned` daire `written`. Yanıt: kayıt + `flat_status`; tek uyarı alanı `warning`: kart başka daireye bağlıysa `DEVICE_LINKED_ELSEWHERE` + `linked_flat_id` (öncelikli), **C2 (2026-10-09):** daire başka bir şablona ayarlıysa `FLAT_TEMPLATE_MISMATCH` + `flat_template_id`; iki durumda da kayıt eklenir, daire durumu DEĞİŞMEZ. Daireye başka kart bağlıysa `409 CONFLICT` |
-| `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; her envanter kartı (müşteri kartı dahil; kullanıcı kararı 2026-10-08); denetim kaydı + oran sınırı |
+| `GET /admin/inventory/:uuid/local-key` | Ethernet yazımı için `{local_key}`; süper kullanıcıya her envanter kartı (müşteri kartı dahil; kullanıcı kararı 2026-10-08). 2026-10-12'den beri servis sorumlusuna yalnız kendi stoğundaki / kapsamındaki kart ve kök stoğundaki `IN_STOCK` kart; diğerleri `404` (§1.4 dipnotu, §3l); denetim kaydı + oran sınırı |
 
 Claim (K-Ş8): kart bir daireye bağlıysa ev adı `"<site adı> <blok>-<no>"`, uç noktalar karta son yazılan şablon
 sürümünden tohumlanır; WP-L eşitlemesi (§2.4b) sonrasında panoyu esas alır. Daire durumu `installed`'a geçer.
@@ -1110,6 +1126,106 @@ dahil, uygulamaya iletir). Kod: `server/src/utils/app_links.js` (saf fonksiyonla
   `{"applinks":{"apps":[],"details":[{"appIDs":["<TEAM>.com.ahbu.evotomasyon.evOtomasyon"],"components":[{"/":"/claim*"},{"/":"/reset-password*"},{"/":"/magic-login*"}],"appID":"<TEAM>.com.ahbu.evotomasyon.evOtomasyon","paths":["/claim*","/reset-password*","/magic-login*"]}]}}`.
   `APPLE_TEAM_ID`: 10 karakter `[A-Z0-9]`; baş/son boşluk kırpılır, küçük harf düzeltilmez (geçersiz sayılır). Team ID henüz yok; iOS
   uygulamasında Associated Domains yetkisi (`applinks:evotomasyon.gudeteknoloji.com.tr`) de henüz tanımlı değil.
+
+## 3l. Servis sorumlusu kapsamı (kiracılık; 2026-10-12, migration 045)
+
+Tasarım ve sunucu ayrıntısı: `docs/superpowers/specs/2026-10-12-servis-kapsamli-super-yetki-design.md` (§10). Kod: `server/src/utils/tenant_scope.js`,
+`server/src/services/service_scope_service.js`, `requireRoot` (`server/src/middlewares/auth_middleware.js`). Uygulama: `a253257`; fabrika aracı: `5051022`.
+
+**Model (sahip kararları 2026-10-12)**
+- **Kök yönetici** (`super_user`) her şeyi yönetir. **Servis sorumlusu** (`service_user`) KENDİ kapsamında süper kullanıcı gibidir (süre sınırı yok);
+  başka servisin kapsamını görmez, değiştiremez.
+- Kapsam alanları (`UUID NULL REFERENCES users(id) ON DELETE SET NULL`; `NULL` = kök kapsamı / kök stoğu): `homes.service_owner_id` (evi sihirbazla
+  kuran ya da acil sıfırlamayla devralan servis), `device_inventory.service_owner_id` (kartı fabrika aracında kaydeden servis; kurulunca evin servisi;
+  stoğa dönen kart evin servisinin stoğunda kalır), `sites.service_owner_id` (siteyi açan servis). Müşteri kapsamı kolonsuzdur: servisin evlerinde üye
+  olan ya da servisin açtığı (`users.created_by_user_id`) `user` rollü hesap.
+- Kayıt kuran servise aittir; servisler arası ya da köke **aktarımı yalnız kök** yapar (aşağıdaki uçlar). `super_user` sahiplendirince ya da devredince
+  evin servisi değişmez; müşteri panoyu kendi uygulamasından sahiplenirse ev ve kart kök kapsamında kalır. Servis hesabı müşteriye düşürülünce
+  (`role: user`) ya da kalıcı silinince (FK `ON DELETE SET NULL`) evleri, kartları ve siteleri köke düşer; dondurulan ya da yumuşak silinen
+  servis hesabının kapsamı kendiliğinden değişmez (kök aktarır).
+- Geri doldurma (yalnız kolonlar ilk eklendiğinde): ev → rolü hâlâ `service_user` olan en eski servis üyesi, yoksa kartı sahiplendiren servis; kurulu
+  kart → evinin servisi; stok kartı → kök; site → açan servis. Servisin kendi evindeki üyeliği süresiz yapılır. Önizleme (salt okunur):
+  `server/scripts/service_scope_backfill_preview.sql`. Canlıda 2026-10-12 geri doldurmasından sonra iki ev de kök kapsamında kaldı.
+- Servis kendi evinde üyelik ve süre aranmadan kapsamlı süperdir (§1.3, §1.4 dipnotu): evin servis üyeliği kalıcıdır (`installer_expires_at` boş),
+  uygulama MQTT kimliği normal süreyle verilir (kurulum penceresiyle kısalmaz), zamanlı kural oluşturmada servis personeli gibi davranır.
+- Değişmeyenler: hırsız alarmı kurma/çözme hiçbir servis rolünde yok (F2-3); gaz vanası açma hiçbir rolde yok; devir ve servis PIN'i ev sahibi-yalnız;
+  personel ev sahibi olamaz ve kendi hesabını silemez; servis PIN oturumu kapsam kazanmaz.
+
+**Yeni uçlar (YALNIZ kök: JWT `super_user`).** `/api/...` (sürümsüz) öneki de çalışır.
+
+| Uç | Gövde | Başarı yanıtı (`data`) |
+|---|---|---|
+| `PATCH /api/v1/admin/homes/:homeId/service-owner` | `{"service_user_id": "<uuid>" \| null}` | `{home_id, service_owner_id, previous_service_owner_id, changed, cards_moved, message}` |
+| `PATCH /api/v1/admin/inventory/:uuid/service-owner` | `{"service_user_id": "<uuid>" \| null}` | `{device_uuid, service_owner_id, previous_service_owner_id, changed, message}` |
+| `PATCH /api/v1/admin/sites/:siteId/service-owner` | `{"service_user_id": "<uuid>" \| null}` | `{site_id, service_owner_id, previous_service_owner_id, changed, message}` |
+
+- `service_user_id` alanı **ZORUNLUDUR** (yanlışlıkla köke düşürmeyi önler); `null` = kök kapsamına al; `serviceUserId` de kabul edilir. Hedef, rolü
+  `service_user` olan **aktif** hesap olmalıdır.
+- Hedef mevcut kapsamla aynıysa `changed:false` ve hiçbir şey yazılmaz. `message`: "Daire yeni servis sorumlusunun kapsamına aktarıldı." / "Daire kök
+  yönetici kapsamına alındı." / "Daire zaten bu kapsamda."; "Kart yeni servis sorumlusunun stoğuna aktarıldı." / "Kart kök stoğuna alındı." / "Kart zaten
+  bu stokta."; "Site yeni servis sorumlusunun kapsamına aktarıldı." / "Site kök yönetici kapsamına alındı." / "Site zaten bu kapsamda.".
+- Ev aktarımı: dairedeki kartlar (`claimed_home_id`) da yeni kapsama geçer (`cards_moved`); önceki servisin (ve bayat) servis üyelikleri silinir,
+  uygulama MQTT kimlikleri iptal edilip açık bağlantıları atılır; yeni servis süresiz servis üyeliği alır; önceki servis varsa tek panolu evde yerel
+  anahtar (bekleyen yolla) ve cihaz MQTT kimliği döndürülür (eski personel okumuş olabilir). Kart aktarımı yalnız stoktaki (daireye bağlı olmayan)
+  kartta yapılır. Denetim: `device_audit_logs` `home_service_owner_changed` / `inventory_service_owner_changed` / `site_service_owner_changed`
+  (`details.from`, `details.to`, evde `cards_moved`).
+- Hatalar:
+
+| HTTP | `code` | Durum ve ileti |
+|---|---|---|
+| 400 | `VALIDATION` | Alan yok: "service_user_id zorunludur (kök kapsamına almak için null gönderin)."; biçim: "Geçersiz servis sorumlusu kimliği (service_user_id)."; yol: "Geçersiz daire kimliği (home_id)." / "Geçersiz cihaz kimliği." / "Geçersiz site kimliği." |
+| 401 | `INVALID_TOKEN` | Oturum yok. Envanter ucunda `X-Admin-Api-Key` kabul edilmez: "Geçersiz veya izin verilmeyen API anahtarı." |
+| 403 | `FORBIDDEN` | Servis sorumlusu: ev ve site uçlarında "Bu işlem yalnızca kök yönetici (Süper Yönetici) içindir.", envanter ucunda "Bu işlem için Süper Yönetici yetkisi gereklidir."; müşteri ve servis PIN oturumu da `403` |
+| 404 | `NOT_FOUND` | "Daire bulunamadı." / "Cihaz bulunamadı." / "Site bulunamadı." (silinmiş site dahil); hedef hesap yok ya da rolü `service_user` değil: "Servis sorumlusu hesabı bulunamadı." |
+| 409 | `CONFLICT` | Hedef servis hesabı aktif değil (dondurulmuş, davet bekliyor, silinmiş): "Servis sorumlusu hesabı aktif değil."; kurulu (daireye bağlı) kart: "Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın." (daireyi aktarın) |
+
+**Yanıtlara eklenen alanlar (yalnız ekleme; eski istemci yok sayar)**
+- `GET /homes`, `GET /auth/me`, giriş ve yenileme yanıtlarındaki ev listesi: her evde `service: {name, phone|null} | null` (e-posta yok; `null` = kök).
+  Servis PIN oturumunun ev listesinde alan yoktur.
+- Claim (`POST /devices/claim`): `service_owner_id`; servis sahiplendirince `technician_access_unlimited: true`; `technician_access_expires_at` artık
+  dönmez (§1.5b). Acil sıfırlama yanıtı: `service_owner_id`.
+- `GET /admin/inventory`: öğelerde `service_owner_id`, `service_owner_email`; servis sorumlusuna da (kendi kartlarında) `claimed_home_id`.
+  `GET /admin/inventory/:uuid`: `service_owner_id`.
+- `GET /service/subscribers`: `service_owner_id`, `service_owner_name`. `GET /admin/users`: `created_by_user_id` (servis sorumlusunun yanıtında
+  başkasının açtığı hesapta `created_by_*` alanları `null`). `GET /sites`: `service_owner_id`, `service_owner_email`; `GET /sites/:id`: `service_owner_id`.
+
+**Servis sorumlusu için kapsam kuralları (sunucu esastır; özet)**
+- **Envanter:** liste ve tekil sorgu yalnız kendi stoğu. `POST /register` kartı kendi stoğuna yazar. Durum (yalnız `IN_STOCK` ↔ `SUSPENDED`), etiket
+  yenileme, PIN kilidi kaldırma ve silme yalnız kendi kartında; başka servisin ya da kök stoğundaki kart `404` "Cihaz bulunamadı." (varlık sızdırılmaz).
+  `REVOKED`'a geçiş ya da iptal edilmiş kartın durumunu değiştirme `403` "Cihazı iptal etme (REVOKED) yalnızca süper yöneticiye aittir.".
+- **Kurma:** claim, `claim/request-otp` ve pano değişimi kendi stoğundaki ya da kök stoğundaki kartla yapılır; başka servisin stoğu `403` ("Bu cihaz
+  başka bir servis sorumlusunun stoğunda; kurulum yapamazsınız." / "Yeni pano başka bir servis sorumlusunun stoğunda; bu dairede kullanılamaz.";
+  PIN sayacına dokunulmaz); kart başka servisin sitesindeki daireye bağlıysa `403` "Kart başka bir servis sorumlusunun sitesindeki daireye bağlı;
+  kurulum yapamazsınız.". Müşterinin başka servise ait boş evi devralınmaz (yeni ev açılır).
+- **Evler:** başka servisin evinde ev bazlı uçlar `403` "Bu daireye erişim yetkiniz bulunmamaktadır." (kalan eski üyelik geçersiz; uygulamadaki "Kurulumu sürdür" bunu "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip
+  PIN ile girin." diye gösterir); servis panelinin Home Admin atama uçları kapsam dışı evde `403` "Bu daire sizin servis kapsamınızda değil."; acil sıfırlama `403` "Bu cihazın dairesinde
+  servis yetkiniz yok. Süper yönetici ile iletişime geçin.". Sahipsiz (kök) evde servis paneli ve kapsam gerektiren yönetim uçları servise kapalıdır.
+- **Üyeler:** evin servisi kendi evinde üye/misafir davet eder ve çıkarır (`MEMBERS` kümesinde `super_user` olarak). Evin servisini yalnız kök çıkarır:
+  ev sahibi ya da servis denerse `403` "Servis sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar."; servis kendi evinden
+  `members/me` ile ayrılamaz: `409 SERVICE_OWNER_CANNOT_LEAVE` "Servis sorumlusu kendi kapsamındaki evden ayrılamaz; servis değişikliğini kök yönetici
+  yapar.". Daire devri kabulü ve Home Admin devri evin servisinin üyeliğini korur.
+- **Müşteriler (`/admin/users`):** servis kendisini, açtığı ve kendi evlerinde üye olan `user` hesaplarını görür ve yönetir (dondurma, sıfırlama
+  bağlantısı, not); diğerleri `404`. Kalıcı silme (sunucu): müşterinin bütün üyelikleri servisin kendi evlerindeyse; aksi `403` "Kalıcı silme için
+  müşterinin tüm üyelikleri sizin servis kapsamınızdaki dairelerde olmalı; aksi halde yalnızca Süper Yönetici silebilir." (uygulamada "Kalıcı Sil" yalnız
+  süper yöneticide görünür). Servis hesabı açma / rol / parola / dondurma ve `GET /admin/service-summary` yalnız kök (`requireRoot`).
+- **Siteler / şablonlar / yerel anahtar ucu:** §3e ve §1.4 dipnotu.
+
+**İstemciler**
+- **Uygulama:** servis sorumlusu "Cihaz Envanteri"nde kendi kartlarını askıya alır / stoğa alır, etiketi yeniden üretir, PIN kilidini kaldırır, siler
+  (`Capabilities.canManageInventory`); iptal ve aktarım yalnız kök (`canRevokeInventory`, `canTransferServiceScope`). Kök için "Servisi Değiştir"
+  penceresi (daire: Aboneler; stoktaki kart: Envanter), "Servis: …" satırları ("Servis: Kök (servissiz)", "Servis: Kök stoğu"). Evin servisi kendi evinde
+  "Aile & Misafir Yönetimi"ni kullanır (`canInvite`, `canManageMembers`; karar sunucuda). Ev sahibi ve sakinde Ayarlar'ın başında salt okunur "Servisiniz:
+  Ad · telefon" kartı (telefon kopyalanır; kaldırma/değiştirme yok; servis yoksa kart çizilmez). Claim sonucunda `technician_access_unlimited` ise "Bu
+  dairede kalıcı servis yetkiniz var.".
+- **Fabrika aracı:** servis girişinde kayıt (kendi stoğuna), askıya alma / aktif etme, silme, etiket yenileme açık; durum satırında "Kapsam: kendi
+  stoğunuz". Kökte envanterde "Servis" sütunu (servisin e-postası ya da "Kök stoğu"), "🔀 Servise Aktar" (stoktaki kart) ve "🔀 Siteyi Servise Aktar".
+  Genel şablonlar servise salt okunurdur ("📑 Çoğalt" ile kendi sitesine kopyalanır).
+
+**Bilinen açıklar / ertelenenler**
+- Servis hesaplarına iki adımlı doğrulama sonraya bırakıldı (risk kabul edildi: bir servis hesabı ele geçirilirse o servisin bütün müşterileri etkilenir).
+- Servis, fabrika aracında kayıt sırasında başka kapsamdaki bir kartın varlığını `409` "zaten kayıtlı" yanıtından (UUID/MAC çakışması) sezebilir; kartın
+  sahibi ve içeriği görünmez.
+- Servisin kendi sitesinde durum geri alma gibi veri bütünlüğü geçersiz kılmaları (§3e) şimdilik kökte; sahip kararı bekliyor.
 
 ## 4. Firmware iç sözleşmesi (çekirdekler arası)
 

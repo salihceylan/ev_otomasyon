@@ -19,7 +19,10 @@
 //   super_user (SQL, bcrypt)          : qa.super@example.com
 //   kalici servis personeli           : qa.servis@example.com      (users.role='service_user' + home_users 'service_user')
 //                                       admin API ile PAROLAYLA acilir (sunucu must_change_password=TRUE yazar);
-//                                       tohum bunu SQL ile FALSE yapar: ilk giriste zorunlu parola ekrani CIKMAZ
+//                                       tohum bunu SQL ile FALSE yapar: ilk giriste zorunlu parola ekrani CIKMAZ.
+//                                       Servis kapsami (migration 045): ev 1'in servisi qa.servis'tir (homes.service_owner_id;
+//                                       ev 1'deki kurulu kart da onun stogunda: device_inventory.service_owner_id). Ev 2 ve
+//                                       stoktaki iki kart kok kapsaminda kalir (NULL).
 //   sahip 1 + ev 1 + sahiplenilmis cihaz (simulatorle eslesen UID, 8 role, 2 panjur) + zamanli kurallar
 //   aile uyesi (resident), gecerli misafir, SURESI DOLMUS misafir (SQL ile valid_until gecmise cekilir)
 //   sahip 2 + ev 2 (baska ev; IDOR denemeleri)
@@ -608,6 +611,39 @@ export async function runSeed({ rt, dbUrl, apiBase = `http://127.0.0.1:${PORTS.a
     });
     return wrote ? applied('service_user olarak ev 1 uyesi yapildi') : unchanged('service_user olarak ev 1 uyesi (zaten)');
   }, { needs: ['claim_home1', 'servis_personeli'] });
+
+  // ---------------------------------------------------------------- 8b) servis kapsami (migration 045, SQL)
+  // Servis sorumlusu kendi kapsaminda super: evin servisi homes.service_owner_id, karti device_inventory.service_owner_id.
+  // Ev 1'i sahip kendisi sahiplendirdigi (claim) icin sunucu evin servisini bos (kok) birakir; migration 045'in geri
+  // doldurmasi da tohumdan ONCE calisir. Bu adim ev 1'i ve evdeki kurulu kart(lar)i uyesi olan qa.servis'in kapsamina alir.
+  // Yalniz farkli olan satirlar yazilir (ikinci calistirmada bos islem). Kolon yoksa (045'siz veritabani: 42703) atlanir.
+  await step('servis_kapsami_ev1', async () => {
+    const r = await withDb(async (client) => {
+      const staff = (await client.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [acc.users.staff.email])).rows[0];
+      if (!staff) throw new SeedError(`servis personeli veritabaninda yok (${acc.users.staff.email})`);
+      try {
+        const home = await client.query(
+          `UPDATE homes SET service_owner_id = $2
+            WHERE id = $1 AND service_owner_id IS DISTINCT FROM $2::uuid
+            RETURNING id`,
+          [homeId(), staff.id],
+        );
+        const cards = await client.query(
+          `UPDATE device_inventory SET service_owner_id = $2
+            WHERE claimed_home_id = $1 AND service_owner_id IS DISTINCT FROM $2::uuid
+            RETURNING device_uuid`,
+          [homeId(), staff.id],
+        );
+        return { home: home.rowCount, cards: cards.rowCount };
+      } catch (e) {
+        if (e && e.code === '42703') return null; // service_owner_id kolonu yok: migration 045 uygulanmamis
+        throw e;
+      }
+    });
+    if (r === null) return unchanged('service_owner_id kolonu yok (migration 045 uygulanmamis): atlandi');
+    if (!r.home && !r.cards) return unchanged('ev 1 ve kartlari zaten qa.servis kapsaminda');
+    return applied(`ev 1 servisi qa.servis yapildi (ev: ${r.home}, kart: ${r.cards})`);
+  }, { needs: ['servis_personeli_uyeligi'] });
 
   // ---------------------------------------------------------------- 9) zamanli kurallar (sahip 1): benzersizlik = ev + kural adi
   await step('zamanli_kurallar', async () => {

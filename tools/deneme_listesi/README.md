@@ -16,3 +16,7 @@ ile işaretlenir; işaretler sayfanın veritabanında (`yanitlar` koleksiyonu) t
   Maddeler değişse de kayıtlar kalır (kimlikleri değiştirmeyin; yeni madde yeni kimlik alır).
 - Maddeler 2026-10-09'da akış belgeleri, servis yazılımı rehberi ve koddan çıkarıldı; tırnaklı metinler `lib/` ve servis
   yazılımında birebir doğrulandı.
+- 2026-10-12 (servis sorumlusu kendi kapsamında süper, migration 045): yeni bölümler S20 (servis: kendi stoğu, daireleri,
+  müşterileri) ve U10 (kök: "Servisi Değiştir", "🔀 Servise Aktar"), S3.25, S4.19–S4.20, S12.12, D12.10, D13.09–D13.12, D15.13;
+  eskiyen maddelerin metni güncellendi ve "Bugün değişti" (`yeni: true`) işaretlendi. Sayfalar yeniden üretilip aynı URL'lere
+  yayınlanmalıdır.

@@ -24,7 +24,7 @@ node run.js down            :: temiz kapatır (yetim postgres.exe / sunucu bıra
 `up` (stage2 olmadan) yalnızca altyapıyı (PG, broker, simülatörler) kaldırır; sunucuyu siz `server/`'dan kendi ortamınızla çalıştırabilirsiniz (§6).
 
 **Tohumlama idempotenttir (§4):** mevcut veritabanında ikinci/üçüncü `up --stage2` (ya da `seed`) hiçbir varlığı çoğaltmaz, yeniden üretmez ve `accounts.json`'u değiştirmez;
-çıktı `Tohumlama tamam (20/20 adim: 0 yapildi, 17 atlandi (zaten var), 3 dogrulandi)` der (ilk kurulumda `17 yapildi`).
+çıktı `Tohumlama tamam (21/21 adim: 0 yapildi, 18 atlandi (zaten var), 3 dogrulandi)` der (ilk kurulumda `18 yapildi`; 2026-10-12'de eklenen `servis_kapsami_ev1` adımı "QA Daire 1"i ve panosunu `qa.servis`'in servis kapsamına alır, migration 045 yoksa atlanır).
 
 **Sırlar ve oturumlar:** `up` her çağrıda yalnızca **dönen sırları** yeniden üretir: JWT sırrı, yönetici API anahtarı, MQTT arka uç parolası, EMQX API anahtarı/sırrı, SMTP parolası.
 Veriye bağlı sırlar (`db_password`, `pin_pepper`, `local_key_secret`) `pgdata` ile birlikte yaşar ve yalnızca `reset` ile yenilenir (değişirlerse veritabanındaki PIN özetleri / şifreli yerel anahtarlar bozulurdu).
@@ -138,11 +138,11 @@ ATLANDI    zamanli_kurallar  - 4 kural zaten var
 ATLANDI    servis_pin  - PIN hala gecerli (~111 dk kaldi; yenisi uretilmedi)
 DOGRULANDI dogrulama_cihaz_cevrimici  - cihaz bulutta cevrimici (MQTT -> kopru -> DB -> REST)
 
-Tohumlama tamam  (20/20 adim: 0 yapildi, 17 atlandi (zaten var), 3 dogrulandi)
+Tohumlama tamam  (21/21 adim: 0 yapildi, 18 atlandi (zaten var), 3 dogrulandi)
 ```
 
 `N/N` yalnızca **başarılı** (yapılan + atlanan + doğrulanan) adımları sayar; başarısız ve `ENGELLENDI` adımlar ayrı yazılır (`KISMEN BASARISIZ  (14/20 adim: …; 3 basarisiz, 3 engellendi)`, çıkış kodu 2).
-Temiz kurulumda `17 yapildi`, tekrarda `0 yapildi` görülür; `0 yapildi` olmayan bir tekrar, o adımın gerçekten bir şey düzelttiği anlamına gelir.
+Temiz kurulumda `18 yapildi`, tekrarda `0 yapildi` görülür; `0 yapildi` olmayan bir tekrar, o adımın gerçekten bir şey düzelttiği anlamına gelir.
 
 **Hız sınırı.** Sunucu girişi IP başına 15 dk'da 30 istekle sınırlıdır (tüm istemciler `127.0.0.1`'dir; sayaçlar sunucu belleğindedir). Tekrarlanan `seed` yalnızca owner1/owner2 için 2 giriş yapar (diğer hesapların parolası SQL ile doğrulanır); `smoke` 6 giriş yapar.
 `HTTP 429 RATE_LIMITED` görürseniz bildirilen süre kadar bekleyin ya da `up` ile sunucuyu yeniden başlatın.
