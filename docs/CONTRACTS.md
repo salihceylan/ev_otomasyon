@@ -176,7 +176,7 @@ Rol kaynakları: global `users.role` ∈ {`user`,`service_user`,`super_user`}; e
 yerel anahtarını döndürür (Ethernet şablon yazımı için; denetim kaydı + oran sınırı). **Sahip kararı 6 (2026-10-09): davranış KORUNUR**
 (süresiz, müşteri kartları dahil); yasal metinler buna göre düzeltildi (§3j). \*\* `target_owner` ile yalnızca staff/super; müşteri OTP'si **zorunlu**.
 \*\*\* Gerekçe ≥ 15 karakter + cihaz UUID'sinin yazarak teyidi + denetim kaydı (IP dahil). Servis personeli kendisini yeni sahip yapamaz.
-Staff'in ev üyeliği claim/devirde 72 saatliğine verilir; istemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
+Staff'in ev üyeliği claim/devirde verilir; kurulum penceresi (`installer_expires_at`, 72 saat) kontrol/izleme erişimini sınırlar, ama acil sıfırlama (panoyu evden kaldırma: stoğa alma / devir) bu pencereyi ARAMAZ: servis üyeliği olan evde süresizdir (sahip kararı 2026-10-12). İstemci süper olmayan servis personeline acil sıfırlama formunda kapsam notu gösterir ("Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun."); `403`'te aynı yönlendirme hata kutusunda görünür (servis paneli kartı ve konsol/çekmece diyaloğu; SERVIS-07).
 
 Misafir (`guest`) için her istekte `valid_from <= now <= valid_until` doğrulanır; dışındaysa `403 GUEST_EXPIRED`.
 

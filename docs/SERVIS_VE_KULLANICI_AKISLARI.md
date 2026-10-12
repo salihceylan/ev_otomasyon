@@ -365,7 +365,7 @@
 4. "Yeni Panoyu Şimdi Bağla" → sihirbaz 5. adımdan başlar.
 
 ### 8.2 Acil servis sıfırlaması
-1. Yalnız süper kullanıcı ve servis sorumlusu (servis sorumlusu yalnız son 72 saatte kurduğu evlerde).
+1. Yalnız süper kullanıcı ve servis sorumlusu (servis sorumlusu yalnız kurduğu ya da devraldığı evlerde; süre sınırı yok).
 2. Cihaz kimliği, en az 15 karakter gerekçe, isteğe bağlı yeni sahip. UID yazılarak onaylanır.
 3. Eski ailenin tüm yetkileri biter; cihaz stoğa döner ya da yeni sahibe devredilir. Yeni kurulum PIN'i bir kez gösterilir.
 4. Yeni sahibe devredildiyse (servis sorumlusu için) "Panoyu şimdi bağla" → sihirbaz 5. adım.

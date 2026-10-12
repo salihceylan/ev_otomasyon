@@ -1262,14 +1262,15 @@ class DeviceService {
         throw httpError(403, 'Bu cihaz iptal edilmiş veya askıya alınmış; yalnızca süper yönetici sıfırlayabilir.', 'FORBIDDEN');
       }
 
-      // 2) Yetki: staff yalnizca uyesi oldugu evde (super her yerde)
+      // 2) Yetki: staff yalnizca servis uyesi oldugu (kurdugu ya da devraldigi) evde; super her yerde.
+      //    Panoyu evden kaldirma (stoga alma / devir) SURESIZDIR: 72 saatlik kurulum penceresi (installer_expires_at)
+      //    burada aranmaz (kullanici karari 2026-10-12). Kontrol/izleme erisimi ise pencereyle sinirli kalir.
       if (!isSuper) {
         let allowed = false;
         if (homeId) {
           const mem = await tx.query(
             `SELECT role FROM home_users
-              WHERE home_id = $1 AND user_id = $2
-                AND (installer_expires_at IS NULL OR installer_expires_at > NOW())`,
+              WHERE home_id = $1 AND user_id = $2`,
             [homeId, actor.userId]
           );
           allowed = mem.rows.length > 0 && mem.rows[0].role === 'service_user';

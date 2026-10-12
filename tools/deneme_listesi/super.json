@@ -952,15 +952,15 @@
     },
     {
      "id": "U8.05",
-     "baslik": "72 saat sınırı olmadan acil sıfırlama (stoğa alma)",
+     "baslik": "Her evde acil sıfırlama (stoğa alma)",
      "adimlar": [
       "Menüden \"Acil Sıfırlama\"yı açın.",
       "\"Cihaz UID (Pano Etiketi)\" alanına panonun UID'sini, \"Sıfırlama Gerekçesi\"ne en az 15 karakter yazın; \"Yeni Sahip\"i boş bırakın.",
       "\"Acil Sıfırla & Eski Aileyi Çıkar\" düğmesine basın; \"Acil Sıfırlama Onayı\" penceresinde UID'yi yazıp \"Sıfırla\"yı seçin."
      ],
-     "beklenen": "Servis personeline gösterilen \"Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin\" notu çıkmaz ve işlem reddedilmez. Sonuçta \"Cihaz sıfırlandı ve stoğa alındı.\" yazar ve \"YENİ KURULUM PIN (yalnızca bir kez gösterilir)\" görünür; eski ailenin erişimi kalkar.",
+     "beklenen": "Servis personeline gösterilen \"Servis personeli kendi kurduğu ya da devraldığı dairelerin\" notu çıkmaz ve işlem reddedilmez. Sonuçta \"Cihaz sıfırlandı ve stoğa alındı.\" yazar ve \"YENİ KURULUM PIN (yalnızca bir kez gösterilir)\" görünür; eski ailenin erişimi kalkar.",
      "rol_notu": "süper kullanıcı",
-     "on_kosul": "72 saatten önce ya da başka bir teknisyen tarafından kurulmuş, panolu bir deneme dairesi",
+     "on_kosul": "Başka bir teknisyen tarafından kurulmuş, panolu bir deneme dairesi",
      "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:78; lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52; lib/ui/pages/family/transfer_ownership_dialog.dart:1087"
     },

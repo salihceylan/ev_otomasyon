@@ -78,7 +78,7 @@ metinler (müşteri kayıtta Kullanıcı Sözleşmesi'ni onaylar; süper kullan�
 | Sihirbazla kurulum ve test | Evet | Evet (müşteri evinde 72 saat) | Evet (yalnız o ev, 2 saat) |
 | Sihirbazda şablon uygulama | Evet | Evet | Hayır |
 | Pano değişimi | Evet | Evet | Evet |
-| Acil sıfırlama | Evet | Evet (son 72 saatte kurduğu evler) | Hayır |
+| Acil sıfırlama | Evet | Evet (kurduğu ya da devraldığı evler, süre sınırı yok) | Hayır |
 | Evin yerel anahtarını okuma | **Hayır** | Evet | Evet |
 | Herhangi bir envanter kartının anahtarını okuma (servis yazılımı) | Evet | Evet | Hayır |
 | Hırsız alarmını kurma/çözme | Hayır | Hayır | Hayır |

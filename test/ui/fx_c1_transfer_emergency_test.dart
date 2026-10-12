@@ -10,12 +10,12 @@ import 'e2_support.dart';
 /// * SERVIS-01 (D13): `local_key_publish: 'pending'` (yanıtta `local_key` yok) bilgi notu olarak gösterilir: yeni anahtar
 ///   pano buluta bağlanınca sunucu tarafından otomatik iletilecek. Eski sunucu yanıtındaki anahtar için uygulanamaz
 ///   "yerinde girilmeli" yerine gerçek kurtarma yolu: seri konsolda RESETKEY + FACTORYINIT (fabrika aracı).
-/// * SERVIS-07 (D15): kalıcı servis personeli (süper değil) 72 saat kısıt notunu görür; 403'te yönlendirme hata kutusunun
+/// * SERVIS-07 (D15): kalıcı servis personeli (süper değil) kapsam notunu görür; 403'te yönlendirme hata kutusunun
 ///   altında (tek kez) görünür. Süper yöneticinin 403 metni değişmez.
 void main() {
   const uid = 'AHBU-S3-A1B2C3';
   const reason = 'Kiracı tahliye edildi, sözleşme ibraz edildi';
-  const scopeNote = 'Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını '
+  const scopeNote = 'Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan '
       'sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.';
 
   bool shown(String key) => find.byKey(Key(key)).evaluate().isNotEmpty;
@@ -83,7 +83,7 @@ void main() {
   });
 
   group('SERVIS-07: servis personeli kısıt notu', () {
-    testWidgets('kalıcı servis personeli: formda 72 saat kısıt notu görünür', (tester) async {
+    testWidgets('kalıcı servis personeli: formda kapsam notu görünür', (tester) async {
       await openEmergency(tester, globalRole: 'service_user');
       expect(shown('reset_staff_scope_note'), isTrue);
       expect(textOf(tester, 'reset_staff_scope_note'), scopeNote);
@@ -92,7 +92,7 @@ void main() {
     testWidgets('süper yönetici: kısıt notu YOK', (tester) async {
       await openEmergency(tester);
       expect(shown('reset_staff_scope_note'), isFalse);
-      expect(find.textContaining('son 72 saat'), findsNothing);
+      expect(find.textContaining('süre sınırı olmadan'), findsNothing);
     });
 
     testWidgets('servis personeline 403: sunucu mesajı aynen + altında süper yönetici yönlendirmesi (tek kez)', (tester) async {
@@ -103,7 +103,7 @@ void main() {
 
       expect(textOf(tester, 'reset_error'), 'Bu cihazın dairesinde servis yetkiniz yok. Süper yönetici ile iletişime geçin.');
       expect(textOf(tester, 'reset_forbidden_hint'), scopeNote);
-      expect(find.textContaining('son 72 saat'), findsOneWidget, reason: 'aynı not ekranda iki kez yazılmaz');
+      expect(find.textContaining('süre sınırı olmadan'), findsOneWidget, reason: 'aynı not ekranda iki kez yazılmaz');
       expect(find.byKey(const Key('emergency_form')), findsOneWidget);
     });
 

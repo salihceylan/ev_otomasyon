@@ -16,11 +16,11 @@ import 'f_widget_support.dart';
 ///   zamana kadar panonun mevcut anahtarı geçerlidir. Sonuç diyaloğu bunu bilgi notu olarak söyler; uygulanamaz "panoya
 ///   yerinde yazılmalıdır" yönergesi kalkar. ESKİ sunucu yanıtı (`skipped_offline`/`failed` + `local_key`) gelirse
 ///   anahtar gösterilebilir ama yönerge gerçek kurtarma yoludur: seri konsolda RESETKEY + FACTORYINIT (fabrika aracı).
-/// * SERVIS-07 (D15): kalıcı servis personeli (süper olmayan) yalnız son 72 saatte kurduğu/devraldığı dairelerin
+/// * SERVIS-07 (D15): kalıcı servis personeli (süper olmayan) yalnız kurduğu/devraldığı dairelerin (süresiz)
 ///   panolarını sıfırlayabilir (sunucu kuralı); kart bunu söyler, 403 gelince yönlendirme hata kutusunda görünür.
 const String kUid = 'AHBU-S3-A1B2C3';
 const String kReason = 'Kiracı tahliye edildi, tapu teyit edildi.';
-const String kScopeNote = 'Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını '
+const String kScopeNote = 'Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan '
     'sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.';
 
 bool exists(String key) => find.byKey(Key(key)).evaluate().isNotEmpty;
@@ -172,7 +172,7 @@ void main() {
   });
 
   group('SERVIS-07: servis personeli kısıt notu', () {
-    testWidgets('kalıcı servis personeli (süper değil): kartta 72 saat kısıt notu görünür', (tester) async {
+    testWidgets('kalıcı servis personeli (süper değil): kartta kapsam notu görünür', (tester) async {
       final env = await serviceHarness(role: 'staff', flush: () async {});
       addTearDown(env.dispose);
       await openCard(tester, env);
@@ -187,7 +187,7 @@ void main() {
       await openCard(tester, env);
 
       expect(exists('reset_staff_scope_note'), isFalse);
-      expect(find.textContaining('son 72 saat'), findsNothing);
+      expect(find.textContaining('süre sınırı olmadan'), findsNothing);
     });
 
     testWidgets('servis personeline 403: sunucu mesajı + hata kutusunda süper yönetici yönlendirmesi (tek kez görünür)',
@@ -229,7 +229,7 @@ void main() {
       await resetWith(tester, env);
 
       expect(exists('reset_error'), isTrue);
-      expect(find.textContaining('son 72 saat'), findsNothing);
+      expect(find.textContaining('süre sınırı olmadan'), findsNothing);
     });
 
     testWidgets('dar ekranda ve büyük yazıda kısıt notu ve 403 yönlendirmesi taşma olmadan çizilir', (tester) async {

@@ -87,17 +87,18 @@ test('yetki: owner/resident/normal kullanici/servis oturumu/aktorsuz reddedilir 
   assert.strictEqual(ctx.inv.status, 'CLAIMED');
 });
 
-test('staff YALNIZCA uyesi oldugu evde sifirlayabilir; uyeligi olmayan / suresi dolmus / owner-uyeligi olan reddedilir', async () => {
+test('staff YALNIZCA servis uyesi oldugu evde sifirlayabilir (pencere suresi dolmus olsa bile); uyeligi olmayan / owner-uyeligi olan reddedilir', async () => {
   // uyelik yok
   let ctx = await setup();
   const stranger = ctx.world.helpers.addUser({ email: 'baska.servis@example.test', role: 'service_user' });
   await expectHttp(ctx.reset(stranger), 403, 'FORBIDDEN');
   assert.strictEqual(ctx.inv.status, 'CLAIMED');
 
-  // suresi dolmus servis uyeligi
+  // suresi dolmus servis uyeligi: panoyu evden kaldirma suresizdir (72 saatlik pencere aranmaz)
   ctx = await setup();
   ctx.world.state.home_users.find((m) => m.user_id === ctx.tech.id).installer_expires_at = new Date(ctx.world.clock.t - 1000);
-  await expectHttp(ctx.reset(ctx.tech), 403, 'FORBIDDEN');
+  const late = await ctx.reset(ctx.tech);
+  assert.strictEqual(late.action, 'UNCLAIMED');
 
   // staff global rolu ama o evde owner (servis degil): servis yetkisiyle islem yapamaz
   ctx = await setup();

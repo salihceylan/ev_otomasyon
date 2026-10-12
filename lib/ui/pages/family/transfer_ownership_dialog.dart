@@ -69,7 +69,7 @@ class TransferOwnershipDialog extends StatefulWidget {
 enum _Tab { transfer, emergency }
 
 /// Diyaloğun durumdan okuduğu değerler (PF-06: `context.select`; `Capabilities` yerine skalerler).
-/// [resetLimited]: acil sıfırlama yetkisi var ama süper değil (kalıcı servis personeli: 72 saatlik kapsam).
+/// [resetLimited]: acil sıfırlama yetkisi var ama süper değil (kalıcı servis personeli: yalnız kurduğu/devraldığı daireler, süresiz).
 /// [isSuper]: süper yönetici (sunucu ona yerel anahtar vermez; devrinde sihirbaz yolu yok, M4-02).
 typedef _TransferView = ({bool canTransfer, bool canReset, bool resetLimited, bool isSuper, String homeName});
 

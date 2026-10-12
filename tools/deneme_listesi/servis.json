@@ -2113,7 +2113,7 @@
      ],
      "beklenen": "Kimlik aynen yazılmadan onay düğmesi açılmaz; yazınca sıfırlama yapılabilir.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Son 72 saatte kurduğunuz bir evin panosu",
+     "on_kosul": "Kurduğunuz ya da devraldığınız bir evin panosu",
      "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:252"
     },
@@ -2125,7 +2125,7 @@
      ],
      "beklenen": "\"Sıfırlama tamamlandı\" ve \"Cihaz stoğa alındı; eski daire bağlantısı kaldırıldı.\" yazar; eski ailenin erişimi biter.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Son 72 saatte kurduğunuz bir evin panosu",
+     "on_kosul": "Kurduğunuz ya da devraldığınız bir evin panosu",
      "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:253"
     },
@@ -2151,7 +2151,7 @@
      ],
      "beklenen": "Cihazın yeni sahibe devredildiği yazar; sihirbaz 5. adımdan açılır.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Son 72 saatte kurduğunuz bir evin panosu; yeni sahibin hesabı",
+     "on_kosul": "Kurduğunuz ya da devraldığınız bir evin panosu; yeni sahibin hesabı",
      "yeni": false,
      "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:675"
     },
@@ -2169,13 +2169,13 @@
     },
     {
      "id": "S13.08",
-     "baslik": "72 saat dışındaki ev sıfırlanamaz",
+     "baslik": "Başkasının kurduğu ev sıfırlanamaz",
      "adimlar": [
-      "72 saatten önce kurulmuş ya da sizin kurmadığınız bir evin panosunu sıfırlamayı deneyin."
+      "Sizin kurmadığınız ve devralmadığınız bir evin panosunu sıfırlamayı deneyin."
      ],
-     "beklenen": "Sunucu reddeder; hata kutusunda \"Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin panolarını sıfırlayabilir\" notu görünür.",
+     "beklenen": "Sunucu reddeder; hata kutusunda \"Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir\" notu görünür.",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "72 saatten eski ya da başkasının kurduğu ev",
+     "on_kosul": "Başka bir teknisyenin kurduğu ev",
      "yeni": false,
      "kaynak": "lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52"
     },
@@ -2191,6 +2191,19 @@
      "on_kosul": "Alarm geçmişi olan pano; yeni sahibin hesabı",
      "yeni": true,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:28"
+    },
+    {
+     "id": "S13.10",
+     "baslik": "Günler önce kurduğunuz evin panosunu kaldırma (süre sınırı yok)",
+     "adimlar": [
+      "Kurulumunu 72 saatten ÖNCE yaptığınız bir evin panosu için acil sıfırlamayı açın.",
+      "Cihaz kimliği ve gerekçeyi yazıp \"Yeni sahip\"i boş bırakın, onaylayın."
+     ],
+     "beklenen": "Sunucu reddetmez; \"Sıfırlama tamamlandı\" ve \"Cihaz stoğa alındı; eski daire bağlantısı kaldırıldı.\" yazar. Kartta \"Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.\" notu görünür.",
+     "rol_notu": "servis sorumlusu",
+     "on_kosul": "72 saatten önce sizin kurduğunuz, panolu bir deneme evi",
+     "yeni": true,
+     "kaynak": "server/src/services/device_service.js (emergencyReset yetki sorgusu); lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52"
     }
    ]
   },

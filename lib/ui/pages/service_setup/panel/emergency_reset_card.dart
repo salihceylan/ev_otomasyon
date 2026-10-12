@@ -36,8 +36,8 @@ import '../../../theme/feature_accent.dart';
 /// * Yeni sahip (isteğe bağlı) e-posta/telefon olarak doğrulanır ve normalleştirilir.
 /// * Sonuçtaki uyarılar / kısmi başarı kullanıcıya gösterilir; tek seferlik gizli değerler
 ///   ([EmergencyResetResultDialog]) panoya yalnızca 45 sn kalacak şekilde kopyalanır.
-/// * Kalıcı servis personeli (süper olmayan) yalnızca süresi dolmamış (72 saatlik) servis üyeliği olan dairelerin
-///   panolarını sıfırlayabilir (sunucu kuralı): kart bunu [staffScopeNote] ile söyler; sunucu 403 dönerse yönlendirme
+/// * Kalıcı servis personeli (süper olmayan) yalnızca servis üyeliği olan (kurduğu ya da devraldığı) dairelerin
+///   panolarını sıfırlayabilir; 72 saatlik kurulum penceresi sıfırlamada ARANMAZ (sunucu kuralı, 2026-10-12): kart bunu [staffScopeNote] ile söyler; sunucu 403 dönerse yönlendirme
 ///   hata kutusunda gösterilir.
 class EmergencyResetCard extends StatefulWidget {
   const EmergencyResetCard({super.key, this.scanner = defaultSetupScanner});
@@ -47,10 +47,10 @@ class EmergencyResetCard extends StatefulWidget {
   /// Gerekçenin en az uzunluğu (sunucu ve istemci aynı kuralı uygular).
   static const int minReasonLength = 15;
 
-  /// Servis personelinin (süper olmayan) sıfırlama kapsamı: sunucu yalnız süresi dolmamış servis üyeliği olan dairenin
-  /// panosuna izin verir (üyelik kurulum/devirde 72 saatliğine verilir).
-  static const String staffScopeNote = 'Servis personeli yalnız son 72 saat içinde kurduğu ya da devraldığı dairelerin '
-      'panolarını sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.';
+  /// Servis personelinin (süper olmayan) sıfırlama kapsamı: sunucu yalnız servis üyeliği olan dairenin panosuna izin
+  /// verir; üyeliğin 72 saatlik kurulum penceresi dolmuş olsa da sıfırlama (evden kaldırma) süresizdir.
+  static const String staffScopeNote = 'Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre '
+      'sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.';
 
   @override
   State<EmergencyResetCard> createState() => _EmergencyResetCardState();
@@ -277,7 +277,7 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
   @override
   Widget build(BuildContext context) {
     final muted = SetupColors.muted(context);
-    // Kalıcı servis personeli (süper değil): sıfırlama kapsamı sunucuda 72 saatlik servis üyeliğiyle sınırlıdır.
+    // Kalıcı servis personeli (süper değil): sıfırlama kapsamı sunucuda servis üyeliğiyle sınırlıdır (süresiz).
     final limited =
         context.select<AutomationState, bool>((s) => s.capabilities.canEmergencyReset && !s.capabilities.isSuperUser);
     // 403 sonrası yönlendirme hata kutusunda gösterilir: aynı not ekranda iki kez yazılmaz.
