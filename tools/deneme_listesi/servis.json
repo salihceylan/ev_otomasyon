@@ -1,7 +1,7 @@
 {
  "rol": "servis",
  "baslik": "Servis Sorumlusu Deneme Listesi",
- "aciklama": "Servis sorumlusunun (servis personeli) uygulamada ve servis yazılımında yapabildiği işlerin tek tek denenecek listesi: ofis, atölye, saha, teslim sihirbazı, pano değişimi, acil sıfırlama, abone ve hesap yönetimi, Wi-Fi değişikliği ve servis PIN'iyle erişim. 2026-10-12'den beri servis sorumlusu KENDİ kapsamında (kendi stoğu, kurduğu ya da devraldığı daireler, kendi müşterileri ve siteleri) süper kullanıcı gibidir ve süre sınırı yoktur: kendi stoğuna kart kaydeder, kartlarını askıya alır, etiketini yeniler, siler (S20). Yalnız kök yöneticinin (süper kullanıcı) yapabildiği işler (servis hesapları, kapsamlar arası aktarım \"Servisi Değiştir\", kartı iptal etme, kalıcı silme vb.) ayrı listededir.",
+ "aciklama": "Servis sorumlusunun (servis personeli) uygulamada ve servis yazılımında yapabildiği işlerin tek tek denenecek listesi: ofis, atölye, saha, teslim sihirbazı, pano değişimi, acil sıfırlama, abone ve hesap yönetimi, Wi-Fi değişikliği ve servis PIN'iyle erişim. 2026-10-12'den beri servis sorumlusu KENDİ kapsamında (kendi stoğu, kurduğu ya da devraldığı daireler, kendi müşterileri ve siteleri) süper kullanıcı gibidir ve süre sınırı yoktur: kendi stoğuna kart kaydeder, kartlarını askıya alır, etiketini yeniler, siler (S20). Yalnız kök yöneticinin (süper kullanıcı) yapabildiği işler (servis hesapları, kapsamlar arası aktarım \"Servisi Değiştir\", kartı iptal etme, kalıcı silme vb.) ayrı listededir. Bu liste şu sürümlere göredir (2026-10-12): uygulama ve sunucu master ddcac40 (sunucu canlıda; S20.15 için uygulama bu commit'le ya da sonrasıyla derlenmiş olmalı); sunucu son migration 045 (canlıda 001–045 uygulandı, son dağıtım 2026-10-12); pano firmware'i depodaki güncel v1.3.2 (karta bu yazılmış olmalı; panonun kurulum ağında /api/status → fw 1.3.2; kartta hangi sürümün yüklü olduğu varsayılmaz); fabrika aracı (servis yazılımı) b69e54f: süper kullanıcı ya da servis sorumlusu girişi.",
  "bolumler": [
   {
    "id": "S1",
@@ -3114,13 +3114,14 @@
      "adimlar": [
       "Kendi kapsamınızdaki daire aktifken (Servis Paneli → \"Mevcut cihazlarım\" altında \"Daire: …\") sağ üstteki profil simgesine dokunun.",
       "\"Aile & Misafir Yönetimi\"ni açın; \"Yeni Birey / Misafir Davet Et (QR Üret)\" ile bir misafir kodu üretin.",
-      "Listede bir aile üyesinin ya da misafirin kartındaki \"Yetkiyi İptal Et\"e basıp onaylayın."
+      "Listede bir aile üyesinin ya da misafirin kartındaki \"Yetkiyi İptal Et\"e basıp onaylayın.",
+      "Varsa kökün ya da başka bir servisin dairesi aktifken (o dairede eski bir servis üyeliğiniz olduğunda) profil simgesine yeniden dokunun."
      ],
-     "beklenen": "Davet kodu üretilir; üye çıkarılınca '\"<ad>\" kullanıcısının yetkisi iptal edildi.' yazar. Ev sahibinin kartında \"Yetkiyi İptal Et\" yoktur. Başka servisin ya da kökün dairesinde sunucu 403 iletisi gösterilir.",
+     "beklenen": "Davet kodu üretilir; üye çıkarılınca '\"<ad>\" kullanıcısının yetkisi iptal edildi.' yazar. Ev sahibinin kartında \"Yetkiyi İptal Et\" yoktur. Kökün ya da başka bir servisin dairesinde profilde \"Aile & Misafir Yönetimi\" ve \"Hızlı Davet Kodu / QR Üret\" düğmeleri hiç görünmez (önceden görünüyor, işlem sunucuda 403 ile reddediliyordu).",
      "rol_notu": "servis sorumlusu",
-     "on_kosul": "Kapsamınızdaki (kurduğunuz) daire aktif; evde deneme amaçlı bir aile üyesi ya da misafir. Aktif daireyi değiştirme yolu bu listede doğrulanmadı.",
+     "on_kosul": "Kapsamınızdaki (kurduğunuz) daire aktif; evde deneme amaçlı bir aile üyesi ya da misafir. Aktif daireyi değiştirme yolu bu listede doğrulanmadı. Son adım için kapsamınız dışındaki bir dairede eski servis üyeliği; ddcac40 ya da sonrası ile derlenmiş uygulama (sunucu canlıda) (eski sunucuda yeni uygulama bu düğmeleri servis sorumlusuna hiç göstermez).",
      "yeni": true,
-     "kaynak": "lib/models/capabilities.dart:313; lib/ui/widgets/user_profile_dialog.dart:149; lib/ui/pages/family/family_members_page.dart:603"
+     "kaynak": "lib/models/capabilities.dart (invite: servis yalnız serviceScopeAdmin iken); lib/models/cloud_models.dart (service_scope_admin); lib/ui/widgets/user_profile_dialog.dart:149; lib/ui/pages/family/family_members_page.dart:603; server/src/services/auth_service.js (service_scope_admin)"
     },
     {
      "id": "S20.16",

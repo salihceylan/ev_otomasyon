@@ -1,7 +1,7 @@
 {
  "rol": "super",
  "baslik": "Süper Kullanıcı Deneme Listesi",
- "aciklama": "Bu liste yalnız süper kullanıcının (kök yönetici) yapabildiği işleri kapsar. Süper kullanıcı servis sorumlusunun yapabildiği her işi de yapabilir; o işler Servis Sorumlusu deneme listesindedir ve burada tekrar edilmez. 2026-10-12'den beri servis sorumlusu kendi kapsamında süperdir: kendi stoğuna kart kaydeder, kendi kartlarını askıya alır / siler / etiketini yeniler (U1, U4, U7'deki işler servis için yalnız kendi stoğunda geçerlidir). Bütün stok ve daireler, kök stoğu, kartı iptal etme (REVOKED) ve servisler arası aktarım (\"Servisi Değiştir\", \"🔀 Servise Aktar\") yalnız köktedir (U10).",
+ "aciklama": "Bu liste yalnız süper kullanıcının (kök yönetici) yapabildiği işleri kapsar. Süper kullanıcı servis sorumlusunun yapabildiği her işi de yapabilir; o işler Servis Sorumlusu deneme listesindedir ve burada tekrar edilmez. 2026-10-12'den beri servis sorumlusu kendi kapsamında süperdir: kendi stoğuna kart kaydeder, kendi kartlarını askıya alır / siler / etiketini yeniler (U1, U4, U7'deki işler servis için yalnız kendi stoğunda geçerlidir). Bütün stok ve daireler, kök stoğu, kartı iptal etme (REVOKED) ve servisler arası aktarım (\"Servisi Değiştir\", \"🔀 Servise Aktar\") yalnız köktedir (U10). Bu liste şu sürümlere göredir (2026-10-12): uygulama ve sunucu master ddcac40; sunucu son migration 045 (canlıda 001–045 uygulandı, son dağıtım 2026-10-12); pano firmware'i depodaki güncel v1.3.2 (version_info.json; karta bu yazılmış olmalı; kartta hangi sürümün yüklü olduğu varsayılmaz); fabrika aracı (servis yazılımı) b69e54f: süper kullanıcı (kök stoğu) ya da servis sorumlusu (kendi stoğu) girişi.",
  "bolumler": [
   {
    "id": "U1",

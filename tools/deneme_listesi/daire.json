@@ -1,7 +1,7 @@
 {
   "rol": "daire",
   "baslik": "Daire Kullanicisi Deneme Listesi",
-  "aciklama": "AHBU Ev Otomasyonu uygulamasında ev sahibi, aile üyesi, misafir ve panoyu kendisi kuran bireysel kullanıcının yapabildiği her şeyi telefonda tek tek denemek için hazırlanmış liste. Her maddeyi deneyip çalışıyor / çalışmıyor olarak işaretleyin; tırnak içindeki yazılar uygulamada birebir böyle görünür.",
+  "aciklama": "AHBU Ev Otomasyonu uygulamasında ev sahibi, aile üyesi, misafir ve panoyu kendisi kuran bireysel kullanıcının yapabildiği her şeyi telefonda tek tek denemek için hazırlanmış liste. Her maddeyi deneyip çalışıyor / çalışmıyor olarak işaretleyin; tırnak içindeki yazılar uygulamada birebir böyle görünür. Bu liste şu sürümlere göredir (2026-10-12): uygulama ve sunucu master ddcac40; sunucu son migration 045 (canlıda 001–045 uygulandı, son dağıtım 2026-10-12); pano firmware'i depodaki güncel v1.3.2 (panoya bu yazılmış olmalı; pano Wi-Fi sihirbazının bağlantı testinde \"Yazılım: 1.3.2\" görünür).",
   "bolumler": [
     {
       "id": "D1",
@@ -723,8 +723,8 @@
           ],
           "beklenen": "8 çıkışın hepsi Röle 1 … Röle 8 adıyla lamba olarak görünür, panjur yoktur; 1 numaralı buton Röle 1'i açıp kapatır (her giriş kendi numaralı rölesini yönetir).",
           "rol_notu": "bireysel",
-          "on_kosul": "Firmware v1.3.2 yazılmış pano (henüz karta yazılmadı)",
-          "yeni": false,
+          "on_kosul": "Firmware v1.3.2 (depodaki güncel sürüm) yazılmış, servis şablonu yazılmamış pano",
+          "yeni": true,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:25"
         }
       ]
