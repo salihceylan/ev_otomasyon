@@ -189,7 +189,7 @@
      "beklenen": "Tablo dolar; durum satırı gösterilen ve toplam kayıt sayısını yazar (Gösterilen … / Toplam …); \"⬇️ Daha fazla\" sonraki kayıtları tablonun sonuna ekler.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "Envanterde 100'den fazla kart (Daha fazla için)",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:92"
     },
     {
@@ -203,7 +203,7 @@
      "beklenen": "Önce yalnız eşleşen kart listelenir; kutu boşken yapılan aramada bütün liste geri gelir.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:99"
     },
     {
@@ -428,7 +428,7 @@
      "beklenen": "Sunucu reddeder: kartın yalnız Pano Değişimi ile ya da yönetici tarafından değiştirilebileceğini söyleyen ileti çıkar; kart değişmez.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "Kuruldu ya da Teslim edildi durumunda daire",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:101"
     },
     {
@@ -741,7 +741,7 @@
      "beklenen": "\"Kablosuz (köprü) sensör bu sürümde desteklenmiyor\" hatası çıkar; şablon kaydedilmez.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "Kablosuz sensör içeren eski bir şablon",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:116"
     },
     {
@@ -904,7 +904,7 @@
      "beklenen": "Anahtar sorulmadan şablon yazılır ve geri okunur. Araç IP'nin doğru karta ait olduğunu denetlemez; yanlış IP başka karta yazar.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "Kablolu Ethernet, firmware v1.3.0+",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:151"
     },
     {
@@ -942,7 +942,7 @@
      "beklenen": "\"Daire Şablonu Değişti\" sorusu çıkar; Evet derseniz dairenin güncel şablonu yazılır, Hayır derseniz hiçbir şey yazılmaz.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "İki bilgisayar ya da iki servis yazılımı penceresi",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:148"
     },
     {
@@ -955,7 +955,7 @@
      "beklenen": "\"Daire Değişti\" uyarısı çıkar; hiçbir şey yazılmaz, daire listesi yenilenir.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "İki bilgisayar ya da iki servis yazılımı penceresi",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/site_template_ui.py:1340"
     },
     {
@@ -968,7 +968,7 @@
      "beklenen": "\"Daire Şablonu Farklı\" penceresi çıkar; daire Yazıldı yapılmaz ve \"Son yazım\" sütununda \"(farklı şablon)\" görünür.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "Kartı bağlı daire, ikinci bir şablon",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:155"
     },
     {
@@ -981,7 +981,7 @@
      "beklenen": "Araç yazmadan önce \"Kartta yarım kalmış şablon uygulaması var\" der; yazım bitince kart normale döner ve daire Yazıldı olur.",
      "rol_notu": "servis sorumlusu (servis yazılımı)",
      "on_kosul": "Şablon yazımı yarıda kesilmiş kart",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:153"
     },
     {
@@ -1124,7 +1124,7 @@
      "beklenen": "Her giriş aynı numaralı röleyi açıp kapatır (giriş 1 → röle 1, giriş 2 → röle 2); hiçbir röle panjur gibi çalışmaz.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "v1.3.2 yüklü, şablonsuz pano",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:30"
     }
    ]
@@ -1242,7 +1242,7 @@
      "beklenen": "\"Bu panonun yarım kalmış kurulumu var\" sorusu çıkar: \"Kaldığınız Yerden Devam\", \"Baştan Başla (kayıt silinir)\", \"Vazgeç\".",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Yarım kalmış mevcut pano kaydı",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:184"
     },
     {
@@ -1255,7 +1255,7 @@
      "beklenen": "Yarım kayıt aynı adımla listede durur.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Yarım kalmış mevcut pano kaydı",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:186"
     },
     {
@@ -1268,7 +1268,7 @@
      "beklenen": "Kilit ekranı sihirbazın üstüne gelir; kilit açılınca sihirbaz aynı adımda sürer, baştan başlamaz.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Uygulamada parmak izi / yüz kilidi açık",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:192"
     }
    ]
@@ -1377,7 +1377,7 @@
      "beklenen": "\"Müşteriye onay kodu gönderilemiyor\" uyarısı çıkar; ileti müşterinin panoyu kendi uygulamasından etiketteki karekodla sahiplenmesini, sonra size servis PIN'i vermesini söyler.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "E-postasız (yalnız telefonla giren) müşteri hesabı",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:198"
     },
     {
@@ -1500,7 +1500,7 @@
      "beklenen": "Önce \"Pano henüz hazırlanmamış: kurulum ağı şu an parolasız (açık).\" uyarısı görünür; hazırlıktan sonra \"Pano hazırlandı. Kurulum ağı şimdi parolalı olarak yeniden başlıyor\" yazar ve telefonu etiketteki parolayla yeniden bağlamanız istenir.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Provizyonsuz pano ve etiketi",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:207"
     },
     {
@@ -1513,7 +1513,7 @@
      "beklenen": "\"Kurulum ağı parolaları eşleşmiyor.\" uyarısı çıkar; pano hazırlanmaz.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Provizyonsuz pano",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:208"
     },
     {
@@ -1526,7 +1526,7 @@
      "beklenen": "\"Yazdığınız parola etiketteki parolayla eşleşmiyor.\" uyarısı çıkar; pano hazırlanmaz.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Provizyonsuz pano ve etiketi",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:209"
     },
     {
@@ -1733,7 +1733,7 @@
      "beklenen": "\"Kablosuz sensör ekle\" düğmesi görünmez (v1.3.2 dahil hiçbir pano desteklemiyor); sensörler yalnız panodaki girişlere atanır.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:221"
     },
     {
@@ -1746,7 +1746,7 @@
      "beklenen": "Sensör \"Bu panoda kablosuz sensör desteklenmiyor; kaldırın.\" uyarısıyla görünür; kaldırılana kadar kayıt yapılamaz, kaldırılınca panodan da silinir.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Panoda kayıtlı kablosuz sensör",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:222"
     },
     {
@@ -1907,7 +1907,7 @@
      "beklenen": "Bu girişler listede yoktur; üstte güvenlik girişi sayısını veren ve \"bu adımda gösterilmez.\" ile biten not görünür; teslim raporunda buton sayılmazlar.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Güvenlik rolü atanmış girişler",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:228"
     },
     {
@@ -2049,7 +2049,7 @@
      "beklenen": "Değişim reddedilmez; \"Bu evde pano değişimini yetkili servis personeli yapmalıdır.\" uyarısı çıkmaz.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Su/gaz sensörü ya da vanası olan ev",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:14"
     },
     {
@@ -2062,7 +2062,7 @@
      "beklenen": "Kırmızı \"Su/gaz koruması şu an çalışmıyor\" uyarısı çıkar: sensör, vana ve bölge ayarları yeni panoya aktarılmamıştır.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Su/gaz sensörü ya da vanası olan ev",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:247"
     },
     {
@@ -2075,7 +2075,7 @@
      "beklenen": "Bölge testi geçer, vana kapanır; su/gaz koruması yeniden çalışır.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "Su/gaz sensörü ya da vanası olan, değişimi yapılmış ev",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:248"
     },
     {
@@ -2244,7 +2244,7 @@
      "beklenen": "Yeni sahip yalnız devirden sonraki ve hâlâ açık alarmları görür; eski kapanmış alarmlar görünmez.",
      "rol_notu": "servis sorumlusu (yeni sahibin hesabıyla kontrol)",
      "on_kosul": "Alarm geçmişi olan pano; yeni sahibin hesabı",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:28"
     },
     {
@@ -2257,7 +2257,7 @@
      "beklenen": "Sunucu reddetmez; \"Sıfırlama tamamlandı\" ve \"Cihaz stoğa alındı; eski daire bağlantısı kaldırıldı.\" yazar. Kartta \"Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.\" notu görünür.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "72 saatten önce sizin kurduğunuz, panolu bir deneme evi",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "server/src/services/device_service.js (emergencyReset yetki sorgusu); lib/ui/pages/service_setup/panel/emergency_reset_card.dart:52"
     }
    ]
@@ -2339,7 +2339,7 @@
      "beklenen": "Alanın başında \"+90\" hazırdır; numara 555 123 45 67 biçimine çevrilir.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:23"
     },
     {
@@ -2364,7 +2364,7 @@
      "beklenen": "Yeni yönetici yalnız atamadan sonraki ve hâlâ açık alarmları görür.",
      "rol_notu": "servis sorumlusu (yeni yöneticinin hesabıyla kontrol)",
      "on_kosul": "Alarm geçmişi olan daire",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:28"
     },
     {
@@ -2435,7 +2435,7 @@
      "beklenen": "Alanın başında \"+90\" hazırdır; numara 555 123 45 67 olarak görünür ve +905… biçiminde saklanır.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:261"
     },
     {
@@ -2447,7 +2447,7 @@
      "beklenen": "\"Cep numarası 5 ile başlamalıdır (5XX XXX XX XX)\" uyarısı çıkar.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/common/validators.dart:86"
     },
     {
@@ -2733,7 +2733,7 @@
      "beklenen": "Değişim yapılır; \"Bu evde pano değişimini yetkili servis personeli yapmalıdır.\" uyarısı çıkmaz; sonuçta \"Yeni Panoyu Şimdi Bağla\" görünür.",
      "rol_notu": "servis sorumlusu (müşteri PIN'iyle)",
      "on_kosul": "Su/gaz sensörü ya da vanası olan ev; yeni stok panosu",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:15"
     },
     {
@@ -2782,7 +2782,7 @@
      "beklenen": "Pano kısa bir kopuştan sonra yeniden çevrimiçi olur ve komutlar çalışır (bulut kimliği yenilenmiş, pano yenisini kendisi almıştır).",
      "rol_notu": "servis sorumlusu (müşteri PIN'iyle; ev sahibinin hesabıyla kontrol)",
      "on_kosul": "Tek panolu ev, v1.3.0+ provizyonlu pano",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:20"
     }
    ]
@@ -2814,7 +2814,7 @@
      "beklenen": "Pano firmware'e gömülü sunucuya (evotomasyon.gudeteknoloji.com.tr) bağlanır ve çevrimiçi görünür; başka sunucu adresi kabul edilmez.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "v1.3.2 yüklü pano",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:32"
     },
     {
@@ -2827,7 +2827,7 @@
      "beklenen": "8 kanalın hepsi Röle 1 … Röle 8 adlı lamba olarak gelir; panjur yoktur.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "v1.3.2 yüklü, şablonsuz pano",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:29"
     },
     {
@@ -2839,7 +2839,7 @@
      "beklenen": "Kanal adları ve röle görevleri önceki gibidir; yeni varsayılan liste bu evleri değiştirmez.",
      "rol_notu": "servis sorumlusu",
      "on_kosul": "v1.3.1 panolu kurulu ev",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:31"
     }
    ]

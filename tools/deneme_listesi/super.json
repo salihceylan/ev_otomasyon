@@ -128,7 +128,7 @@
      "beklenen": "Tarayıcı yerine AHBU uygulaması açılır ve etiketteki kartla cihaz ekleme (sahiplenme) penceresi gelir. Karekodun içindeki adres, sunucu ayarı ne olursa olsun her zaman evotomasyon.gudeteknoloji.com.tr ile başlar. (iPhone'da bu henüz çalışmaz.)",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "AHBU uygulamasının sürüm derlemesi kurulu Android telefon; 2026-10-09 sonrası basılmış etiket",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/factory_client.py:62; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:772"
     }
    ]
@@ -147,7 +147,7 @@
      "beklenen": "Seçeneğin yanındaki sürüm yazısında v1.3.2, \"Dosya\" kutusunda ...\\firmware_releases\\v1.3.2\\firmware_combined_0x0.bin yolu görünür.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/version_info.json:2; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:7"
     },
     {
@@ -161,7 +161,7 @@
      "beklenen": "\"Başarılı\" penceresinde \"Firmware yüklendi.\" ve \"Provizyon USB (seri) üzerinden OTOMATİK başlatıldı\" yazar; araç kendiliğinden 3. sekmeye geçip provizyonu başlatır. Boş kartta \"Kart Ayarları Silinecek\" sorusu çıkmaz. Karta v1.3.2 yazılmıştır.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "USB'ye takılı boş kart; 2. sekmede bu kartın kaydı yapılmış",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:174; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3314"
     },
     {
@@ -188,7 +188,7 @@
      "beklenen": "\"Başarılı\" penceresinde \"Uygulama imajı yazıldı (0x10000).\" ve kartın ayarlarının korunduğu, provizyon gerekmediği yazar. Kart yeniden başladıktan sonra uygulamada aynı ev ve kanal adlarıyla çevrimiçi görünür; etiket geçerli kalır.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "USB'de eski sürümlü (ör. v1.3.1), provizyonlu ve buluta bağlı kurulu kart",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:167; ev_otomasyon_servis_yazilimi/ev_otomasyon_sistemi.py:3199"
     },
     {
@@ -217,7 +217,7 @@
      "beklenen": "Her girişte aynı numaralı röle çeker (DI1 → Röle 1 ... DI8 → Röle 8), ikinci tetiklemede bırakır. Hiçbir röle çifti panjur gibi çalışmaz. Kart uygulamaya bağlanınca kanallar Röle 1 ... Röle 8 adlı lamba olarak görünür.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "Birleşik v1.3.2 imajı yeni yazılmış, şablon yazılmamış, beslemesi olan kart",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.3.2/SURUM_NOTLARI.md:63; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:29"
     },
     {
@@ -231,7 +231,7 @@
      "beklenen": "Her açılışta pano 1-2 dakika içinde yeniden çevrimiçi olur; açılış sırasında röleler art arda kapanıp açılmaz (eski sürümde açılışta çökme ve röle tıkırtısı olabiliyordu).",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "v1.3.2 yazılmış (birleşik ya da Güncelle), Wi-Fi'ye bağlı ve uygulamada görünen pano",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "ev_otomasyon_servis_yazilimi/waveshare_s3_demo/firmware_releases/v1.3.2/SURUM_NOTLARI.md:69; ev_otomasyon_servis_yazilimi/EV_OTOMASYON_KULLANIM_REHBERI.md:9"
     }
    ]
@@ -594,7 +594,7 @@
      "beklenen": "Alanın başında \"+90\" ön eki hazır durur; baştaki 0 atılır ve numara 5XX XXX XX XX biçiminde görünür. Kayıttan sonra hesap kartında numara +905XXXXXXXXX biçiminde görünür (0555..., +90555... ve 555... aynı numara sayılır).",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "Kullanılmayan bir deneme telefon numarası",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/common/validators.dart:129; docs/akislar/SERVIS_SORUMLUSU_AKISI.md:23"
     },
     {
@@ -664,7 +664,7 @@
      "beklenen": "Yenilemeden sonra hesabın rozeti \"Davet bekliyor\" olur (\"Aktif\" değil); kişi yine e-postadaki bağlantıyla parolasını belirlemelidir.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "\"Davet bekliyor\" durumunda bir deneme servis sorumlusu hesabı",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "docs/akislar/SERVIS_SORUMLUSU_AKISI.md:258; lib/ui/pages/service_setup/panel/admin_account.dart:113"
     },
     {
@@ -703,7 +703,7 @@
      "beklenen": "Başka hesabın kartında \"Rol Değiştir\" ve \"Kalıcı Sil\" düğmeleri var; kendi kartınızda yok; servis sorumlusu hiçbir kartta görmez.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "ikinci bir hesap (servis sorumlusu)",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/pages/service_management_page.dart:958"
     },
     {
@@ -717,7 +717,7 @@
      "beklenen": "Kısa ileti: \"<Ad> hesabının rolü \"<Yeni rol>\" olarak değiştirildi.\"; liste yenilenir. O kişinin tüm oturumları kapanır, yeniden giriş yapınca yeni rolüyle açılır.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "deneme amaçlı ikinci bir hesap",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/pages/service_management_page.dart:274"
     },
     {
@@ -744,7 +744,7 @@
      "beklenen": "Durum etiketi \"Silinmiş\" (eskiden \"Donduruldu\" görünüyordu); \"Rol Değiştir\" pasif, altında \"Silinmiş hesabın rolü değiştirilemez.\" notu var.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "silinmiş bir hesap",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/pages/service_setup/panel/admin_account.dart:218"
     },
     {
@@ -758,7 +758,7 @@
      "beklenen": "\"Bu işlem geri alınamaz.\" uyarısı görünür; e-posta tam eşleşmedikçe \"Kalıcı Olarak Sil\" pasif kalır; \"Vazgeç\" ile hiçbir şey silinmez.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "deneme amaçlı ikinci bir hesap",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:866"
     },
     {
@@ -772,7 +772,7 @@
      "beklenen": "Kısa ileti \"Kullanıcı kalıcı olarak silindi.\" (boş daire kaydı da silindiyse \"… (üyesi ve panosu olmayan N daire kaydı da silindi).\") ve hesap listeden kalkar. Gerçek müşteri hesabıyla denemeyin: geri alınamaz.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "silinebilecek deneme hesabı (panolu dairesi yok)",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "lib/ui/pages/service_setup/panel/admin_account_dialogs.dart:866"
     },
     {
@@ -785,7 +785,7 @@
      "beklenen": "Pencerede \"Kullanıcı, panosu olan bir dairenin tek sahibi. Kalıcı silmeden önce daireyi devredin ya da panoya acil sıfırlama yapın.\" yazar; hesap silinmez.",
      "rol_notu": "süper kullanıcı",
      "on_kosul": "panosu takılı bir dairenin tek sahibi olan deneme hesabı",
-     "yeni": true,
+     "yeni": false,
      "kaynak": "server/src/services/admin_user_service.js"
     }
    ]

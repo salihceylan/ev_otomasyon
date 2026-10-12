@@ -30,7 +30,7 @@
           "beklenen": "\"E-posta (tekrar)\" alanının altında \"E-posta adresleri eşleşmiyor\" yazar; hesap açılmaz.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:16"
         },
         {
@@ -43,7 +43,7 @@
           "beklenen": "Alanın başında \"+90\" hazır durur; yazdığınız numara 3-3-2-2 gruplanarak görünür.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "lib/ui/pages/auth/register_page.dart:318"
         },
         {
@@ -56,7 +56,7 @@
           "beklenen": "Alanın altında \"Cep numarası 5 ile başlamalıdır (5XX XXX XX XX)\" yazar.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "lib/ui/common/validators.dart:86"
         },
         {
@@ -69,7 +69,7 @@
           "beklenen": "Baştaki 0 atılır; alanda +90 sonrasında 555 123 45 67 görünür.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:15"
         },
         {
@@ -108,7 +108,7 @@
           "beklenen": "\"Kayıt Ol ve Giriş Yap\" düğmesi soluk (pasif) kalır; kutuyu işaretleyince etkinleşir.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:78"
         },
         {
@@ -120,7 +120,7 @@
           "beklenen": "Sözleşme metni açılır; geri dönünce kayıt sayfasındaki bilgiler yerinde durur.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:78"
         },
         {
@@ -199,7 +199,7 @@
           "beklenen": "Bu numaranın doğrulanmamış bir hesapta kayıtlı olduğunu ve e-posta ile şifreyle giriş yapmanızı söyleyen ileti görünür; SMS ile oturum açılmaz.",
           "rol_notu": "hepsi",
           "on_kosul": "SMS ile giriş hizmeti açık; kayıtta telefonu yazılmış bir hesap",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:88"
         },
         {
@@ -283,7 +283,7 @@
           "beklenen": "\"Kod, bu numaraya bağlı hesabın e-posta adresine gönderildi (hesap varsa).\" yazar; kod o hesabın e-postasına gelir (0555…, +90555… ve 555… aynı numara sayılır).",
           "rol_notu": "hepsi",
           "on_kosul": "Kayıtta telefon numarası yazılmış hesap",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:15"
         },
         {
@@ -296,7 +296,7 @@
           "beklenen": "Uygulama doğrudan açılır ve \"Yeni Şifre Belirle\" sayfası gelir (uygulama kurulu değilse tarayıcıda yönlendirme sayfası açılır).",
           "rol_notu": "hepsi",
           "on_kosul": "Android telefon, uygulama kurulu",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:308"
         },
         {
@@ -620,7 +620,7 @@
           "beklenen": "Uygulama doğrudan açılır, \"Eşleştirme penceresi açılıyor...\" yazar ve \"Cihaz Eşleştirme\" penceresi bilgiler dolu olarak gelir.",
           "rol_notu": "bireysel",
           "on_kosul": "Android telefon, uygulama kurulu",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:308"
         },
         {
@@ -632,7 +632,7 @@
           "beklenen": "Bu sürümde uygulama değil tarayıcı açılır; eşleştirmeyi uygulama içindeki \"Karekod Tara (Katıl / Cihaz Eşle)\" ile yapın.",
           "rol_notu": "bireysel",
           "on_kosul": "iPhone",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:310"
         },
         {
@@ -657,7 +657,7 @@
           "beklenen": "Eşleştirme penceresi hemen açılmaz; \"Önce ana ekrandaki zorunlu adımı (parola değişimi ya da sözleşme onayı) tamamlayın\" ile başlayan ileti görünür. Şifreyi değiştirince eşleştirme penceresi açılır (açılmazsa karekodu yeniden okutun).",
           "rol_notu": "bireysel",
           "on_kosul": "Android telefon; geçici şifreyle açılmış hesap",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:138"
         },
         {
@@ -724,7 +724,7 @@
           "beklenen": "8 çıkışın hepsi Röle 1 … Röle 8 adıyla lamba olarak görünür, panjur yoktur; 1 numaralı buton Röle 1'i açıp kapatır (her giriş kendi numaralı rölesini yönetir).",
           "rol_notu": "bireysel",
           "on_kosul": "Firmware v1.3.2 yazılmış pano (henüz karta yazılmadı)",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:25"
         }
       ]
@@ -842,7 +842,7 @@
           "beklenen": "İnternet gelince cihaz listesi \"Yeniden dene\"ye basmadan kendiliğinden yüklenir.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:157"
         },
         {
@@ -854,7 +854,7 @@
           "beklenen": "Cihaz listesi yüklenemese de alarm kartı ve \"Vanayı Kapat\" düğmesi görünür.",
           "rol_notu": "hepsi",
           "on_kosul": "Su sensörü ve vanası tanımlı ev, süren alarm",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:158"
         },
         {
@@ -1179,7 +1179,7 @@
           "beklenen": "Cihaz anahtarı sorulmadan cihazlar görünür ve lamba kontrol edilir.",
           "rol_notu": "ev sahibi, aile üyesi",
           "on_kosul": "Pano modeme kabloyla (Ethernet) bağlı, v1.3.0+; telefon aynı ev ağında",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:176"
         },
         {
@@ -1192,7 +1192,7 @@
           "beklenen": "\"Cihaz kontrol edilemiyor\" uyarısı ve \"Cihaz anahtarı gerekli\" ile başlayan ileti görünür; cihazlar kontrol edilemez.",
           "rol_notu": "ev sahibi, aile üyesi",
           "on_kosul": "Pano Wi-Fi ile bağlı; telefon aynı ev ağında",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:177"
         }
       ]
@@ -1705,7 +1705,7 @@
           "beklenen": "Durum çubuğunda alarm takibi bildirimi yeniden görünür; ayar kapanmaz ve alarm bildirimleri gelmeye devam eder.",
           "rol_notu": "ev sahibi, aile üyesi",
           "on_kosul": "Android telefon, bildirim açık",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:43"
         },
         {
@@ -1875,7 +1875,7 @@
           "beklenen": "Kodu zaten kullandığınızı ve dairenin üyesi olduğunuzu söyleyen ileti görünür; hata çıkmaz, ev seçilir ve ev listenize gelir.",
           "rol_notu": "aile üyesi, misafir",
           "on_kosul": "Kendi kullandığınız davet kodu",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:39"
         },
         {
@@ -1989,7 +1989,7 @@
           "beklenen": "Pano çevrimiçi kalır (yenilenen kimliği kendisi alır) ve lamba kontrol edilir; çıkarılan kişi eve erişemez.",
           "rol_notu": "ev sahibi",
           "on_kosul": "Tek panolu ev, pano v1.3.0+ ve çevrimiçi",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:259"
         },
         {
@@ -2002,7 +2002,7 @@
           "beklenen": "\"evinden ayrıldınız.\" ile biten ileti görünür; ev listeden kalkar, cihazlara erişim biter.",
           "rol_notu": "aile üyesi",
           "on_kosul": "Bir evde aile üyesi olan hesap",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:262"
         },
         {
@@ -2014,7 +2014,7 @@
           "beklenen": "\"evinden ayrıldınız.\" ile biten ileti görünür; ev listeden kalkar.",
           "rol_notu": "misafir",
           "on_kosul": "Süresi dolmamış misafir hesabı",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:13"
         },
         {
@@ -2026,7 +2026,7 @@
           "beklenen": "Kod kabul edilmez; yeniden katılmak için ev sahibinden yeni davet gerekir.",
           "rol_notu": "aile üyesi, misafir",
           "on_kosul": "Evden yeni ayrılmış hesap",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:263"
         },
         {
@@ -2038,7 +2038,7 @@
           "beklenen": "\"Evden Ayrıl\" düğmesi görünmez; ev sahibi ayrılmak için önce evi devretmelidir.",
           "rol_notu": "ev sahibi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "lib/ui/pages/family/leave_home_flow.dart:10"
         }
       ]
@@ -2108,7 +2108,7 @@
           "beklenen": "Önizlemede \"Bu daireyi zaten devraldınız.\" yazar; onaylanırsa dairenin sahipliğinin zaten size devredildiğini söyleyen ileti görünür ve ev seçilir.",
           "rol_notu": "ev sahibi",
           "on_kosul": "Tamamlanmış devir",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:269"
         },
         {
@@ -2121,7 +2121,7 @@
           "beklenen": "Yalnız devirden sonraki alarmlar ve hâlâ süren alarmlar görünür; önceki ailenin alarm geçmişi görünmez.",
           "rol_notu": "ev sahibi",
           "on_kosul": "Alarm kaydı olan ev ve tamamlanmış devir",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:271"
         },
         {
@@ -2279,7 +2279,7 @@
           "beklenen": "\"Bu evde pano değişimini yetkili servis personeli yapmalıdır.\" yazar; değişim yapılmaz. Altında servis PIN'i üretip servise vermenizi söyleyen yönerge ve \"Anladım\" düğmesi bulunur.",
           "rol_notu": "ev sahibi",
           "on_kosul": "Su/gaz sensörü ya da vanası tanımlı ev, yeni pano etiketi",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:19"
         },
         {
@@ -2348,7 +2348,7 @@
           "beklenen": "\"Yasal Metinler\" sayfasında \"Kullanıcı Sözleşmesi ve Son Kullanıcı Lisans Koşulları\", \"Gizlilik Politikası ve KVKK Aydınlatma Metni\" ve \"Açık Kaynak Lisansları\" bulunur; her biri dokununca açılır.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:285"
         },
         {
@@ -2360,7 +2360,7 @@
           "beklenen": "Aynı \"Yasal Metinler\" sayfası açılır.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:101"
         },
         {
@@ -2385,7 +2385,7 @@
           "beklenen": "Metnin başında sürüm bilgisi ve \"TASLAK: Bu metin henüz kesinleşmedi; yürürlüğe girmeden önce değişebilir.\" uyarısı görünür.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:305"
         },
         {
@@ -2397,7 +2397,7 @@
           "beklenen": "Sözleşme bugün taslak olduğu için tam ekran \"Kullanıcı Sözleşmesi\" onay sayfası çıkmaz; doğrudan ana ekran açılır.",
           "rol_notu": "hepsi",
           "on_kosul": "",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:93"
         },
         {
@@ -2410,7 +2410,7 @@
           "beklenen": "Tam ekran \"Kullanıcı Sözleşmesi\" sayfası açılır; geri tuşu kapatmaz. \"Kabul Ediyorum\" ile ana ekrana geçilir, \"Çıkış Yap\" ile oturum kapanır.",
           "rol_notu": "hepsi",
           "on_kosul": "Sözleşmenin kesinleşmiş olması (bugün taslak; şimdilik denenemez)",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:93"
         }
       ]
@@ -2550,7 +2550,7 @@
           "beklenen": "Erişim bitmez; cihazlar görünmeye ve kontrol edilmeye devam eder. Erişim sunucunun saatine göre, kodun üretildiği andan 2 saat sonra biter.",
           "rol_notu": "misafir",
           "on_kosul": "Misafir hesabı; telefon saatini elle değiştirebilmek",
-          "yeni": true,
+          "yeni": false,
           "kaynak": "docs/akislar/DAIRE_KULLANICISI_AKISI.md:37"
         },
         {
