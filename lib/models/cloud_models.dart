@@ -212,6 +212,38 @@ enum HomeAccessState {
   }
 }
 
+/// Evin servisi (`GET /homes`, `/auth/me`, giriş/yenileme -> her evde `service: {name, phone} | null`; servis sorumlusu
+/// kapsamı, migration 045): **salt okunur** ve yalnızca ad + telefondur (e-posta sunucudan gelmez). `null` = ev kök yönetici
+/// kapsamındadır (servis yok). Müşteri servisi kaldıramaz; değişikliği yalnız kök yapar.
+class HomeServiceInfo {
+  const HomeServiceInfo({required this.name, this.phone});
+
+  final String name;
+
+  /// Servisin telefonu; sunucu vermediyse `null`.
+  final String? phone;
+
+  /// Ad yoksa `null` (bozuk kayıt "servis yok" sayılır, ev listesini bozmaz).
+  static HomeServiceInfo? tryParse(Object? raw) {
+    final map = asMap(raw);
+    if (map == null) return null;
+    final name = asNonEmptyString(map['name'] ?? map['full_name']);
+    if (name == null) return null;
+    return HomeServiceInfo(name: name, phone: asNonEmptyString(map['phone']));
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{'name': name, if (phone != null) 'phone': phone};
+
+  @override
+  bool operator ==(Object other) => other is HomeServiceInfo && other.name == name && other.phone == phone;
+
+  @override
+  int get hashCode => Object.hash(name, phone);
+
+  @override
+  String toString() => 'HomeServiceInfo($name)';
+}
+
 /// Ev / daire (`GET /homes`: `{ id, name, role, timezone, mqtt_topic_id }`).
 class HomeModel {
   const HomeModel({
@@ -227,6 +259,7 @@ class HomeModel {
     this.accessState = HomeAccessState.unknown,
     this.accessStartsIn,
     this.accessExpiresIn,
+    this.service,
   });
 
   /// Ev UUID'si (**String**; `int` ev kimliği yoktur).
@@ -260,6 +293,10 @@ class HomeModel {
   /// yazılmaz; uygulama bunlardan sunucu-yerel saat farkını hesaplar (cekirdek-1).
   final int? accessStartsIn;
   final int? accessExpiresIn;
+
+  /// Evin servisi (`service: {name, phone}`; yalnız ekleme, eski sunucu vermez). `null` = servis yok (ev kök yönetici
+  /// kapsamında ya da sunucu bilgi vermedi). Müşteri ekranında salt okunur "Servisiniz" kartını besler.
+  final HomeServiceInfo? service;
 
   HomeRole get homeRole => HomeRole.parse(role);
   bool get isOwnerRole => homeRole == HomeRole.owner;
@@ -302,6 +339,7 @@ class HomeModel {
       accessState: accessState,
       accessStartsIn: _nonNegative(json['access_starts_in']),
       accessExpiresIn: _nonNegative(json['access_expires_in']),
+      service: HomeServiceInfo.tryParse(json['service']),
     );
   }
 
@@ -321,6 +359,7 @@ class HomeModel {
         if (guestValidUntil != null) 'valid_until': guestValidUntil!.toUtc().toIso8601String(),
         'is_expired': serverMarkedExpired,
         'access_state': accessState.wire,
+        if (service != null) 'service': service!.toJson(),
       };
 
   HomeModel copyWith({String? role, bool? serverMarkedExpired, HomeAccessState? accessState}) =>
@@ -337,6 +376,7 @@ class HomeModel {
         accessState: accessState ?? this.accessState,
         accessStartsIn: accessStartsIn,
         accessExpiresIn: accessExpiresIn,
+        service: service,
       );
 }
 
@@ -711,6 +751,9 @@ class InventoryDeviceModel {
     this.claimedUserEmail,
     required this.qrClaimUrl,
     this.claimedHomeId,
+    this.serviceOwnerId,
+    this.serviceOwnerEmail,
+    this.serviceOwnerReported = false,
   });
 
   final String id;
@@ -733,6 +776,22 @@ class InventoryDeviceModel {
 
   /// Sahiplenildiği evin kimliği (`claimed_home_id`; yalnız süper yönetici yanıtında; servis_kurulum-9).
   final String? claimedHomeId;
+
+  /// Kartın stok sahibi servis sorumlusu (`service_owner_id`; servis kapsamı, migration 045). `null` = kök stoğu.
+  final String? serviceOwnerId;
+
+  /// Stok sahibi servisin e-postası (`service_owner_email`; yalnız ekleme).
+  final String? serviceOwnerEmail;
+
+  /// Sunucu `service_owner_id` alanını bildirdi mi? Eski sunucuda alan HİÇ gelmez; bu durumda `null` sahip "kök stoğu"
+  /// diye gösterilmez (yanlış bilgi vermemek için).
+  final bool serviceOwnerReported;
+
+  /// Kart bir servis sorumlusunun stoğunda.
+  bool get hasServiceOwner => serviceOwnerId != null;
+
+  /// Kart kök stoğunda (sunucu sahip alanını bildirdi ve sahip yok).
+  bool get isRootStock => serviceOwnerReported && serviceOwnerId == null;
 
   /// Kurulum PIN'i hatalı denemeler yüzünden şu an kilitli mi (`locked_until` gelecekte; bireysel-7).
   bool isPinLocked(DateTime now) {
@@ -786,6 +845,9 @@ class InventoryDeviceModel {
       qrClaimUrl: asNonEmptyString(json['qr_claim_url']) ??
           '${AppConfig.productionClaimUrl}?uid=${Uri.encodeQueryComponent(uuid)}',
       claimedHomeId: asNonEmptyString(json['claimed_home_id']),
+      serviceOwnerId: asNonEmptyString(json['service_owner_id']),
+      serviceOwnerEmail: asNonEmptyString(json['service_owner_email']),
+      serviceOwnerReported: json.containsKey('service_owner_id'),
     );
   }
 
@@ -806,5 +868,8 @@ class InventoryDeviceModel {
         claimedUserEmail: claimedUserEmail,
         qrClaimUrl: qrClaimUrl,
         claimedHomeId: claimedHomeId,
+        serviceOwnerId: serviceOwnerId,
+        serviceOwnerEmail: serviceOwnerEmail,
+        serviceOwnerReported: serviceOwnerReported,
       );
 }

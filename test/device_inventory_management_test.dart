@@ -92,18 +92,70 @@ void main() {
       expect(exists('btn_reissue_label_$kUidStock'), isFalse, reason: 'etiket yalnızca stoktaki cihaz için üretilir');
     });
 
-    testWidgets('servis personeli envanteri ve karekodu görür ama hiçbir yönetim düğmesi çıkmaz', (tester) async {
+    testWidgets(
+        'servis sorumlusu kendi stoğundaki kartlarda süperle AYNI yönetim düğmelerini görür (askıya al, etiket, sil, stoğa al); kök-yalnız öğeler yoktur',
+        (tester) async {
       final env = await envFor('staff');
       addTearDown(env.dispose);
       await openInventory(tester, env);
 
       expect(find.byKey(const Key('card_inventory_$kUidStock')), findsOneWidget);
       expect(exists('btn_qr_$kUidStock'), isTrue);
+
+      // Stokta: askıya al, etiketi yeniden üret, envanterden sil.
+      expect(exists('btn_suspend_$kUidStock'), isTrue);
+      expect(exists('btn_reissue_label_$kUidStock'), isTrue);
+      expect(exists('btn_delete_$kUidStock'), isTrue);
+      expect(exists('btn_restore_$kUidStock'), isFalse);
+
+      // Devrede: yönetim düğmesi yok, nedeni açıklanır (süperle aynı).
       for (final prefix in ['btn_suspend_', 'btn_restore_', 'btn_delete_', 'btn_reissue_label_']) {
-        for (final uid in [kUidStock, kUidClaimed, kUidSuspended]) {
-          expect(exists('$prefix$uid'), isFalse, reason: '$prefix$uid personelde görünmemeli');
-        }
+        expect(exists('$prefix$kUidClaimed'), isFalse, reason: '$prefix$kUidClaimed devredeki kartta olmamalı');
       }
+      expect(exists('note_claimed_$kUidClaimed'), isTrue);
+
+      // Askıda: stoğa al ve sil var.
+      expect(exists('btn_restore_$kUidSuspended'), isTrue);
+      expect(exists('btn_delete_$kUidSuspended'), isTrue);
+
+      // Kök-yalnız: aktarım düğmesi ve servis sahibi satırı servise gösterilmez.
+      for (final uid in [kUidStock, kUidClaimed, kUidSuspended]) {
+        expect(exists('btn_transfer_service_$uid'), isFalse, reason: 'aktarım yalnız kök');
+        expect(exists('note_service_owner_$uid'), isFalse, reason: 'servis sahibi satırı yalnız kökte');
+      }
+    });
+
+    testWidgets('servis sorumlusu iptal edilmiş kartı stoğa ALAMAZ (iptal yalnız kök): düğme yok, açıklama var; silme sürer', (tester) async {
+      final env = await envFor('staff', devices: <InventoryDeviceModel>[inventoryDevice(uid: kUidStock, status: 'REVOKED')]);
+      addTearDown(env.dispose);
+      await openInventory(tester, env);
+
+      expect(exists('btn_restore_$kUidStock'), isFalse);
+      expect(exists('note_revoked_$kUidStock'), isTrue);
+      expect(find.textContaining('yalnızca süper yöneticiye aittir'), findsOneWidget);
+      expect(exists('btn_delete_$kUidStock'), isTrue, reason: 'sunucu servise kendi stoğundaki (devrede olmayan) kartın silinmesini açar');
+    });
+
+    testWidgets('servis sorumlusu askıya alır: istek gider ve kart askıda görünür', (tester) async {
+      final env = await envFor('staff');
+      addTearDown(env.dispose);
+      await openInventory(tester, env);
+
+      await tapKey(tester, 'btn_suspend_$kUidStock');
+      await tapKey(tester, 'btn_status_confirm');
+      await settle(tester);
+      expect(env.cloud.inventoryStatusUpdates, <String>['$kUidStock:SUSPENDED']);
+      expect(exists('btn_restore_$kUidStock'), isTrue);
+    });
+
+    testWidgets('durum katmanı savunması: servis sorumlusu için REVOKED isteği hiç gönderilmez', (tester) async {
+      final env = await envFor('staff');
+      addTearDown(env.dispose);
+      await expectLater(
+        env.state.updateInventoryStatus(kUidStock, 'REVOKED'),
+        throwsA(isA<ApiException>().having((e) => e.isForbidden, 'forbidden', isTrue)),
+      );
+      expect(env.cloud.inventoryStatusUpdates, isEmpty);
     });
 
     testWidgets('geçici servis oturumu envanteri açamaz ve sunucuya istek atılmaz', (tester) async {

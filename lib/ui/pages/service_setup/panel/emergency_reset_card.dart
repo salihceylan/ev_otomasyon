@@ -37,8 +37,8 @@ import '../../../theme/feature_accent.dart';
 /// * Sonuçtaki uyarılar / kısmi başarı kullanıcıya gösterilir; tek seferlik gizli değerler
 ///   ([EmergencyResetResultDialog]) panoya yalnızca 45 sn kalacak şekilde kopyalanır.
 /// * Kalıcı servis personeli (süper olmayan) yalnızca servis üyeliği olan (kurduğu ya da devraldığı) dairelerin
-///   panolarını sıfırlayabilir; 72 saatlik kurulum penceresi sıfırlamada ARANMAZ (sunucu kuralı, 2026-10-12): kart bunu [staffScopeNote] ile söyler; sunucu 403 dönerse yönlendirme
-///   hata kutusunda gösterilir.
+///   panolarını sıfırlayabilir; kendi kapsamındaki dairede süre sınırı yoktur (servis kapsamı, 2026-10-12): kart bunu
+///   [staffScopeNote] ile söyler; başka servisin ya da kökün dairesinde sunucu 403 döner ve yönlendirme hata kutusunda gösterilir.
 class EmergencyResetCard extends StatefulWidget {
   const EmergencyResetCard({super.key, this.scanner = defaultSetupScanner});
 
@@ -47,8 +47,8 @@ class EmergencyResetCard extends StatefulWidget {
   /// Gerekçenin en az uzunluğu (sunucu ve istemci aynı kuralı uygular).
   static const int minReasonLength = 15;
 
-  /// Servis personelinin (süper olmayan) sıfırlama kapsamı: sunucu yalnız servis üyeliği olan dairenin panosuna izin
-  /// verir; üyeliğin 72 saatlik kurulum penceresi dolmuş olsa da sıfırlama (evden kaldırma) süresizdir.
+  /// Servis personelinin (süper olmayan) sıfırlama kapsamı: sunucu yalnız kendi kapsamındaki (kurduğu ya da devraldığı)
+  /// dairenin panosuna izin verir; bu dairelerde sıfırlama (evden kaldırma) süresizdir.
   static const String staffScopeNote = 'Servis personeli kendi kurduğu ya da devraldığı dairelerin panolarını süre '
       'sınırı olmadan sıfırlayabilir; diğer daireler için süper yöneticiye başvurun.';
 

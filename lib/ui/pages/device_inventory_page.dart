@@ -20,14 +20,25 @@ import '../widgets/neon_app_bar.dart';
 import '../widgets/settings/accent_button.dart';
 import 'service_setup/panel/service_glass.dart';
 import 'service_setup/panel/label_reissue_dialog.dart';
+import 'service_setup/panel/service_owner_dialog.dart';
 import 'service_setup/secret_clipboard.dart';
 import 'service_setup/setup_style.dart';
+
+/// Sayfa kökünü belirleyen yetkiler: kart yönetimi (süper + kendi stoğunda servis), aktarım (yalnız kök) ve iptal/iptali
+/// geri alma (yalnız kök).
+typedef _InventoryView = ({bool manage, bool transfer, bool revoke});
 
 /// AHBU Akıllı Ev & Bina Otomasyonu
 /// Cihaz Envanteri ve Karekod Yönetim Paneli (Süper Yönetici & Yetkili Servis)
 ///
 /// * Liste **sayfalı** ve aramada 300 ms gecikmelidir; yenileme hatası görünür kalır (bayat liste
 ///   uyarılır, sessizce eski veri gösterilmez).
+/// * **Kapsam (servis sorumlusu kapsamı, migration 045):** süper yönetici (kök) bütün kartları görür ve yönetir; servis
+///   sorumlusu YALNIZ kendi stoğundaki kartları görür (sunucu süzer) ve aynı yönetim düğmelerini kullanır (askıya al /
+///   stoğa al, etiketi yeniden üret, PIN kilidini kaldır, stoktaki kartı sil). Kök ayrıca kartın servisini görür
+///   ("Servis: e-posta" / "Servis: Kök stoğu") ve stoktaki kartı **"Servisi Değiştir"** ile başka servise ya da köke
+///   aktarır; iptal (REVOKED) ve iptal edilmiş kartı stoğa alma da yalnız köktedir. Kurulu kart evinin servisini izler:
+///   aktarım için daire (Aboneler) aktarılır.
 /// * Durum geçişleri kısıtlıdır: yalnızca **Stokta <-> Askıda**. Devrede (CLAIMED) cihaz için
 ///   "Askıya Al" ve "Sil" gösterilmez; iptal edilmiş cihaz yalnızca **UID yazarak** silinir.
 /// * Silme ve etiket yeniden üretimi **cihaz seri numarasını yazarak** onaylanır.
@@ -199,8 +210,9 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
 
   static bool canSuspend(InventoryDeviceModel d) => d.isInStock;
 
-  /// Askıdaki ya da iptal edilmiş cihaz stoğa alınabilir (sunucu geçişleri: SUSPENDED/REVOKED -> IN_STOCK).
-  static bool canRestore(InventoryDeviceModel d) => d.isSuspended || d.isRevoked;
+  /// Askıdaki ya da iptal edilmiş cihaz stoğa alınabilir (sunucu geçişleri: SUSPENDED/REVOKED -> IN_STOCK). İptal edilmiş
+  /// cihazı stoğa almak yalnız köke aittir ([revoke]); servis sorumlusu yalnız askıdakini aktif eder (sunucu: REVOKED 403).
+  static bool canRestore(InventoryDeviceModel d, {bool revoke = true}) => d.isSuspended || (d.isRevoked && revoke);
 
   /// Devrede (CLAIMED/INSTALLED) cihaz silinemez.
   static bool canDelete(InventoryDeviceModel d) => !d.isClaimed;
@@ -209,11 +221,25 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
   /// (sunucu askıdaki/devredeki cihazda 409 döner).
   static bool canReissue(InventoryDeviceModel d) => d.isInStock;
 
+  /// Kartın servisi (stok sahibi) yalnızca **stoktaki** (daireye bağlı olmayan) kartta doğrudan değiştirilir; kurulu kart
+  /// evinin servisini izler (sunucu 409: "kartı değil daireyi aktarın").
+  static bool canTransferService(InventoryDeviceModel d) => !d.isClaimed && d.claimedHomeId == null;
+
+  /// Kartın stok sahibi satırı: servisin e-postası ya da "Kök stoğu".
+  static String _serviceOwnerText(InventoryDeviceModel d) {
+    if (!d.hasServiceOwner) return 'Servis: Kök stoğu';
+    final email = d.serviceOwnerEmail;
+    return 'Servis: ${email == null || email.isEmpty ? 'Servis sorumlusu' : email}';
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Sayfa kökü tüm durumu izlemez (PF-06): yalnızca yönetim yetkisi görünümü değiştirir. Her bildirimde
+    // Sayfa kökü tüm durumu izlemez (PF-06): yalnızca yönetim yetkileri görünümü değiştirir. Her bildirimde
     // (canlı durum, çevrimiçi/çevrimdışı geçişleri) sayfa ve tüm envanter kartları yeniden kurulmaz.
-    final manage = context.select<AutomationState, bool>((s) => s.capabilities.canManageInventory);
+    final view = context.select<AutomationState, _InventoryView>((s) {
+      final caps = s.capabilities;
+      return (manage: caps.canManageInventory, transfer: caps.canTransferServiceScope, revoke: caps.canRevokeInventory);
+    });
 
     return PopScope(
       canPop: !_reissuing,
@@ -224,11 +250,11 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
           );
         }
       },
-      child: _scaffold(context, manage),
+      child: _scaffold(context, view),
     );
   }
 
-  Widget _scaffold(BuildContext context, bool manage) {
+  Widget _scaffold(BuildContext context, _InventoryView view) {
     // Scaffold arka planı temadan saydam gelir: küresel `CircuitBackground` (AppShell) görünür. Burada ikinci bir
     // `CircuitBackground` + opak zemin, küresel katmanı tamamen örtüyordu; tam ekran katmanlar (düz renk, JPEG,
     // gradyan, PCB boyası) yine de ikinci kez çizilirdi (PF-15 c).
@@ -265,7 +291,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
         child: RefreshIndicator(
           onRefresh: () => _load(reset: true),
           color: AppTheme.accentTone(context, AppFeature.inventory.accentFamily),
-          child: _list(context, manage),
+          child: _list(context, view),
         ),
       ),
     );
@@ -443,7 +469,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     return null;
   }
 
-  Widget _list(BuildContext context, bool manage) {
+  Widget _list(BuildContext context, _InventoryView view) {
     final stateBody = _stateBody(context);
     // Yenileme/ek sayfa hatası varsa listenin üstünde uyarı gösterilir (bayat liste sessiz kalmaz).
     final header = <Widget>[
@@ -491,7 +517,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
           id: device.deviceUuid,
           index: i,
           entered: _entered,
-          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _card(context, device, manage)),
+          child: Padding(padding: const EdgeInsets.symmetric(horizontal: 16), child: _card(context, device, view)),
         );
       },
     );
@@ -531,7 +557,8 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     return d.statusLabel;
   }
 
-  Widget _card(BuildContext context, InventoryDeviceModel device, bool manage) {
+  Widget _card(BuildContext context, InventoryDeviceModel device, _InventoryView view) {
+    final manage = view.manage;
     final Color statusColor;
     if (device.isInStock) {
       statusColor = AppTheme.accentGreen;
@@ -549,7 +576,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     final muted = AppTheme.getTextMuted(context);
     final home = device.claimedHomeName;
     final email = device.claimedUserEmail;
-    // Kurulum PIN'i hatalı denemelerle kilitli (bireysel-7): herkes görür, yalnız süper yönetici kaldırır.
+    // Kurulum PIN'i hatalı denemelerle kilitli (bireysel-7): herkes görür; süper yönetici ve kartın servisi kaldırır.
     final pinLocked = device.isPinLocked(context.read<AutomationState>().clock.now());
     // "Sahipli: Daire 5 (Sahipsiz)" çelişkisi: e-posta yoksa parantez hiç yazılmaz.
     final ownerText = 'Sahipli: ${home ?? 'Bilinmeyen Daire'}${email == null ? '' : ' ($email)'}';
@@ -632,6 +659,26 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
               ),
             ),
           ],
+          // Kök kartın stok sahibini görür: servisin e-postası ya da "Kök stoğu" (eski sunucu alanı vermez: satır çizilmez).
+          if (view.transfer && (device.serviceOwnerReported || device.hasServiceOwner)) ...[
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.engineering_rounded, color: muted, size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _serviceOwnerText(device),
+                    key: Key('note_service_owner_${device.deviceUuid}'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: AppText.caption, height: 1.3, color: muted),
+                  ),
+                ),
+              ],
+            ),
+          ],
           if (pinLocked) ...[
             const SizedBox(height: 10),
             Text(
@@ -669,7 +716,7 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                   label: const Text('Askıya Al', textAlign: TextAlign.center),
                   style: accentOutlinedButtonStyle(context, AppFamilies.amber),
                 ),
-              if (manage && canRestore(device))
+              if (manage && canRestore(device, revoke: view.revoke))
                 OutlinedButton.icon(
                   key: Key('btn_restore_${device.deviceUuid}'),
                   onPressed: busy ? null : () => _changeStatus(device, 'IN_STOCK'),
@@ -693,6 +740,14 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
                   label: const Text('PIN Kilidini Kaldır', textAlign: TextAlign.center),
                   style: accentOutlinedButtonStyle(context, AppFamilies.amber),
                 ),
+              if (view.transfer && device.serviceOwnerReported && canTransferService(device))
+                OutlinedButton.icon(
+                  key: Key('btn_transfer_service_${device.deviceUuid}'),
+                  onPressed: busy ? null : () => _transferService(device),
+                  icon: Icon(Icons.swap_horiz_rounded, size: accentIconSize(context, base: 18)),
+                  label: const Text('Servisi Değiştir', textAlign: TextAlign.center),
+                  style: accentOutlinedButtonStyle(context, AppFamilies.violet),
+                ),
               if (manage && canDelete(device))
                 OutlinedButton.icon(
                   key: Key('btn_delete_${device.deviceUuid}'),
@@ -709,6 +764,24 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
               child: Text(
                 'Devredeki cihaz askıya alınamaz veya silinemez. Daire değişikliği için acil sıfırlama kullanın.',
                 key: Key('note_claimed_${device.deviceUuid}'),
+                style: TextStyle(fontSize: AppText.badge, color: muted),
+              ),
+            ),
+          if (view.transfer && device.serviceOwnerReported && device.isClaimed)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'Kurulu kartın servisi dairesini izler. Servisi değiştirmek için Aboneler ekranından daireyi aktarın.',
+                key: Key('note_transfer_claimed_${device.deviceUuid}'),
+                style: TextStyle(fontSize: AppText.badge, color: muted),
+              ),
+            ),
+          if (manage && !view.revoke && device.isRevoked)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                'İptal edilmiş kartı stoğa almak yalnızca süper yöneticiye aittir.',
+                key: Key('note_revoked_${device.deviceUuid}'),
                 style: TextStyle(fontSize: AppText.badge, color: muted),
               ),
             ),
@@ -911,6 +984,22 @@ class _DeviceInventoryPageState extends State<DeviceInventoryPage> {
     } finally {
       if (mounted) setState(() => _busyDevices.remove(device.deviceUuid));
     }
+  }
+
+  /// Kök: stoktaki kartın servisini (stok sahibini) başka bir servise ya da köke aktarır. Pencere API'yi çağırır; başarıda
+  /// sonuç iletisi gösterilir ve liste yenilenir.
+  Future<void> _transferService(InventoryDeviceModel device) async {
+    final result = await ServiceOwnerDialog.show(
+      context,
+      target: ServiceOwnerTarget.inventory,
+      targetId: device.deviceUuid,
+      targetLabel: '${device.deviceUuid} (${device.formattedSerial})',
+      currentOwnerId: device.serviceOwnerId,
+      currentOwnerLabel: device.serviceOwnerEmail,
+    );
+    if (result == null || !mounted) return;
+    _snack(serviceOwnerResultMessage(result, target: ServiceOwnerTarget.inventory));
+    unawaited(_load(reset: true));
   }
 
   /// Kurulum PIN kilidini onayla kaldırır (bireysel-7): etiket sahibi başka hesabın hatalı denemeleri yüzünden

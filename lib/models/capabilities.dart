@@ -307,7 +307,10 @@ class Capabilities {
     final childLock = homeAccess && notGuest;
     final calibrate = homeAccess && isManagerLike; // owner, staff, session, super (resident ✖)
     final rules = homeAccess && (isSuper || isStaffHome || isOwner || isResident); // session ✖
-    final invite = homeAccess && (isSuper || isOwner);
+    // Üye/misafir yönetimi: ev sahibi, süper ve (servis sorumlusu kapsamı, migration 045) evin servisi. Servis kendi
+    // evinde süresiz kapsamlı süperdir (sunucu: MEMBERS listesinde `super_user` var). Karar sunucudadır: başkasının
+    // (ya da sahipsiz) evinde sunucu 403 döner ve ileti gösterilir.
+    final invite = homeAccess && (isSuper || isOwner || isStaffHome);
     final transfer = homeAccess && isOwner; // super ✖
     final servicePin = homeAccess && isOwner; // yalnızca ev sahibi
     final commission = homeAccess && (isSuper || isStaffHome || isSession);
@@ -356,7 +359,10 @@ class Capabilities {
       canFetchLocalKey: localKey,
       canReissueDeviceCredential: deviceCredential,
       canViewInventory: isSuper || isStaffGlobal,
-      canManageInventory: isSuper,
+      // Servis sorumlusu kendi stoğundaki kartları yönetir (askıya alma / aktif etme, etiket, PIN kilidi, silme); liste ve
+      // yetki sunucuda KENDİ stoğuna süzülür. İptal (REVOKED) ve kapsamlar arası aktarım yalnız kök: [canRevokeInventory],
+      // [canTransferServiceScope].
+      canManageInventory: isSuper || isStaffGlobal,
       canOpenServiceManagement: isSuper || isStaffGlobal,
       canManageAdminAccounts: isSuper,
       canCloseActuators: control,
@@ -411,10 +417,10 @@ class Capabilities {
   /// Zamanlı kural oluştur/düzenle/sil. Servis PIN oturumu ve misafir ✖.
   final bool canManageRules;
 
-  /// Üye/misafir davet etme (yalnızca owner ve süper kullanıcı).
+  /// Üye/misafir davet etme: ev sahibi, süper kullanıcı ve evin servisi (kendi kapsamındaki evde süresiz süper).
   final bool canInvite;
 
-  /// Üye listesi yönetimi / çıkarma (yalnızca owner ve süper kullanıcı).
+  /// Üye listesi yönetimi / çıkarma: ev sahibi, süper kullanıcı ve evin servisi. Evin servis üyeliğini yalnız kök çıkarır.
   final bool canManageMembers;
 
   /// Daire devri (yalnızca owner).
@@ -455,16 +461,19 @@ class Capabilities {
   /// süper kullanıcı. Resident ve misafir ✖.
   final bool canReissueDeviceCredential;
 
-  /// Cihaz envanterini listeleme (süper kullanıcı; servis personeli kendi stoku).
+  /// Cihaz envanterini listeleme (süper kullanıcı: tümü; servis sorumlusu: yalnız kendi stoğu, sunucu süzer).
   final bool canViewInventory;
 
-  /// Envanter oluştur/sil/durum değiştir (yalnızca süper kullanıcı).
+  /// Envanter kartı yönetimi: askıya al / aktif et, etiketi yeniden üret, PIN kilidini kaldır, stoktaki kartı sil.
+  /// Süper kullanıcı (tüm kartlar) ve servis sorumlusu (kendi stoğu; sunucu kapsamı uygular). İptal (REVOKED) için
+  /// [canRevokeInventory], aktarım için [canTransferServiceScope].
   final bool canManageInventory;
 
   /// Servis yönetim ekranı (süper kullanıcı ve kalıcı servis personeli).
   final bool canOpenServiceManagement;
 
-  /// Yönetici hesapları (süper kullanıcı/servis sorumlusu oluşturma-düzenleme).
+  /// Yönetici hesapları (servis sorumlusu açma / rol değiştirme / kalıcı silme) ve servis özeti: yalnız kök. Servis
+  /// sorumlusu yalnızca kendi müşterilerini yönetir (o ekran [canOpenServiceManagement] ile açılır).
   final bool canManageAdminAccounts;
 
   /// Güvenlik eylemcisini güvenli yöne götürme: vanayı kapatma, sireni/fanı kapatma. Misafir DAHİL.
@@ -488,6 +497,14 @@ class Capabilities {
     if (!isAuthenticated) return canControlActuators; // yerel anahtar sahibi (Capabilities.localKeyHolder)
     return hasHomeAccess && (isOwner || isResident) && !isServiceSession;
   }
+
+  /// Kapsamlar arası **aktarım** (ev / kart / site başka servise ya da köke) ve servis kapsamı özeti: yalnız kök
+  /// (`super_user`). Servis sorumlusu ve diğer roller ✖ (sunucu: `requireRoot`, 403). Mevcut bayraktan türetilir.
+  bool get canTransferServiceScope => isAuthenticated && isSuperUser;
+
+  /// Cihazı iptal etme (REVOKED) ve iptal edilmiş cihazı stoğa alma: yalnız kök (sunucu: servis sorumlusuna 403).
+  /// Servis sorumlusu kendi kartını yalnız askıya alır / aktif eder.
+  bool get canRevokeInventory => isAuthenticated && isSuperUser;
 
   /// Site / kurulum şablonlarını görme ve panoya uygulama (CONTRACTS §3e, K-Ş7): süper kullanıcı ve küresel servis
   /// personeli (`requireServiceManager`). Servis PIN oturumu, ev sahibi, sakin ve misafir ✖. Mevcut bayraktan

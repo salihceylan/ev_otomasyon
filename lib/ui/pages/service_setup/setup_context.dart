@@ -179,7 +179,7 @@ class SetupContext {
   /// Sunucudan (yetkiliyse) cihaz yerel anahtarını alır; verilmezse `null`.
   ///
   /// **Hiçbir yere kaydedilmez**: `AutomationState.localKeyFor` gibi güvenli depoya yazmaz (teknisyenin
-  /// telefonunda müşteri panolarının LAN anahtarı kalmasın; kurulum yetkisi bitince de taşınmasın).
+  /// telefonunda müşteri panolarının LAN anahtarı kalmasın; evin servisi değişince de taşınmasın).
   /// Anahtar yalnızca [ServiceTarget.localKey] içinde (bellekte) tutulur. İstek **her zaman claim edilen
   /// eve** gider (aktif ev okunmaz). Süper kullanıcıya sunucu anahtar vermediği için ona hiç sorulmaz
   /// (anahtar elle girilir).

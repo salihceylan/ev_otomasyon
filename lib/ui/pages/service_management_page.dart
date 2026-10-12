@@ -453,7 +453,7 @@ class _ServiceManagementPageState extends State<ServiceManagementPage> with Sing
             color: SetupColors.info,
             text:
                 'Servis sorumlusu ve yönetici hesaplarını yalnızca süper yönetici tanımlayabilir. Burada '
-                'oluşturduğunuz müşteri hesaplarını görür ve yönetirsiniz.',
+                'kendi müşterilerinizi (açtığınız ve dairelerinizdeki hesaplar) görür ve yönetirsiniz.',
           ),
         ),
       _filters(context, isSuper),

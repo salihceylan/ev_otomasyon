@@ -28,8 +28,10 @@ import 'scroll_cue.dart';
 /// Girdiler **`Capabilities`'ten** türetilir (rol adı karşılaştırması yok):
 /// * süper kullanıcı: envanter (`canManageInventory`), servis sorumluları (`canManageAdminAccounts`),
 ///   tüm aboneler (`canViewInventory`), sistem doktoru;
-/// * kalıcı servis personeli (`isStaff`): servis modu, aboneler, pano değişimi, Wi-Fi kurtarma;
-///   acil sıfırlama (`canEmergencyReset`).
+/// * kalıcı servis personeli (`isStaff`; kendi kapsamında süper): servis modu, aboneler, pano değişimi, Wi-Fi kurtarma;
+///   acil sıfırlama (`canEmergencyReset`). Servisin kendi stoğunun envanterine servis konsolundan (sayaç + "Cihaz
+///   Envanteri" görevi) ve servis panelinin araç kartından girilir: servis çekmecesinde ayrı satır yoktur ("Servis
+///   Konsolu" satırıyla aynı cyan ailesi çakışırdı). Servis hesapları yönetimi ve aktarım kök-yalnızdır.
 ///
 /// Çıkış, onaylı çıkıştır ([confirmAndLogout]; navigator yığınını temizler). Anahtarlar:
 /// `Key('nav_drawer')`, `Key('nav_drawer_<ad>')`, `Key('nav_drawer_logout')`.
@@ -80,7 +82,7 @@ class SuperUserDrawer extends StatelessWidget {
         selected: true,
         onTap: () => Navigator.pop(context),
       ),
-      if (caps.canManageInventory)
+      if (isSuper && caps.canManageInventory)
         _DrawerItem(
           itemKey: const Key('nav_drawer_inventory'),
           icon: Icons.inventory_2_rounded,

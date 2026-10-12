@@ -371,17 +371,18 @@ void main() {
     testWidgets('DeviceInventoryPage', (tester) async {
       final env = await serviceHarness(role: 'super', flush: () async {});
       addTearDown(env.dispose);
-      env.state.setInventoryDevicesForTesting(<InventoryDeviceModel>[inventoryDevice()]);
+      env.state.setInventoryDevicesForTesting(<InventoryDeviceModel>[inventoryDevice(ownerReported: true)]);
       await pumpPage(tester, env, const DeviceInventoryPage(autoLoad: false), size: const Size(900, 3000));
       await settle(tester);
       expect(_present('btn_suspend_$kDeviceUid'), isTrue, reason: 'süper yönetici yönetim düğmelerini görür');
+      expect(_present('btn_transfer_service_$kDeviceUid'), isTrue, reason: 'aktarım yalnız kökte');
 
       final probe = _RebuildProbe((w) => w is DeviceInventoryPage);
       addTearDown(probe.stop);
       await _irrelevantNotifications(tester, env.state);
-      expect(probe.count, 0, reason: 'yalnızca canManageInventory için tüm sayfa kurulmaz (select<bool>)');
+      expect(probe.count, 0, reason: 'yalnızca envanter yetkileri (yönetim/aktarım/iptal) için tüm sayfa kurulmaz (select)');
 
-      // Yetki düşünce (servis personeli) yönetim düğmeleri kalkar: select yine tepki verir.
+      // Servis sorumlusuna geçince kök-yalnız aktarım düğmesi kalkar; kendi stoğunu yönetmeye devam eder: select yine tepki verir.
       env.state.setCurrentUserForTesting(const UserModel(
         id: 'staff-1',
         email: 'servis@ornek.test',
@@ -390,8 +391,14 @@ void main() {
       ));
       await tester.pump();
       expect(probe.count, greaterThan(0));
-      expect(_present('btn_suspend_$kDeviceUid'), isFalse);
+      expect(_present('btn_transfer_service_$kDeviceUid'), isFalse, reason: 'aktarım kök-yalnız');
+      expect(_present('btn_suspend_$kDeviceUid'), isTrue, reason: 'servis kendi stoğunu yönetir');
       expect(_present('btn_qr_$kDeviceUid'), isTrue, reason: 'karekod herkese açık kalır');
+
+      // Envanter yetkisi tamamen kalkınca (müşteri hesabı) yönetim düğmeleri de kalkar.
+      env.state.setCurrentUserForTesting(_plainUser);
+      await tester.pump();
+      expect(_present('btn_suspend_$kDeviceUid'), isFalse);
     });
 
     testWidgets('ReplaceBoardDialog', (tester) async {

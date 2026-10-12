@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../../../models/automation_models.dart';
 import '../../../models/capabilities.dart';
+import '../../../models/cloud_models.dart';
 import '../../../services/automation_state.dart';
 import '../../common/confirm_dialogs.dart';
 import '../../dashboard/labels.dart';
@@ -54,6 +56,80 @@ class HardwareNoticeCard extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Evin servisi (salt okunur): **`Servisiniz: ad · telefon`**. Sunucu `GET /homes` yanıtında her evde `service:
+/// {name, phone}` verir (servis sorumlusu kapsamı, migration 045); ev kök kapsamındaysa ya da eski sunucuda `service`
+/// yoktur ve kart HİÇ çizilmez. Müşteri servisi kaldıramaz, değiştiremez: değişikliği yalnız kök yönetici yapar (kart bunu
+/// söyler). Telefon yanındaki düğme numarayı panoya kopyalar (uygulamada arama paketi yoktur).
+///
+/// Anahtarlar: `Key('card_home_service')`, `Key('home_service_line')`, `Key('btn_copy_service_phone')`.
+class HomeServiceCard extends StatelessWidget {
+  const HomeServiceCard({super.key});
+
+  /// Karttaki satır: "Servisiniz: Ad · Telefon" (telefon yoksa yalnız ad).
+  static String lineOf(HomeServiceInfo service) {
+    final phone = service.phone;
+    return 'Servisiniz: ${service.name}${phone == null ? '' : ' · $phone'}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final service = context.select<AutomationState, HomeServiceInfo?>((s) => s.activeHome?.service);
+    if (service == null) return const SizedBox.shrink();
+    final phone = service.phone;
+    final primary = AppTheme.getTextPrimary(context);
+
+    return SurfaceCard(
+      key: const Key('card_home_service'),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Etkileşimsiz bilgi kartı: servis kimliği (konsol ailesi) orb'u; parıltı yok (asıl kontroller öne çıksın).
+          OrbIconBadge(icon: Icons.engineering_rounded, family: AppFeature.serviceConsole.accentFamily),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  lineOf(service),
+                  key: const Key('home_service_line'),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: AppText.cardTitle, height: 1.25, color: primary),
+                ),
+                const SizedBox(height: 4),
+                const CardCaption(
+                  'Bu bilgi salt okunurdur; servis değişikliğini yalnızca yönetici yapabilir.',
+                ),
+              ],
+            ),
+          ),
+          if (phone != null) ...[
+            const SizedBox(width: 8),
+            GlassIconButton(
+              key: const Key('btn_copy_service_phone'),
+              icon: Icons.copy_rounded,
+              semanticLabel: 'Servis telefonunu kopyala',
+              size: 36,
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: phone));
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(
+                    const SnackBar(
+                      content: Text('Servis telefonu panoya kopyalandı.'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+              },
+            ),
+          ],
         ],
       ),
     );

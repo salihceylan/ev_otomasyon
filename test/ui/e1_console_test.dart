@@ -5,6 +5,7 @@ import 'package:ev_otomasyon/ui/dashboard/console_dashboards.dart';
 import 'package:ev_otomasyon/ui/dashboard/endpoint_sections.dart' show SectionHeader;
 import 'package:ev_otomasyon/ui/motion/motion.dart';
 import 'package:ev_otomasyon/ui/pages/dashboard_page.dart';
+import 'package:ev_otomasyon/ui/pages/device_inventory_page.dart';
 import 'package:ev_otomasyon/ui/theme/tokens.dart';
 import 'package:ev_otomasyon/ui/widgets/orb/orb.dart';
 import 'package:ev_otomasyon/ui/widgets/surface_card.dart';
@@ -184,6 +185,16 @@ void main() {
       expect(byKeyName('card_action_service_managers'), findsNothing);
       expect(byKeyName('btn_open_service_management'), findsNothing, reason: '"Tüm Paneli Aç" yalnızca süper konsolda');
       expect(byKeyName('notice_service_safety'), findsOneWidget);
+    });
+
+    testWidgets('"Pano Envanteri" sayacı servis sorumlusunu KENDİ stoğunun envanterine götürür (servis kapsamı)', (tester) async {
+      await pumpService(tester);
+      await flush(tester);
+
+      await tester.tap(byKeyName('card_metric_devices'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(find.byType(DeviceInventoryPage), findsOneWidget);
     });
 
     testWidgets('sabit servis e-postası yedeği ve sabit "8 röle / 8 giriş" metni yoktur', (tester) async {

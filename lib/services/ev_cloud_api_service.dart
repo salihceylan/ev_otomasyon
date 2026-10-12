@@ -1980,6 +1980,46 @@ class EvCloudApiService {
   }
 
   // ---------------------------------------------------------------------------
+  // Servis kapsamı: kapsamlar arası AKTARIM (yalnız kök / super_user; servis sorumlusuna 403)
+  // ---------------------------------------------------------------------------
+  // Gövde `{service_user_id: "<uuid>" | null}`; alan ZORUNLUDUR ve `null` = köke al (yanlışlıkla köke düşürmeyi önlemek için
+  // sunucu alanı boş bırakmayı 400 sayar). Hata kodları: 400 VALIDATION (geçersiz kimlik), 403 FORBIDDEN (kök değil),
+  // 404 NOT_FOUND (kayıt ya da hedef servis hesabı yok), 409 CONFLICT (hedef hesap aktif değil; kurulu kart doğrudan aktarılmaz).
+
+  /// Daireyi başka bir servise ya da köke ([serviceUserId] `null`) aktarır: `PATCH /admin/homes/:homeId/service-owner`.
+  /// Dairedeki kartlar yeni servisin stoğuna geçer; eski servisin üyeliği ve uygulama kimlikleri iptal edilir.
+  Future<ServiceOwnerTransferResult> transferHomeServiceOwner(String homeId, {String? serviceUserId}) async {
+    final body = await _call(
+      'PATCH',
+      '/v1/admin/homes/${_seg(homeId)}/service-owner',
+      body: <String, dynamic>{'service_user_id': serviceUserId},
+    );
+    return _parseOrThrow(() => ServiceOwnerTransferResult.fromJson(_data(body)));
+  }
+
+  /// Stoktaki kartı başka bir servisin stoğuna ya da kök stoğuna aktarır: `PATCH /admin/inventory/:uuid/service-owner`.
+  /// Kurulu (daireye bağlı) kart evinin servisini izler: sunucu `409 CONFLICT` döner (daire aktarılmalıdır).
+  Future<ServiceOwnerTransferResult> transferInventoryServiceOwner(String uuid, {String? serviceUserId}) async {
+    final body = await _call(
+      'PATCH',
+      '/v1/admin/inventory/${_seg(uuid.trim().toUpperCase())}/service-owner',
+      body: <String, dynamic>{'service_user_id': serviceUserId},
+    );
+    return _parseOrThrow(() => ServiceOwnerTransferResult.fromJson(_data(body)));
+  }
+
+  /// Siteyi başka bir servise ya da köke aktarır: `PATCH /admin/sites/:siteId/service-owner`. (Uygulamada site yönetim
+  /// ekranı yoktur; uç fabrika / yönetim araçları için hazır tutulur.)
+  Future<ServiceOwnerTransferResult> transferSiteServiceOwner(String siteId, {String? serviceUserId}) async {
+    final body = await _call(
+      'PATCH',
+      '/v1/admin/sites/${_seg(siteId)}/service-owner',
+      body: <String, dynamic>{'service_user_id': serviceUserId},
+    );
+    return _parseOrThrow(() => ServiceOwnerTransferResult.fromJson(_data(body)));
+  }
+
+  // ---------------------------------------------------------------------------
   // Site ve kurulum şablonları (CONTRACTS §3e; yalnız `service_user` + `super_user`, servis PIN oturumu 403)
   // ---------------------------------------------------------------------------
 

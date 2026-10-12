@@ -44,7 +44,8 @@ class SubscriberOwner {
 ///
 /// Sunucu (B2) yanıtı: `{home_id, home_name, home_address, owner, device_count, online_count,
 /// commissioned_count, commissioned_at, last_seen_at, device_uuids[], created_at}`. Eski/yalın biçimler
-/// (`device_uuid`, `is_commissioned`, `commissioning_status`) de okunur.
+/// (`device_uuid`, `is_commissioned`, `commissioning_status`) de okunur. Servis kapsamı (migration 045): `service_owner_id`,
+/// `service_owner_name` (evin servis sorumlusu; `null` = kök kapsamı) isteğe bağlıdır, eski sunucuda yoktur.
 @immutable
 class Subscriber {
   const Subscriber({
@@ -58,6 +59,9 @@ class Subscriber {
     this.commissionedFlag = false,
     this.lastSeenAt,
     this.owner,
+    this.serviceOwnerId,
+    this.serviceOwnerName,
+    this.serviceOwnerReported = false,
   });
 
   final String homeId;
@@ -74,6 +78,16 @@ class Subscriber {
   final bool commissionedFlag;
   final DateTime? lastSeenAt;
   final SubscriberOwner? owner;
+
+  /// Evin servis sorumlusu (`service_owner_id`); `null` = kök kapsamı (ya da eski sunucu: bkz. [serviceOwnerReported]).
+  final String? serviceOwnerId;
+  final String? serviceOwnerName;
+
+  /// Sunucu servis alanlarını bildirdi mi? Eski sunucuda alan YOKTUR: "kök kapsamı" diye yanlış gösterilmez.
+  final bool serviceOwnerReported;
+
+  /// Daire kök kapsamında (sunucu bildirdi ve servis yok).
+  bool get isRootScope => serviceOwnerReported && serviceOwnerId == null;
 
   bool get hasOwner => owner != null;
 
@@ -111,6 +125,9 @@ class Subscriber {
           (asNonEmptyString(json['commissioning_status'])?.toUpperCase() == 'APPROVED_WORKING'),
       lastSeenAt: asDate(json['last_seen_at']),
       owner: SubscriberOwner.tryParse(json['owner']),
+      serviceOwnerId: asNonEmptyString(json['service_owner_id']),
+      serviceOwnerName: asNonEmptyString(json['service_owner_name']),
+      serviceOwnerReported: json.containsKey('service_owner_id') || json.containsKey('service_owner_name'),
     );
   }
 

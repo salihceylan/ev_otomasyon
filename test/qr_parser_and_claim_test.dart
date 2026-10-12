@@ -412,6 +412,51 @@ void main() {
 
       expect(find.text('Müşteri için yeni hesap açıldı ve davet e-postası gönderildi.'), findsOneWidget);
       expect(find.textContaining('Kurulum erişiminiz'), findsOneWidget);
+      expect(find.text('Bu dairede kalıcı servis yetkiniz var.'), findsNothing);
+    });
+
+    testWidgets('servis kendi evinde süresizdir: başarı ekranı "kalıcı servis yetkiniz var" der, süre bitişi yazmaz', (tester) async {
+      final env = await openAsStaff(tester);
+      env.cloud.claimResultToReturn = const ClaimResult(
+        homeId: kHomeA,
+        homeName: 'Daire 5',
+        deviceUuid: uid,
+        customerAccount: CustomerAccountInfo(created: true, inviteSent: true, status: 'pending_invite'),
+        technicianAccessUnlimited: true,
+        serviceOwnerId: 'staff-1',
+      );
+      await fill(tester);
+      await tapKey(tester, 'switch_claim_for_customer');
+      await typeInto(tester, 'field_claim_customer', 'musteri@ornek.test');
+      await tapKey(tester, 'btn_claim_send_otp');
+      await typeInto(tester, 'field_claim_otp', '135790');
+
+      await tapKey(tester, 'btn_claim_submit');
+
+      expect(find.text('Müşteri için yeni hesap açıldı ve davet e-postası gönderildi.'), findsOneWidget);
+      expect(textOf(tester, 'claim_access_note'), 'Bu dairede kalıcı servis yetkiniz var.');
+      expect(find.textContaining('Kurulum erişiminiz'), findsNothing);
+      expect(find.textContaining('tarihine kadar'), findsNothing);
+    });
+
+    testWidgets('erişim bilgisi hiç gelmezse (süre bitişi yok, süresiz bayrağı yok) erişim notu yazılmaz', (tester) async {
+      final env = await openAsStaff(tester);
+      env.cloud.claimResultToReturn = const ClaimResult(
+        homeId: kHomeA,
+        homeName: 'Daire 5',
+        deviceUuid: uid,
+        customerAccount: CustomerAccountInfo(created: true, inviteSent: true, status: 'pending_invite'),
+      );
+      await fill(tester);
+      await tapKey(tester, 'switch_claim_for_customer');
+      await typeInto(tester, 'field_claim_customer', 'musteri@ornek.test');
+      await tapKey(tester, 'btn_claim_send_otp');
+      await typeInto(tester, 'field_claim_otp', '135790');
+
+      await tapKey(tester, 'btn_claim_submit');
+
+      expect(find.text('Müşteri için yeni hesap açıldı ve davet e-postası gönderildi.'), findsOneWidget);
+      expect(find.byKey(const Key('claim_access_note')), findsNothing);
     });
   });
 

@@ -187,11 +187,20 @@ class _Step4ClaimState extends State<Step4Claim> {
                   text: 'Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası '
                       'gönderildi.',
                 ),
+              // Servis kendi evinde süresizdir (yeni sunucu: süre bitişi gelmez); süreli erişim yalnız eski sunucu / kök
+              // kapsamındaki evde bildirilir ve o zaman tarih yazılır. İkisi de yoksa not gösterilmez.
               if (s.technicianAccessExpiresAt != null)
                 SetupInfoRow(
+                  key: const Key('claim_access_note'),
                   icon: Icons.schedule_rounded,
                   text: 'Bu daire için kurulum yetkiniz ${fmt.format(s.technicianAccessExpiresAt!.toLocal())} '
                       'tarihine kadar geçerlidir.',
+                )
+              else if (s.technicianAccessUnlimited)
+                const SetupInfoRow(
+                  key: Key('claim_access_note'),
+                  icon: Icons.verified_user_rounded,
+                  text: 'Bu dairede kalıcı servis yetkiniz var.',
                 ),
             ],
           ),

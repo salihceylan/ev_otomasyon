@@ -73,7 +73,9 @@ void main() {
       ...groupAndLock,
       'canCalibrate',
       'canManageRules',
-      // davet ✖, devir ✖, servis PIN ✖
+      // Servis kapsamı (045): evin servisi kendi evinde üye / misafir yönetir; devir ✖ ve servis PIN ✖ (yalnız ev sahibi)
+      'canInvite',
+      'canManageMembers',
       'canClaimDevice',
       'canCommission',
       'canReplaceBoard',
@@ -84,9 +86,14 @@ void main() {
       'canFetchLocalKey',
       'canReissueDeviceCredential',
       'canViewInventory',
+      // kendi stoğundaki kartları yönetir (askıya al, etiket, PIN kilidi, sil); servis hesapları (canManageAdminAccounts) ✖
+      'canManageInventory',
       'canOpenServiceManagement',
       ...safetyManager,
     });
+    // Kök-yalnız (türetilmiş) yetkiler servise kapalı: iptal (REVOKED) ve kapsamlar arası aktarım.
+    expect(caps.canRevokeInventory, isFalse);
+    expect(caps.canTransferServiceScope, isFalse);
   });
 
   test('kalıcı servis personeli üyeliği olmayan eve erişemez (home_users zorunlu)', () {
@@ -98,6 +105,8 @@ void main() {
     expect(caps.canClaimDevice, isTrue);
     expect(caps.canEmergencyReset, isTrue);
     expect(caps.canViewInventory, isTrue);
+    expect(caps.canManageInventory, isTrue, reason: 'envanter yetkisi küreseldir (kendi stoğu); ev üyeliğine bağlı değil');
+    expect(caps.canInvite, isFalse, reason: 'üyelik / kapsam yokken ev yönetimi yok');
   });
 
   test('servis PIN oturumu (tek ev)', () {

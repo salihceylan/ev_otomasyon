@@ -5145,8 +5145,14 @@ class AutomationState extends ChangeNotifier {
     }
   }
 
+  /// Envanter kartının durumunu değiştirir. Servis sorumlusu YALNIZ kendi stoğunda askıya alır / aktif eder (sunucu kapsamı
+  /// uygular); iptal (REVOKED) ve iptal edilmiş kartı stoğa alma yalnız kök içindir ([Capabilities.canRevokeInventory]).
   Future<bool> updateInventoryStatus(String uuid, String newStatus) async {
     if (!capabilities.canManageInventory) throw ApiException.forbidden();
+    if (!capabilities.canRevokeInventory) {
+      final revokedBefore = _inventoryDevices.where((d) => d.deviceUuid == uuid).firstOrNull?.isRevoked ?? false;
+      if (newStatus.trim().toUpperCase() == 'REVOKED' || revokedBefore) throw ApiException.forbidden();
+    }
     await cloudApi.updateInventoryDeviceStatus(uuid, newStatus);
     _inventoryDevices = [
       for (final d in _inventoryDevices)
@@ -5156,7 +5162,7 @@ class AutomationState extends ChangeNotifier {
     return true;
   }
 
-  /// Kurulum PIN kilidini kaldırır (yalnız süper yönetici; bireysel-7). Anahtar ve PIN değişmez.
+  /// Kurulum PIN kilidini kaldırır (süper yönetici; servis sorumlusu kendi kartında; bireysel-7). Anahtar ve PIN değişmez.
   Future<void> clearInventoryPinLock(String uuid) async {
     if (!capabilities.canManageInventory) throw ApiException.forbidden();
     await cloudApi.clearInventoryPinLock(uuid);
@@ -5173,6 +5179,20 @@ class AutomationState extends ChangeNotifier {
     _inventoryDevices = _inventoryDevices.where((d) => d.deviceUuid != uuid).toList();
     notifyListeners();
     return true;
+  }
+
+  /// Daireyi başka bir servise ya da köke ([serviceUserId] `null`) aktarır (YALNIZ kök; servis sorumlusuna sunucu 403
+  /// döner, burada da istek atılmaz). Abone listesi sayfası kendi verisini yeniler.
+  Future<ServiceOwnerTransferResult> transferHomeServiceOwner(String homeId, {String? serviceUserId}) async {
+    if (!capabilities.canTransferServiceScope) throw ApiException.forbidden();
+    return cloudApi.transferHomeServiceOwner(homeId, serviceUserId: serviceUserId);
+  }
+
+  /// Stoktaki kartı başka bir servisin stoğuna ya da kök stoğuna ([serviceUserId] `null`) aktarır (YALNIZ kök).
+  /// Kurulu kart evinin servisini izler: sunucu 409 döner (daireyi aktarın).
+  Future<ServiceOwnerTransferResult> transferInventoryServiceOwner(String uuid, {String? serviceUserId}) async {
+    if (!capabilities.canTransferServiceScope) throw ApiException.forbidden();
+    return cloudApi.transferInventoryServiceOwner(uuid, serviceUserId: serviceUserId);
   }
 
   Future<void> fetchServiceSubscribers() async {

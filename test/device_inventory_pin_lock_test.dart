@@ -66,11 +66,19 @@ void main() {
     expect(find.textContaining('PIN kilidi kaldırıldı'), findsOneWidget);
   });
 
-  testWidgets('servis personeli kilidi göremez ama kaldıramaz (yalnız süper)', (tester) async {
+  testWidgets('servis sorumlusu kendi kartındaki kilidi görür ve onaylı kaldırır (servis kapsamı: kendi stoğunda süper)', (tester) async {
     final env = await open(tester, 'staff', locked(until: DateTime.utc(2026, 10, 1, 12, 30)));
     addTearDown(env.dispose);
     expect(exists('note_pin_locked_$uid'), isTrue);
-    expect(exists('btn_clear_pin_lock_$uid'), isFalse);
+    expect(exists('btn_clear_pin_lock_$uid'), isTrue);
+
+    await tester.ensureVisible(find.byKey(const Key('btn_clear_pin_lock_$uid')));
+    await tester.tap(find.byKey(const Key('btn_clear_pin_lock_$uid')));
+    await settle(tester);
+    expect(env.cloud.pinLocksCleared, isEmpty, reason: 'onay beklenir');
+    await tester.tap(find.byKey(const Key('btn_simple_confirm')));
+    await settle(tester);
+    expect(env.cloud.pinLocksCleared, <String>[uid]);
   });
 
   testWidgets('kilit süresi geçmiş kartta düğme yok', (tester) async {

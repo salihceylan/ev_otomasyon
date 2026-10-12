@@ -379,7 +379,11 @@ class CustomerAccountInfo {
 }
 
 /// `POST /devices/claim` yanıtı: `{ home_id, home_name, device_uuid, device_credential?,
-/// customer_account?, technician_access_expires_at?, warnings? }`.
+/// customer_account?, technician_access_expires_at?, technician_access_unlimited?, service_owner_id?, warnings? }`.
+///
+/// Servis sorumlusu kapsamı (migration 045): servis sahiplendirince evin servisi olur ve kendi evinde **süresiz** yetkilidir;
+/// sunucu `technician_access_unlimited: true` verir ve `technician_access_expires_at` artık GELMEZ. Eski sunucu süreli
+/// (72 saat) erişimi `technician_access_expires_at` ile bildirir; ikisi de yoksa erişim notu gösterilmez.
 class ClaimResult {
   const ClaimResult({
     required this.homeId,
@@ -388,6 +392,8 @@ class ClaimResult {
     this.deviceCredential,
     this.customerAccount,
     this.technicianAccessExpiresAt,
+    this.technicianAccessUnlimited = false,
+    this.serviceOwnerId,
     this.warnings = const <String>[],
     this.raw = const {},
   });
@@ -402,8 +408,15 @@ class ClaimResult {
   /// Müşteri adına eşleme yapıldıysa müşteri hesabı bilgisi.
   final CustomerAccountInfo? customerAccount;
 
-  /// Servis personeline tanınan süreli kurulum erişiminin bitişi.
+  /// Servis personeline tanınan süreli kurulum erişiminin bitişi (yalnız eski sunucu / kök kapsamındaki ev; servis
+  /// kendi evinde süresizdir: bu alan gelmez).
   final DateTime? technicianAccessExpiresAt;
+
+  /// Servis bu dairede **süresiz** yetkili (`technician_access_unlimited`; yeni sunucu, servis sahiplendirdiğinde).
+  final bool technicianAccessUnlimited;
+
+  /// Evin servis sorumlusu (`service_owner_id`); yoksa / eski sunucuda `null`.
+  final String? serviceOwnerId;
 
   /// Kısmi başarı uyarıları (ör. davet e-postası gönderilemedi). Kullanıcıya gösterilmelidir.
   final List<String> warnings;
@@ -424,6 +437,8 @@ class ClaimResult {
       deviceCredential: DeviceMqttCredential.tryParse(json['device_credential']),
       customerAccount: customer == null ? null : CustomerAccountInfo.fromJson(customer),
       technicianAccessExpiresAt: asDate(json['technician_access_expires_at']),
+      technicianAccessUnlimited: asBool(json['technician_access_unlimited']) ?? false,
+      serviceOwnerId: asNonEmptyString(json['service_owner_id']),
       warnings: _asStringList(json['warnings']),
       raw: safeRaw,
     );
@@ -936,6 +951,7 @@ class EmergencyResetResult {
     this.message = '',
     this.warnings = const <String>[],
     this.partial = false,
+    this.serviceOwnerId,
   });
 
   /// `UNCLAIMED` | `REASSIGNED` (büyük harf; bilinmeyen değer olduğu gibi).
@@ -952,6 +968,9 @@ class EmergencyResetResult {
   final String message;
   final List<String> warnings;
   final bool partial;
+
+  /// Sıfırlamadan sonra evin servis sorumlusu (`service_owner_id`; yalnız ekleme, servis kapsamı 045).
+  final String? serviceOwnerId;
 
   bool get isUnclaimed => action == 'UNCLAIMED';
   bool get isReassigned => action == 'REASSIGNED';
@@ -1004,12 +1023,52 @@ class EmergencyResetResult {
       message: asString(json['message']) ?? '',
       warnings: _asStringList(json['warnings']),
       partial: asBool(json['partial']) ?? false,
+      serviceOwnerId: asNonEmptyString(json['service_owner_id']),
     );
   }
 
   @override
   String toString() => 'EmergencyResetResult(action: $action, device: $deviceUuid, '
       'partial: $partial, secrets: ******)';
+}
+
+/// Kapsamlar arası **aktarım** sonucu (yalnız kök; `PATCH /admin/homes|inventory|sites/:id/service-owner`, gövde
+/// `{service_user_id: "<uuid>" | null}`; `null` = köke al). Sunucu yanıtı (`data`): `{home_id | device_uuid | site_id,
+/// service_owner_id, previous_service_owner_id, changed, cards_moved?, message}`.
+class ServiceOwnerTransferResult {
+  const ServiceOwnerTransferResult({
+    this.serviceOwnerId,
+    this.previousServiceOwnerId,
+    this.changed = true,
+    this.cardsMoved = 0,
+    this.message = '',
+  });
+
+  /// Aktarımdan sonraki servis sahibi; `null` = kök kapsamı.
+  final String? serviceOwnerId;
+
+  /// Aktarımdan önceki servis sahibi; `null` = kök kapsamıydı.
+  final String? previousServiceOwnerId;
+
+  /// Kapsam gerçekten değişti mi (`false`: kayıt zaten bu kapsamdaydı).
+  final bool changed;
+
+  /// Daire aktarımında yeni servisin stoğuna geçen kart sayısı (`cards_moved`; yalnız daire).
+  final int cardsMoved;
+
+  /// Sunucunun Türkçe sonuç iletisi (boş olabilir).
+  final String message;
+
+  /// Köke alındı mı (hedef servis yok).
+  bool get toRoot => serviceOwnerId == null;
+
+  factory ServiceOwnerTransferResult.fromJson(Map<String, dynamic> json) => ServiceOwnerTransferResult(
+        serviceOwnerId: asNonEmptyString(json['service_owner_id']),
+        previousServiceOwnerId: asNonEmptyString(json['previous_service_owner_id']),
+        changed: asBool(json['changed']) ?? true,
+        cardsMoved: asInt(json['cards_moved']) ?? 0,
+        message: asString(json['message']) ?? '',
+      );
 }
 
 /// Pano değişiminde yeni panoya `set_runtime` ile aktarılacak panjur süresi.

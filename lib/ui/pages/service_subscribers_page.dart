@@ -17,6 +17,7 @@ import '../widgets/orb/orb_icon_badge.dart';
 import '../widgets/settings/accent_button.dart';
 import 'service_setup/panel/assign_admin_dialog.dart';
 import 'service_setup/panel/service_glass.dart';
+import 'service_setup/panel/service_owner_dialog.dart';
 import 'service_setup/panel/subscriber_models.dart';
 import 'service_setup/open_wizard.dart';
 import 'service_setup/service_target.dart';
@@ -26,16 +27,18 @@ import 'service_setup/setup_style.dart';
 
 /// Yetkili Servis Sorumlusu - Abonelerim & Cihaz Atama
 ///
-/// Servis sorumlusunun devreye aldığı (ya da yetkili olduğu) daireleri listeler (**sayfalı**, **300 ms
-/// gecikmeli arama**), pano durumunu gösterir ve ev sahibini "Home Admin" olarak atar/devreder:
-/// bilgi formu -> ikinci onay penceresi -> (mevcut sahip varsa) sahibe giden onay kodu -> atama.
+/// Servis sorumlusunun kendi kapsamındaki (kurduğu ya da devraldığı) daireleri listeler (**sayfalı**, **300 ms
+/// gecikmeli arama**; liste sunucuda servise süzülür), pano durumunu gösterir ve ev sahibini "Home Admin" olarak
+/// atar/devreder: bilgi formu -> ikinci onay penceresi -> (mevcut sahip varsa) sahibe giden onay kodu -> atama.
+/// Süper yönetici (kök) bütün daireleri görür; her dairenin servisi satırda yazılır ("Servis: ad" / "Servis: Kök
+/// (servissiz)") ve **"Servisi Değiştir"** ile daire başka servise ya da köke aktarılır (yalnız kök; servise gizli).
 ///
 /// Yükleme hatası **görünür** kalır (bayat liste yenileme hatasıyla birlikte uyarılır); sonsuz
 /// yükleme dönmez (zaman aşımı + hata + yeniden dene).
 ///
 /// "Kurulumu sürdür" yarım kalan (devreye alınmamış) dairede **süper kullanıcıya ve servis sorumlusuna** açıktır
-/// ([canResumeSetup]); müşteri/misafir/servis PIN oturumu bu sayfayı zaten açamaz. Servis sorumlusu yalnız sunucunun
-/// kendi listesine koyduğu (süresi dolmamış 72 saatlik kurulum penceresi olan) dairelerde sürdürebilir; süre bittiyse
+/// ([canResumeSetup]); müşteri/misafir/servis PIN oturumu bu sayfayı zaten açamaz. Servis sorumlusu kendi kapsamındaki
+/// dairelerde süresiz sürdürebilir (72 saatlik kurulum penceresi aranmaz); başka servisin ya da sahipsiz (kök) dairede
 /// sunucu 403 döner ve sade bir yönlendirme gösterilir (Servis PIN'i ile girin).
 ///
 /// Sayfa TEK kaydırma alanıdır: oturum bandı, sayaçlar ve arama kutusu listenin ilk öğeleridir (sabit bir üst bant büyük
@@ -60,7 +63,7 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
   static const Duration _searchDebounce = Duration(milliseconds: 300);
   static const Duration _requestTimeout = Duration(seconds: 25);
 
-  /// Servis sorumlusunun bu dairede (artık) yetkisi yok: kurulum penceresi bitti ya da üye değil.
+  /// Servis sorumlusunun bu dairede yetkisi yok: daire kendi kapsamında değil (başka servisin ya da kök kapsamında).
   static const String _noServiceAccess =
       "Bu dairede servis yetkiniz yok. Müşteriden Servis PIN'i isteyip PIN ile girin.";
 
@@ -412,6 +415,8 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
     final primary = AppTheme.getTextPrimary(context);
     final large = SetupText.isLargeText(context);
     final pill = _commissionBadge(s.isCommissioned);
+    // Kapsamlar arası aktarım yalnız kökte; servisin tüm daireleri zaten kendisinindir (servis satırı da yalnız kökte).
+    final canTransfer = context.read<AutomationState>().capabilities.canTransferServiceScope && s.serviceOwnerReported;
     return ServiceCard(
       key: Key('card_subscriber_${s.homeId}'),
       accent: hasOwner ? null : AppTheme.accentAmber,
@@ -564,6 +569,25 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
               ],
             ),
           ),
+          if (canTransfer) ...[
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.engineering_rounded, size: 18, color: muted),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _serviceText(s),
+                    key: Key('note_service_owner_${s.homeId}'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: AppText.caption, height: 1.3, color: muted),
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           // Tek eylem tam genişlikte, tema hapı ve aile tonu (yerel backgroundColor/şekil kırpılmış yüzeyin altında "hayalet köşe"
           // bırakıyordu); yükseklik >= 48 dp.
@@ -598,6 +622,14 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
                   icon: Icon(Icons.play_circle_outline_rounded, size: accentIconSize(context, base: 18)),
                   label: const Text('Kurulumu sürdür', textAlign: TextAlign.center),
                 ),
+              if (canTransfer)
+                OutlinedButton.icon(
+                  key: Key('btn_transfer_service_${s.homeId}'),
+                  style: accentOutlinedButtonStyle(context, AppFamilies.violet),
+                  onPressed: () => _transferService(s),
+                  icon: Icon(Icons.swap_horiz_rounded, size: accentIconSize(context, base: 18)),
+                  label: const Text('Servisi Değiştir', textAlign: TextAlign.center),
+                ),
             ],
           ),
         ],
@@ -608,9 +640,9 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
   /// Süper yönetici (evin üyesi değildir; "Mevcut cihazlarım" yolu yoktur) ve servis sorumlusu yarım kalan kurulumu
   /// sürdürür (servis_kurulum-9): evin panoları sunucudan alınır, sihirbaz mevcut cihaz kipinde 5. adımdan açılır.
   ///
-  /// Servis sorumlusunda sunucu, evde süresi dolmamış `service_user` üyeliği (sahiplenmeden sonra 72 saat) arar. Üyelik
-  /// yoksa ya da süre bittiyse `403` (nadiren `404`) döner; ham sunucu iletisi yerine [_noServiceAccess] gösterilir.
-  /// Süper kullanıcıda sunucu iletisi olduğu gibi gösterilir.
+  /// Servis sorumlusunda sunucu, dairenin kendi kapsamında olup olmadığına bakar (kurduğu / devraldığı daire, süresiz).
+  /// Daire başka servisin ya da kökün ise `403` (nadiren `404`) döner; ham sunucu iletisi yerine [_noServiceAccess]
+  /// gösterilir. Süper kullanıcıda sunucu iletisi olduğu gibi gösterilir.
   Future<void> _resumeSetup(Subscriber s) async {
     final state = context.read<AutomationState>();
     final messenger = ScaffoldMessenger.of(context);
@@ -657,6 +689,34 @@ class _ServiceSubscribersPageState extends State<ServiceSubscribersPage> {
       existingTarget: ServiceTarget(homeId: s.homeId, deviceUuid: uid, homeName: s.homeName),
       startStep: SetupSteps.wifi,
     );
+  }
+
+  /// Kök için dairenin servisi: servisin adı ya da "Kök (servissiz)".
+  static String _serviceText(Subscriber s) {
+    if (!s.isRootScope) return 'Servis: ${s.serviceOwnerName ?? 'Servis sorumlusu'}';
+    return 'Servis: Kök (servissiz)';
+  }
+
+  /// Kök: dairenin servisini başka bir servise ya da köke aktarır. Pencere API'yi çağırır; başarıda sonuç iletisi gösterilir
+  /// ve liste yenilenir.
+  Future<void> _transferService(Subscriber s) async {
+    final result = await ServiceOwnerDialog.show(
+      context,
+      target: ServiceOwnerTarget.home,
+      targetId: s.homeId,
+      targetLabel: '${s.homeName} (#${s.shortId})',
+      currentOwnerId: s.serviceOwnerId,
+      currentOwnerLabel: s.serviceOwnerName,
+    );
+    if (result == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const Key('snack_transfer_done'),
+        backgroundColor: AppTheme.filledAccent(AppTheme.accentGreen),
+        content: Text(serviceOwnerResultMessage(result, target: ServiceOwnerTarget.home)),
+      ),
+    );
+    unawaited(_load(reset: true));
   }
 
   Widget _commissionBadge(bool commissioned) {

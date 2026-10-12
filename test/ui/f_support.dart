@@ -1305,10 +1305,20 @@ class ServiceFakeCloud extends FakeCloudApi {
       deviceUuid: deviceUuid,
       deviceCredential: claimCredential,
       customerAccount: claimCustomerAccount ?? const CustomerAccountInfo(created: true, status: 'pending_invite', inviteSent: true),
-      technicianAccessExpiresAt: DateTime.utc(2026, 10, 4, 12),
+      // Eski sunucu: süreli (72 saat) kurulum erişimi. Servis kapsamı (045): servis kendi evinde SÜRESİZdir (bitiş gelmez,
+      // `technician_access_unlimited: true`); müşteri kendi sahiplendiyse erişim bilgisi hiç gelmez.
+      technicianAccessExpiresAt: (claimAccessUnlimited || claimNoAccessInfo) ? null : DateTime.utc(2026, 10, 4, 12),
+      technicianAccessUnlimited: claimAccessUnlimited,
+      serviceOwnerId: claimAccessUnlimited ? 'staff-1' : null,
       warnings: claimWarnings,
     );
   }
+
+  /// Yeni sunucu davranışı: servis sahiplendirince süresiz yetki (`technician_access_unlimited`), süre bitişi yok.
+  bool claimAccessUnlimited = false;
+
+  /// Hiç erişim bilgisi gelmez (ne süre bitişi ne de `technician_access_unlimited`).
+  bool claimNoAccessInfo = false;
 
   @override
   Future<List<DeviceInfo>> devices(String homeId) async {
@@ -1446,6 +1456,9 @@ class ServiceFakeCloud extends FakeCloudApi {
             'claimed_home_id': ?d.claimedHomeId,
             'failed_attempts': d.failedAttempts,
             'locked_until': ?d.lockedUntil?.toUtc().toIso8601String(),
+            // Servis kapsamı (045): yeni sunucu alanı her satırda verir (null = kök stoğu); eski sunucu hiç vermez.
+            if (d.serviceOwnerReported) 'service_owner_id': d.serviceOwnerId,
+            if (d.serviceOwnerReported) 'service_owner_email': d.serviceOwnerEmail,
           },
       ],
       'stats': <String, dynamic>{
@@ -1523,8 +1536,112 @@ class ServiceFakeCloud extends FakeCloudApi {
                 claimedHomeName: d.claimedHomeName,
                 claimedHomeId: d.claimedHomeId,
                 qrClaimUrl: d.qrClaimUrl,
+                serviceOwnerId: d.serviceOwnerId,
+                serviceOwnerEmail: d.serviceOwnerEmail,
+                serviceOwnerReported: d.serviceOwnerReported,
               ),
     ];
+  }
+
+  // ---------------------------------------------------------------------------
+  // Servis kapsamı: kapsamlar arası AKTARIM (yalnız kök; migration 045)
+  // ---------------------------------------------------------------------------
+
+  /// Başarıyla uygulanan aktarımlar: `home:<id>:<hedef|root>` / `inventory:<uuid>:<hedef|root>`.
+  final List<String> serviceTransfers = <String>[];
+  Object? transferError;
+  Completer<void>? transferGate;
+
+  /// Daire aktarımında "taşınan kart" sayısı (yanıttaki `cards_moved`).
+  int transferCardsMoved = 0;
+
+  String? _serviceNameOf(String? id) {
+    if (id == null) return null;
+    final u = adminUsers.where((u) => '${u['id']}' == id).firstOrNull;
+    return u == null ? null : '${u['full_name']}';
+  }
+
+  String? _serviceEmailOf(String? id) {
+    if (id == null) return null;
+    final u = adminUsers.where((u) => '${u['id']}' == id).firstOrNull;
+    return u == null ? null : '${u['email']}';
+  }
+
+  @override
+  Future<ServiceOwnerTransferResult> transferHomeServiceOwner(String homeId, {String? serviceUserId}) async {
+    calls.add('transferHomeServiceOwner:$homeId:${serviceUserId ?? 'root'}');
+    final gate = transferGate;
+    if (gate != null) await gate.future;
+    final error = transferError;
+    if (error != null) throw error;
+    final row = subscribers.where((s) => '${s['home_id']}' == homeId).firstOrNull;
+    final previous = row?['service_owner_id'] as String?;
+    final changed = previous != serviceUserId;
+    if (changed) serviceTransfers.add('home:$homeId:${serviceUserId ?? 'root'}');
+    if (row != null) {
+      row['service_owner_id'] = serviceUserId;
+      row['service_owner_name'] = _serviceNameOf(serviceUserId);
+    }
+    return ServiceOwnerTransferResult(
+      serviceOwnerId: serviceUserId,
+      previousServiceOwnerId: previous,
+      changed: changed,
+      cardsMoved: changed ? transferCardsMoved : 0,
+      message: !changed
+          ? 'Daire zaten bu kapsamda.'
+          : (serviceUserId == null ? 'Daire kök yönetici kapsamına alındı.' : 'Daire yeni servis sorumlusunun kapsamına aktarıldı.'),
+    );
+  }
+
+  @override
+  Future<ServiceOwnerTransferResult> transferInventoryServiceOwner(String uuid, {String? serviceUserId}) async {
+    calls.add('transferInventoryServiceOwner:$uuid:${serviceUserId ?? 'root'}');
+    final gate = transferGate;
+    if (gate != null) await gate.future;
+    final error = transferError;
+    if (error != null) throw error;
+    final device = inventory.where((d) => d.deviceUuid == uuid).firstOrNull;
+    if (device != null && (device.isClaimed || device.claimedHomeId != null)) {
+      throw const ApiException(
+        statusCode: 409,
+        code: 'CONFLICT',
+        message: 'Kurulu kartın sahibi evinin servisidir; kartı değil daireyi aktarın.',
+      );
+    }
+    final previous = device?.serviceOwnerId;
+    final changed = previous != serviceUserId;
+    if (changed) serviceTransfers.add('inventory:$uuid:${serviceUserId ?? 'root'}');
+    if (device != null) {
+      inventory = <InventoryDeviceModel>[
+        for (final d in inventory)
+          d.deviceUuid != uuid
+              ? d
+              : InventoryDeviceModel(
+                  id: d.id,
+                  serialNo: d.serialNo,
+                  deviceUuid: d.deviceUuid,
+                  macAddress: d.macAddress,
+                  model: d.model,
+                  batchNo: d.batchNo,
+                  status: d.status,
+                  createdAt: d.createdAt,
+                  claimedHomeName: d.claimedHomeName,
+                  claimedHomeId: d.claimedHomeId,
+                  qrClaimUrl: d.qrClaimUrl,
+                  serviceOwnerId: serviceUserId,
+                  serviceOwnerEmail: _serviceEmailOf(serviceUserId),
+                  serviceOwnerReported: true,
+                ),
+      ];
+    }
+    return ServiceOwnerTransferResult(
+      serviceOwnerId: serviceUserId,
+      previousServiceOwnerId: previous,
+      changed: changed,
+      message: !changed
+          ? 'Kart zaten bu stokta.'
+          : (serviceUserId == null ? 'Kart kök stoğuna alındı.' : 'Kart yeni servis sorumlusunun stoğuna aktarıldı.'),
+    );
   }
 
   @override
@@ -2081,6 +2198,12 @@ InventoryDeviceModel inventoryDevice({
   String status = 'IN_STOCK',
   int serial = 1,
   String? claimedHome,
+  String? claimedHomeId,
+
+  /// Servis kapsamı (045): `true` ise sunucu `service_owner_id` alanını bildirir (null = kök stoğu).
+  bool ownerReported = false,
+  String? serviceOwnerId,
+  String? serviceOwnerEmail,
 }) =>
     InventoryDeviceModel(
       id: 'inv-$serial',
@@ -2091,6 +2214,10 @@ InventoryDeviceModel inventoryDevice({
       batchNo: 'BATCH-2026-01',
       status: status,
       claimedHomeName: claimedHome,
+      claimedHomeId: claimedHomeId,
+      serviceOwnerId: serviceOwnerId,
+      serviceOwnerEmail: serviceOwnerEmail,
+      serviceOwnerReported: ownerReported || serviceOwnerId != null,
       createdAt: DateTime.utc(2026, 9, 24, 10),
       qrClaimUrl: 'https://evotomasyon.gudeteknoloji.com.tr/claim?uid=$uid',
     );

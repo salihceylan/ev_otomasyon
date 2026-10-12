@@ -29,6 +29,7 @@ class ClaimSummary {
     this.customerSecurityReset = false,
     this.inviteSent,
     this.technicianAccessExpiresAt,
+    this.technicianAccessUnlimited = false,
     this.credentialReceived = false,
     this.localKeyReady = false,
   });
@@ -47,7 +48,13 @@ class ClaimSummary {
   /// Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı (`security_reset`; uyelik-11).
   final bool customerSecurityReset;
   final bool? inviteSent;
+
+  /// Süreli kurulum erişiminin bitişi (yalnız eski sunucu / kök kapsamındaki ev). Servis sorumlusu kendi evinde süresizdir:
+  /// yeni sunucu bu alanı artık vermez ([technicianAccessUnlimited]).
   final DateTime? technicianAccessExpiresAt;
+
+  /// Servis bu dairede **süresiz** yetkili (`technician_access_unlimited`): arayüz "kalıcı servis yetkiniz var" der.
+  final bool technicianAccessUnlimited;
 
   /// Sunucu cihaz bulut kimliğini bu yanıtta verdi mi (kimliğin kendisi tutulmaz/gösterilmez).
   final bool credentialReceived;
@@ -68,6 +75,7 @@ class ClaimSummary {
         customerSecurityReset: customerSecurityReset,
         inviteSent: inviteSent,
         technicianAccessExpiresAt: technicianAccessExpiresAt,
+        technicianAccessUnlimited: technicianAccessUnlimited,
         credentialReceived: credentialReceived,
         localKeyReady: true,
       );
@@ -189,6 +197,7 @@ class ClaimLogic extends SetupLogic {
         customerSecurityReset: account?.securityReset ?? false,
         inviteSent: account?.inviteSent,
         technicianAccessExpiresAt: result.technicianAccessExpiresAt,
+        technicianAccessUnlimited: result.technicianAccessUnlimited,
         credentialReceived: result.deviceCredential != null,
       );
       // Gizli girdiler bellekten silinir.
@@ -215,8 +224,8 @@ class ClaimLogic extends SetupLogic {
   }
 
   /// Sonucu belirsiz kalan önceki claim isteğinin sunucuda tamamlanıp tamamlanmadığını doğrular: cihaz bu hesabın
-  /// görebildiği bir dairede kayıtlıysa o daire döner. Servis personeline claim sonrası 72 saatlik üyelik verilir
-  /// (CONTRACTS §1.5b); bu evler önce sorgulanır. Cihaz hiçbirinde yoksa `null` (istek sunucuya ulaşmamıştı ya da hesap
+  /// görebildiği bir dairede kayıtlıysa o daire döner. Servis personeline claim sonrası evde (kendi kapsamında) kalıcı
+  /// servis üyeliği verilir (servis kapsamı, migration 045); bu evler önce sorgulanır. Cihaz hiçbirinde yoksa `null` (istek sunucuya ulaşmamıştı ya da hesap
   /// evi göremiyor). Ağ/oturum hatasında "yok" DENMEZ: hata yukarı verilir (durum doğrulanamadan ikinci claim gönderilmez).
   Future<HomeModel?> _findClaimedHome(String uid) async {
     final homes = await ctx.cloud.fetchHomes();

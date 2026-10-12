@@ -58,11 +58,10 @@ class ServiceToolCards extends StatelessWidget {
     // Yalnız kartları belirleyen yetkiler izlenir (AutomationState'in her bildirimi bu listeyi yeniden kurmasın).
     final caps = context.select<
         AutomationState,
-        ({bool view, bool manageInventory, bool replace, bool openManagement, bool manageAccounts})>((s) {
+        ({bool view, bool replace, bool openManagement, bool manageAccounts})>((s) {
       final c = s.capabilities;
       return (
         view: c.canViewInventory,
-        manageInventory: c.canManageInventory,
         replace: c.canReplaceBoard,
         openManagement: c.canOpenServiceManagement,
         manageAccounts: c.canManageAdminAccounts,
@@ -93,9 +92,10 @@ class ServiceToolCards extends StatelessWidget {
           family: AppFeature.inventory.accentFamily,
           icon: Icons.inventory_2_rounded,
           title: 'Cihaz Envanteri',
-          subtitle: caps.manageInventory
+          // Süper yönetici de servis sorumlusu da kartları yönetir; servis yalnız KENDİ stoğunu görür (sunucu süzer).
+          subtitle: caps.manageAccounts
               ? 'Stok, karekod ve etiket yönetimi'
-              : 'Stoğunuzdaki panolar ve karekodları',
+              : 'Stoğunuzdaki panolar, karekod ve etiket yönetimi',
           onTap: () => _push(context, const DeviceInventoryPage()),
         ),
       if (caps.replace)
@@ -123,7 +123,7 @@ class ServiceToolCards extends StatelessWidget {
           title: 'Servis Hesapları',
           subtitle: caps.manageAccounts
               ? 'Servis sorumluları ve yöneticiler'
-              : 'Oluşturduğunuz müşteri hesapları',
+              : 'Müşteri hesaplarınız',
           onTap: () => _push(context, const ServiceManagementPage()),
         ),
     ];

@@ -299,6 +299,46 @@ void main() {
       await pumpUntil(tester, env, () => continueEnabled(tester));
     });
 
+    testWidgets('servis kendi evinde SÜRESİZ: "kalıcı servis yetkiniz var" yazılır, tarih/72 saat ifadesi çıkmaz', (tester) async {
+      final env = await serviceHarness(flush: () async {});
+      addTearDown(env.dispose);
+      env.cloud.claimAccessUnlimited = true;
+      await toStep4(tester, env);
+
+      await claimNow(tester, env);
+      await pumpUntil(tester, env, () => exists('claim_result_card'));
+      expect(exists('claim_access_note'), isTrue);
+      expect(find.text('Bu dairede kalıcı servis yetkiniz var.'), findsOneWidget);
+      expect(find.textContaining('kurulum yetkiniz'), findsNothing);
+      expect(find.textContaining('tarihine kadar'), findsNothing);
+      expect(find.textContaining('72'), findsNothing);
+    });
+
+    testWidgets('eski sunucu (süreli erişim): bitiş tarihi yazılır; kalıcı yetki ifadesi çıkmaz', (tester) async {
+      final env = await serviceHarness(flush: () async {});
+      addTearDown(env.dispose);
+      await toStep4(tester, env);
+
+      await claimNow(tester, env);
+      await pumpUntil(tester, env, () => exists('claim_result_card'));
+      expect(find.textContaining('Bu daire için kurulum yetkiniz'), findsOneWidget);
+      expect(find.textContaining('tarihine kadar geçerlidir'), findsOneWidget);
+      expect(find.text('Bu dairede kalıcı servis yetkiniz var.'), findsNothing);
+    });
+
+    testWidgets('sunucu hiç erişim bilgisi vermezse (süre bitişi yok, süresiz bayrağı yok) erişim notu gösterilmez', (tester) async {
+      final env = await serviceHarness(flush: () async {});
+      addTearDown(env.dispose);
+      env.cloud.claimNoAccessInfo = true;
+      await toStep4(tester, env);
+
+      await claimNow(tester, env);
+      await pumpUntil(tester, env, () => exists('claim_result_card'));
+      expect(exists('claim_access_note'), isFalse);
+      expect(find.textContaining('kurulum yetkiniz'), findsNothing);
+      expect(find.textContaining('kalıcı servis yetkiniz'), findsNothing);
+    });
+
     testWidgets('claim sonrası PIN ve müşteri kodu hiçbir kalıcı kayıtta yer almaz', (tester) async {
       final env = await serviceHarness(flush: () async {});
       addTearDown(env.dispose);

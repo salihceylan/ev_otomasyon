@@ -21,7 +21,7 @@ import '../theme/tokens.dart';
 import '../widgets/settings/settings_card.dart';
 import 'channels_page.dart';
 
-typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatus});
+typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatus, bool hasHomeService});
 
 /// Cihaz & Sistem Ayarları.
 ///
@@ -29,6 +29,7 @@ typedef _PageVm = ({Capabilities caps, AppMode mode, bool hasUser, bool hasStatu
 ///
 /// | Kart | Koşul |
 /// |---|---|
+/// | Servisiniz (evin servisi, salt okunur) | bulut modu + ev rolü sahip / sakin + sunucu `service` verdi |
 /// | Çocuk kilidi | `canViewState` (misafir salt-okunur görür; değiştirme `canChangeChildLock`) |
 /// | Gece huzur bildirimi | bulut modu + `canChangeChildLock` |
 /// | Arka planda alarm bildirimi | bulut modu + ev rolü sahip / sakin (müşteri evindeki servis rolü ve servis oturumu ✖) |
@@ -49,13 +50,25 @@ class DeviceSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final vm = context.select<AutomationState, _PageVm>(
-      (s) => (caps: s.capabilities, mode: s.mode, hasUser: s.currentUser != null, hasStatus: s.status != null),
+      (s) => (
+        caps: s.capabilities,
+        mode: s.mode,
+        hasUser: s.currentUser != null,
+        hasStatus: s.status != null,
+        hasHomeService: s.activeHome?.service != null,
+      ),
     );
     final caps = vm.caps;
     final cloud = vm.mode == AppMode.cloud;
     final direct = vm.mode == AppMode.direct;
 
-    final notices = <Widget>[if (caps.hasHomeAccess || direct) const HardwareNoticeCard(), const RoleNoticeCard()];
+    final notices = <Widget>[
+      if (caps.hasHomeAccess || direct) const HardwareNoticeCard(),
+      // Servisiniz: ev sahibi / sakin evinin servisini salt okunur görür (servis oturumu ve misafir ✖; kart servis yoksa çizilmez).
+      if (cloud && vm.hasHomeService && (caps.isOwner || caps.isResident) && !caps.isServiceSession)
+        const HomeServiceCard(),
+      const RoleNoticeCard(),
+    ];
     // Bölümler: çocuk kilidi Güvenlik'in ilk kartıdır (sayfadaki ilk Switch sözleşmesi). Bölüm başlığı rengi de özellik haritasından
     // gelir ([AppFeature]): bölümün kartlarıyla AYNI aile.
     final sections = <(String, IconData, AccentFamily, List<Widget>)>[

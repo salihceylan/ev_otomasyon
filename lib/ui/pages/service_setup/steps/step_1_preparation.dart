@@ -64,7 +64,7 @@ class Step1Preparation extends StatelessWidget {
                     icon: access.isSuperUser ? Icons.shield_rounded : Icons.verified_user_rounded,
                     text: access.isSuperUser
                         ? 'Süper yönetici hesabı (cihaz anahtarını sunucudan alamaz; gerekirse elle girilir).'
-                        : 'Kalıcı servis personeli hesabı: kurulum yetkiniz müşteriye bağladığınız daire için süreli verilir.',
+                        : 'Servis sorumlusu hesabı: müşteriye bağladığınız ve devraldığınız dairelerde süresiz yetkiniz vardır.',
                   ),
                 if (c.isExistingDevice && target != null)
                   SetupInfoRow(

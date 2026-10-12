@@ -361,6 +361,7 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
           securityReset: account?.securityReset ?? false,
           inviteSent: account?.inviteSent ?? false,
           technicianUntil: res.technicianAccessExpiresAt,
+          technicianUnlimited: res.technicianAccessUnlimited,
         );
       });
     } catch (e) {
@@ -748,9 +749,12 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
             : 'Müşteri hesabı henüz etkinleştirilmedi; davet gönderilemedi; müşteri Şifremi unuttum ile etkinleştirebilir.',
       if (view.securityReset && !view.warnings.any((w) => w.contains('güvenlik için sıfırlandı')))
         'Müşterinin doğrulanmamış mevcut hesabı güvenlik için sıfırlandı; şifre belirleme e-postası gönderildi.',
-      if (view.technicianUntil != null)
-        'Kurulum erişiminiz ${formatLocalDateTime(view.technicianUntil!)} tarihine kadar sürer.',
     ];
+    // Servis kendi evinde süresizdir (yeni sunucu süre bitişi vermez); süreli erişim yalnız eski sunucuda / kök kapsamındaki
+    // evde bildirilir. İkisi de yoksa erişim notu gösterilmez.
+    final accessNote = view.technicianUntil != null
+        ? 'Kurulum erişiminiz ${formatLocalDateTime(view.technicianUntil!)} tarihine kadar sürer.'
+        : (view.technicianUnlimited ? 'Bu dairede kalıcı servis yetkiniz var.' : null);
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -774,6 +778,10 @@ class _ClaimManualDialogState extends State<ClaimManualDialog> {
         for (var i = 0; i < items.length; i++) ...[
           const SizedBox(height: 8),
           InlineMessage.warning(items[i], key: Key('claim_warning_$i')),
+        ],
+        if (accessNote != null) ...[
+          const SizedBox(height: 8),
+          InlineMessage.info(accessNote, key: const Key('claim_access_note')),
         ],
         const SizedBox(height: 8),
         // Pano (v1.3.0+) internete çıkınca bulut kimliğini kendisi alır (CONTRACTS §3f); sürüm denetimi yapılmaz.
@@ -813,6 +821,7 @@ class _ClaimSuccessView {
     this.customerPending = false,
     this.securityReset = false,
     this.technicianUntil,
+    this.technicianUnlimited = false,
   });
 
   final String homeName;
@@ -822,6 +831,9 @@ class _ClaimSuccessView {
   final bool securityReset;
   final bool inviteSent;
   final DateTime? technicianUntil;
+
+  /// Servis bu dairede süresiz yetkili (`technician_access_unlimited`).
+  final bool technicianUnlimited;
 }
 
 /// Yazılan harfleri büyük harfe çevirir (imleç konumu korunur).

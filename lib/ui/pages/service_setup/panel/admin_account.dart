@@ -25,6 +25,7 @@ class AdminAccount {
     this.notes = '',
     this.createdByName,
     this.homeCount,
+    this.createdByUserId,
   });
 
   final String id;
@@ -37,6 +38,10 @@ class AdminAccount {
   final String notes;
   final String? createdByName;
   final int? homeCount;
+
+  /// Hesabı açan kullanıcının kimliği (`created_by_user_id`; servis kapsamı 045: servisin müşterisi = servisin açtığı ya da
+  /// kendi evlerinde üye olan kullanıcı). Eski sunucuda / başka servisin açtığı hesapta `null`.
+  final String? createdByUserId;
 
   bool get isSuper => role == GlobalRole.superUser;
   bool get isServiceStaff => role == GlobalRole.serviceUser;
@@ -81,6 +86,7 @@ class AdminAccount {
       notes: asString(map['admin_notes']) ?? '',
       createdByName: asNonEmptyString(map['created_by_name']),
       homeCount: asInt(map['home_count']),
+      createdByUserId: asNonEmptyString(map['created_by_user_id']),
     );
   }
 
@@ -95,6 +101,7 @@ class AdminAccount {
         notes: notes,
         createdByName: createdByName,
         homeCount: homeCount,
+        createdByUserId: createdByUserId,
       );
 
   /// Kullanıcıya gösterilen rol etiketi.

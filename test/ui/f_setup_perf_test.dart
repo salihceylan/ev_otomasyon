@@ -331,7 +331,11 @@ void main() {
         const Scaffold(body: SingleChildScrollView(child: ServiceToolCards())),
         size: const Size(500, 1000),
       );
-      expect(find.text('Stoğunuzdaki panolar ve karekodları'), findsOneWidget, reason: 'servis personeli: stok yönetimi yok');
+      expect(
+        find.text('Stoğunuzdaki panolar, karekod ve etiket yönetimi'),
+        findsOneWidget,
+        reason: 'servis personeli: kendi stoğunu yönetir (sunucu kapsamı uygular)',
+      );
 
       counter.reset();
       for (var i = 0; i < 5; i++) {
@@ -344,7 +348,7 @@ void main() {
         const UserModel(id: 'super-1', email: 'yonetici@ornek.test', fullName: 'Yönetici', role: 'super_user'),
       );
       await tester.pump();
-      expect(find.text('Stok, karekod ve etiket yönetimi'), findsOneWidget, reason: 'süper yönetici: stok yönetimi var');
+      expect(find.text('Stok, karekod ve etiket yönetimi'), findsOneWidget, reason: 'süper yönetici: bütün stok');
       expect(counter.of('ServiceToolCards'), greaterThan(0));
     });
   });

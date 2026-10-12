@@ -363,7 +363,8 @@ class _ServiceConsoleState extends State<ServiceConsole> {
               icon: Icons.inventory_2_rounded,
               family: AppFeature.inventory.accentFamily,
               badge: 'STOK & PANO',
-              onTap: null,
+              // Servis sorumlusu kendi stoğunun envanterini açar (sunucu kendi kartlarına süzer).
+              onTap: caps.canManageInventory ? () => _push(context, const DeviceInventoryPage()) : null,
             ),
             _Metric(
               cardKey: const Key('card_metric_commissioned'),
