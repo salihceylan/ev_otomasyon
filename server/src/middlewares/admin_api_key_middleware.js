@@ -4,8 +4,9 @@
 // AHBU Akilli Ev - Envanter / fabrika erisim kapisi (WP-A: A8)
 // ==============================================================================
 //
-//  - Birincil yol: JWT (authenticateToken) + global rol. Envanter islemleri super_user'dir;
-//    listeleme/tekil sorgu icin istenirse servis personeli (allowStaff) - kapsami servis katmani daraltir.
+//  - Birincil yol: JWT (authenticateToken) + global rol. Envanter islemleri super_user'dir; allowStaff ile servis
+//    sorumlusu (service_user) da girer (045: kendi stoguna kayit + kendi kartlarini yonetme) - kapsami servis katmani
+//    (inventory_service: service_owner_id = kullanici) daraltir. Kok-yalniz uclar allowStaff:false kullanir.
 //  - Ikincil yol (makine entegrasyonu): `X-Admin-Api-Key` basligi, yalnizca ADMIN_API_KEY ortam
 //    degiskeni TANIMLI ve >= 32 karakter ise; sabit zamanli karsilastirma. Tanimli degilse yol
 //    KAPALIDIR (fail-closed). Kod icinde VARSAYILAN ANAHTAR YOKTUR; kullanici parolalari asla

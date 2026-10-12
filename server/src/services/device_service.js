@@ -28,6 +28,7 @@ const { httpError } = require('../utils/http_errors');
 const { can } = require('../utils/role_matrix');
 const { validateCommand, capabilityForCommand, isSafeTarget, KINDS } = require('../utils/command_schema');
 const { endpointRowsFromTemplate } = require('../utils/template_schema');
+const tenant = require('../utils/tenant_scope');
 // Yalniz saf yardimci (yer tutucu e-posta: telefon-OTP / Apple gizli / silinmis hesap); modul db yuklemez.
 const { isPlaceholderEmail } = require('./account_deletion_service');
 
@@ -54,7 +55,9 @@ const OTP_MAX_ATTEMPTS = 5;
 const OTP_TTL_SECONDS = 15 * 60;
 const OTP_RESEND_COOLDOWN_SECONDS = 60;
 const OTP_ATTEMPT_WINDOW_MINUTES = 15;
-const STAFF_INSTALL_WINDOW_HOURS = 72; // servis personelinin sahiplendigi evde kurulum penceresi
+// Servis sorumlusu kapsami (migration 045): sahiplendigi/devraldigi evde 72 saatlik kurulum penceresi ARTIK UYGULANMAZ
+// (uyelik suresizdir, ev homes.service_owner_id ile servise baglanir). Sabit yalniz disa aktarim uyumlulugu icin kalir.
+const STAFF_INSTALL_WINDOW_HOURS = 72;
 const BURNED_PIN = 'CLAIMED_BURNED_PIN'; // yakilmis PIN: hicbir ozet bu degere esit olamaz
 // Acil sifirlama (stoga donus): yeni yerel anahtar sunucuda GECERLI ama panoya iletilemedi ('failed'); anahtar yanitta bir
 // kez doner. Panoya bulut yolu kalmadi: gercek kurtarma yolu seri konsol RESETKEY + FACTORYINIT (istemci yonergesiyle ayni).
@@ -450,7 +453,7 @@ class DeviceService {
     // Migration 035 uygulanmadan yeniden baslatilan surumde claim BOZULMAZ: tablo yoksa daire baglantisi yok sayilir.
     if (!(await this._hasSchema035(tx))) return null;
     const res = await tx.query(
-      `SELECT f.id AS flat_id, f.block, f.number, f.status, s.name AS site_name,
+      `SELECT f.id AS flat_id, f.block, f.number, f.status, s.name AS site_name, s.service_owner_id AS site_service_owner_id,
               w.template_id, w.version, v.body AS template_body
          FROM site_flats f JOIN sites s ON s.id = f.site_id AND s.deleted_at IS NULL
          LEFT JOIN LATERAL (
@@ -598,8 +601,12 @@ class DeviceService {
     const db = this.db;
 
     // 1) Cihaz envanterde mi, durumu uygun mu?
-    const invRes = await db.query('SELECT id, status FROM device_inventory WHERE device_uuid = $1', [uuid]);
+    const invRes = await db.query('SELECT id, status, service_owner_id FROM device_inventory WHERE device_uuid = $1', [uuid]);
     if (invRes.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
+    // Servis kapsami (045): baska servisin stogundaki kart icin musteriye kod GONDERILMEZ.
+    if (actor.globalRole === 'service_user' && !tenant.mayInstall(actor, invRes.rows[0])) {
+      throw httpError(403, 'Bu cihaz başka bir servis sorumlusunun stoğunda; kurulum yapamazsınız.', 'FORBIDDEN');
+    }
     this._assertInventoryClaimable(invRes.rows[0]);
 
     // 2) Aktor + hedef: kendi adina kurulum yapilamaz; kodun gidecegi e-posta adresi belirlenir.
@@ -807,7 +814,8 @@ class DeviceService {
 
       // 1) Envanter satirini KILITLE (esdeger iki claim sirayla calisir)
       const invRes = await tx.query(
-        `SELECT id, device_uuid, mac_address, pin_hash, model, status, failed_attempts, locked_until, local_key_enc
+        `SELECT id, device_uuid, mac_address, pin_hash, model, status, failed_attempts, locked_until, local_key_enc,
+                service_owner_id
            FROM device_inventory
           WHERE device_uuid = $1
           FOR UPDATE`,
@@ -817,6 +825,12 @@ class DeviceService {
         throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
       }
       const inv = invRes.rows[0];
+
+      // 1a) Servis kapsami (045): servis YALNIZ kendi stogundaki ya da kok stogundaki (NULL) karti kurabilir; baska
+      //     servisin stogundaki kart 403 (PIN sayacina dokunulmadan).
+      if (actor.globalRole === 'service_user' && !tenant.mayInstall(actor, inv)) {
+        throw httpError(403, 'Bu cihaz başka bir servis sorumlusunun stoğunda; kurulum yapamazsınız.', 'FORBIDDEN');
+      }
 
       // 1b) Yaniti kaybolan claim'in tekrari (bireysel-3): kart zaten ISTEYENIN sahibi oldugu evdeyse acik 409
       //     (reason ALREADY_YOURS + ev). Yalniz evin sahibine; yeni kimlik URETILMEZ, PIN sayacina dokunulmaz.
@@ -848,6 +862,13 @@ class DeviceService {
       //     karta son basariyla yazilan sablon surumunden. Bagli degilse davranis AYNEN.
       const flatSeed = await this._loadFlatSeed(tx, uuid);
       const flatHomeName = flatSeed ? `${flatSeed.site_name} ${flatSeed.block}-${flatSeed.number}`.slice(0, 100) : null;
+      // 3c) Servis kapsami (045): kart BASKA servisin sitesindeki daireye bagliysa o dairede yalniz o servis (ya da kok) kurar.
+      if (
+        actor.globalRole === 'service_user' && flatSeed && flatSeed.site_service_owner_id &&
+        !tenant.sameId(flatSeed.site_service_owner_id, actor.userId)
+      ) {
+        throw httpError(403, 'Kart başka bir servis sorumlusunun sitesindeki daireye bağlı; kurulum yapamazsınız.', 'FORBIDDEN');
+      }
 
       // 4) Ayni musteri icin eszamanli sahiplenmeleri sirala (bos ev secimi / hesap olusturma yarisi)
       await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
@@ -990,6 +1011,7 @@ class DeviceService {
 
       // 7) Hedef daire: sahibin cihazsiz evi varsa o, yoksa YENI ev (rastgele konu kimligi)
       let home;
+      let homeService = null; // evin servis sahibi (045): kart ve uyelik buna gore
       const emptyHome = await tx.query(
         `SELECT h.id, h.name, h.mqtt_username
            FROM homes h
@@ -1000,8 +1022,17 @@ class DeviceService {
           FOR UPDATE OF h`,
         [owner.id]
       );
-      if (emptyHome.rows.length > 0) {
-        home = emptyHome.rows[0];
+      let reuse = emptyHome.rows.length > 0 ? emptyHome.rows[0] : null;
+      if (reuse) {
+        // Musterinin bos evi BASKA bir servisin kapsamindaysa o servisin evi sahiplenilmez: yeni ev acilir.
+        homeService = (await tenant.homeServiceOwner(tx, reuse.id)) || null;
+        if (actor.globalRole === 'service_user' && homeService && !tenant.sameId(homeService, actor.userId)) {
+          reuse = null;
+          homeService = null;
+        }
+      }
+      if (reuse) {
+        home = reuse;
         if (flatHomeName && home.name !== flatHomeName) {
           const renamed = await tx.query('UPDATE homes SET name = $2 WHERE id = $1 RETURNING id, name, mqtt_username', [home.id, flatHomeName]);
           home = renamed.rows[0] || home;
@@ -1014,19 +1045,23 @@ class DeviceService {
         );
       }
 
-      // Servis personeli: kurulumu tamamlayabilmesi icin SURELI servis uyeligi (super_user'a gerekmez)
-      let technicianAccessUntil = null;
+      // Servis sorumlusu (045): sihirbazla sahiplendirdigi ev ONUN kapsamina girer (kok istedikce baska servise aktarir) ve
+      // evde SURESIZ servis uyeligi alir (72 saatlik kurulum penceresi yok). super_user sahiplendirirse ev kok kalir.
+      let technicianAccessUnlimited = false;
       if (actor.globalRole === 'service_user') {
-        const m = await tx.query(
+        if (!homeService) {
+          await tx.query('UPDATE homes SET service_owner_id = $2 WHERE id = $1', [home.id, actorRow.id]);
+          homeService = actorRow.id;
+        }
+        await tx.query(
           `INSERT INTO home_users (home_id, user_id, role, installer_expires_at)
-           VALUES ($1, $2, 'service_user', NOW() + ($3 * INTERVAL '1 hour'))
+           VALUES ($1, $2, 'service_user', NULL)
            ON CONFLICT (home_id, user_id) DO UPDATE
-              SET installer_expires_at = EXCLUDED.installer_expires_at
-            WHERE home_users.role = 'service_user'
-           RETURNING installer_expires_at`,
-          [home.id, actorRow.id, STAFF_INSTALL_WINDOW_HOURS]
+              SET installer_expires_at = NULL
+            WHERE home_users.role = 'service_user'`,
+          [home.id, actorRow.id]
         );
-        technicianAccessUntil = m.rows[0] ? m.rows[0].installer_expires_at : null;
+        technicianAccessUnlimited = true;
       }
 
       // 8) Cihaz (devices) kaydi: MAC cakismasi giderilir; duz metin PIN yazilmaz; yerel anahtar sifreli.
@@ -1087,9 +1122,10 @@ class DeviceService {
                 failed_attempts = 0,
                 locked_until = NULL,
                 pin_hash = $3,
-                local_key_enc = COALESCE(local_key_enc, $4)
+                local_key_enc = COALESCE(local_key_enc, $4),
+                service_owner_id = $6
           WHERE id = $5`,
-        [home.id, owner.id, BURNED_PIN, localKey.enc, inv.id]
+        [home.id, owner.id, BURNED_PIN, localKey.enc, inv.id, homeService]
       );
 
       // 11) Cihaz MQTT kimligi (d_{t}) - TEK SEFERLIK
@@ -1111,6 +1147,7 @@ class DeviceService {
           customer_account_created: Boolean(createdAccount),
           customer_account_reset: securityReset,
           local_key_generated: localKey.generated,
+          service_owner_id: homeService,
           ...(flatSeed
             ? { site_flat_id: flatSeed.flat_id, template_id: seededFromTemplate ? flatSeed.template_id : null, template_version: seededFromTemplate ? flatSeed.version : null }
             : {}),
@@ -1126,7 +1163,8 @@ class DeviceService {
         pendingCustomer,
         neutralized,
         securityReset,
-        technicianAccessUntil,
+        technicianAccessUnlimited,
+        homeService,
       };
     });
 
@@ -1181,9 +1219,10 @@ class DeviceService {
       device_credential: this._publicDeviceCredential(outcome.credential),
     };
     if (customerAccount) data.customer_account = customerAccount;
-    if (outcome.technicianAccessUntil) {
-      data.technician_access_expires_at = new Date(outcome.technicianAccessUntil).toISOString();
-    }
+    // Servis sorumlusu kapsami (045): kurulum penceresi YOK (technician_access_expires_at artik donmez); ev servisin
+    // kapsamindadir. Eski istemciler alani yoksa gormezden gelir.
+    if (outcome.technicianAccessUnlimited) data.technician_access_unlimited = true;
+    data.service_owner_id = outcome.homeService || null;
     if (warnings.length > 0) data.warnings = warnings;
     return data;
   }
@@ -1240,7 +1279,8 @@ class DeviceService {
     const outcome = await this.db.withTransaction(async (tx) => {
       // 1) Cihaz + envanter satirlarini KILITLE
       const invRes = await tx.query(
-        `SELECT id, device_uuid, status, claimed_home_id, claimed_by_user_id, model, mac_address, local_key_enc
+        `SELECT id, device_uuid, status, claimed_home_id, claimed_by_user_id, model, mac_address, local_key_enc,
+                service_owner_id
            FROM device_inventory WHERE device_uuid = $1 FOR UPDATE`,
         [uuid]
       );
@@ -1262,18 +1302,25 @@ class DeviceService {
         throw httpError(403, 'Bu cihaz iptal edilmiş veya askıya alınmış; yalnızca süper yönetici sıfırlayabilir.', 'FORBIDDEN');
       }
 
-      // 2) Yetki: staff yalnizca servis uyesi oldugu (kurdugu ya da devraldigi) evde; super her yerde.
-      //    Panoyu evden kaldirma (stoga alma / devir) SURESIZDIR: 72 saatlik kurulum penceresi (installer_expires_at)
-      //    burada aranmaz (kullanici karari 2026-10-12). Kontrol/izleme erisimi ise pencereyle sinirli kalir.
+      // 2) Yetki (servis kapsami, 045): super (kok) her yerde. Servis sorumlusu YALNIZ kendi kapsamindaki evde:
+      //    homes.service_owner_id = kendisi (kiraci) YA DA ev sahipsiz (kok, service_owner_id NULL) iken eski kural:
+      //    evde servis uyeligi. Evin servisi BASKA bir servisse (kalan uyelik olsa bile) 403.
+      //    Panoyu evden kaldirma (stoga alma / devir) SURESIZDIR: 72 saatlik kurulum penceresi aranmaz.
+      let homeService = null; // evin servis sahibi
+      if (homeId) homeService = (await tenant.homeServiceOwner(tx, homeId)) || null;
       if (!isSuper) {
         let allowed = false;
         if (homeId) {
-          const mem = await tx.query(
-            `SELECT role FROM home_users
-              WHERE home_id = $1 AND user_id = $2`,
-            [homeId, actor.userId]
-          );
-          allowed = mem.rows.length > 0 && mem.rows[0].role === 'service_user';
+          if (homeService) {
+            allowed = tenant.sameId(homeService, actor.userId);
+          } else {
+            const mem = await tx.query(
+              `SELECT role FROM home_users
+                WHERE home_id = $1 AND user_id = $2`,
+              [homeId, actor.userId]
+            );
+            allowed = mem.rows.length > 0 && mem.rows[0].role === 'service_user';
+          }
         }
         if (!allowed) {
           throw httpError(403, 'Bu cihazın dairesinde servis yetkiniz yok. Süper yönetici ile iletişime geçin.', 'FORBIDDEN');
@@ -1423,13 +1470,22 @@ class DeviceService {
           homeId,
           newOwnerRow.id,
         ]);
-        // Servis personeli yeni sahip icin kurulumu (cihaz kimligini yazma, kanal ayari, devreye alma) bitirebilsin
-        // diye SURELI servis uyeligi alir (claim ile ayni kural; super_user'a gerekmez).
+        // Servis sorumlusu kapsami (045): acil sifirlamayla DEVREDEN servis evin servis sahibi olur (ev sahipsizdi ya da
+        // zaten onundu) ve evde SURESIZ servis uyeligi alir (kurulum penceresi yok). Ev baska bir kapsamdaysa (kok) ve
+        // islemi super_user yapiyorsa evin servisi DEGISMEZ; eski servis uyeligi (silinen tum uyelikler arasinda) yeniden
+        // acilir ki servis kapsami uyelik satirinda da tutarli kalsin.
         if (actor.globalRole === 'service_user') {
+          if (!homeService) {
+            await tx.query('UPDATE homes SET service_owner_id = $2 WHERE id = $1', [homeId, actor.userId]);
+            homeService = actor.userId;
+          }
+        }
+        if (homeService) {
           await tx.query(
             `INSERT INTO home_users (home_id, user_id, role, installer_expires_at)
-             VALUES ($1, $2, 'service_user', NOW() + ($3 * INTERVAL '1 hour'))`,
-            [homeId, actor.userId, STAFF_INSTALL_WINDOW_HOURS]
+             VALUES ($1, $2, 'service_user', NULL)
+             ON CONFLICT (home_id, user_id) DO UPDATE SET role = 'service_user', installer_expires_at = NULL`,
+            [homeId, homeService]
           );
         }
         await tx.query(
@@ -1441,9 +1497,10 @@ class DeviceService {
                   failed_attempts = 0,
                   locked_until = NULL,
                   pin_hash = $3,
-                  local_key_enc = $4
+                  local_key_enc = $4,
+                  service_owner_id = $6
             WHERE id = $5`,
-          [homeId, newOwnerRow.id, BURNED_PIN, inventoryKeyEnc, inv.id]
+          [homeId, newOwnerRow.id, BURNED_PIN, inventoryKeyEnc, inv.id, homeService]
         );
         if (dev) {
           await tx.query(
@@ -1533,11 +1590,12 @@ class DeviceService {
         deviceUuid: uuid,
         homeId,
         actor,
-        details: { action, affected_users: oldUserIds.length },
+        details: { action, affected_users: oldUserIds.length, service_owner_id: homeService },
       });
 
       return {
         action,
+        homeService,
         homeId,
         topicId,
         setupPin,
@@ -1670,6 +1728,7 @@ class DeviceService {
       affected_users_count: outcome.affectedUsers,
       local_key_publish: localKeyPublish,
       child_lock_reset: childLockReset,
+      service_owner_id: outcome.homeService || null,
     };
     if (outcome.action === 'UNCLAIMED') {
       data.setup_pin = outcome.setupPin; // TEK SEFERLIK: yeni etiket / sonraki sahiplenme icin
@@ -1729,7 +1788,8 @@ class DeviceService {
     const outcome = await this.db.withTransaction(async (tx) => {
       // 1) Yeni panonun envanter satiri KILITLI
       const invRes = await tx.query(
-        `SELECT id, device_uuid, mac_address, pin_hash, model, status, failed_attempts, locked_until, local_key_enc
+        `SELECT id, device_uuid, mac_address, pin_hash, model, status, failed_attempts, locked_until, local_key_enc,
+                service_owner_id
            FROM device_inventory WHERE device_uuid = $1 FOR UPDATE`,
         [newUuid]
       );
@@ -1739,17 +1799,28 @@ class DeviceService {
       const newInv = invRes.rows[0];
       this._assertInventoryClaimable(newInv);
 
+      // 1b) Servis kapsami (045): yeni pano baska bir servisin stogundaysa (kartin servisi evin servisinden farkliysa)
+      //     takilamaz (kok her karti takabilir). PIN sayacina dokunulmadan reddedilir: baska servisin kartinin PIN
+      //     kilidi bu yoldan oynanamaz. Kurulunca kartin servisi evin servisi olur (adim 10).
+      if (!tenant.isRoot(actor) && newInv.service_owner_id) {
+        const targetHomeService = await tenant.homeServiceOwner(tx, homeId);
+        if (!tenant.sameId(newInv.service_owner_id, targetHomeService)) {
+          throw httpError(403, 'Yeni pano başka bir servis sorumlusunun stoğunda; bu dairede kullanılamaz.', 'FORBIDDEN');
+        }
+      }
+
       // 2) PIN (claim ile ayni sayac; commit-then-throw)
       const pinCheck = await this._checkInventoryPin(tx, newInv, pinText);
       if (!pinCheck.ok) return { ok: false, error: pinCheck.error };
 
       // 3) Ev (tek, dogrulanmis home_id)
       const homeRes = await tx.query(
-        'SELECT id, name, mqtt_username, child_lock_enabled FROM homes WHERE id = $1 FOR UPDATE',
+        'SELECT id, name, mqtt_username, child_lock_enabled, service_owner_id FROM homes WHERE id = $1 FOR UPDATE',
         [homeId]
       );
       if (homeRes.rows.length === 0) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
       const home = homeRes.rows[0];
+      const homeService = home.service_owner_id || null;
 
       // 3b) Karar 18: guvenlik yapilandirmasi (sensor / vana / bolge) olan evde pano degisimini yalniz yetkili servis
       //     (personel, servis oturumu, super) yapar; ev sahibinin kendi degisimi 403 (islem geri alinir, PIN harcanmaz).
@@ -1904,9 +1975,10 @@ class DeviceService {
       await tx.query(
         `UPDATE device_inventory
             SET status = 'CLAIMED', claimed_home_id = $1, claimed_by_user_id = $2, claimed_at = CURRENT_TIMESTAMP,
-                failed_attempts = 0, locked_until = NULL, pin_hash = $3, local_key_enc = COALESCE(local_key_enc, $4)
+                failed_attempts = 0, locked_until = NULL, pin_hash = $3, local_key_enc = COALESCE(local_key_enc, $4),
+                service_owner_id = $6
           WHERE id = $5`,
-        [homeId, ownerId, BURNED_PIN, localKey.enc, newInv.id]
+        [homeId, ownerId, BURNED_PIN, localKey.enc, newInv.id, homeService]
       );
       await tx.query(
         `UPDATE device_inventory SET status = 'REVOKED', claimed_home_id = NULL WHERE device_uuid = $1`,

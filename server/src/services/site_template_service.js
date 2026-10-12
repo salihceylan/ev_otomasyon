@@ -19,6 +19,7 @@
 const crypto = require('crypto');
 const { httpError } = require('../utils/http_errors');
 const { validateTemplate, bodySha256, withMeta, UUID_RE } = require('../utils/template_schema');
+const tenant = require('../utils/tenant_scope');
 
 const FLAT_STATUSES = Object.freeze(['planned', 'written', 'installed', 'handed_over']);
 const WRITE_VIAS = Object.freeze(['usb', 'eth', 'lan']);
@@ -215,10 +216,23 @@ const FLAT_SELECT = `SELECT f.id, f.site_id, f.block, f.number, f.flat_type, f.t
       LIMIT 1
    ) lok ON TRUE`;
 
-// servis_kurulum-10: daire durumu yalniz ileri; installed / handed_over icin kart sart; geri alma yalniz super_user
+// servis_kurulum-10: daire durumu yalniz ileri; installed / handed_over icin kart sart; geri alma yalniz super_user.
+// Servis sorumlusu kapsami (045): bu VERI BUTUNLUGU gecersiz kilmalari (durum geri alma, IN_STOCK olmayan karti baglama,
+// kurulmus/teslim edilmis dairenin kartini degisim kaydi olmadan degistirme) KOK-YALNIZ kalir (sahip kararlari
+// servis_kurulum-10 / atolye-8 / C13); servis kendi sitesinde bunlarin disinda tam yetkilidir (site/daire/sablon/kart baglama/yazim).
 const STATUS_TRANSITION_TEXT = 'Daire durumu bu şekilde değiştirilemez.';
 function isSuper(actor) {
   return Boolean(actor && (actor.globalRole === 'super_user' || actor.role === 'super_user'));
+}
+
+/** Site/sablon/kart kapsam disi: varlik sizdirilmaz (404). */
+function siteNotFound() {
+  return httpError(404, 'Site bulunamadı.', 'NOT_FOUND');
+}
+
+/** Genel (site'siz) sablon degisikligi yalniz kok. */
+function globalTemplateForbidden() {
+  return httpError(403, 'Genel (standart) şablonları yalnızca kök yönetici değiştirebilir.', 'FORBIDDEN');
 }
 
 class SiteTemplateService {
@@ -239,7 +253,12 @@ class SiteTemplateService {
   // Siteler
   // ===========================================================================
 
-  async listSites() {
+  /**
+   * Servis sorumlusu kapsami (045): `actor` (rota her zaman gecirir; yoksa dahili cagri = kok). Servis YALNIZ kendi
+   * sitelerini gorur/yonetir (sites.service_owner_id); kok her seyi; sahipsiz (NULL) siteler servise kapali.
+   */
+  async listSites(actor = null) {
+    const scoped = !tenant.isRoot(actor);
     const res = await this.db.query(
       `SELECT ${SITE_COLUMNS},
               COUNT(f.id) FILTER (WHERE f.status = 'planned') AS planned,
@@ -248,9 +267,10 @@ class SiteTemplateService {
               COUNT(f.id) FILTER (WHERE f.status = 'handed_over') AS handed_over
          FROM sites s
          LEFT JOIN site_flats f ON f.site_id = s.id
-        WHERE s.deleted_at IS NULL
+        WHERE s.deleted_at IS NULL${scoped ? ' AND s.service_owner_id = $1' : ''}
         GROUP BY s.id
-        ORDER BY s.name ASC, s.created_at ASC`
+        ORDER BY s.name ASC, s.created_at ASC`,
+      scoped ? [tenant.actorId(actor)] : []
     );
     return res.rows.map(siteRow);
   }
@@ -260,9 +280,11 @@ class SiteTemplateService {
     const cols = Object.keys(v);
     const params = cols.map((c) => v[c]);
     params.push((actor && actor.userId) || null);
+    // Siteyi acan servis sorumlusu onun sahibi olur; kok actiysa sahipsiz (NULL, kok kapsami).
+    params.push(tenant.isService(actor) ? tenant.actorId(actor) : null);
     const res = await this.db.query(
-      `INSERT INTO sites (${cols.join(', ')}, created_by)
-       VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}, $${params.length})
+      `INSERT INTO sites (${cols.join(', ')}, created_by, service_owner_id)
+       VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')}, $${params.length - 1}, $${params.length})
        RETURNING id, name, address, city, district, contact_name, contact_phone, contact_email, block_count, flat_count,
                  notes, created_at, updated_at`,
       params
@@ -270,35 +292,37 @@ class SiteTemplateService {
     return siteRow(res.rows[0]);
   }
 
-  async getSite(siteId) {
+  async getSite(siteId, actor = null) {
     const id = uuidOrThrow(siteId, 'site');
-    const res = await this.db.query(`SELECT ${SITE_COLUMNS} FROM sites s WHERE s.id = $1 AND s.deleted_at IS NULL`, [id]);
-    if (res.rows.length === 0) throw httpError(404, 'Site bulunamadı.', 'NOT_FOUND');
+    const res = await this.db.query(`SELECT ${SITE_COLUMNS}, s.service_owner_id FROM sites s WHERE s.id = $1 AND s.deleted_at IS NULL`, [id]);
+    if (res.rows.length === 0 || !tenant.siteScope(actor, res.rows[0])) throw siteNotFound();
     return siteRow(res.rows[0]);
   }
 
-  async updateSite(siteId, input) {
+  async updateSite(siteId, input, actor = null) {
     const id = uuidOrThrow(siteId, 'site');
     const v = parseSiteInput(input, { partial: true });
     const cols = Object.keys(v);
     const params = [id, ...cols.map((c) => v[c])];
+    const scoped = !tenant.isRoot(actor);
+    if (scoped) params.push(tenant.actorId(actor));
     const res = await this.db.query(
       `UPDATE sites
           SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(', ')}, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND deleted_at IS NULL
+        WHERE id = $1 AND deleted_at IS NULL${scoped ? ` AND service_owner_id = $${params.length}` : ''}
         RETURNING id, name, address, city, district, contact_name, contact_phone, contact_email, block_count, flat_count,
                   notes, created_at, updated_at`,
       params
     );
-    if (res.rows.length === 0) throw httpError(404, 'Site bulunamadı.', 'NOT_FOUND');
+    if (res.rows.length === 0) throw siteNotFound();
     return siteRow(res.rows[0]);
   }
 
-  async deleteSite(siteId) {
+  async deleteSite(siteId, actor = null) {
     const id = uuidOrThrow(siteId, 'site');
     return this.db.withTransaction(async (tx) => {
-      const cur = await tx.query('SELECT id FROM sites WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [id]);
-      if (cur.rows.length === 0) throw httpError(404, 'Site bulunamadı.', 'NOT_FOUND');
+      const cur = await tx.query('SELECT id, service_owner_id FROM sites WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [id]);
+      if (cur.rows.length === 0 || !tenant.siteScope(actor, cur.rows[0])) throw siteNotFound();
       const linked = await tx.query(
         'SELECT COUNT(*)::int AS n FROM site_flats WHERE site_id = $1 AND device_uuid IS NOT NULL',
         [id]
@@ -312,10 +336,11 @@ class SiteTemplateService {
   }
 
   /** lock: false | 'share' (FOR SHARE: silmeyi bekletir) | true (FOR UPDATE) */
-  async _assertSite(q, siteId, { lock = false } = {}) {
+  async _assertSite(q, siteId, { lock = false, actor = null } = {}) {
     const clause = lock === 'share' ? ' FOR SHARE' : lock ? ' FOR UPDATE' : '';
-    const res = await q(`SELECT id, name FROM sites WHERE id = $1 AND deleted_at IS NULL${clause}`, [siteId]);
-    if (res.rows.length === 0) throw httpError(404, 'Site bulunamadı.', 'NOT_FOUND');
+    const res = await q(`SELECT id, name, service_owner_id FROM sites WHERE id = $1 AND deleted_at IS NULL${clause}`, [siteId]);
+    // Kapsam disi site (baska servisin / sahipsiz) varligi da sizdirilmaz: 404
+    if (res.rows.length === 0 || !tenant.siteScope(actor, res.rows[0])) throw siteNotFound();
     return res.rows[0];
   }
 
@@ -332,15 +357,15 @@ class SiteTemplateService {
   // Daireler
   // ===========================================================================
 
-  async listFlats(siteId) {
+  async listFlats(siteId, actor = null) {
     const id = uuidOrThrow(siteId, 'site');
     const q = (t, p) => this.db.query(t, p);
-    await this._assertSite(q, id);
+    await this._assertSite(q, id, { actor });
     const res = await this.db.query(`${FLAT_SELECT} WHERE f.site_id = $1 ORDER BY f.block ASC, length(f.number) ASC, f.number ASC`, [id]);
     return res.rows.map(flatRow);
   }
 
-  async bulkCreateFlats(siteId, input) {
+  async bulkCreateFlats(siteId, input, actor = null) {
     const id = uuidOrThrow(siteId, 'site');
     const b = isObj(input) ? input : {};
     const block = blockOrNumber(b.block, 'Blok');
@@ -354,7 +379,7 @@ class SiteTemplateService {
 
     return this.db.withTransaction(async (tx) => {
       const q = (t, p) => tx.query(t, p);
-      await this._assertSite(q, id, { lock: true });
+      await this._assertSite(q, id, { lock: true, actor });
       if (templateId) await this._assertTemplateForSite(q, templateId, id);
       const ins = await tx.query(
         `INSERT INTO site_flats (site_id, block, number, flat_type, template_id)
@@ -372,8 +397,8 @@ class SiteTemplateService {
    * Kilit sirasi (tum yollar ayni): envanter -> site (FOR SHARE) -> sablon (FOR SHARE) -> daire (FOR UPDATE).
    * Site FOR SHARE: deleteSite (FOR UPDATE) ile yarista "silinmis site + karta bagli daire" olusmaz.
    */
-  async _lockFlat(tx, siteId, flatId) {
-    await this._assertSite((t, p) => tx.query(t, p), siteId, { lock: 'share' });
+  async _lockFlat(tx, siteId, flatId, actor = null) {
+    await this._assertSite((t, p) => tx.query(t, p), siteId, { lock: 'share', actor });
     const res = await tx.query(
       'SELECT id, site_id, block, number, flat_type, template_id, device_uuid, status FROM site_flats WHERE id = $1 AND site_id = $2 FOR UPDATE',
       [flatId, siteId]
@@ -409,9 +434,9 @@ class SiteTemplateService {
     if (cols.length === 0) throw bad('Güncellenecek alan yok.');
 
     return this.db.withTransaction(async (tx) => {
-      await this._assertSite((t, p) => tx.query(t, p), sid, { lock: 'share' });
+      await this._assertSite((t, p) => tx.query(t, p), sid, { lock: 'share', actor });
       if (sets.template_id) await this._assertTemplateForSite((t, p) => tx.query(t, p), sets.template_id, sid);
-      const cur = await this._lockFlat(tx, sid, fid);
+      const cur = await this._lockFlat(tx, sid, fid, actor);
       if (has(sets, 'status') && sets.status !== cur.status) {
         const from = FLAT_STATUSES.indexOf(cur.status);
         const to = FLAT_STATUSES.indexOf(sets.status);
@@ -438,11 +463,11 @@ class SiteTemplateService {
     });
   }
 
-  async deleteFlat(siteId, flatId) {
+  async deleteFlat(siteId, flatId, actor = null) {
     const sid = uuidOrThrow(siteId, 'site');
     const fid = uuidOrThrow(flatId, 'daire');
     return this.db.withTransaction(async (tx) => {
-      const flat = await this._lockFlat(tx, sid, fid);
+      const flat = await this._lockFlat(tx, sid, fid, actor);
       if (flat.device_uuid) {
         throw httpError(409, 'Karta bağlı daire silinemez. Önce kart bağlantısını kaldırın.', 'CONFLICT');
       }
@@ -475,11 +500,16 @@ class SiteTemplateService {
       // Kilit sirasi claim ile ayni: once envanter satiri, sonra site/daire.
       let invStatus = null;
       if (uuid) {
-        const inv = await tx.query('SELECT device_uuid, status FROM device_inventory WHERE device_uuid = $1 FOR UPDATE', [uuid]);
+        const inv = await tx.query('SELECT device_uuid, status, service_owner_id FROM device_inventory WHERE device_uuid = $1 FOR UPDATE', [uuid]);
         if (inv.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
         invStatus = inv.rows[0].status;
+        // Servis kapsami (045): BASKA servisin stogundaki kart baglanamaz (kok stogundaki ya da kendi karti baglanir;
+        // IN_STOCK olmayan kok karti asagidaki DEVICE_NOT_IN_STOCK kuraliyla reddedilir, yalniz kok gecersiz kilar).
+        if (!tenant.isRoot(actor) && inv.rows[0].service_owner_id && !tenant.sameId(inv.rows[0].service_owner_id, tenant.actorId(actor))) {
+          throw httpError(403, 'Bu kart başka bir servis sorumlusunun stoğunda; daireye bağlanamaz.', 'FORBIDDEN');
+        }
       }
-      const flat = await this._lockFlat(tx, sid, fid);
+      const flat = await this._lockFlat(tx, sid, fid, actor);
       if (uuid === flat.device_uuid) return this._flatById((t, p) => tx.query(t, p), fid); // C13: ayni kart
       const settled = flat.status === 'installed' || flat.status === 'handed_over';
       let viaReplacement = false; // pano degisim kaydi: eski = dairenin karti, yeni = kart
@@ -534,11 +564,22 @@ class SiteTemplateService {
   // Sablonlar
   // ===========================================================================
 
-  async listTemplates({ siteId, includeGlobal } = {}) {
+  /**
+   * Sablon okuma kapsami (045): genel (site'siz) sablonlar herkese OKUNUR; site sablonu yalniz o sitenin sahibi servise
+   * (ve koke). Kapsam disi site sablonu 404 (varlik sizdirilmaz).
+   */
+  async _assertTemplateReadable(q, siteId, actor) {
+    if (!siteId || tenant.isRoot(actor)) return;
+    const r = await q('SELECT service_owner_id FROM sites WHERE id = $1', [siteId]);
+    if (r.rows.length === 0 || !tenant.siteScope(actor, r.rows[0])) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+  }
+
+  async listTemplates({ siteId, includeGlobal } = {}, actor = null) {
     const params = [];
     let where = 't.deleted_at IS NULL';
     if (siteId !== undefined && siteId !== null && siteId !== '') {
       params.push(uuidOrThrow(siteId, 'site'));
+      if (!tenant.isRoot(actor)) await this._assertSite((t, p) => this.db.query(t, p), params[0], { actor });
       where += includeGlobal ? ' AND (t.site_id = $1 OR t.site_id IS NULL)' : ' AND t.site_id = $1';
     } else {
       // atolye-14: site_id yoksa yalniz genel (standart) sablonlar; include_global yok sayilir
@@ -563,8 +604,11 @@ class SiteTemplateService {
     const sha = bodySha256(body);
     const userId = (actor && actor.userId) || null;
 
+    // Genel (site'siz) sablon KOKUN: servis okur/kullanir, olusturamaz/degistiremez (045).
+    if (!siteId && !tenant.isRoot(actor)) throw globalTemplateForbidden();
+
     return this.db.withTransaction(async (tx) => {
-      if (siteId) await this._assertSite((t, p) => tx.query(t, p), siteId);
+      if (siteId) await this._assertSite((t, p) => tx.query(t, p), siteId, { actor });
       const ins = await tx.query(
         `INSERT INTO install_templates (id, site_id, name, flat_type, current_version, created_by, updated_by)
          VALUES ($1, $2, $3, $4, 1, $5, $5)
@@ -579,7 +623,7 @@ class SiteTemplateService {
     });
   }
 
-  async getTemplate(templateId) {
+  async getTemplate(templateId, actor = null) {
     const id = uuidOrThrow(templateId, 'şablon');
     const res = await this.db.query(
       `SELECT ${TEMPLATE_COLUMNS}, v.body
@@ -589,6 +633,7 @@ class SiteTemplateService {
       [id]
     );
     if (res.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+    await this._assertTemplateReadable((t, p) => this.db.query(t, p), res.rows[0].site_id, actor);
     return { ...templateRow(res.rows[0]), body: res.rows[0].body };
   }
 
@@ -617,6 +662,9 @@ class SiteTemplateService {
       );
       const t = cur.rows[0];
       if (!t) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+      // Servis kapsami (045): genel sablon yalniz kok; site sablonu yalniz sitenin sahibi servis (ya da kok).
+      if (!t.site_id && !tenant.isRoot(actor)) throw globalTemplateForbidden();
+      await this._assertTemplateReadable((q, p) => tx.query(q, p), t.site_id, actor);
       const curVersion = Number(t.current_version);
       const verRes = await tx.query(
         'SELECT sha256, body FROM install_template_versions WHERE template_id = $1 AND version = $2',
@@ -653,9 +701,16 @@ class SiteTemplateService {
   }
 
   /** Yumusak silme; ayni islemde bu sablonu kullanan daireler ayrilir (template_id NULL; silme engellenmez). */
-  async deleteTemplate(templateId) {
+  async deleteTemplate(templateId, actor = null) {
     const id = uuidOrThrow(templateId, 'şablon');
     return this.db.withTransaction(async (tx) => {
+      if (!tenant.isRoot(actor)) {
+        // Servis kapsami (045): genel sablon yalniz kok; site sablonu yalniz sitenin sahibi servis.
+        const cur = await tx.query('SELECT site_id FROM install_templates WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [id]);
+        if (cur.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+        if (!cur.rows[0].site_id) throw globalTemplateForbidden();
+        await this._assertTemplateReadable((q, p) => tx.query(q, p), cur.rows[0].site_id, actor);
+      }
       const res = await tx.query(
         'UPDATE install_templates SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND deleted_at IS NULL RETURNING id',
         [id]
@@ -669,15 +724,16 @@ class SiteTemplateService {
     });
   }
 
-  async _assertTemplateExists(id) {
-    const res = await this.db.query('SELECT id FROM install_templates WHERE id = $1', [id]);
+  async _assertTemplateExists(id, actor = null) {
+    const res = await this.db.query('SELECT id, site_id FROM install_templates WHERE id = $1', [id]);
     if (res.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+    await this._assertTemplateReadable((t, p) => this.db.query(t, p), res.rows[0].site_id, actor);
   }
 
   /** Surum listesi (yumusak silinmis sablonda da okunur: yazim kayitlari icin). */
-  async listVersions(templateId) {
+  async listVersions(templateId, actor = null) {
     const id = uuidOrThrow(templateId, 'şablon');
-    await this._assertTemplateExists(id);
+    await this._assertTemplateExists(id, actor);
     const res = await this.db.query(
       'SELECT version, sha256, created_at, created_by FROM install_template_versions WHERE template_id = $1 ORDER BY version DESC',
       [id]
@@ -685,10 +741,11 @@ class SiteTemplateService {
     return res.rows.map((r) => ({ version: r.version, sha256: String(r.sha256).trim(), created_at: r.created_at, created_by: r.created_by }));
   }
 
-  async getVersion(templateId, version) {
+  async getVersion(templateId, version, actor = null) {
     const id = uuidOrThrow(templateId, 'şablon');
     const v = typeof version === 'string' && /^\d{1,10}$/.test(version) ? Number(version) : version;
     if (!Number.isInteger(v) || v < 1 || v > 2147483647) throw bad('Geçersiz sürüm numarası.');
+    if (!tenant.isRoot(actor)) await this._assertTemplateExists(id, actor);
     const res = await this.db.query(
       'SELECT template_id, version, body, sha256, created_at, created_by FROM install_template_versions WHERE template_id = $1 AND version = $2',
       [id, v]
@@ -734,19 +791,25 @@ class SiteTemplateService {
     return this.db.withTransaction(async (tx) => {
       const ver = await tx.query('SELECT 1 FROM install_template_versions WHERE template_id = $1 AND version = $2', [templateId, version]);
       if (ver.rows.length === 0) throw httpError(404, 'Şablon sürümü bulunamadı.', 'NOT_FOUND');
-      const inv = await tx.query('SELECT device_uuid FROM device_inventory WHERE device_uuid = $1', [uuid]);
+      const inv = await tx.query('SELECT device_uuid, status, service_owner_id FROM device_inventory WHERE device_uuid = $1', [uuid]);
       if (inv.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
+      // Servis kapsami (045): BASKA servisin stogundaki karta yazim kaydedilemez (404; varlik sizdirilmaz).
+      if (!tenant.isRoot(actor) && inv.rows[0].service_owner_id && !tenant.sameId(inv.rows[0].service_owner_id, tenant.actorId(actor))) {
+        throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
+      }
       // Kilit sirasi: site (FOR SHARE) -> sablon (FOR SHARE) -> daire (FOR UPDATE); es zamanli silmeler bekler.
       let flatSiteId = null;
       if (flatId) {
         const fs0 = await tx.query('SELECT site_id FROM site_flats WHERE id = $1', [flatId]);
         if (fs0.rows.length === 0) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
         flatSiteId = fs0.rows[0].site_id;
-        const site = await tx.query('SELECT id FROM sites WHERE id = $1 AND deleted_at IS NULL FOR SHARE', [flatSiteId]);
+        const site = await tx.query('SELECT id, service_owner_id FROM sites WHERE id = $1 AND deleted_at IS NULL FOR SHARE', [flatSiteId]);
+        if (site.rows.length > 0 && !tenant.siteScope(actor, site.rows[0])) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
         if (site.rows.length === 0) throw httpError(409, 'Dairenin sitesi silinmiş; yazım kaydedilemez.', 'SITE_DELETED');
       }
       const tpl = await tx.query('SELECT id, site_id, deleted_at FROM install_templates WHERE id = $1 FOR SHARE', [templateId]);
       if (tpl.rows.length === 0) throw httpError(404, 'Şablon bulunamadı.', 'NOT_FOUND');
+      await this._assertTemplateReadable((q, p) => tx.query(q, p), tpl.rows[0].site_id, actor);
       if (tpl.rows[0].deleted_at) throw httpError(409, 'Şablon silinmiş; yazım kaydedilemez.', 'TEMPLATE_DELETED');
       if (flatSiteId && tpl.rows[0].site_id && tpl.rows[0].site_id !== flatSiteId) {
         throw httpError(422, 'Şablon başka bir siteye ait; bu daireye yazım kaydedilemez.', 'TEMPLATE_SITE_MISMATCH');
@@ -800,7 +863,7 @@ class SiteTemplateService {
     const uuid = normalizeDeviceUuid(deviceUuid);
     if (!uuid) throw bad('Geçersiz cihaz kimliği.');
     const res = await this.db.query(
-      `SELECT di.device_uuid, di.status, COALESCE(d.local_key_enc, di.local_key_enc) AS local_key_enc, d.home_id
+      `SELECT di.device_uuid, di.status, di.service_owner_id, COALESCE(d.local_key_enc, di.local_key_enc) AS local_key_enc, d.home_id
          FROM device_inventory di
          LEFT JOIN devices d ON d.device_uuid = di.device_uuid
         WHERE di.device_uuid = $1`,
@@ -808,6 +871,11 @@ class SiteTemplateService {
     );
     if (res.rows.length === 0) throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
     const row = res.rows[0];
+    // Servis kapsami (045): servis YALNIZ kendi kartinin ya da kok stogundaki (kurulabilir) kartin yerel anahtarini
+    // okur; baska servisin ve kurulu kok kartinin anahtari 404 (varlik sizdirilmaz, denetim kaydi yazilmaz).
+    if (!tenant.isRoot(actor) && !['tenant', 'root_stock'].includes(tenant.inventoryScope(actor, row))) {
+      throw httpError(404, 'Bu cihaz envanterde kayıtlı değil.', 'NOT_FOUND');
+    }
     if (!row.local_key_enc) throw httpError(404, 'Bu cihaz için yerel anahtar tanımlı değil.', 'NOT_FOUND');
     const box = this.secretBox;
     if (!box || typeof box.isConfigured !== 'function' || !box.isConfigured()) {

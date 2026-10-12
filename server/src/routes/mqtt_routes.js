@@ -62,7 +62,8 @@ function createRouter(deps = {}) {
         }
       } else if (actor.isServiceSession) {
         validUntil = access.valid_until || (req.user && req.user.session_expires_at) || null;
-      } else if (access.role === 'service_user' && access.installer_expires_at) {
+      } else if (access.role === 'service_user' && access.installer_expires_at && !access.is_tenant_admin) {
+        // (Servis sorumlusu kapsami, 045: evin servisi kendi evinde kurulum penceresiyle SINIRLANMAZ; kimlik suresi 12 saat.)
         // Sureli servis uyeligi (uyelik-6): sure = min(12 saat, kurulum penceresi sonu)
         validUntil = access.installer_expires_at;
       }

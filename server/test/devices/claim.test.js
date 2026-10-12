@@ -457,10 +457,14 @@ test('servis personeli + dogru OTP: musteri sahip olur, teknisyen SURELI servis 
   const owner = members.find((m) => m.role === 'owner');
   const staff = members.find((m) => m.role === 'service_user');
   assert.strictEqual(owner.user_id, ctx.customer.id);
-  assert.strictEqual(staff.user_id, tech.id, 'teknisyen kurulumu bitirebilsin diye servis uyesi olur');
-  const hours = (new Date(staff.installer_expires_at) - ctx.world.clock.now()) / 3600000;
-  assert.ok(hours > 71 && hours <= 72, `servis uyeligi sureli olmali (72 saat): ${hours}`);
-  assert.ok(r.technician_access_expires_at);
+  assert.strictEqual(staff.user_id, tech.id, 'sihirbazla sahiplendiren servis evde servis uyesi olur');
+  // Servis sorumlusu kapsami (045): kurulum penceresi (72 saat) YOK; uyelik suresiz, ev servisin kapsamina girer.
+  assert.strictEqual(staff.installer_expires_at, null, 'servis uyeligi SURESIZ');
+  assert.strictEqual(r.technician_access_expires_at, undefined, 'sureli erisim alani artik donmez');
+  assert.strictEqual(r.technician_access_unlimited, true);
+  assert.strictEqual(r.service_owner_id, tech.id);
+  assert.strictEqual(state.homes.find((h) => h.id === r.home_id).service_owner_id, tech.id, 'ev servisin kapsaminda');
+  assert.strictEqual(ctx.inv.service_owner_id, tech.id, 'kurulan kart evin servisine gecer');
 
   assert.strictEqual(state.device_claim_otps.length, 0, 'OTP tek kullanimlik: tuketildi');
   assert.strictEqual(ctx.deviceService.invites.length, 0, 'mevcut hesap icin davet gonderilmez');

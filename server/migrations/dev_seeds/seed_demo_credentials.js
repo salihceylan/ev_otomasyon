@@ -55,6 +55,11 @@ async function run() {
          ON CONFLICT (home_id, user_id) DO NOTHING`,
         [homeId, u.rows[0].id, p.homeRole]
       );
+      if (p.homeRole === 'service_user') {
+        // Servis sorumlusu kapsami (045): demo evin servisi bu hesap olur (ev + o evdeki kartlar); kurulum penceresi yok.
+        await pool.query('UPDATE homes SET service_owner_id = $2 WHERE id = $1 AND service_owner_id IS NULL', [homeId, u.rows[0].id]);
+        await pool.query('UPDATE device_inventory SET service_owner_id = $2 WHERE claimed_home_id = $1 AND service_owner_id IS NULL', [homeId, u.rows[0].id]);
+      }
     }
     console.log('Demo kullanicilar olusturuldu (parola DEV_SEED_PASSWORD; yazdirilmadi).');
   } finally {

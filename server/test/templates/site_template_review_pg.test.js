@@ -90,15 +90,22 @@ test('inceleme duzeltmeleri gercek PG', { skip: PG_SKIP }, async () => {
     assert.equal(audit[0].details.inventory_status, 'IN_STOCK');
     assert.equal(audit[0].home_id, null);
     assert.ok(!JSON.stringify(audit).includes('Anahtar-'), 'anahtar denetime yazilmaz');
+    // 045: kok stogundaki IPTAL/ASKIDAKI kartin anahtarini yalniz KOK okur; servis kendi kartini (her durumda) okur
     for (const [u, st] of [['AHBU-R035-0002', 'REVOKED'], ['AHBU-R035-0003', 'SUSPENDED']]) {
-      assert.equal((await svc.getInventoryLocalKey(sActor, u)).local_key, `Anahtar-${u}`, st);
+      await expectHttp(svc.getInventoryLocalKey(sActor, u), 404, 'NOT_FOUND');
+      assert.equal((await svc.getInventoryLocalKey(zActor, u)).local_key, `Anahtar-${u}`, st);
       const a = (await db.query("SELECT details FROM device_audit_logs WHERE event = 'inventory_local_key_read' AND device_uuid = $1", [u])).rows;
-      assert.equal(a.length, 1);
+      assert.equal(a.length, 1, 'reddedilen istek denetim kaydi YAZMAZ; yalniz kok okumasi');
       assert.equal(a[0].details.inventory_status, st);
     }
+    await inv('AHBU-R035-0066', 'SUSPENDED');
+    await db.query('UPDATE device_inventory SET service_owner_id = $1 WHERE device_uuid = $2', [staff.id, 'AHBU-R035-0066']);
+    assert.equal((await svc.getInventoryLocalKey(sActor, 'AHBU-R035-0066')).local_key, 'Anahtar-AHBU-R035-0066', 'servis kendi stogundaki karti (askida da olsa) okur');
     // Sahiplenilmis (musteri) karti: anahtar doner; denetimde CLAIMED + ev kimligi
     const claimed = await deviceService.claimDevice({ actor: { userId: owner.id, globalRole: 'user', ip: '127.0.0.1' }, deviceUuid: 'AHBU-R035-0004', setupPin: '135790', homeName: 'Ev' });
-    const k4 = await svc.getInventoryLocalKey(sActor, 'AHBU-R035-0004');
+    // kok evindeki musteri karti: baska kapsam -> servis 404, kok okur
+    await expectHttp(svc.getInventoryLocalKey(sActor, 'AHBU-R035-0004'), 404, 'NOT_FOUND');
+    const k4 = await svc.getInventoryLocalKey(zActor, 'AHBU-R035-0004');
     const devKey = (await db.query("SELECT local_key_enc FROM devices WHERE device_uuid = 'AHBU-R035-0004'")).rows[0].local_key_enc;
     assert.equal(k4.local_key, secretBox.decrypt(devKey), 'panodaki gecerli anahtar (devices) doner');
     const a4 = (await db.query("SELECT home_id, details FROM device_audit_logs WHERE event = 'inventory_local_key_read' AND device_uuid = 'AHBU-R035-0004'")).rows;
@@ -137,7 +144,7 @@ test('inceleme duzeltmeleri gercek PG', { skip: PG_SKIP }, async () => {
     // ---------------------------------------------------------------- 4) recordWrite reddi
     const other = await svc.createSite(sActor, { name: 'Gunes' });
     const otherTpl = await svc.createTemplate(sActor, { site_id: other.id, body: fixture('ok_1p1.json') });
-    const globalTpl = await svc.createTemplate(sActor, { site_id: null, body: fixture('ok_2p1_genel.json') });
+    const globalTpl = await svc.createTemplate(zActor, { site_id: null, body: fixture('ok_2p1_genel.json') }); // genel sablon kokun (045)
     const w = { device_uuid: 'AHBU-R035-0001', flat_id: created[0].id, via: 'usb', result: 'ok' };
     await expectHttp(svc.recordWrite(sActor, { ...w, template_id: otherTpl.id, version: 1 }), 422, 'TEMPLATE_SITE_MISMATCH');
     await svc.recordWrite(sActor, { ...w, template_id: globalTpl.id, version: 1 }); // genel sablon: kabul

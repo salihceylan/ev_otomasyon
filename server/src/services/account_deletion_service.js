@@ -176,7 +176,7 @@ class AccountDeletionService {
       // Engel yalniz baska UYESI ya da CIHAZI olan ev; bos ev asagida silinir (UYELIK-03).
       const sole = await q(
         `SELECT hu.home_id AS id, h.name,
-                (SELECT COUNT(*)::int FROM home_users m WHERE m.home_id = hu.home_id AND m.user_id <> $1) AS other_member_count,
+                (SELECT COUNT(*)::int FROM home_users m WHERE m.home_id = hu.home_id AND m.user_id <> $1 AND m.role <> 'service_user') AS other_member_count,
                 (SELECT COUNT(*)::int FROM devices d WHERE d.home_id = hu.home_id) AS device_count
            FROM home_users hu
            JOIN homes h ON h.id = hu.home_id

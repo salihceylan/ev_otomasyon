@@ -12,8 +12,8 @@
 // YETKI (CONTRACTS §1.4): yalnizca staff (global rol service_user) ve super_user. Servis (PIN) oturumu,
 // owner, resident ve misafir HAYIR. Kapsam EV BAZLIDIR:
 //   - super_user : tum evler
-//   - staff      : yalnizca home_users'ta SURESI DOLMAMIS 'service_user' uyeligi olan evler
-//                  (kurulum penceresi - installer_expires_at - dolan ev listeden de duser)
+//   - staff      : yalnizca KENDI servis kapsamindaki evler (homes.service_owner_id = kendisi, migration 045);
+//                  kurulum penceresi (72 saat) ARANMAZ; kok (sahipsiz) ve baska servislerin evleri gorunmez
 // Iletisim bilgisi (sahip adi, e-posta, telefon) yalnizca kapsamdaki evler icin doner.
 //
 // HOME ADMIN ATAMA kurallari:
@@ -37,6 +37,7 @@ const crypto = require('crypto');
 const { HttpError, isUuid } = require('../utils/helpers');
 // Yalniz saf yardimci (yer tutucu e-posta: telefon-OTP / Apple gizli / silinmis hesap)
 const { isPlaceholderEmail } = require('./account_deletion_service');
+const tenant = require('../utils/tenant_scope');
 
 // --- Sabitler ---------------------------------------------------------------
 const OTP_TTL_SECONDS = 15 * 60;
@@ -208,13 +209,10 @@ class ServicePanelService {
     const params = [];
     const conditions = [];
     if (!scope.isSuper) {
-      // staff: yalnizca kendi (suresi dolmamis) servis uyeligi olan evler
+      // staff (servis sorumlusu kapsami, 045): yalnizca KENDI kapsamindaki evler (homes.service_owner_id = kendisi);
+      // kok (sahipsiz) evler ve baska servislerin evleri listelenmez. Kurulum penceresi aranmaz.
       params.push(actor.userId);
-      conditions.push(
-        `EXISTS (SELECT 1 FROM home_users sm
-                  WHERE sm.home_id = h.id AND sm.user_id = $${params.length} AND sm.role = 'service_user'
-                    AND (sm.installer_expires_at IS NULL OR sm.installer_expires_at > NOW()))`
-      );
+      conditions.push(`h.service_owner_id = $${params.length}`);
     }
     const term = typeof q === 'string' ? q.trim().slice(0, MAX_SEARCH_LENGTH) : '';
     if (term) {
@@ -236,6 +234,7 @@ class ServicePanelService {
          WHERE hu.home_id = h.id AND hu.role = 'owner'
          ORDER BY hu.created_at ASC, hu.id ASC
          LIMIT 1)
+      LEFT JOIN users su ON su.id = h.service_owner_id
       ${where}`;
 
     const db = this.db;
@@ -247,7 +246,8 @@ class ServicePanelService {
     const pageRes = await db.query(
       `SELECT h.id AS home_id, h.name AS home_name, h.address AS home_address, h.created_at AS home_created_at,
               ou.id AS owner_id, ou.full_name AS owner_full_name, ou.email AS owner_email,
-              ou.phone AS owner_phone, ou.account_status AS owner_account_status
+              ou.phone AS owner_phone, ou.account_status AS owner_account_status,
+              h.service_owner_id, su.full_name AS service_owner_name
          ${base}
         ORDER BY h.created_at DESC, h.id ASC
         LIMIT $${pageParams.length - 1} OFFSET $${pageParams.length}`,
@@ -281,6 +281,9 @@ class ServicePanelService {
         home_name: h.home_name,
         home_address: h.home_address || null,
         owner: publicOwner(h),
+        // 045: evin servis sorumlusu (kok icin hangi servisin evi oldugunu gosterir; NULL = kok kapsami)
+        service_owner_id: h.service_owner_id || null,
+        service_owner_name: h.service_owner_name || null,
         device_count: Number(s.device_count || 0),
         online_count: Number(s.online_count || 0),
         commissioned_count: Number(s.commissioned_count || 0),
@@ -326,8 +329,11 @@ class ServicePanelService {
     return { fullName, email, phone, key: email || phone, keyType: email ? 'email' : 'phone' };
   }
 
-  /** Islemi yapanin etkin hesap + (staff icin) bu evdeki GECERLI servis uyeligi dogrulamasi. */
-  async _assertActorMayAct(q, scope, actor, homeId) {
+  /**
+   * Islemi yapanin etkin hesap + (staff icin) evin KENDI kapsaminda olmasi (homes.service_owner_id = kendisi, 045)
+   * dogrulamasi. `home` = { service_owner_id } (cagiran evi zaten okudu). Kok (super_user) her evde.
+   */
+  async _assertActorMayAct(q, scope, actor, homeId, home) {
     const me = await q('SELECT id, role, is_active, account_status FROM users WHERE id = $1', [actor.userId]);
     const row = me.rows[0];
     if (!row || row.is_active === false || row.account_status !== 'active') {
@@ -337,14 +343,8 @@ class ServicePanelService {
       throw httpError(403, 'Yetki bilgisi güncel değil. Lütfen yeniden giriş yapın.', 'FORBIDDEN');
     }
     if (scope.isStaff) {
-      const mem = await q(
-        `SELECT 1 FROM home_users
-          WHERE home_id = $1 AND user_id = $2 AND role = 'service_user'
-            AND (installer_expires_at IS NULL OR installer_expires_at > NOW())`,
-        [homeId, actor.userId]
-      );
-      if (mem.rows.length === 0) {
-        throw httpError(403, 'Bu dairede servis yetkiniz yok veya servis süreniz doldu.', 'FORBIDDEN');
+      if (!home || !home.service_owner_id || !tenant.sameId(home.service_owner_id, actor.userId)) {
+        throw httpError(403, 'Bu daire sizin servis kapsamınızda değil.', 'FORBIDDEN');
       }
     }
     return row;
@@ -430,10 +430,10 @@ class ServicePanelService {
     const db = this.db;
     const q = (text, params) => db.query(text, params);
 
-    const homeRes = await q('SELECT id, name FROM homes WHERE id = $1', [homeId]);
+    const homeRes = await q('SELECT id, name, service_owner_id FROM homes WHERE id = $1', [homeId]);
     const home = homeRes.rows[0];
     if (!home) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
-    await this._assertActorMayAct(q, scope, actor, homeId);
+    await this._assertActorMayAct(q, scope, actor, homeId, home);
 
     const owners = await this._loadOwners(q, homeId);
     if (owners.length === 0) {
@@ -674,12 +674,12 @@ class ServicePanelService {
       const q = (text, params) => tx.query(text, params);
 
       // 1) Evi kilitle: es zamanli atama / devir / acil sifirlama siralanir
-      const homeRes = await q('SELECT id, name, mqtt_username FROM homes WHERE id = $1 FOR UPDATE', [homeId]);
+      const homeRes = await q('SELECT id, name, mqtt_username, service_owner_id FROM homes WHERE id = $1 FOR UPDATE', [homeId]);
       const home = homeRes.rows[0];
       if (!home) throw httpError(404, 'Daire bulunamadı.', 'NOT_FOUND');
 
-      // 2) Islemi yapan: etkin hesap + (staff) bu evde gecerli servis uyeligi
-      await this._assertActorMayAct(q, scope, actor, homeId);
+      // 2) Islemi yapan: etkin hesap + (staff) evin KENDI servis kapsaminda olmasi (045)
+      await this._assertActorMayAct(q, scope, actor, homeId, home);
 
       // 3) Mevcut sahipler ve mod
       const owners = await this._loadOwners(q, homeId, { lock: true });
@@ -765,7 +765,8 @@ class ServicePanelService {
             WHERE home_id = $1
               AND ($2::uuid IS NULL OR NOT (user_id = $2::uuid AND role = 'service_user'))
             RETURNING user_id, role`,
-          [homeId, scope.isStaff ? actor.userId : null]
+          // Evin servis sahibinin (kendisi ya da kokun islemde evin servisi) uyeligi devirde korunur (045)
+          [homeId, scope.isStaff ? actor.userId : home.service_owner_id || null]
         );
         removedMemberships = (removed.rows || []).length;
         removedKeyHolders = (removed.rows || []).filter(

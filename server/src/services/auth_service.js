@@ -467,20 +467,27 @@ class AuthService {
   }
 
   async listHomesForUser(userId) {
-    const r = await db.query(
+    // Servis sorumlusu kapsami (045): evin servisi (ad + telefon) ayni sorguda. Migration 045 uygulanmamis bir veritabaninda
+    // (kolon yok, 42703) GIRIS BOZULMAZ: servis bilgisiz sorguya dusulur (rolling deploy / geri alma).
+    const homesSql = (withService) =>
       `SELECT h.id, h.name, h.address, h.mqtt_username,
               COALESCE(to_jsonb(h) ->> 'timezone', 'Europe/Istanbul') AS timezone,
-              hu.role, hu.valid_from, hu.valid_until, hu.installer_expires_at
+              hu.role, hu.valid_from, hu.valid_until, hu.installer_expires_at${withService ? ',\n              su.full_name AS service_name, su.phone AS service_phone' : ''}
          FROM home_users hu
          JOIN homes h ON h.id = hu.home_id
-         JOIN users u ON u.id = hu.user_id
+         JOIN users u ON u.id = hu.user_id${withService ? '\n         LEFT JOIN users su ON su.id = h.service_owner_id' : ''}
         WHERE hu.user_id = $1
           AND NOT (hu.role = 'service_user' AND hu.installer_expires_at IS NOT NULL AND hu.installer_expires_at <= NOW())
           -- uyelik-13: personel rolunden dusurulmus hesabin kalmis servis uyeligi listelenmez (erisim zaten yok)
           AND NOT (hu.role = 'service_user' AND u.role NOT IN ('service_user', 'super_user'))
-        ORDER BY h.name ASC`,
-      [userId]
-    );
+        ORDER BY h.name ASC`;
+    let r;
+    try {
+      r = await db.query(homesSql(true), [userId]);
+    } catch (err) {
+      if (!err || err.code !== '42703') throw err;
+      r = await db.query(homesSql(false), [userId]);
+    }
     const nowMs = Date.now();
     // cekirdek-7 (sozlesme C5): erisim penceresinin yanit anindaki SUNUCU saatine goreli kalan sureleri (tamsayi sn >= 0).
     // Istemci saat farkini (sunucuNow - yerelNow) bunlardan hesaplar; yerel saati ileri/geri olan misafir erken/gec kapanmaz.
@@ -507,6 +514,9 @@ class AuthService {
         is_expired: state !== 'active',
         access_starts_in: secondsUntil(row.valid_from, Math.ceil),
         access_expires_in: secondsUntil(accessEnd, Math.floor),
+        // Servis sorumlusu kapsami (045): evin servisi, SALT OKUNUR ve yalniz ad + telefon (e-posta DEGIL). Kok kapsamindaki
+        // ev (service_owner_id NULL) icin null. Musteri servisi kaldiramaz; degisikligi yalniz kok yapar.
+        service: row.service_name ? { name: row.service_name, phone: row.service_phone || null } : null,
       };
     });
   }

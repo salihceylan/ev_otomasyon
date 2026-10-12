@@ -28,7 +28,8 @@ const homeD = h.home({ name: 'Delta Villa', owner: phoneOwner });
 const homeExpired = h.home({ name: 'Süresi Dolmuş Ev', owner: ownerB });
 h.member(homeA, staff, 'service_user');
 h.member(homeB, staff, 'service_user', { installer_expires_at: new Date(Date.now() + 3600e3) });
-h.member(homeExpired, staff, 'service_user', { installer_expires_at: new Date(Date.now() - 3600e3) });
+// 045: kok kapsamindaki (service_owner_id NULL) evde kalmis ESKI (suresi dolmus) servis uyeligi: ev listelenmez
+h.member(homeExpired, staff, 'service_user', { installer_expires_at: new Date(Date.now() - 3600e3), noScope: true });
 h.member(homeC, staff2, 'service_user');
 h.member(homeD, staff2, 'service_user');
 const devA1 = h.device(homeA, { online: true, commissioned: true });
@@ -44,7 +45,19 @@ test('super_user tüm evleri görür', async () => {
   assert.deepEqual(names(r), ['Alfa Apartmanı', 'Beta Sitesi', 'Delta Villa', 'Gama Evi', 'Süresi Dolmuş Ev'].sort());
 });
 
-test('staff yalnızca KENDİ (süresi dolmamış) servis üyeliği olan evleri görür; başkasının ve süresi dolmuş ev listelenmez', async () => {
+test('045: servis kendi evini kurulum penceresi (72 saat) dolsa da görür (pencere aranmaz)', async () => {
+  const m = state.home_users.find((x) => x.home_id === homeA.id && x.user_id === staff.id);
+  const old = m.installer_expires_at;
+  m.installer_expires_at = new Date(Date.now() - 3600e3);
+  try {
+    const r = await api('get', URL, tokenOf(staff));
+    assert.ok(names(r).includes('Alfa Apartmanı'));
+  } finally {
+    m.installer_expires_at = old;
+  }
+});
+
+test('staff yalnızca KENDİ servis kapsamındaki (service_owner_id) evleri görür; başkasının ve sahipsiz (kök) ev listelenmez', async () => {
   const r1 = await api('get', URL, tokenOf(staff));
   assert.equal(r1.status, 200);
   assert.deepEqual(names(r1), ['Alfa Apartmanı', 'Beta Sitesi']);

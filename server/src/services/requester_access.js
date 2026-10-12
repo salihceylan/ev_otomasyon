@@ -7,7 +7,8 @@
 // Kullananlar: services/safety_cfg_sync.js (cevrimdisi panoya yapilandirma yamasi kuyrugu, F2.D.2 + guvenlik-5) ve
 // services/alarm_service.js (cevrimdisi panoya kuyruklanan alarm onayi, sko-1 / sozlesme C11).
 // SAF denetim + sorgu metinleri: G/C yalniz cagiranin verdigi `q` (db.query ya da transaction istemcisi) ile.
-//   - Kullanici (by): hesap var, aktif, engelli durumda degil; global super_user ya da evde (suresi dolmamis) uyelik.
+//   - Kullanici (by): hesap var, aktif, engelli durumda degil; global super_user, evin servis sahibi (045: service_user +
+//     homes.service_owner_id = kullanici) ya da evde (suresi dolmamis) uyelik.
 //     `roles` verilirse uyelik rolu bu kumede olmali; ev bazli 'service_user' yalniz kalici personelde (global rol
 //     service_user/super_user) gecerlidir (auth_middleware.requireHomeAccess ile ayni kural).
 //   - Servis (PIN) oturumu (sid): oturum satiri var, iptal edilmemis, suresi dolmamis.
@@ -20,7 +21,9 @@ const SQL = Object.freeze({
     'EXISTS (SELECT 1 FROM home_users hu WHERE hu.user_id = u.id AND hu.home_id = $2 ' +
     'AND (hu.installer_expires_at IS NULL OR hu.installer_expires_at > CURRENT_TIMESTAMP)) AS member, ' +
     '(SELECT hu.role FROM home_users hu WHERE hu.user_id = u.id AND hu.home_id = $2 ' +
-    'AND (hu.installer_expires_at IS NULL OR hu.installer_expires_at > CURRENT_TIMESTAMP) LIMIT 1) AS home_role ' +
+    'AND (hu.installer_expires_at IS NULL OR hu.installer_expires_at > CURRENT_TIMESTAMP) LIMIT 1) AS home_role, ' +
+    // Servis sorumlusu kapsami (045): evin servis sahibi (kurulum penceresi aranmaz)
+    'EXISTS (SELECT 1 FROM homes th WHERE th.id = $2 AND th.service_owner_id = u.id) AS tenant_owner ' +
     'FROM users u WHERE u.id = $1',
   sessionById: 'SELECT revoked_at, expires_at FROM service_sessions WHERE id = $1 AND home_id = $2',
   // sid tasimayan ESKI kayit: kaydin zamanindan sonra evde iptal edilen bir servis oturumu varsa gecersiz
@@ -41,6 +44,10 @@ function userAllowed(u, { roles = null } = {}) {
   if (!u || u.is_active === false) return false;
   if (u.account_status && BLOCKED_STATUSES.includes(String(u.account_status).toLowerCase())) return false;
   if (u.global_role === 'super_user') return true;
+  // Kapsamli servis (045): evin servis sahibi, onay ucunun rol kumesi servis/super iceriyorsa uyeliksiz de yetkilidir.
+  if (u.tenant_owner === true && u.global_role === 'service_user') {
+    return !roles || roles.includes('service_user') || roles.includes('super_user');
+  }
   if (u.member !== true) return false;
   if (!roles) return true;
   if (!roles.includes(u.home_role)) return false;

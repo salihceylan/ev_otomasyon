@@ -368,8 +368,10 @@ test('PG staff claim: OTP zorunlu; yanlis OTP atomik sayac (5 -> 429); dogru OTP
   const mem = await h.rows('SELECT user_id, role, installer_expires_at FROM home_users WHERE home_id = $1', [r.home_id]);
   assert.deepEqual(mem.map((m) => m.role).sort(), ['owner', 'service_user']);
   assert.equal(mem.find((m) => m.role === 'owner').user_id, customer.id);
-  const hours = (new Date(mem.find((m) => m.role === 'service_user').installer_expires_at) - Date.now()) / 3600000;
-  assert.ok(hours > 71 && hours <= 72.01, `servis uyeligi suresi: ${hours} saat`);
+  // 045: kurulum penceresi (72 saat) YOK; uyelik suresiz, ev + kart servisin kapsaminda
+  assert.equal(mem.find((m) => m.role === 'service_user').installer_expires_at, null, 'servis uyeligi suresiz');
+  assert.equal((await h.one('SELECT service_owner_id FROM homes WHERE id = $1', [r.home_id])).service_owner_id, staff.id, 'ev servisin kapsaminda');
+  assert.equal((await h.one('SELECT service_owner_id FROM device_inventory WHERE device_uuid = $1', [inv2.device_uuid])).service_owner_id, staff.id, 'kart evin servisine gecti');
   assert.equal(r.customer_account.status, 'pending_invite');
   assert.equal(await h.count('device_claim_otps', 'device_uuid = $1', [inv2.device_uuid]), 0, 'OTP tuketildi');
 });
@@ -731,8 +733,8 @@ test('PG acil sifirlama (yeni sahibe devir) + REVOKED/SUSPENDED yalniz super', {
   assert.equal(r2.action, 'REASSIGNED');
   const sm = (await h.rows('SELECT user_id, role, installer_expires_at FROM home_users WHERE home_id = $1', [t.home.id])).find((m) => m.role === 'service_user');
   assert.equal(sm.user_id, t.staff.id);
-  const hours = (new Date(sm.installer_expires_at) - Date.now()) / 3600000;
-  assert.ok(hours > 71 && hours <= 72.01, `servis uyeligi: ${hours} saat`);
+  assert.equal(sm.installer_expires_at, null, '045: servis uyeligi suresiz (72 saat penceresi yok)');
+  assert.equal((await h.one('SELECT service_owner_id FROM homes WHERE id = $1', [t.home.id])).service_owner_id, t.staff.id, 'devreden servis evin servis sahibi');
 
   const t3 = await richHome(c);
   await rejects(svc.emergencyReset({ actor: actorOf(t3.staff), deviceUuid: t3.uuid, confirmUid: t3.uuid, reason: REASON, newOwnerIdentifier: t3.staff.email }), 403, 'FORBIDDEN');

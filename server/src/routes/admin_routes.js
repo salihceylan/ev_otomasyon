@@ -9,7 +9,8 @@
 
 const express = require('express');
 const adminUserService = require('../services/admin_user_service');
-const { authenticateToken, requireSuperUser, requireServiceManager } = require('../middlewares/auth_middleware');
+const { authenticateToken, requireRoot, requireServiceManager } = require('../middlewares/auth_middleware');
+const serviceScopeService = require('../services/service_scope_service');
 const { rateLimit } = require('../middlewares/rate_limit');
 const { asyncHandler } = require('../middlewares/error_handler');
 const { successResponse } = require('../utils/helpers');
@@ -80,9 +81,28 @@ router.delete('/users/:id', asyncHandler(async (req, res) => {
   return successResponse(res, null, result.message);
 }));
 
-router.get('/service-summary', requireSuperUser, asyncHandler(async (req, res) => {
+// KOK-YALNIZ (servis sorumlusu 403): butun sistemin ozeti
+router.get('/service-summary', requireRoot, asyncHandler(async (req, res) => {
   const summary = await adminUserService.getServiceSummary();
   return successResponse(res, summary);
+}));
+
+// --- KAPSAMLAR ARASI AKTARIM (KOK-YALNIZ; servis sorumlusu 403) -----------------------------------------------------
+// Govde: { service_user_id: "<uuid>" | null }  (null = kok kapsamina al). Alan ZORUNLU.
+const hasServiceUserField = (b) => Object.prototype.hasOwnProperty.call(b, 'service_user_id') || Object.prototype.hasOwnProperty.call(b, 'serviceUserId');
+const serviceUserOf = (b) => (hasServiceUserField(b) ? (b.service_user_id !== undefined ? b.service_user_id : b.serviceUserId) : undefined);
+const rootActor = (req) => ({ userId: req.user.id, role: 'super_user', type: 'super_user', ip: req.ip || null });
+
+router.patch('/homes/:homeId/service-owner', requireRoot, asyncHandler(async (req, res) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  const result = await serviceScopeService.transferHome({ homeId: req.params.homeId, serviceUserId: serviceUserOf(b), actor: rootActor(req) });
+  return successResponse(res, result, result.message);
+}));
+
+router.patch('/sites/:siteId/service-owner', requireRoot, asyncHandler(async (req, res) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  const result = await serviceScopeService.transferSite({ siteId: req.params.siteId, serviceUserId: serviceUserOf(b), actor: rootActor(req) });
+  return successResponse(res, result, result.message);
 }));
 
 module.exports = router;

@@ -36,6 +36,9 @@
 //       installer_expires_at yalniz ev rolu service_user iken dolu olabilir (sureli kurulum penceresi).
 //       role: ev bazli rol | 'super_user' | 'service_session'. is_super yalnizca super_user
 //       istisnasi ile girildiyse true'dur.
+//     - Servis sorumlusu KAPSAMI (045): global rol service_user + homes.service_owner_id = kullanici -> uyeliksiz,
+//       suresiz KAPSAMLI SUPER (is_super + is_tenant_admin true; role = listede 'super_user' varsa o, yoksa 'service_user').
+//       Baska servisin evinde kalan eski servis uyeligi gecersizdir. Kok-yalnizlar icin requireRoot.
 //
 // requireHomeMember      = requireHomeAccess(ALL_HOME_ACCESS_ROLES)
 // requireServiceManager  = global rol service_user | super_user (servis oturumu HARIC)
@@ -457,6 +460,39 @@ function requireHomeAccess(allowedRoles = ALL_HOME_ACCESS_ROLES) {
         return deny403(res);
       }
 
+      // 2b) Servis sorumlusu KAPSAMI (migration 045, tasarim 2026-10-12 §5): kullanici global rolu service_user ve ev
+      //     homes.service_owner_id = kullanici ise ev erisimi KAPSAMLI SUPER olarak verilir: izin listesinde 'super_user'
+      //     varsa role 'super_user', yoksa 'service_user'; is_super + is_tenant_admin true; kurulum penceresi
+      //     (installer_expires_at) ARANMAZ. Liste ne super_user ne service_user iceriyorsa (ev sahibi/sakin-yalniz
+      //     uclar: devir, hirsiz alarmi kurma, servis PIN'i...) kapsam hicbir sey vermez. Baska servisin evi
+      //     (service_owner_id baska kullanici) icin kalan uyelik satiri da GECERSIZDIR (kiracilar arasi sizinti yok).
+      let tenantOwnerId = null;
+      if (req.user.role === 'service_user' && (allowed.has('super_user') || allowed.has('service_user'))) {
+        let ownerRes;
+        try {
+          ownerRes = await db.query('SELECT service_owner_id FROM homes WHERE id = $1', [homeId]);
+        } catch (err) {
+          // Migration 045 uygulanmamis veritabani (kolon yok, 42703; rolling deploy / geri alma): kiraci kapsami yok,
+          // eski uyelik kurali aynen calisir (servis personelinin erisimi kesilmez).
+          if (!err || err.code !== '42703') throw err;
+          ownerRes = { rows: [] };
+        }
+        const ownerRow = ownerRes.rows[0];
+        tenantOwnerId = ownerRow && ownerRow.service_owner_id ? String(ownerRow.service_owner_id).toLowerCase() : null;
+        if (tenantOwnerId && tenantOwnerId === String(req.user.id).toLowerCase()) {
+          req.homeAccess = {
+            home_id: homeId,
+            role: allowed.has('super_user') ? 'super_user' : 'service_user',
+            is_super: true,
+            is_tenant_admin: true,
+            is_service_session: false,
+            valid_until: null,
+            installer_expires_at: null,
+          };
+          return next();
+        }
+      }
+
       // 3) Ev uyeligi (home_users) zorunlu.
       const memberRes = await db.query(
         `SELECT role, valid_from, valid_until, installer_expires_at
@@ -484,6 +520,10 @@ function requireHomeAccess(allowedRoles = ALL_HOME_ACCESS_ROLES) {
       if (role === 'service_user') {
         // Ev bazli servis rolu yalnizca kalici servis personeli (global rol) icin gecerlidir.
         if (!STAFF_GLOBAL_ROLES.has(req.user.role)) {
+          return deny403(res, 'Bu daireye erişim yetkiniz bulunmamaktadır.');
+        }
+        // Evin servisi BASKA bir servis sorumlusuysa kalan (eski) servis uyeligi gecersizdir.
+        if (tenantOwnerId && tenantOwnerId !== String(req.user.id).toLowerCase()) {
           return deny403(res, 'Bu daireye erişim yetkiniz bulunmamaktadır.');
         }
         // Eski gecici (PIN) servis kayitlari: suresi dolduysa erisim yok.
@@ -526,6 +566,19 @@ function requireSuperUser(req, res, next) {
   return next();
 }
 
+/**
+ * KOK-YALNIZ kapi (tasarim 2026-10-12 §4): global rol super_user. Servis sorumlusu (service_user, kendi kapsaminda
+ * super olsa da) ve servis PIN oturumu GECEMEZ: servis hesabi yonetimi, kapsamlar arasi aktarim, sahipsiz (kok)
+ * kayitlar, baska servisin verisi, /admin/service-summary.
+ */
+function requireRoot(req, res, next) {
+  if (!req.user) return deny401(res, 'INVALID_TOKEN', 'Kimlik doğrulaması gerekli.');
+  if (req.user.is_service_session || req.user.role !== 'super_user') {
+    return deny403(res, 'Bu işlem yalnızca kök yönetici (Süper Yönetici) içindir.');
+  }
+  return next();
+}
+
 function requireServiceManager(req, res, next) {
   if (!req.user) return deny401(res, 'INVALID_TOKEN', 'Kimlik doğrulaması gerekli.');
   if (req.user.is_service_session || !STAFF_GLOBAL_ROLES.has(req.user.role)) {
@@ -546,6 +599,7 @@ module.exports = {
   requireHomeAccess,
   requireHomeMember,
   requireSuperUser,
+  requireRoot,
   requireServiceManager,
   rejectServiceSession,
   // Rol kumeleri

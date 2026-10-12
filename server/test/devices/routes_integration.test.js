@@ -330,7 +330,10 @@ test('servis personeli: OTP iste -> musteri e-postasina gider (gercek mailer) ->
     assert.strictEqual(created.account_status, 'pending_invite');
     assert.match(created.password_hash, /^\$2[aby]\$12\$/);
     assert.strictEqual(stockInv3.claimed_by_user_id, created.id, 'sahip musteri (teknisyen degil)');
-    assert.ok(ok.body.data.technician_access_expires_at);
+    // 045: kurulum penceresi yok; sihirbazla sahiplendiren servis evin servis sahibi olur
+    assert.strictEqual(ok.body.data.technician_access_expires_at, undefined);
+    assert.strictEqual(ok.body.data.technician_access_unlimited, true);
+    assert.strictEqual(ok.body.data.service_owner_id, staff.id);
 
     // teknisyen artik bu evin servis uyesi: yerel anahtari alabilir; baska servis personeli alamaz
     const homeId = ok.body.data.home_id;

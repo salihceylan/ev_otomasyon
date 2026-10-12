@@ -99,8 +99,15 @@ test('site_template_service gercek PG: uctan uca', { skip: PG_SKIP }, async () =
     await assert.rejects(db.query("UPDATE install_template_versions SET body = '{}' WHERE template_id = $1", [t1.id]), (e) => e.code === '55000');
 
     // Genel sablon + liste filtresi
-    const g = await svc.createTemplate(actor, { site_id: null, body: fixture('ok_2p1_genel.json') });
+    // 045: genel (site'siz) sablon KOKUN: servis olusturamaz/degistiremez/silemez, okur ve kullanir
+    const supRow = (await db.query("INSERT INTO users (full_name, email, password_hash, role) VALUES ('Kok', 'sup035@example.test', 'x', 'super_user') RETURNING id")).rows[0];
+    const rootActor = { userId: supRow.id, globalRole: 'super_user', ip: '10.0.0.6' };
+    await expectHttp(svc.createTemplate(actor, { site_id: null, body: fixture('ok_2p1_genel.json') }), 403, 'FORBIDDEN');
+    const g = await svc.createTemplate(rootActor, { site_id: null, body: fixture('ok_2p1_genel.json') });
     assert.equal(g.site_id, null);
+    assert.equal((await svc.getTemplate(g.id, actor)).id, g.id, 'servis genel sablonu okur');
+    await expectHttp(svc.updateTemplate(actor, g.id, { body: fixture('ok_2p1_genel.json') }), 403, 'FORBIDDEN');
+    await expectHttp(svc.deleteTemplate(g.id, actor), 403, 'FORBIDDEN');
     assert.deepEqual((await svc.listTemplates({ siteId: site.id })).map((t) => t.id), [t1.id]);
     assert.deepEqual(new Set((await svc.listTemplates({ siteId: site.id, includeGlobal: true })).map((t) => t.id)), new Set([t1.id, g.id]));
     assert.deepEqual(svc.validate({ body: fixture('ok_3p1_vana_dimmer.json') }), { ok: true });

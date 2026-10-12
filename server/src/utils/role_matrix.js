@@ -80,6 +80,12 @@ function rolesFor(capability) {
  */
 function effectiveRole(homeAccess) {
   if (!homeAccess || typeof homeAccess !== 'object') return null;
+  // Servis sorumlusu kapsami (045): is_super true olsa da etkin rol, kapinin verdigi rol (listede super_user varsa
+  // 'super_user', yoksa 'service_user') olarak kalir: boylece 'service_user'a acik ama super_user'a kapali yetenekler
+  // (ornegin local_key) kapsamli servis icin de dogru degerlendirilir.
+  if (homeAccess.is_tenant_admin === true) {
+    return homeAccess.role === 'super_user' ? ROLES.SUPER : ROLES.STAFF;
+  }
   if (homeAccess.is_super === true) return ROLES.SUPER;
   if (homeAccess.is_service_session === true) return ROLES.SESSION;
   const role = homeAccess.role;

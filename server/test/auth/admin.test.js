@@ -24,8 +24,21 @@ const store = createAuthStore().install(fakeDb);
 // ---- yonetim SQL'leri icin ek modeller ----
 const memberships = []; // { home_id, user_id, role }
 const homes = new Set();
-const deleted = { homes: [], users: [] };
+const homeServices = new Map(); // 045: homeId -> evin servis sahibi (homes.service_owner_id)
+const deleted = { homes: [], users: [], ownershipCleared: [] };
 let failUserDelete = false;
+
+// 045: servis kapsamindaki musteri = kendi actigi ya da kendi evlerinde uyesi olan 'user'
+const customerInScope = (staffId, u) =>
+  Boolean(u) && u.role === 'user' &&
+  (u.created_by_user_id === staffId || memberships.some((m) => m.user_id === u.id && homeServices.get(m.home_id) === staffId));
+fakeDb.on(/SELECT 1\s+FROM users u\s+WHERE u\.id = \$2 AND u\.role = 'user'/, (p) => (customerInScope(p[0], store.users.get(p[1])) ? [{ x: 1 }] : []));
+fakeDb.on(/SELECT 1\s+FROM home_users hu JOIN homes h ON h\.id = hu\.home_id\s+WHERE hu\.user_id = \$1 AND h\.service_owner_id IS DISTINCT FROM \$2/, (p) =>
+  memberships.some((m) => m.user_id === p[0] && homeServices.get(m.home_id) !== p[1]) ? [{ x: 1 }] : []);
+fakeDb.on(/UPDATE (homes|device_inventory|sites) SET service_owner_id = NULL WHERE service_owner_id = \$1/, (p, t) => {
+  deleted.ownershipCleared.push([t.match(/UPDATE (\w+)/)[1], p[0]]);
+  return [];
+});
 
 fakeDb.on(/SELECT COUNT\(\*\)::int AS total FROM users u/, (p, t) => [{ total: listFilter(p, t).length }]);
 fakeDb.on(/FROM users u\s+LEFT JOIN users creator/, (p, t) => listFilter(p.slice(0, -2), t).map((u) => ({ ...u })));
@@ -89,10 +102,10 @@ function listFilter(params, text) {
   let list = [...store.users.values()];
   const roleM = text.match(/u\.role = \$(\d+)/);
   if (roleM) list = list.filter((u) => u.role === params[Number(roleM[1]) - 1]);
-  const scope = text.match(/u\.created_by_user_id = \$(\d+)\) OR u\.id = \$(\d+)/);
+  const scope = text.match(/u\.created_by_user_id = \$(\d+)\s+OR EXISTS/);
   if (scope) {
     const staffId = params[Number(scope[1]) - 1];
-    list = list.filter((u) => (u.role === 'user' && u.created_by_user_id === staffId) || u.id === staffId);
+    list = list.filter((u) => customerInScope(staffId, u) || u.id === staffId);
   }
   return list;
 }
@@ -469,9 +482,25 @@ test('push belirteci gizliligi: push hatasi/modul yoklugu admin islemini BOZMAZ 
   }
 });
 
-test('kalici silme: yalnizca super; staff 403', async () => {
+test('kalici silme: super her kullaniciyi; staff YALNIZ butun uyelikleri kendi evlerindeki musteriyi (045), digerleri 403/404', async () => {
+  // butun uyelikleri baska kapsamda (kok evi) olan musteri: staff 403
   const u2 = store.addUser({ email: 'kalici.staff@example.com', created_by_user_id: staff.id });
+  memberships.push({ home_id: 'ev-kok', user_id: u2.id, role: 'resident' }); // service_owner_id NULL (kok)
   assert.strictEqual((await api('delete', `/users/${u2.id}?hard=true`, T(staff))).status, 403);
+  assert.ok(store.users.has(u2.id), 'silinmedi');
+  // kapsam disi (baska servisin musterisi): 404
+  assert.strictEqual((await api('delete', `/users/${foreignUser.id}?hard=true`, T(staff))).status, 404);
+  assert.ok(store.users.has(foreignUser.id));
+  // butun uyelikleri staff'in kendi evlerinde: kalici silme izinli
+  const u2b = store.addUser({ email: 'kalici.kendi@example.com', created_by_user_id: staff.id });
+  homeServices.set('ev-servis-1', staff.id);
+  memberships.push({ home_id: 'ev-servis-1', user_id: u2b.id, role: 'resident' });
+  const ok = await api('delete', `/users/${u2b.id}?hard=true`, T(staff));
+  assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  assert.ok(!store.users.has(u2b.id));
+  // servis hesabini (baska staff) kalici silemez: kapsam disi 404; super kalici silebilir
+  assert.strictEqual((await api('delete', `/users/${staff2.id}?hard=true`, T(staff))).status, 404);
+  assert.ok(store.users.has(staff2.id));
 });
 
 test('kalici silme: baska uyeli evin TEK sahibi ise 409 (sahipsiz ev olusmaz)', async () => {

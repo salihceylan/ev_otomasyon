@@ -28,7 +28,7 @@ function stockDevice(extra = {}) {
 const url = (uuid) => `/api/v1/admin/inventory/${uuid}/reissue-label`;
 const reissue = (uuid, token = tokenOf(sup)) => api('post', url(uuid), token, {});
 
-test('yalnız super_user yeniden üretebilir: staff, resident, owner, normal kullanıcı, servis oturumu 403; kimliksiz 401; API anahtarı 401', async () => {
+test('yalnız super_user ya da KARTIN SAHİBİ servis yeniden üretebilir: başka servis (kok stogundaki kart), resident, owner, normal kullanıcı, servis oturumu 403/404; kimliksiz 401; API anahtarı 401', async () => {
   const { inv } = stockDevice();
   const staff = h.user({ role: 'service_user' });
   const owner = h.user();
@@ -37,7 +37,8 @@ test('yalnız super_user yeniden üretebilir: staff, resident, owner, normal kul
   h.member(home, resident, 'resident');
   const { session } = h.serviceSession(home);
   for (const [label, token, status] of [
-    ['staff', tokenOf(staff), 403],
+    // 045: servis sorumlusu yalniz KENDI stogundaki karti yeniler; kok stogundaki (service_owner_id NULL) kart icin 404
+    ['staff (kok stogundaki kart)', tokenOf(staff), 404],
     ['owner', tokenOf(owner), 403],
     ['resident', tokenOf(resident), 403],
     ['servis oturumu', env.sessionToken(home, session), 403],

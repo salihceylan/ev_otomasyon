@@ -49,6 +49,8 @@ function createRouter(deps = {}) {
   /** Etkin ev rolu (super uyeliksiz gecerse 'super_user'). */
   function homeRoleOf(req) {
     const a = req.homeAccess || {};
+    // Kapsamli servis (045) kural olusturmada servis personeli gibi davranir (tek sahipli evde kural sahip adina kaydedilir).
+    if (a.is_tenant_admin === true) return 'service_user';
     if (a.is_super === true || (req.user && req.user.role === 'super_user' && !a.role)) return 'super_user';
     return a.role || null;
   }

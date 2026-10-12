@@ -153,7 +153,7 @@ test('site/daire/sablon duzeltmeleri gercek PG', { skip: PG_SKIP }, async () => 
     await expectHttp(svc.updateTemplate(staff, t1.id, { body: c3, base_version: 'x' }), 400, 'VALIDATION');
 
     // --- atolye-14: site_id'siz liste yalniz genel sablonlar
-    const g = await svc.createTemplate(staff, { site_id: null, body: fixture('ok_3p1_vana_dimmer.json') });
+    const g = await svc.createTemplate(sup, { site_id: null, body: fixture('ok_3p1_vana_dimmer.json') }); // genel sablon kokun (045)
     const all = await svc.listTemplates({});
     assert.deepEqual(all.map((t) => t.id), [g.id]);
     assert.deepEqual((await svc.listTemplates({ includeGlobal: true })).map((t) => t.id), [g.id], 'include_global site_id siz yok sayilir');

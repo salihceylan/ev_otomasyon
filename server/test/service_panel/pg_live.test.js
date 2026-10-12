@@ -116,6 +116,11 @@ function getCtx() {
           `INSERT INTO home_users (home_id, user_id, role, installer_expires_at, valid_from, valid_until) VALUES ($1, $2, $3, $4, $5, $6)`,
           [home.id, user.id, role, extra.installerExpiresAt || null, extra.validFrom || null, extra.validUntil || null]
         );
+        // 045 geri doldurma taklidi: evde ilk servis uyesi (kuresel rolu service_user) evin servis sahibi sayilir
+        // (`noScope: true` ile atlanir).
+        if (role === 'service_user' && user.role === 'service_user' && !extra.noScope) {
+          await q('UPDATE homes SET service_owner_id = $2 WHERE id = $1 AND service_owner_id IS NULL', [home.id, user.id]);
+        }
       },
       async device(home, { online = false, commissioned = false } = {}) {
         const n = ++seq;
@@ -207,7 +212,8 @@ test('PG abone listesi: staff yalniz KENDI (suresi dolmamis) evlerini gorur; sup
   const homeExpired = await h.home({ owner: ownerB, name: `B2L-${TAG}-Suresi Dolmus` });
   await h.member(homeA, staff, 'service_user');
   await h.member(homeB, staff, 'service_user', { installerExpiresAt: new Date(Date.now() + 3600e3) });
-  await h.member(homeExpired, staff, 'service_user', { installerExpiresAt: new Date(Date.now() - 3600e3) });
+  // 045: kok kapsamindaki evde kalmis ESKI (suresi dolmus) servis uyeligi: ev servis listesinde YOK
+  await h.member(homeExpired, staff, 'service_user', { installerExpiresAt: new Date(Date.now() - 3600e3), noScope: true });
   await h.member(homeC, staff2, 'service_user');
   const devA1 = await h.device(homeA, { online: true, commissioned: true });
   await h.device(homeA, { online: false });
@@ -800,7 +806,8 @@ test('PG etiket yeniden uretimi: yalniz super; IN_STOCK; eski PIN gecersiz, yeni
   const oldKeyEnc = (await h.one('SELECT local_key_enc FROM device_inventory WHERE device_uuid = $1', [uuid])).local_key_enc;
 
   // yetki: staff / normal / API anahtari / kimliksiz
-  for (const [label, token, status] of [['staff', staff.token, 403], ['normal', normal.token, 403], ['kimliksiz', null, 401]]) {
+  // (045: servis sorumlusu yalniz KENDI stogundaki karti yeniler; kok stogundaki kart icin 404)
+  for (const [label, token, status] of [['staff (kok stogundaki kart)', staff.token, 404], ['normal', normal.token, 403], ['kimliksiz', null, 401]]) {
     const r = await post(c, `/api/v1/admin/inventory/${uuid}/reissue-label`, token, {});
     assert.equal(r.status, status, label);
   }

@@ -5,9 +5,10 @@
 // ==============================================================================
 //
 // Aktorler: super_user (tam yetki, korumalar dahilinde) ve service_user (staff).
-//  - Staff yalnizca KENDI olusturdugu son kullanicilari (role='user') gorur/duzenler;
-//    super kullanici detayini GOREMEZ (404). Parola BELIRLEYEMEZ/DEGISTIREMEZ: yalnizca
-//    sifirlama/etkinlestirme baglantisi tetikler. Rol degistiremez, kalici silemez.
+//  - Staff (servis sorumlusu kapsami, 045) yalnizca KENDI MUSTERILERINI (role='user': kendi actigi ya da KENDI evlerinde
+//    uyesi olan) gorur/duzenler/dondurur; super kullanici ve diger servis hesaplari 404. Parola BELIRLEYEMEZ/DEGISTIREMEZ:
+//    yalnizca sifirlama/etkinlestirme baglantisi tetikler. Rol degistiremez; servis hesabi ACAMAZ/SILEMEZ/DONDURAMAZ
+//    (yalniz kok). Kalici silme YALNIZ musterinin butun uyelikleri servisin kendi evlerindeyse.
 //  - Super: kendini dondurma/rolunu dusurme ENGELLI; son aktif super kullanici dondurulamaz,
 //    dusurulemez, silinemez. Baska bir super kullanicinin parolasini degistirmek icin KENDI
 //    mevcut parolasiyla yeniden dogrulama (current_password) gerekir. Kendi parolasi icin
@@ -24,6 +25,7 @@ const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { HttpError, isUuid } = require('../utils/helpers');
 const { toBoundedInt, MAX_OFFSET } = require('../utils/ints');
+const tenant = require('../utils/tenant_scope');
 const authService = require('./auth_service');
 const serviceTokenService = require('./service_token_service');
 const { invalidateUserAuthCache, invalidateServiceSessionCache } = require('../middlewares/auth_middleware');
@@ -58,11 +60,14 @@ function deletedAccountConflict() {
   return new HttpError(409, 'Silinmiş hesap üzerinde bu işlem yapılamaz.', 'CONFLICT');
 }
 
-/** Staff kapsami: kendisi veya kendi olusturdugu son kullanici. */
-function staffCanSee(actor, target) {
+/**
+ * Staff kapsami (servis sorumlusu kapsami, 045): kendisi, kendi actigi (created_by_user_id) ya da KENDI evlerinden
+ * birinde uyesi olan son kullanici ('user' rolu). Diger servis hesaplari, kok hesaplar ve baska servisin musterileri
+ * kapsam disidir (404).
+ */
+async function staffCanSee(q, actor, target) {
   if (!target) return false;
-  if (target.id === actor.id) return true;
-  return target.role === 'user' && target.created_by_user_id === actor.id;
+  return tenant.userInScope(q, actor, target.id);
 }
 
 function cleanNotes(value) {
@@ -124,9 +129,9 @@ class AdminUserService {
       conditions.push(`(LOWER(u.full_name) LIKE ${p} OR LOWER(u.email) LIKE ${p} OR COALESCE(u.phone, '') LIKE ${p})`);
     }
     if (isStaff(currentUser)) {
+      // 045: servisin musterileri = kendi actigi ya da KENDI evlerinde uyesi olan 'user' + kendisi
       params.push(currentUser.id);
-      const p = `$${params.length}`;
-      conditions.push(`((u.role = 'user' AND u.created_by_user_id = ${p}) OR u.id = ${p})`);
+      conditions.push(tenant.customerScopeSql('u', `$${params.length}`));
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -138,7 +143,7 @@ class AdminUserService {
     listParams.push(pageSize, pageOffset);
     const listRes = await db.query(
       `SELECT u.id, u.email, u.full_name, u.phone, u.role, u.is_active, u.account_status,
-              u.created_at, u.updated_at, u.admin_notes,
+              u.created_at, u.updated_at, u.admin_notes, u.created_by_user_id,
               creator.email AS created_by_email, creator.full_name AS created_by_name,
               (SELECT COUNT(*)::int FROM home_users hu WHERE hu.user_id = u.id) AS home_count,
               (SELECT COUNT(*)::int FROM commissioning_logs cl WHERE cl.technician_id = u.id) AS commissioning_count
@@ -151,11 +156,17 @@ class AdminUserService {
       listParams
     );
 
+    // Staff baska servisin actigi musterinin olusturan bilgisini (e-posta/ad) GOREMEZ (kiracilar arasi sizinti yok).
+    const users = isStaff(currentUser)
+      ? listRes.rows.map((u) => (tenant.sameId(u.created_by_user_id, currentUser.id) || !u.created_by_user_id
+        ? u
+        : { ...u, created_by_user_id: null, created_by_email: null, created_by_name: null }))
+      : listRes.rows;
     return {
       total: Number(countRes.rows[0] ? countRes.rows[0].total : 0),
       limit: pageSize,
       offset: pageOffset,
-      users: listRes.rows,
+      users,
     };
   }
 
@@ -163,17 +174,26 @@ class AdminUserService {
     assertActor(currentUser);
     const target = await this._getTarget(db, userId);
     if (!target) throw notFound();
-    if (isStaff(currentUser) && !staffCanSee(currentUser, target)) throw notFound();
+    if (isStaff(currentUser) && !(await staffCanSee(db, currentUser, target))) throw notFound();
 
-    const creator = target.created_by_user_id
+    const staffView = isStaff(currentUser);
+    const creator = target.created_by_user_id && (!staffView || tenant.sameId(target.created_by_user_id, currentUser.id))
       ? (await db.query('SELECT email, full_name FROM users WHERE id = $1', [target.created_by_user_id])).rows[0]
       : null;
-    const homesRes = await db.query(
-      `SELECT h.id, h.name, h.address, hu.role, hu.created_at
-         FROM homes h JOIN home_users hu ON h.id = hu.home_id
-        WHERE hu.user_id = $1`,
-      [target.id]
-    );
+    // Staff yalniz KENDI kapsamindaki evleri gorur (musterinin baska servislerin evlerindeki uyeligi sizmaz).
+    const homesRes = staffView
+      ? await db.query(
+          `SELECT h.id, h.name, h.address, hu.role, hu.created_at
+             FROM homes h JOIN home_users hu ON h.id = hu.home_id
+            WHERE hu.user_id = $1 AND h.service_owner_id = $2`,
+          [target.id, currentUser.id]
+        )
+      : await db.query(
+          `SELECT h.id, h.name, h.address, hu.role, hu.created_at
+             FROM homes h JOIN home_users hu ON h.id = hu.home_id
+            WHERE hu.user_id = $1`,
+          [target.id]
+        );
     let commissioningLogs = [];
     if (target.role === 'service_user') {
       const logs = await db.query(
@@ -312,7 +332,7 @@ class AdminUserService {
         return await db.withTransaction(async (tx) => {
           const target = await this._getTarget(tx, userId, { forUpdate: true });
           if (!target) throw notFound();
-          if (!actorIsSuper && !staffCanSee(currentUser, target)) throw notFound();
+          if (!actorIsSuper && !(await staffCanSee(tx, currentUser, target))) throw notFound();
           if (!actorIsSuper && target.id === currentUser.id && (wantsActive || wantsRole)) {
             throw new HttpError(403, 'Bu işlem için yetkiniz yok.', 'FORBIDDEN');
           }
@@ -401,6 +421,11 @@ class AdminUserService {
           // evlerinde personel olarak kalmasin (requireHomeAccess zaten reddeder; listede de gorunmesin).
           if (roleChanged && role === 'user' && STAFF_ROLES.includes(target.role)) {
             await tx.query("DELETE FROM home_users WHERE user_id = $1 AND role = 'service_user'", [target.id]);
+            // Servis kapsami (045): artik servis degil -> evleri, kartlari ve siteleri kok kapsamina duser (sahipsiz kayit
+            // kalmaz, musteri "Servisiniz" kartinda eski servisi gormez). Kok isterse baska servise aktarir.
+            await tx.query('UPDATE homes SET service_owner_id = NULL WHERE service_owner_id = $1', [target.id]);
+            await tx.query('UPDATE device_inventory SET service_owner_id = NULL WHERE service_owner_id = $1', [target.id]);
+            await tx.query('UPDATE sites SET service_owner_id = NULL WHERE service_owner_id = $1', [target.id]);
           }
           // Oturumlar toplu iptal edildiyse (parola atama dahil) push belirteci COMMIT sonrasi kapatilir.
           const pushReason = wantsPassword
@@ -432,7 +457,7 @@ class AdminUserService {
     assertActor(currentUser);
     const target = await this._getTarget(db, userId);
     if (!target) throw notFound();
-    if (isStaff(currentUser) && !staffCanSee(currentUser, target)) throw notFound();
+    if (isStaff(currentUser) && !(await staffCanSee(db, currentUser, target))) throw notFound();
     if (target.role === 'super_user' && !isSuper(currentUser)) throw notFound();
     if (target.is_active === false || target.account_status === 'suspended') {
       throw new HttpError(409, 'Askıya alınmış hesaba bağlantı gönderilemez.', 'CONFLICT');
@@ -450,7 +475,8 @@ class AdminUserService {
   }
 
   /**
-   * Pasife alma (varsayilan) veya kalici silme (yalnizca super_user).
+   * Pasife alma (varsayilan) veya kalici silme (super_user; servis sorumlusu YALNIZ musterisinin butun uyelikleri
+   * kendi evlerindeyse - 045).
    */
   async deleteUser(userId, { currentUser, hardDelete = false } = {}) {
     assertActor(currentUser);
@@ -458,16 +484,31 @@ class AdminUserService {
     if (currentUser.id === userId) {
       throw new HttpError(400, 'Kendi hesabınızı bu menüden silemez veya donduramazsınız.', 'VALIDATION');
     }
-    if (hardDelete && !isSuper(currentUser)) {
-      throw new HttpError(403, 'Kalıcı silme yalnızca Süper Yöneticilere aittir.', 'FORBIDDEN');
-    }
 
     let outcome;
     try {
       outcome = await db.withTransaction(async (tx) => {
         const target = await this._getTarget(tx, userId, { forUpdate: true });
         if (!target) throw notFound();
-        if (isStaff(currentUser) && !staffCanSee(currentUser, target)) throw notFound();
+        if (isStaff(currentUser) && !(await staffCanSee(tx, currentUser, target))) throw notFound();
+        if (hardDelete && isStaff(currentUser)) {
+          // Servis kapsami (045): kalici silme yalniz son kullanici ve YALNIZ butun uyelikleri servisin kendi evlerindeyse;
+          // baska kapsamda (kok ya da baska servis) uyeligi olan musteri yalnizca kok tarafindan kalici silinir.
+          const foreign = await tx.query(
+            `SELECT 1
+               FROM home_users hu JOIN homes h ON h.id = hu.home_id
+              WHERE hu.user_id = $1 AND h.service_owner_id IS DISTINCT FROM $2
+              LIMIT 1`,
+            [target.id, currentUser.id]
+          );
+          if (target.role !== 'user' || (foreign.rows || []).length > 0) {
+            throw new HttpError(
+              403,
+              'Kalıcı silme için müşterinin tüm üyelikleri sizin servis kapsamınızdaki dairelerde olmalı; aksi halde yalnızca Süper Yönetici silebilir.',
+              'FORBIDDEN'
+            );
+          }
+        }
         if (target.role === 'super_user') {
           if (!isSuper(currentUser)) throw notFound();
           if ((await countOtherActiveSupers(tx, target.id)) === 0) {
@@ -498,7 +539,7 @@ class AdminUserService {
                   (SELECT COUNT(*)::int FROM home_users o
                     WHERE o.home_id = hu.home_id AND o.role = 'owner' AND o.user_id <> $1) AS other_owners,
                   (SELECT COUNT(*)::int FROM home_users m
-                    WHERE m.home_id = hu.home_id AND m.user_id <> $1) AS other_members,
+                    WHERE m.home_id = hu.home_id AND m.user_id <> $1 AND m.role <> 'service_user') AS other_members,
                   (SELECT COUNT(*)::int FROM devices d WHERE d.home_id = hu.home_id) AS device_count
              FROM home_users hu
             WHERE hu.user_id = $1 AND hu.role = 'owner'`,

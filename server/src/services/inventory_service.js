@@ -6,8 +6,12 @@
 //
 // Yetki (CONTRACTS §1.4):
 //   Envanter olustur / sil / durum : super_user (olustur: ayrica gecerli ADMIN_API_KEY)
-//   Envanter listele / tekil sorgu : super_user (tumu), service_user (YALNIZCA kendi stogu:
-//                                    sahiplendirdigi veya servis uyesi oldugu evlerdeki cihazlar)
+//   Servis sorumlusu kapsami (045): service_user fabrika aracindan KENDI stoguna kart kaydeder (service_owner_id =
+//     kendisi) ve YALNIZ kendi kartlarini listeler/arar/yonetir (askiya alma/aktif etme, etiket yenileme, PIN kilidi,
+//     stoktaki karti silme). Kok stogundaki (NULL) ve baska servisin karti listelenmez/yonetilemez (404); kurmak
+//     (claim) icin kok stogu serbest, baska servisin stogu 403 (device_service). REVOKED durumu yalniz kok. Kapsamlar
+//     arasi aktarim (service_owner_id degisimi) yalniz kok (service_scope_service).
+//   Envanter listele / tekil sorgu : super_user (tumu), service_user (YALNIZCA kendi stogu)
 // Durum gecisleri (TRANSITIONS): CLAIMED dogrudan atanamaz (yalnizca sahiplenme akisi);
 //   herhangi bir durumdan IN_STOCK'a donus yalnizca super_user ve yalnizca cihaz hicbir daireye
 //   bagli DEGILSE (bagliysa acil sifirlama kullanilmalidir - cleanup oradadir).
@@ -20,6 +24,7 @@ const db = require('../db');
 const { HttpError, generateNumericPin } = require('../utils/helpers');
 const { hashPin } = require('../utils/pin');
 const { toBoundedInt, MAX_OFFSET } = require('../utils/ints');
+const tenant = require('../utils/tenant_scope');
 
 const UUID_RE = /^AHBU-[A-Z0-9-]{3,32}$/;
 const STATUSES = Object.freeze(['IN_STOCK', 'INSTALLED', 'CLAIMED', 'REVOKED', 'SUSPENDED']);
@@ -96,13 +101,27 @@ function linkedToFlatError() {
   return new HttpError(409, LINKED_TO_FLAT_MESSAGE, 'DEVICE_LINKED_TO_FLAT');
 }
 
-/** Servis personelinin kapsami: sahiplendirdigi veya servis uyesi oldugu evlerdeki cihazlar. */
+/** Aktor bir servis sorumlusu mu (kiraci)? Rota `req.inventoryActor.type`, dogrudan cagrilar `role` verir. */
+function isServiceActor(actor) {
+  return Boolean(actor) && (actor.type === 'service_user' || actor.role === 'service_user');
+}
+
+/** Servis sorumlusunun kapsami (045): YALNIZ KENDI stogundaki/kurdugu kartlar (service_owner_id = kendisi). */
 function scopeClause(actor, params) {
   if (!actor || actor.type !== 'service_user') return '';
   params.push(actor.userId);
-  const p = `$${params.length}`;
-  return ` AND (di.claimed_by_user_id = ${p}
-            OR di.claimed_home_id IN (SELECT home_id FROM home_users WHERE user_id = ${p} AND role = 'service_user'))`;
+  return ` AND di.service_owner_id = $${params.length}`;
+}
+
+/**
+ * Yonetim yetkisi (durum, etiket, PIN kilidi, silme): kok her karti; servis YALNIZ kendi stogundakini. Baska servisin
+ * ya da kok stogundaki kartin varligi sizdirilmaz (404). `row.service_owner_id` sorguda okunmus olmali.
+ */
+function assertMayManage(actor, row) {
+  if (!isServiceActor(actor)) return;
+  if (!actor.userId || !row.service_owner_id || !tenant.sameId(row.service_owner_id, actor.userId)) {
+    throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
+  }
 }
 
 class InventoryService {
@@ -119,7 +138,13 @@ class InventoryService {
    * Fabrika: yeni panoyu envantere kaydeder (IN_STOCK). local_key uretilir, sifreli saklanir
    * ve yanitta BIR KEZ doner. PIN yalnizca ozetiyle saklanir.
    */
-  async registerDevice({ device_uuid, mac_address, pin, model, batch_no } = {}) {
+  async registerDevice({ device_uuid, mac_address, pin, model, batch_no } = {}, actor = null) {
+    // Servis sorumlusu (045) kendi stoguna kaydeder; kok / API anahtari kok stoguna (NULL).
+    let ownerId = null;
+    if (isServiceActor(actor)) {
+      if (!actor.userId) throw new HttpError(403, 'Bu işlem için yetkiniz bulunmamaktadır.', 'FORBIDDEN');
+      ownerId = actor.userId;
+    }
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği (AHBU-... biçimi beklenir).', 'VALIDATION');
     const cleanMac = normalizeMac(mac_address);
@@ -150,10 +175,10 @@ class InventoryService {
     let record;
     try {
       const ins = await db.query(
-        `INSERT INTO device_inventory (device_uuid, mac_address, pin_hash, local_key_enc, model, batch_no, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'IN_STOCK')
-         RETURNING id, serial_no, device_uuid, mac_address, model, batch_no, status, created_at`,
-        [cleanUuid, cleanMac, hashPin(cleanPin), localKeyEnc, cleanModel, cleanBatch]
+        `INSERT INTO device_inventory (device_uuid, mac_address, pin_hash, local_key_enc, model, batch_no, status, service_owner_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 'IN_STOCK', $7)
+         RETURNING id, serial_no, device_uuid, mac_address, model, batch_no, status, service_owner_id, created_at`,
+        [cleanUuid, cleanMac, hashPin(cleanPin), localKeyEnc, cleanModel, cleanBatch, ownerId]
       );
       record = ins.rows[0];
     } catch (err) {
@@ -201,16 +226,19 @@ class InventoryService {
 
     const base = `FROM device_inventory di
       LEFT JOIN homes h ON di.claimed_home_id = h.id
-      LEFT JOIN users u ON di.claimed_by_user_id = u.id`;
+      LEFT JOIN users u ON di.claimed_by_user_id = u.id
+      LEFT JOIN users so ON di.service_owner_id = so.id`;
 
     const countRes = await db.query(`SELECT COUNT(*)::int AS total ${base}${where}`, params);
     const listParams = params.slice();
     listParams.push(pageSize, pageOffset);
-    // super_user: claimed_home_id da doner (servis_kurulum-9: yaniti kaybolan claim'i daireden surdurebilsin)
-    const isSuper = Boolean(actor) && actor.type === 'super_user';
+    // super_user ve kendi kartlarini goren servis (045): claimed_home_id da doner (servis_kurulum-9: yaniti kaybolan
+    // claim'i daireden surdurebilsin). service_owner_id / service_owner_email: kartin stok sahibi (NULL = kok stogu).
+    const isSuper = Boolean(actor) && (actor.type === 'super_user' || actor.type === 'service_user');
     const listRes = await db.query(
       `SELECT di.id, di.serial_no, di.device_uuid, di.mac_address, di.model, di.batch_no, di.status,
               di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at,
+              di.service_owner_id, so.email AS service_owner_email,
               h.name AS claimed_home_name, u.email AS claimed_user_email${isSuper ? ', di.claimed_home_id' : ''}
          ${base}${where}
         ORDER BY di.serial_no DESC NULLS LAST, di.created_at DESC
@@ -263,10 +291,10 @@ class InventoryService {
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
     const params = [cleanUuid];
-    const isSuper = Boolean(actor) && actor.type === 'super_user';
+    const isSuper = Boolean(actor) && (actor.type === 'super_user' || actor.type === 'service_user');
     const r = await db.query(
       `SELECT di.id, di.serial_no, di.device_uuid, di.mac_address, di.model, di.batch_no, di.status,
-              di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at${isSuper ? ', di.claimed_home_id' : ''}
+              di.failed_attempts, di.locked_until, di.claimed_at, di.created_at, di.updated_at, di.service_owner_id${isSuper ? ', di.claimed_home_id' : ''}
          FROM device_inventory di
         WHERE di.device_uuid = $1${scopeClause(actor, params)}`,
       params
@@ -281,8 +309,11 @@ class InventoryService {
     return row;
   }
 
-  /** Durum degisikligi (yalnizca super_user). */
-  async updateStatus(device_uuid, new_status) {
+  /**
+   * Durum degisikligi (super_user; servis sorumlusu YALNIZ kendi kartinda ve REVOKED'a/REVOKED'dan degil: askiya
+   * alma / aktif etme).
+   */
+  async updateStatus(device_uuid, new_status, actor = null) {
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
     const target = typeof new_status === 'string' ? new_status.trim().toUpperCase() : '';
@@ -290,7 +321,7 @@ class InventoryService {
 
     return db.withTransaction(async (tx) => {
       const cur = await tx.query(
-        `SELECT di.id, di.status, di.claimed_home_id,
+        `SELECT di.id, di.status, di.claimed_home_id, di.service_owner_id,
                 (SELECT COUNT(*)::int FROM devices d WHERE d.device_uuid = di.device_uuid AND d.home_id IS NOT NULL) AS attached
            FROM device_inventory di
           WHERE di.device_uuid = $1
@@ -299,6 +330,10 @@ class InventoryService {
       );
       if (cur.rows.length === 0) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
       const row = cur.rows[0];
+      assertMayManage(actor, row);
+      if (isServiceActor(actor) && (target === 'REVOKED' || row.status === 'REVOKED')) {
+        throw new HttpError(403, 'Cihazı iptal etme (REVOKED) yalnızca süper yöneticiye aittir.', 'FORBIDDEN');
+      }
       if (row.status === target) {
         throw new HttpError(409, 'Cihaz zaten bu durumda.', 'CONFLICT');
       }
@@ -355,7 +390,7 @@ class InventoryService {
 
     const row = await db.withTransaction(async (tx) => {
       const cur = await tx.query(
-        `SELECT di.id, di.status, di.claimed_home_id,
+        `SELECT di.id, di.status, di.claimed_home_id, di.service_owner_id,
                 EXISTS (SELECT 1 FROM devices d
                          WHERE d.device_uuid = di.device_uuid
                            AND (d.home_id IS NOT NULL OR d.is_claimed = TRUE OR d.is_commissioned = TRUE)) AS attached
@@ -366,6 +401,7 @@ class InventoryService {
       );
       if (cur.rows.length === 0) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
       const inv = cur.rows[0];
+      assertMayManage(actor, inv);
       if (inv.status !== 'IN_STOCK') {
         throw new HttpError(409, `Yalnızca stoktaki (IN_STOCK) cihazın etiketi yeniden üretilebilir (mevcut durum: ${inv.status}).`, 'CONFLICT');
       }
@@ -424,12 +460,15 @@ class InventoryService {
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
     return db.withTransaction(async (tx) => {
+      // Servis sorumlusu (045) YALNIZ kendi kartinin kilidini kaldirir; baska kart 404 (varlik sizdirilmaz).
+      const scoped = isServiceActor(actor);
+      if (scoped && !actor.userId) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
       const upd = await tx.query(
         `UPDATE device_inventory
             SET failed_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
-          WHERE device_uuid = $1
+          WHERE device_uuid = $1${scoped ? ' AND service_owner_id = $2' : ''}
           RETURNING device_uuid`,
-        [cleanUuid]
+        scoped ? [cleanUuid, actor.userId] : [cleanUuid]
       );
       if (!upd.rows || upd.rows.length === 0) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
       await tx.query(
@@ -441,14 +480,14 @@ class InventoryService {
     });
   }
 
-  /** Silme (yalnizca super_user). CLAIMED/INSTALLED veya daireye bagli cihaz silinemez. */
-  async deleteDevice(device_uuid) {
+  /** Silme (super_user; servis sorumlusu yalniz KENDI stogundaki karti). CLAIMED/INSTALLED veya daireye bagli cihaz silinemez. */
+  async deleteDevice(device_uuid, actor = null) {
     const cleanUuid = normalizeUuid(device_uuid);
     if (!cleanUuid) throw new HttpError(400, 'Geçersiz cihaz kimliği.', 'VALIDATION');
 
     return db.withTransaction(async (tx) => {
       const cur = await tx.query(
-        `SELECT di.id, di.status, di.claimed_home_id,
+        `SELECT di.id, di.status, di.claimed_home_id, di.service_owner_id,
                 (SELECT COUNT(*)::int FROM devices d WHERE d.device_uuid = di.device_uuid AND d.home_id IS NOT NULL) AS attached
            FROM device_inventory di
           WHERE di.device_uuid = $1
@@ -457,6 +496,7 @@ class InventoryService {
       );
       if (cur.rows.length === 0) throw new HttpError(404, 'Cihaz bulunamadı.', 'NOT_FOUND');
       const row = cur.rows[0];
+      assertMayManage(actor, row);
       if (row.status === 'CLAIMED' || row.status === 'INSTALLED') {
         throw new HttpError(409, 'Sahiplenilmiş cihaz silinemez. Önce acil sıfırlama ile stoğa alın.', 'CONFLICT');
       }

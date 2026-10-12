@@ -147,7 +147,27 @@ test('eski /api oneki de calisir; parametreler servise aynen gider', async () =>
   assert.equal(svc.calls[0].args[3].globalRole, 'service_user');
   const r2 = await request(app).get(`/api/v1/templates?site_id=${SITE}&include_global=1`).set('x-test-user', ACTORS.super);
   assert.equal(r2.status, 200);
-  assert.deepEqual(svc.calls[1].args, [{ siteId: SITE, includeGlobal: true }]);
+  assert.deepEqual(svc.calls[1].args[0], { siteId: SITE, includeGlobal: true });
+  assert.equal(svc.calls[1].args[1].userId, 'u-super', 'aktor (kapsam icin) servise gider');
+});
+
+test('045 kapsam: HER sinirli yontem aktoru (userId + globalRole) alir - kapsam servis katmaninda uygulanir', async () => {
+  // yontem -> aktorun beklenen arguman dizini
+  const ACTOR_ARG = {
+    listSites: 0, createSite: 0, getSite: 1, updateSite: 2, deleteSite: 1, listFlats: 1, bulkCreateFlats: 2, updateFlat: 3,
+    deleteFlat: 2, linkFlatDevice: 3, listTemplates: 1, createTemplate: 0, getTemplate: 1, updateTemplate: 0, deleteTemplate: 1,
+    listVersions: 1, getVersion: 2, recordWrite: 0, getInventoryLocalKey: 0,
+  };
+  for (const [method, path, body, svcMethod] of CASES) {
+    if (!(svcMethod in ACTOR_ARG)) continue;
+    const { app, svc } = build();
+    let req = request(app)[method](`/api/v1${path}`).set('x-test-user', ACTORS.staff);
+    if (body) req = req.send(body);
+    const res = await req;
+    assert.ok(res.status < 300, `${svcMethod}: ${res.status}`);
+    const actor = svc.calls[0].args[ACTOR_ARG[svcMethod]];
+    assert.ok(actor && actor.userId === 'u-staff' && actor.globalRole === 'service_user', `${svcMethod}: aktor ${ACTOR_ARG[svcMethod]}. argumanda olmali`);
+  }
 });
 
 test('PUT /templates/:id ayni govde: 200 + created:false; yeni surum: 200 + created:true', async () => {

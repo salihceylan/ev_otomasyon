@@ -235,6 +235,13 @@ function createHomeStore({ now = () => Date.now() } = {}) {
       s.members = s.members.filter((m) => !(m.home_id === p[0] && m.user_id === p[1]));
       return [];
     }],
+    // 045: devir kabulu evin servis sahibinin servis uyeligini korur
+    [/DELETE FROM home_users\s+WHERE home_id = \$1 AND \(\$2::uuid IS NULL OR NOT \(user_id = \$2::uuid AND role = 'service_user'\)\)/, (p) => {
+      s.members = s.members.filter((m) => !(m.home_id === p[0] && !(p[1] && m.user_id === p[1] && m.role === 'service_user')));
+      return [];
+    }],
+    [/SELECT service_owner_id FROM homes WHERE id = \$1/, (p) =>
+      (s.homes.has(p[0]) ? [{ service_owner_id: s.homes.get(p[0]).service_owner_id || null }] : [])],
     [/DELETE FROM home_users WHERE home_id = \$1/, (p) => {
       s.members = s.members.filter((m) => m.home_id !== p[0]);
       return [];
@@ -256,7 +263,7 @@ function createHomeStore({ now = () => Date.now() } = {}) {
     [/FROM home_transfers t\s+JOIN homes h ON h\.id = t\.home_id\s+WHERE t\.code_hash = \$1/, (p) =>
       s.transfers.filter((t) => t.code_hash === p[0]).map((t) => {
         const h = s.homes.get(t.home_id) || {};
-        return { ...t, home_name: h.name, home_address: h.address || null };
+        return { ...t, home_name: h.name, home_address: h.address || null, service_owner_id: h.service_owner_id || null };
       })],
     [/UPDATE home_transfers\s+SET status = 'COMPLETED'/, (p) => {
       const t = s.transfers.find((x) => x.id === p[1] && x.status === 'PENDING' && alive(x.expires_at));

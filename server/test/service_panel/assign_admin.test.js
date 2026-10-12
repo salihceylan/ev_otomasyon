@@ -681,8 +681,10 @@ test('zorla atama: yalnız super_user, gerekçe >= 15; OTP aranmaz; bekleyen kod
   assert.deepEqual([log.mode, log.actor_role, log.reason], ['forced', 'super_user', reason]);
   // önceki sahibe "devredildi" bildirimi
   assert.ok(env.mailsTo(t.owner.email).some((m) => /devredildi/i.test(m.subject)));
-  // super üyelik olmadan işlem yapar: staff'in servis üyeliği (başkasının) silinir — super için korunacak satır yok
-  assert.ok(!state.home_users.some((m) => m.home_id === t.home.id && m.user_id === t.staff.id), 'super zorla atamasında diğer personelin üyeliği de kalkar');
+  // super üyelik olmadan işlem yapar. Servis kapsamı (045): evin SERVİS SAHİBİNİN (burada t.staff) süresiz servis üyeliği
+  // devirde korunur; kapsam homes.service_owner_id'de kalır ve üyelik satırı ev listesi/kurallar için gereklidir.
+  assert.ok(state.home_users.some((m) => m.home_id === t.home.id && m.user_id === t.staff.id && m.role === 'service_user'), 'evin servis sahibinin üyeliği korunur');
+  assert.equal(t.home.service_owner_id, t.staff.id, 'servis kapsamı değişmez');
 });
 
 test('pano-6: atama owner/resident uyeligini silince tek panolu evin yerel anahtari BEKLEYEN yolla doner (ayni tx, COMMIT sonrasi uzlastirici); sahip YOK modunda donmez', async () => {
@@ -734,12 +736,19 @@ test('zorla atama: birden fazla sahipli evde yalnız super (staff 409 MULTIPLE_O
   assert.equal(ownersOf(t.home.id).length, 1);
 });
 
-test('atama: staff servis üyeliği süresi dolmuşsa / başka evdeyse / pasifse servis katmanı da reddeder (derinlemesine savunma)', async () => {
+test('atama: staff evin servisi değilse (başka servisin evi / sahipsiz ev) / pasifse servis katmanı da reddeder (derinlemesine savunma)', async () => {
   const { svc } = makeSvc();
   const t = scenario();
+  // Servis kapsamı (045): 72 saatlik pencere aranmaz; yetki homes.service_owner_id'dir. Süresi dolmuş eski üyelik tek başına
+  // yetkiyi KALDIRMAZ, evin servisi başkasıysa ya da ev sahipsizse (kök) 403.
   state.home_users.find((m) => m.user_id === t.staff.id).installer_expires_at = new Date(clock.now().getTime() - 1000);
+  const rival = h.user({ role: 'service_user' });
+  t.home.service_owner_id = rival.id;
   await rejects(requestOtp(svc, t, target()), 403, 'FORBIDDEN');
   await rejects(svc.assignAdmin({ actor: actorOf(t.staff), homeId: t.home.id, target: target(), otpCode: '123456' }), 403, 'FORBIDDEN');
+  t.home.service_owner_id = null; // sahipsiz (kök) ev
+  await rejects(svc.assignAdmin({ actor: actorOf(t.staff), homeId: t.home.id, target: target(), otpCode: '123456' }), 403, 'FORBIDDEN');
+  t.home.service_owner_id = t.staff.id;
   const outsider = h.user({ role: 'service_user' });
   await rejects(svc.assignAdmin({ actor: actorOf(outsider), homeId: t.home.id, target: target(), otpCode: '123456' }), 403, 'FORBIDDEN');
   const frozen = h.user({ role: 'service_user', status: 'suspended' });

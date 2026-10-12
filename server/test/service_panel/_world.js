@@ -128,11 +128,12 @@ function createWorld({ clock = createClock() } = {}) {
   // ================================================================== abone listesi
   const subscriberFilter = (sql, params) => {
     let i = 0;
-    const staffId = sql.includes("sm.role = 'service_user'") ? params[i++] : null;
+    // 045: staff kapsami = homes.service_owner_id (kurulum penceresi / uyelik aranmaz)
+    const staffId = sql.includes('h.service_owner_id = $') ? params[i++] : null;
     const term = sql.includes('ILIKE') ? params[i++] : null;
     const re = term ? likeToRegExp(term) : null;
     const homes = s.homes.filter((h) => {
-      if (staffId && !staffMemberValid(h.id, staffId)) return false;
+      if (staffId && h.service_owner_id !== staffId) return false;
       if (re) {
         const owner = ownerOf(h.id);
         const fields = [h.name, h.address || '', owner ? owner.full_name : null, owner ? owner.email : null, owner ? owner.phone || '' : null];
@@ -156,6 +157,8 @@ function createWorld({ clock = createClock() } = {}) {
         home_id: h.id, home_name: h.name, home_address: h.address || null, home_created_at: h.created_at,
         owner_id: o ? o.id : null, owner_full_name: o ? o.full_name : null, owner_email: o ? o.email : null,
         owner_phone: o ? o.phone || null : null, owner_account_status: o ? o.account_status : null,
+        service_owner_id: h.service_owner_id || null,
+        service_owner_name: h.service_owner_id && userById(h.service_owner_id) ? userById(h.service_owner_id).full_name : null,
       };
     });
   });
@@ -179,8 +182,12 @@ function createWorld({ clock = createClock() } = {}) {
   });
 
   // ================================================================== Home Admin atama
-  db.on('SELECT id, name FROM homes WHERE id = $1', ({ params }) => copies(s.homes.filter((h) => h.id === params[0])));
-  db.on('SELECT id, name, mqtt_username FROM homes WHERE id = $1 FOR UPDATE', async (ctx) => {
+  db.on('SELECT id, name, service_owner_id FROM homes WHERE id = $1', ({ params }) => copies(s.homes.filter((h) => h.id === params[0])));
+  // 045: requireHomeAccess kapsamli servis denetimi + invitation/transfer servis sahibi okumalari
+  db.on((sql) => sql === 'SELECT service_owner_id FROM homes WHERE id = $1', ({ params }) =>
+    s.homes.filter((h) => h.id === params[0]).map((h) => ({ service_owner_id: h.service_owner_id || null }))
+  );
+  db.on('SELECT id, name, mqtt_username, service_owner_id FROM homes WHERE id = $1 FOR UPDATE', async (ctx) => {
     const home = homeById(ctx.params[0]);
     if (!home) return [];
     await ctx.lock(`home:${home.id}`);
@@ -438,7 +445,8 @@ function createWorld({ clock = createClock() } = {}) {
       .map((m) => ({
         id: m.home_id,
         name: homeById(m.home_id).name,
-        other_member_count: s.home_users.filter((x) => x.home_id === m.home_id && x.user_id !== userId).length,
+        // 045: evin servis uyeligi (suresiz) ev sahibinin hesap silmesini ENGELLEMEZ -> sayilmaz
+        other_member_count: s.home_users.filter((x) => x.home_id === m.home_id && x.user_id !== userId && x.role !== 'service_user').length,
         device_count: s.devices.filter((d) => d.home_id === m.home_id).length,
       }))
       .sort((a, b) => (a.name < b.name ? -1 : 1));
@@ -557,13 +565,19 @@ function createWorld({ clock = createClock() } = {}) {
     return [{ id: row.id }];
   });
   // auth_service.listHomesForUser (uyelik-13: users ile birlesir; personel olmayan hesabin servis uyeligi listelenmez)
-  db.on('FROM home_users hu JOIN homes h ON h.id = hu.home_id JOIN users u ON u.id = hu.user_id WHERE hu.user_id = $1', ({ params }) =>
+  // 045: servis bilgisi (ad + telefon) icin LEFT JOIN users su
+  db.on('FROM home_users hu JOIN homes h ON h.id = hu.home_id JOIN users u ON u.id = hu.user_id LEFT JOIN users su ON su.id = h.service_owner_id WHERE hu.user_id = $1', ({ params }) =>
     s.home_users.filter((m) => m.user_id === params[0]).filter((m) => {
       const u = s.users.find((x) => x.id === m.user_id) || {};
       return !(m.role === 'service_user' && !['service_user', 'super_user'].includes(u.role));
     }).map((m) => {
       const h = homeById(m.home_id);
-      return { id: h.id, name: h.name, address: h.address || null, mqtt_username: h.mqtt_username, timezone: 'Europe/Istanbul', role: m.role, valid_from: m.valid_from, valid_until: m.valid_until, installer_expires_at: m.installer_expires_at };
+      const svc = h.service_owner_id ? s.users.find((x) => x.id === h.service_owner_id) : null;
+      return {
+        id: h.id, name: h.name, address: h.address || null, mqtt_username: h.mqtt_username, timezone: 'Europe/Istanbul', role: m.role,
+        valid_from: m.valid_from, valid_until: m.valid_until, installer_expires_at: m.installer_expires_at,
+        service_name: svc ? svc.full_name : null, service_phone: svc ? svc.phone || null : null,
+      };
     })
   );
   db.on(', password_hash FROM users WHERE LOWER(email) = $1', ({ params }) => copies(s.users.filter((u) => String(u.email).toLowerCase() === params[0])));
@@ -574,7 +588,7 @@ function createWorld({ clock = createClock() } = {}) {
     if (!inv) return [];
     await ctx.lock(`inv:${inv.id}`);
     const attached = s.devices.some((d) => d.device_uuid === inv.device_uuid && (d.home_id || d.is_claimed === true || d.is_commissioned === true));
-    return [{ id: inv.id, status: inv.status, claimed_home_id: inv.claimed_home_id || null, attached }];
+    return [{ id: inv.id, status: inv.status, claimed_home_id: inv.claimed_home_id || null, service_owner_id: inv.service_owner_id || null, attached }];
   });
   // atolye-2: yeniden uretim YALNIZ PIN'i yeniler (yerel anahtar degismez)
   db.on((sql) => sql.startsWith('UPDATE device_inventory SET pin_hash = $1, failed_attempts = 0'), (ctx) => {
@@ -641,8 +655,8 @@ function createWorld({ clock = createClock() } = {}) {
       s.users.push(row);
       return row;
     },
-    home({ name, owner = null, address = null, created_at } = {}) {
-      const row = { id: uid(), name: name || `Ev ${++seq}`, address, mqtt_username: `h_${crypto.randomBytes(8).toString('hex')}`, created_at: created_at || new Date(now().getTime() + ++seq) };
+    home({ name, owner = null, address = null, created_at, service_owner_id = null } = {}) {
+      const row = { id: uid(), name: name || `Ev ${++seq}`, address, mqtt_username: `h_${crypto.randomBytes(8).toString('hex')}`, created_at: created_at || new Date(now().getTime() + ++seq), service_owner_id };
       s.homes.push(row);
       if (owner) h.member(row, owner, 'owner');
       return row;
@@ -650,6 +664,10 @@ function createWorld({ clock = createClock() } = {}) {
     member(home, user, role, extra = {}) {
       const row = { id: uid(), seq: ++seq, home_id: home.id, user_id: user.id, role, valid_from: null, valid_until: null, installer_expires_at: null, created_at: new Date(now().getTime() + seq), ...extra };
       s.home_users.push(row);
+      // 045 geri doldurma taklidi: evde ilk servis uyesi (kuresel rolu service_user) evin servis sahibi sayilir.
+      // `noScope: true` ile (ya da ev zaten bir servise aitse) atlanir.
+      if (role === 'service_user' && user.role === 'service_user' && !home.service_owner_id && !extra.noScope) home.service_owner_id = user.id;
+      delete row.noScope;
       return row;
     },
     device(home, { online = false, commissioned = false, uuid, last_seen_at = null } = {}) {
@@ -661,11 +679,11 @@ function createWorld({ clock = createClock() } = {}) {
       s.devices.push(row);
       return row;
     },
-    inventory({ uuid, status = 'IN_STOCK', pin_hash = 'old-pin-hash', local_key_enc = 'old-key-enc', claimed_home_id = null } = {}) {
+    inventory({ uuid, status = 'IN_STOCK', pin_hash = 'old-pin-hash', local_key_enc = 'old-key-enc', claimed_home_id = null, service_owner_id = null } = {}) {
       const row = {
         id: uid(), device_uuid: uuid || `AHBU-S3-${String(++seq).padStart(4, '0')}`, mac_address: 'E8:F6:0A:00:00:01', model: 'ESP32-S3-POE-ETH-8DI-8RO',
         batch_no: 'B1', serial_no: s.device_inventory.length + 1, status, pin_hash, local_key_enc, failed_attempts: 3, locked_until: new Date(now().getTime() + 600000),
-        claimed_home_id, claimed_by_user_id: null, label_reissue_count: 0, label_reissued_at: null,
+        claimed_home_id, claimed_by_user_id: null, label_reissue_count: 0, label_reissued_at: null, service_owner_id,
       };
       s.device_inventory.push(row);
       return row;

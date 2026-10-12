@@ -325,8 +325,11 @@ test('yeni sahibe devir: eski aile cikarilir, yeni sahip owner olur, kanallar ye
     [[ctx.newbie.id, 'owner'], [ctx.tech.id, 'service_user']].sort()
   );
   const staffMember = members.find((m) => m.role === 'service_user');
-  const hours = (new Date(staffMember.installer_expires_at) - ctx.world.clock.now()) / 3600000;
-  assert.ok(hours > 71 && hours <= 72, `servis uyeligi sureli olmali: ${hours}`);
+  // Servis sorumlusu kapsami (045): devreden servis evin servis sahibi olur; uyelik SURESIZ (72 saat penceresi yok)
+  assert.strictEqual(staffMember.installer_expires_at, null, 'servis uyeligi suresiz');
+  assert.strictEqual(r.service_owner_id, ctx.tech.id);
+  assert.strictEqual(state.homes.find((h) => h.id === ctx.home.id).service_owner_id, ctx.tech.id, 'ev devreden servisin kapsamina girer');
+  assert.strictEqual(ctx.inv.service_owner_id, ctx.tech.id, 'kart evin servisine gecer');
   assert.ok(!members.some((m) => m.user_id === ctx.owner.id || m.user_id === ctx.resident.id), 'eski aile cikarilmali');
 
   assert.strictEqual(ctx.inv.status, 'CLAIMED');

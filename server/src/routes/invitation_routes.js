@@ -145,7 +145,14 @@ router.delete(
   asyncHandler(async (req, res) => {
     const result = await InvitationService.removeHomeMember(
       req.homeAccess.home_id,
-      { userId: req.user.id, role: req.homeAccess.role, isSuper: req.homeAccess.is_super === true },
+      {
+        userId: req.user.id,
+        role: req.homeAccess.role,
+        isSuper: req.homeAccess.is_super === true,
+        // 045: evin servis sahibi yalniz kok tarafindan evden cikarilabilir (musteri/kapsamli servis cikaramaz)
+        globalRole: req.user.role,
+        tenantAdmin: req.homeAccess.is_tenant_admin === true,
+      },
       req.params.targetUserId
     );
     return successResponse(res, result, result.message);

@@ -136,7 +136,7 @@ class TransferService {
     const outcome = await db.withTransaction(async (tx) => {
       const tRes = await tx.query(
         `SELECT t.id, t.home_id, t.from_user_id, t.target_identifier, t.status, t.expires_at, t.accepted_by,
-                h.name AS home_name, h.address AS home_address
+                h.name AS home_name, h.address AS home_address, h.service_owner_id
            FROM home_transfers t
            JOIN homes h ON h.id = t.home_id
           WHERE t.code_hash = $1
@@ -192,8 +192,13 @@ class TransferService {
       );
       if (done.rows.length === 0) throw new HttpError(410, GENERIC_INVALID, 'GONE');
 
-      // Eski ailenin bu evdeki uyelikleri kaldirilir; yeni kullanici TEK owner olur.
-      await tx.query('DELETE FROM home_users WHERE home_id = $1', [transfer.home_id]);
+      // Eski ailenin bu evdeki uyelikleri kaldirilir; yeni kullanici TEK owner olur. Evin SERVIS SAHIBININ (045,
+      // homes.service_owner_id) suresiz servis uyeligi korunur: daire devri servis kapsamini degistirmez.
+      await tx.query(
+        `DELETE FROM home_users
+          WHERE home_id = $1 AND ($2::uuid IS NULL OR NOT (user_id = $2::uuid AND role = 'service_user'))`,
+        [transfer.home_id, transfer.service_owner_id || null]
+      );
       await tx.query(
         `INSERT INTO home_users (home_id, user_id, role) VALUES ($1, $2, 'owner')`,
         [transfer.home_id, newUserId]

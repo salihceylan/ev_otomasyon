@@ -512,6 +512,15 @@ class InvitationService {
         throw new HttpError(404, 'Kullanıcı bu evde bulunamadı.', 'NOT_FOUND');
       }
       const targetRole = targetRes.rows[0].role;
+      // Servis sorumlusu kapsami (045): evin servis sahibi evden CIKARILAMAZ (musteri servisi kaldiramaz; servis degisikligini
+      // yalniz kok yapar - aktarim ucu). Ev sahibi ya da kapsamli servis (is_super) de dahil, yalniz kok istisnadir.
+      if (targetRole === 'service_user') {
+        const svcOwner = await tx.query('SELECT service_owner_id FROM homes WHERE id = $1', [homeId]);
+        const ownerId = svcOwner.rows[0] && svcOwner.rows[0].service_owner_id;
+        if (ownerId && String(ownerId).toLowerCase() === String(targetUserId).toLowerCase() && !(actor && actor.globalRole === 'super_user')) {
+          throw new HttpError(403, 'Servis sorumlusu evden çıkarılamaz; servis değişikliğini yalnızca kök yönetici yapar.', 'FORBIDDEN');
+        }
+      }
       if (targetRole === 'owner') {
         if (!actorIsSuper) {
           throw new HttpError(403, 'Ev sahibi başka bir ev sahibini evden çıkaramaz.', 'FORBIDDEN');
@@ -582,6 +591,15 @@ class InvitationService {
       const role = mine.rows[0].role;
       if (role === 'owner') {
         throw new HttpError(409, 'Ev sahibi evden ayrılamaz; önce evi devredin.', 'OWNER_CANNOT_LEAVE');
+      }
+      // Servis sorumlusu kapsami (045): evin servisi kendi kapsamindaki evden ayrilamaz (kapsam service_owner_id'de kalir,
+      // uyelik satiri evin listesi/kurallari icin gereklidir); servis degisikligi yalniz kok.
+      if (role === 'service_user') {
+        const svcOwner = await tx.query('SELECT service_owner_id FROM homes WHERE id = $1', [homeId]);
+        const ownerId = svcOwner.rows[0] && svcOwner.rows[0].service_owner_id;
+        if (ownerId && String(ownerId).toLowerCase() === String(userId).toLowerCase()) {
+          throw new HttpError(409, 'Servis sorumlusu kendi kapsamındaki evden ayrılamaz; servis değişikliğini kök yönetici yapar.', 'SERVICE_OWNER_CANNOT_LEAVE');
+        }
       }
 
       await tx.query('DELETE FROM home_users WHERE home_id = $1 AND user_id = $2', [homeId, userId]);

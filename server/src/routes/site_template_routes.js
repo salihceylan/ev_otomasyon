@@ -29,6 +29,10 @@
 // YETKI: HER uc authenticateToken + requireServiceManager (global rol service_user | super_user; servis PIN oturumu,
 // ev sahibi, sakin, misafir 403). Kimlik HER ROUTE'TA ayri uygulanir (router.use YOK): router `/api` altina da
 // baglandigi icin router.use kendisine ait olmayan isteklere de 401 donerdi.
+// KAPSAM (servis sorumlusu kapsami, migration 045): servis YALNIZ kendi sitelerini (sites.service_owner_id), onlarin
+// dairelerini/sablonlarini ve kendi (ya da kok stogundaki) kartlarini gorur/yonetir; "Genel" (site'siz) sablonlari
+// OKUR/KULLANIR ama degistiremez; baska servisin ve sahipsiz siteler 404. Servis katmani her yonteme aktoru
+// (actorOf) gecirilerek kapsami uygular; kapsamlar arasi aktarim yalniz kok (PATCH /admin/sites/:id/service-owner).
 
 const express = require('express');
 const { asyncHandler } = require('../middlewares/error_handler');
@@ -64,7 +68,7 @@ function createRouter(deps = {}) {
   // --- Siteler -----------------------------------------------------------------
   router.get('/sites', ...guard, asyncHandler(async (req, res) => {
     noStore(res); // iletisim bilgisi icerir
-    return successResponse(res, await svc.listSites());
+    return successResponse(res, await svc.listSites(actorOf(req)));
   }));
 
   router.post('/sites', ...guard, asyncHandler(async (req, res) => {
@@ -74,24 +78,24 @@ function createRouter(deps = {}) {
 
   router.get('/sites/:siteId', ...guard, asyncHandler(async (req, res) => {
     noStore(res);
-    return successResponse(res, await svc.getSite(req.params.siteId));
+    return successResponse(res, await svc.getSite(req.params.siteId, actorOf(req)));
   }));
 
   router.patch('/sites/:siteId', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.updateSite(req.params.siteId, body(req)), 'Site güncellendi.');
+    return successResponse(res, await svc.updateSite(req.params.siteId, body(req), actorOf(req)), 'Site güncellendi.');
   }));
 
   router.delete('/sites/:siteId', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.deleteSite(req.params.siteId), 'Site silindi.');
+    return successResponse(res, await svc.deleteSite(req.params.siteId, actorOf(req)), 'Site silindi.');
   }));
 
   // --- Daireler ----------------------------------------------------------------
   router.get('/sites/:siteId/flats', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.listFlats(req.params.siteId));
+    return successResponse(res, await svc.listFlats(req.params.siteId, actorOf(req)));
   }));
 
   router.post('/sites/:siteId/flats/bulk', ...guard, asyncHandler(async (req, res) => {
-    const result = await svc.bulkCreateFlats(req.params.siteId, body(req));
+    const result = await svc.bulkCreateFlats(req.params.siteId, body(req), actorOf(req));
     return successResponse(res, result, 'Daireler oluşturuldu.', 201);
   }));
 
@@ -100,7 +104,7 @@ function createRouter(deps = {}) {
   }));
 
   router.delete('/sites/:siteId/flats/:flatId', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.deleteFlat(req.params.siteId, req.params.flatId), 'Daire silindi.');
+    return successResponse(res, await svc.deleteFlat(req.params.siteId, req.params.flatId, actorOf(req)), 'Daire silindi.');
   }));
 
   router.put('/sites/:siteId/flats/:flatId/device', ...guard, asyncHandler(async (req, res) => {
@@ -113,7 +117,7 @@ function createRouter(deps = {}) {
   // --- Sablonlar ---------------------------------------------------------------
   router.get('/templates', ...guard, asyncHandler(async (req, res) => {
     const q = req.query || {};
-    const list = await svc.listTemplates({ siteId: q.site_id, includeGlobal: truthy(q.include_global) });
+    const list = await svc.listTemplates({ siteId: q.site_id, includeGlobal: truthy(q.include_global) }, actorOf(req));
     return successResponse(res, list);
   }));
 
@@ -128,7 +132,7 @@ function createRouter(deps = {}) {
   }));
 
   router.get('/templates/:id', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.getTemplate(req.params.id));
+    return successResponse(res, await svc.getTemplate(req.params.id, actorOf(req)));
   }));
 
   router.put('/templates/:id', ...guard, asyncHandler(async (req, res) => {
@@ -138,15 +142,15 @@ function createRouter(deps = {}) {
   }));
 
   router.delete('/templates/:id', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.deleteTemplate(req.params.id), 'Şablon silindi.');
+    return successResponse(res, await svc.deleteTemplate(req.params.id, actorOf(req)), 'Şablon silindi.');
   }));
 
   router.get('/templates/:id/versions', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.listVersions(req.params.id));
+    return successResponse(res, await svc.listVersions(req.params.id, actorOf(req)));
   }));
 
   router.get('/templates/:id/versions/:version', ...guard, asyncHandler(async (req, res) => {
-    return successResponse(res, await svc.getVersion(req.params.id, req.params.version));
+    return successResponse(res, await svc.getVersion(req.params.id, req.params.version, actorOf(req)));
   }));
 
   // --- Karta yazim kaydi -------------------------------------------------------

@@ -18,11 +18,12 @@ const TPL_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const STAFF = { userId: 'u-staff', globalRole: 'service_user' };
 const SUPER = { userId: 'u-super', globalRole: 'super_user' };
 
-function makeSvc(flat) {
+function makeSvc(flat, siteOwner = 'u-staff') {
   const updates = [];
   const q = async (text, params) => {
     const sql = String(text).replace(/\s+/g, ' ').trim();
-    if (sql.startsWith('SELECT id, name FROM sites WHERE id = $1')) return { rows: [{ id: SITE, name: 'S' }] };
+    // 045: site kapsami (service_owner_id); STAFF varsayilan olarak sitenin servis sahibidir
+    if (sql.startsWith('SELECT id, name, service_owner_id FROM sites WHERE id = $1')) return { rows: [{ id: SITE, name: 'S', service_owner_id: siteOwner }] };
     if (sql.startsWith('SELECT id, site_id FROM install_templates WHERE id = $1')) return { rows: [{ id: params[0], site_id: SITE }] };
     if (sql.startsWith('SELECT id, site_id, block, number, flat_type, template_id, device_uuid, status FROM site_flats WHERE id = $1 AND site_id = $2 FOR UPDATE')) {
       return { rows: [{ ...flat }] };
@@ -63,12 +64,21 @@ test('ileri gecis serbest (atlayarak da); ayni durum serbest', async () => {
   assert.equal((await svc.updateFlat(SITE, FLAT, { status: 'handed_over' }, STAFF)).status, 'handed_over');
 });
 
-test('geri alma yalniz super_user; aksi 409 INVALID_STATUS_TRANSITION (Turkce mesaj)', async () => {
+test('geri alma yalniz super_user (servis sitenin sahibi olsa da 409); aktorsuz 409 INVALID_STATUS_TRANSITION (Turkce mesaj); baska servisin sitesi 404', async () => {
   const { svc } = makeSvc(base({ status: 'installed', device_uuid: 'AHBU-S3-0001' }));
   const e = await rejects(svc.updateFlat(SITE, FLAT, { status: 'written' }, STAFF), 409, 'INVALID_STATUS_TRANSITION');
   assert.equal(e.message, 'Daire durumu bu şekilde değiştirilemez.');
   await rejects(svc.updateFlat(SITE, FLAT, { status: 'planned' }), 409, 'INVALID_STATUS_TRANSITION');
   assert.equal((await svc.updateFlat(SITE, FLAT, { status: 'planned' }, SUPER)).status, 'planned');
+  // kiracilar arasi: baska servisin sitesinde hicbir sey yapamaz (404; varlik sizdirilmaz)
+  const rival = { userId: 'u-rival', globalRole: 'service_user' };
+  const s2 = makeSvc(base({ status: 'installed', device_uuid: 'AHBU-S3-0001' }));
+  await rejects(s2.svc.updateFlat(SITE, FLAT, { status: 'planned' }, rival), 404, 'NOT_FOUND');
+  assert.equal(s2.updates.length, 0, 'baska servis hicbir seyi degistiremedi');
+  // sahipsiz (kok) site: servis icin kapali
+  const s3 = makeSvc(base({ status: 'written' }), null);
+  await rejects(s3.svc.updateFlat(SITE, FLAT, { status: 'installed' }, STAFF), 404, 'NOT_FOUND');
+  assert.equal((await s3.svc.updateFlat(SITE, FLAT, { status: 'planned' }, SUPER)).status, 'planned');
 });
 
 test('installed / handed_over icin kart sart (super icin de)', async () => {

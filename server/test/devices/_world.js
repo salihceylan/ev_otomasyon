@@ -377,13 +377,15 @@ function createWorld({ clock = createClock() } = {}) {
   db.on("UPDATE device_inventory SET status = 'CLAIMED'", (ctx) => {
     // claim / pano degisimi (yeni): [home, owner, burned, enc, id] - COALESCE(local_key_enc, $4)
     // acil sifirlama (yeni sahip): [home, owner, burned, enc, id] - local_key_enc = $4
-    const [homeId, ownerId, burned, enc, id] = ctx.params;
+    // 045: altinci parametre = evin servis sahibi (kart kurulunca evin servisini izler)
+    const [homeId, ownerId, burned, enc, id, serviceOwner] = ctx.params;
     const inv = state.device_inventory.find((i) => i.id === id);
     const keepExisting = ctx.sql.includes('COALESCE(local_key_enc, $4)');
     patch(ctx, inv, {
       status: 'CLAIMED', claimed_home_id: homeId, claimed_by_user_id: ownerId, claimed_at: now(),
       failed_attempts: 0, locked_until: null, pin_hash: burned,
       local_key_enc: keepExisting ? inv.local_key_enc || enc : enc,
+      service_owner_id: serviceOwner || null,
     });
     return { rows: [], rowCount: 1 };
   });
@@ -510,17 +512,24 @@ function createWorld({ clock = createClock() } = {}) {
     insert(ctx, state.home_users, { home_id: homeId, user_id: userId, role: 'owner', installer_expires_at: null });
     return { rows: [], rowCount: 1 };
   });
+  // 045: servis uyeligi SURESIZDIR (installer_expires_at NULL); eski SQL (NOW() + saat) param[2] = saat idi.
   db.on('INSERT INTO home_users (home_id, user_id, role, installer_expires_at)', (ctx) => {
     const [homeId, userId, hours] = ctx.params;
-    const expires = new Date(now().getTime() + hours * 3600000);
+    const expires = hours === undefined || hours === null ? null : new Date(now().getTime() + hours * 3600000);
     const existing = state.home_users.find((m) => m.home_id === homeId && m.user_id === userId);
     if (existing) {
-      if (existing.role !== 'service_user') return [];
-      patch(ctx, existing, { installer_expires_at: expires });
+      const forceRole = ctx.sql.includes("SET role = 'service_user'");
+      if (existing.role !== 'service_user' && !forceRole) return [];
+      patch(ctx, existing, { installer_expires_at: expires, role: 'service_user' });
       return [{ installer_expires_at: expires }];
     }
     insert(ctx, state.home_users, { home_id: homeId, user_id: userId, role: 'service_user', installer_expires_at: expires });
     return [{ installer_expires_at: expires }];
+  });
+  db.on('UPDATE homes SET service_owner_id = $2 WHERE id = $1', (ctx) => {
+    const home = state.homes.find((h) => h.id === ctx.params[0]);
+    if (home) patch(ctx, home, { service_owner_id: ctx.params[1] || null });
+    return { rows: [], rowCount: home ? 1 : 0 };
   });
   db.on('FROM home_users WHERE home_id = $1 AND user_id = $2', ({ params, sql }) => {
     const m = state.home_users.find((x) => x.home_id === params[0] && x.user_id === params[1]);

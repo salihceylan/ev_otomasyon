@@ -42,7 +42,8 @@ function addDevice(uuid, fields = {}) {
   devices.set(uuid, d);
   return d;
 }
-const inScope = (d, staffId) => d.claimed_by_user_id === staffId || (staffHomes.get(staffId) || new Set()).has(d.claimed_home_id);
+// 045: servis kapsami = kartin KENDI stogu (device_inventory.service_owner_id)
+const inScope = (d, staffId) => d.service_owner_id === staffId;
 
 fakeDb.on(/[\s\S]*/, (p, t) => {
   if (/FROM users\s+WHERE id = \$1/.test(t)) return users.has(p[0]) ? [{ ...users.get(p[0]) }] : [];
@@ -51,12 +52,12 @@ fakeDb.on(/[\s\S]*/, (p, t) => {
     return [...devices.values()].filter((d) => d.device_uuid === p[0] || d.mac_address === p[1]);
   }
   if (/INSERT INTO device_inventory/.test(t)) {
-    const d = addDevice(p[0], { mac_address: p[1], pin_hash: p[2], local_key_enc: p[3], model: p[4], batch_no: p[5] });
-    return [{ id: d.id, serial_no: d.serial_no, device_uuid: d.device_uuid, mac_address: d.mac_address, model: d.model, batch_no: d.batch_no, status: d.status, created_at: new Date() }];
+    const d = addDevice(p[0], { mac_address: p[1], pin_hash: p[2], local_key_enc: p[3], model: p[4], batch_no: p[5], service_owner_id: p[6] || null });
+    return [{ id: d.id, serial_no: d.serial_no, device_uuid: d.device_uuid, mac_address: d.mac_address, model: d.model, batch_no: d.batch_no, status: d.status, service_owner_id: d.service_owner_id, created_at: new Date() }];
   }
   if (/FROM device_inventory di\s+WHERE di\.device_uuid = \$1/.test(t) && /FOR UPDATE OF di/.test(t)) {
     const d = devices.get(p[0]);
-    return d ? [{ id: d.id, status: d.status, claimed_home_id: d.claimed_home_id, attached: attachedDevices.has(d.device_uuid) ? 1 : 0 }] : [];
+    return d ? [{ id: d.id, status: d.status, claimed_home_id: d.claimed_home_id, service_owner_id: d.service_owner_id || null, attached: attachedDevices.has(d.device_uuid) ? 1 : 0 }] : [];
   }
   if (/FROM device_inventory di\s+WHERE di\.device_uuid = \$1/.test(t)) {
     const d = devices.get(p[0]);
@@ -75,11 +76,11 @@ fakeDb.on(/[\s\S]*/, (p, t) => {
     return [];
   }
   if (/SELECT COUNT\(\*\)::int AS total FROM device_inventory di/.test(t)) {
-    const staffId = /claimed_by_user_id = \$/.test(t) ? p[p.length - 1] : null;
+    const staffId = /di\.service_owner_id = \$/.test(t) ? p[p.length - 1] : null;
     return [{ total: [...devices.values()].filter((d) => !staffId || inScope(d, staffId)).length }];
   }
   if (/FROM device_inventory di\s+LEFT JOIN homes h/.test(t)) {
-    const staffId = /claimed_by_user_id = \$/.test(t) ? p[p.length - 3] : null;
+    const staffId = /di\.service_owner_id = \$/.test(t) ? p[p.length - 3] : null;
     return [...devices.values()].filter((d) => !staffId || inScope(d, staffId)).map((d) => ({ ...d, pin_hash: undefined, local_key_enc: undefined }));
   }
   if (/COUNT\(\*\) FILTER/.test(t)) return [{ total: devices.size, in_stock: 0, claimed: 0, suspended: 0, revoked: 0 }];
@@ -89,6 +90,7 @@ fakeDb.on(/[\s\S]*/, (p, t) => {
 const SVC_HOME = crypto.randomUUID();
 const superUser = addUser({ role: 'super_user', password_hash: bcrypt.hashSync('Super-Parola-Gizli-1', 4) });
 const staff = addUser({ role: 'service_user' });
+const staff2 = addUser({ role: 'service_user' });
 const user = addUser({ role: 'user' });
 const T = (u) => `Bearer ${makeAccessToken(u)}`;
 const SVC = `Bearer ${makeServiceToken({ sid: crypto.randomUUID(), home_id: SVC_HOME })}`;
@@ -156,16 +158,21 @@ test('API anahtari: gecersiz denemeler IP basina sinirlanir (429)', async () => 
   assert.strictEqual(r.status, 429);
 });
 
-test('JWT: yalnizca super_user kayit/durum/silme; staff/kullanici/servis oturumu 403; tokensiz 401', async () => {
+test('JWT: kayit/durum/silme super_user ve servis sorumlusu (kendi kapsaminda); kullanici/servis oturumu 403; tokensiz 401', async () => {
   assert.strictEqual((await register({}, newBody())).status, 401);
-  for (const who of [T(staff), T(user), SVC]) {
+  for (const who of [T(user), SVC]) {
     assert.strictEqual((await register({ Authorization: who }, newBody())).status, 403);
   }
   const d = addDevice('AHBU-S3-JWT1');
-  for (const who of [T(staff), T(user), SVC]) {
+  for (const who of [T(user), SVC]) {
     assert.strictEqual((await request(app).patch(`/api/v1/admin/inventory/${d.device_uuid}/status`).set('Authorization', who).send({ status: 'SUSPENDED' })).status, 403);
     assert.strictEqual((await request(app).delete(`/api/v1/admin/inventory/${d.device_uuid}`).set('Authorization', who)).status, 403);
   }
+  // Servis sorumlusu (045): KOK stogundaki karti yonetemez (404), kendi kaydettigi karti yonetir
+  assert.strictEqual((await request(app).patch(`/api/v1/admin/inventory/${d.device_uuid}/status`).set('Authorization', T(staff)).send({ status: 'SUSPENDED' })).status, 404);
+  assert.strictEqual((await request(app).delete(`/api/v1/admin/inventory/${d.device_uuid}`).set('Authorization', T(staff))).status, 404);
+  assert.ok(devices.has('AHBU-S3-JWT1'), 'kok stogundaki kart silinmedi');
+  assert.strictEqual(d.status, 'IN_STOCK');
   assert.strictEqual((await request(app).get('/api/v1/admin/inventory').set('Authorization', T(user))).status, 403);
   assert.strictEqual((await request(app).get('/api/v1/admin/inventory').set('Authorization', SVC)).status, 403);
   assert.strictEqual((await request(app).get(`/api/v1/admin/inventory/${d.device_uuid}`).set('Authorization', T(user))).status, 403);
@@ -254,9 +261,10 @@ test('silme: CLAIMED / bagli cihaz silinemez; stoktaki silinir', async () => {
 test('listeleme: staff YALNIZCA kendi stogunu gorur; kapsam disi tekil sorgu 404', async () => {
   const myHome = crypto.randomUUID();
   staffHomes.set(staff.id, new Set([myHome]));
-  addDevice('AHBU-S3-SC01', { status: 'CLAIMED', claimed_home_id: myHome });
-  addDevice('AHBU-S3-SC02', { status: 'CLAIMED', claimed_by_user_id: staff.id, claimed_home_id: crypto.randomUUID() });
-  addDevice('AHBU-S3-SC03', { status: 'CLAIMED', claimed_home_id: crypto.randomUUID() });
+  addDevice('AHBU-S3-SC01', { status: 'CLAIMED', claimed_home_id: myHome, service_owner_id: staff.id });
+  addDevice('AHBU-S3-SC02', { status: 'CLAIMED', claimed_by_user_id: staff.id, claimed_home_id: crypto.randomUUID(), service_owner_id: staff.id });
+  addDevice('AHBU-S3-SC03', { status: 'CLAIMED', claimed_home_id: crypto.randomUUID() }); // kok stogu / kok evi
+  addDevice('AHBU-S3-SC04', { status: 'IN_STOCK', service_owner_id: staff2.id }); // baska servisin stogu
   const list = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(staff));
   assert.strictEqual(list.status, 200);
   const uuids = list.body.data.items.map((i) => i.device_uuid).sort();
@@ -282,9 +290,10 @@ const flatLinked = new Set(); // site_flats.device_uuid (migration 035)
 const pinLockAudits = [];
 fakeDb.on(/SELECT to_regclass\(\$1\) AS t/, (p) => [{ t: p[0] === 'public.site_flats' ? 'public.site_flats' : null }]);
 fakeDb.on(/SELECT 1 FROM site_flats WHERE device_uuid = \$1/, (p) => (flatLinked.has(p[0]) ? [{ '?column?': 1 }] : []));
-fakeDb.on(/UPDATE device_inventory\s+SET failed_attempts = 0, locked_until = NULL/, (p) => {
+fakeDb.on(/UPDATE device_inventory\s+SET failed_attempts = 0, locked_until = NULL/, (p, t) => {
   const d = devices.get(p[0]);
   if (!d) return [];
+  if (/AND service_owner_id = \$2/.test(t) && d.service_owner_id !== p[1]) return []; // 045: servis yalniz kendi karti
   d.failed_attempts = 0;
   d.locked_until = null;
   return [{ device_uuid: d.device_uuid }];
@@ -294,10 +303,10 @@ fakeDb.on(/INSERT INTO device_audit_logs/, (p) => {
   return [];
 });
 
-test('servis_kurulum-9: super_user liste/tekil yanitinda claimed_home_id VAR; service_user yanitinda YOK', async () => {
+test('servis_kurulum-9: super_user liste/tekil yanitinda claimed_home_id VAR; service_user (045: kendi karti) icin de VAR, baska servisin karti hic gorunmez', async () => {
   const myHome = crypto.randomUUID();
   staffHomes.set(staff.id, new Set([myHome]));
-  addDevice('AHBU-S3-CH01', { status: 'CLAIMED', claimed_home_id: myHome });
+  addDevice('AHBU-S3-CH01', { status: 'CLAIMED', claimed_home_id: myHome, service_owner_id: staff.id });
   const sup = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(superUser));
   const item = sup.body.data.items.find((i) => i.device_uuid === 'AHBU-S3-CH01');
   assert.strictEqual(item.claimed_home_id, myHome);
@@ -306,10 +315,14 @@ test('servis_kurulum-9: super_user liste/tekil yanitinda claimed_home_id VAR; se
 
   const st = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(staff));
   const sItem = st.body.data.items.find((i) => i.device_uuid === 'AHBU-S3-CH01');
-  assert.ok(sItem && !('claimed_home_id' in sItem), 'service_user kapsami degismez');
+  assert.ok(sItem && sItem.claimed_home_id === myHome, 'kendi kartinda claimed_home_id doner (045)');
   const stOne = await request(app).get('/api/v1/admin/inventory/AHBU-S3-CH01').set('Authorization', T(staff));
   assert.strictEqual(stOne.status, 200);
-  assert.ok(!('claimed_home_id' in stOne.body.data));
+  assert.strictEqual(stOne.body.data.claimed_home_id, myHome);
+  // baska servis bu karti goremez (liste + tekil)
+  const other = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(staff2));
+  assert.ok(!other.body.data.items.some((i) => i.device_uuid === 'AHBU-S3-CH01'));
+  assert.strictEqual((await request(app).get('/api/v1/admin/inventory/AHBU-S3-CH01').set('Authorization', T(staff2))).status, 404);
 });
 
 test('atolye-7: daireye bagli kart silinemez (409 DEVICE_LINKED_TO_FLAT); bagli degilse silinir', async () => {
@@ -341,9 +354,11 @@ test('atolye-8: daireye bagli kart REVOKED -> IN_STOCK yapilamaz (409 DEVICE_LIN
 test('bireysel-7: PIN kilidini kaldirma - yalniz super_user; sayaclar sifirlanir, anahtar/PIN degismez; denetim kaydi', async () => {
   const d = addDevice('AHBU-S3-PL01', { failed_attempts: 5, locked_until: new Date(Date.now() + 600e3), pin_hash: 'pin-ozeti', local_key_enc: 'anahtar-sifreli' });
   const url = '/api/v1/admin/inventory/AHBU-S3-PL01/clear-pin-lock';
-  for (const who of [T(staff), T(user), SVC]) {
+  for (const who of [T(user), SVC]) {
     assert.strictEqual((await request(app).post(url).set('Authorization', who).send({})).status, 403);
   }
+  // 045: servis sorumlusu kok stogundaki kartin kilidini kaldiramaz (404); baska servisin karti da 404
+  assert.strictEqual((await request(app).post(url).set('Authorization', T(staff)).send({})).status, 404);
   assert.strictEqual(d.failed_attempts, 5, 'yetkisiz istekte dokunulmaz');
   const r = await request(app).post(url).set('Authorization', T(superUser)).send({});
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -357,4 +372,81 @@ test('bireysel-7: PIN kilidini kaldirma - yalniz super_user; sayaclar sifirlanir
   assert.strictEqual(a.actor_user_id, superUser.id);
   assert.strictEqual((await request(app).post('/api/v1/admin/inventory/AHBU-S3-YOK9/clear-pin-lock').set('Authorization', T(superUser)).send({})).status, 404);
   assert.strictEqual((await request(app).post('/api/v1/admin/inventory/gecersiz/clear-pin-lock').set('Authorization', T(superUser)).send({})).status, 400);
+});
+
+// ---- 045: servis sorumlusu kapsami (kiracilik) ----
+fakeDb.on(/UPDATE device_inventory SET service_owner_id = \$2, updated_at = CURRENT_TIMESTAMP WHERE id = \$1/, (p) => {
+  const d = [...devices.values()].find((x) => x.id === p[0]);
+  if (d) d.service_owner_id = p[1];
+  return [];
+});
+
+test('045: servis KENDI stoguna kart kaydeder (service_owner_id = kendisi); kok kok stoguna (NULL); baska servis goremez', async () => {
+  const mine = newBody();
+  const r = await register({ Authorization: T(staff) }, mine);
+  assert.strictEqual(r.status, 201, JSON.stringify(r.body));
+  assert.strictEqual(r.headers['cache-control'], 'no-store');
+  assert.strictEqual(devices.get(mine.device_uuid).service_owner_id, staff.id);
+  assert.strictEqual(r.body.data.device.service_owner_id, staff.id);
+  assert.match(r.body.data.local_key, /^[A-Za-z0-9]{16}$/, 'local_key BIR KEZ doner');
+  const rootBody = newBody();
+  assert.strictEqual((await register({ Authorization: T(superUser) }, rootBody)).status, 201);
+  assert.strictEqual(devices.get(rootBody.device_uuid).service_owner_id || null, null, 'kok kok stoguna kaydeder');
+  // servis yalniz kendi kartlarini listeler/arar: kok ve baska servis kartlari yok
+  const own = await request(app).get(`/api/v1/admin/inventory?search=${mine.device_uuid}`).set('Authorization', T(staff));
+  assert.strictEqual(own.status, 200);
+  assert.ok(own.body.data.items.some((i) => i.device_uuid === mine.device_uuid));
+  const list = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(staff));
+  assert.ok(list.body.data.items.every((i) => devices.get(i.device_uuid).service_owner_id === staff.id), 'yalniz kendi kartlari');
+  assert.ok(!list.body.data.items.some((i) => i.device_uuid === rootBody.device_uuid));
+  const other = await request(app).get('/api/v1/admin/inventory').set('Authorization', T(staff2));
+  assert.ok(!other.body.data.items.some((i) => i.device_uuid === mine.device_uuid), 'baska servis goremez');
+  assert.strictEqual((await request(app).get(`/api/v1/admin/inventory/${mine.device_uuid}`).set('Authorization', T(staff2))).status, 404);
+});
+
+test('045: servis kendi kartini askiya alir/aktif eder/siler; REVOKED, baska servisin ve kok stogundaki kart yasak (404/403)', async () => {
+  const body = newBody();
+  assert.strictEqual((await register({ Authorization: T(staff) }, body)).status, 201);
+  const uuid = body.device_uuid;
+  const patch = (who, status, u = uuid) => request(app).patch(`/api/v1/admin/inventory/${u}/status`).set('Authorization', who).send({ status });
+  assert.strictEqual((await patch(T(staff), 'SUSPENDED')).status, 200, 'askiya alma');
+  assert.strictEqual(devices.get(uuid).status, 'SUSPENDED');
+  assert.strictEqual((await patch(T(staff), 'IN_STOCK')).status, 200, 'aktif etme (stoga)');
+  assert.strictEqual((await patch(T(staff), 'REVOKED')).status, 403, 'REVOKED yalniz kok');
+  assert.strictEqual(devices.get(uuid).status, 'IN_STOCK');
+  // baska servis: ne durum ne silme
+  assert.strictEqual((await patch(T(staff2), 'SUSPENDED')).status, 404);
+  assert.strictEqual((await request(app).delete(`/api/v1/admin/inventory/${uuid}`).set('Authorization', T(staff2))).status, 404);
+  assert.ok(devices.has(uuid));
+  // servis kendi stoktaki kartini siler
+  assert.strictEqual((await request(app).delete(`/api/v1/admin/inventory/${uuid}`).set('Authorization', T(staff))).status, 200);
+  assert.ok(!devices.has(uuid));
+});
+
+test('045: kapsamlar arasi aktarim (PATCH /:uuid/service-owner) YALNIZ KOK; servis 403; kurulu kart 409; hedef service_user olmali', async () => {
+  const body = newBody();
+  assert.strictEqual((await register({ Authorization: T(superUser) }, body)).status, 201);
+  const url = `/api/v1/admin/inventory/${body.device_uuid}/service-owner`;
+  const patchOwner = (who, payload) => request(app).patch(url).set('Authorization', who).send(payload);
+  for (const who of [T(staff), T(staff2), T(user), SVC]) {
+    assert.strictEqual((await patchOwner(who, { service_user_id: staff.id })).status, 403);
+  }
+  assert.strictEqual(devices.get(body.device_uuid).service_owner_id || null, null, 'yetkisiz istekte degismedi');
+  assert.strictEqual((await patchOwner(T(superUser), {})).status, 400, 'alan zorunlu');
+  assert.strictEqual((await patchOwner(T(superUser), { service_user_id: user.id })).status, 404, 'hedef service_user degil');
+  const ok = await patchOwner(T(superUser), { service_user_id: staff.id });
+  assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  assert.strictEqual(devices.get(body.device_uuid).service_owner_id, staff.id);
+  assert.strictEqual(ok.body.data.previous_service_owner_id, null);
+  // artik sahibi staff: kendi stogunda; staff2 goremez
+  assert.strictEqual((await request(app).get(`/api/v1/admin/inventory/${body.device_uuid}`).set('Authorization', T(staff))).status, 200);
+  assert.strictEqual((await request(app).get(`/api/v1/admin/inventory/${body.device_uuid}`).set('Authorization', T(staff2))).status, 404);
+  // koke geri al (null)
+  assert.strictEqual((await patchOwner(T(superUser), { service_user_id: null })).status, 200);
+  assert.strictEqual(devices.get(body.device_uuid).service_owner_id, null);
+  // kurulu kart: 409 (evinin servisini izler)
+  const installed = addDevice('AHBU-S3-AK01', { status: 'CLAIMED', claimed_home_id: crypto.randomUUID() });
+  const r409 = await request(app).patch('/api/v1/admin/inventory/AHBU-S3-AK01/service-owner').set('Authorization', T(superUser)).send({ service_user_id: staff.id });
+  assert.strictEqual(r409.status, 409);
+  assert.strictEqual(installed.service_owner_id || null, null);
 });
