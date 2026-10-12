@@ -136,6 +136,9 @@ function siteRow(r) {
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
+  // Kapsam sahibi (045): yalniz sorgu getirdiyse (liste/ayrinti). NULL = kok kapsami.
+  if (r.service_owner_id !== undefined) out.service_owner_id = r.service_owner_id || null;
+  if (r.service_owner_email !== undefined) out.service_owner_email = r.service_owner_email || null;
   if (r.planned !== undefined) {
     out.flat_stats = {
       planned: Number(r.planned) || 0,
@@ -260,15 +263,16 @@ class SiteTemplateService {
   async listSites(actor = null) {
     const scoped = !tenant.isRoot(actor);
     const res = await this.db.query(
-      `SELECT ${SITE_COLUMNS},
+      `SELECT ${SITE_COLUMNS}, s.service_owner_id, so.email AS service_owner_email,
               COUNT(f.id) FILTER (WHERE f.status = 'planned') AS planned,
               COUNT(f.id) FILTER (WHERE f.status = 'written') AS written,
               COUNT(f.id) FILTER (WHERE f.status = 'installed') AS installed,
               COUNT(f.id) FILTER (WHERE f.status = 'handed_over') AS handed_over
          FROM sites s
          LEFT JOIN site_flats f ON f.site_id = s.id
+         LEFT JOIN users so ON so.id = s.service_owner_id
         WHERE s.deleted_at IS NULL${scoped ? ' AND s.service_owner_id = $1' : ''}
-        GROUP BY s.id
+        GROUP BY s.id, so.email
         ORDER BY s.name ASC, s.created_at ASC`,
       scoped ? [tenant.actorId(actor)] : []
     );
