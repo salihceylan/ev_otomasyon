@@ -865,7 +865,8 @@ class AuthService {
    * uyelik-1: personel akislarinda (claim, Home Admin atama, acil sifirlama yeni sahip) DOGRULANMAMIS onceden acilmis
    * hesabi etkisizlestirir (on-hesap ele gecirme savunmasi): baskasinin kaydettigi parola gecersiz, token_version++,
    * aktif hesap 'pending_invite' olur ve TUM oturumlar + uygulama MQTT kimlikleri AYNI tx'te iptal edilir. Dogrulanmis
-   * hesaba DOKUNULMAZ. Kullanilamaz bcrypt ozeti (_unusablePasswordHash) yavas oldugu icin tx DISINDA hesaplanip verilir.
+   * hesaba ve yonetici/servis hesabina (role <> 'user'; yonetici acar, on-hesap olamaz) DOKUNULMAZ. Kullanilamaz bcrypt
+   * ozeti (_unusablePasswordHash) yavas oldugu icin tx DISINDA hesaplanip verilir.
    * Cagiran COMMIT SONRASI `finishNeutralize(userId, sonuc, { reason })` cagirir (sosyal giris savunmasina DOKUNULMAZ).
    * @returns {Promise<{neutralized:boolean, mqttUsernames:string[], serviceSessionsRevoked?:boolean}>}
    */
@@ -883,7 +884,7 @@ class AuthService {
               phone = CASE WHEN phone_verified THEN phone ELSE NULL END,
               account_status = CASE WHEN account_status = 'active' THEN 'pending_invite' ELSE account_status END,
               updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND email_verified = FALSE
+        WHERE id = $1 AND email_verified = FALSE AND role = 'user'
         RETURNING id`,
       [userId, unusableHash]
     );

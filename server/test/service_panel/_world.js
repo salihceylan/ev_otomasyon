@@ -495,6 +495,8 @@ function createWorld({ clock = createClock() } = {}) {
   db.on('UPDATE users SET password_hash = $2, token_version = token_version + 1, must_change_password = FALSE, password_changed_at = NULL', (ctx) => {
     const u = s.users.find((x) => x.id === ctx.params[0] && x.email_verified === false);
     if (!u) return [];
+    // yonetici/servis hesabi etkisizlestirilmez (AND role = 'user')
+    if (ctx.sql.includes("AND role = 'user'") && u.role !== 'user') return [];
     patch(ctx, u, {
       password_hash: ctx.params[1], token_version: (u.token_version || 1) + 1, must_change_password: false, password_changed_at: null,
       account_status: u.account_status === 'active' ? 'pending_invite' : u.account_status,

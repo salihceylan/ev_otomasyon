@@ -240,6 +240,8 @@ function createAuthStore({ now = () => Date.now() } = {}) {
     [/UPDATE users\s+SET password_hash = \$2,\s+token_version = token_version \+ 1,\s+must_change_password = FALSE,\s+password_changed_at = NULL,[\s\S]*WHERE id = \$1 AND email_verified = FALSE/, (p, t) => {
       const u = s.users.get(p[0]);
       if (!u || u.email_verified !== false) return [];
+      // yonetici/servis hesabi etkisizlestirilmez (AND role = 'user')
+      if (/AND role = 'user'/.test(t) && u.role !== 'user') return [];
       u.password_hash = p[1];
       u.token_version += 1;
       u.must_change_password = false;

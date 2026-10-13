@@ -90,6 +90,19 @@ test('uyelik-1: dogrulanmis hesaba DOKUNULMAZ; pending_invite dogrulanmamis hesa
   await assert.rejects(fakeDb.withTransaction((tx) => authService.neutralizeUnverifiedAccount(u.id, { tx, reason: 'x' })), TypeError);
 });
 
+test('uyelik-1: yonetici/servis hesabi (super_user, service_user) dogrulanmamis olsa da ETKISIZLESTIRILMEZ', async () => {
+  const unusableHash = await authService._unusablePasswordHash();
+  for (const role of ['super_user', 'service_user']) {
+    const { u, cred } = seedUser({ role, email_verified: false, account_status: 'active' });
+    const before = { ...store.users.get(u.id) };
+    const r = await fakeDb.withTransaction((tx) => authService.neutralizeUnverifiedAccount(u.id, { tx, reason: 'x', unusableHash }));
+    assert.deepStrictEqual(r, { neutralized: false, mqttUsernames: [] }, role);
+    assert.deepStrictEqual(store.users.get(u.id), before, `${role}: satir aynen`);
+    assert.ok(store.mqttCreds.includes(cred), `${role}: MQTT kimligi yerinde`);
+    assert.ok(store.refresh.filter((x) => x.user_id === u.id).every((x) => !x.revoked_at), `${role}: oturumlar yerinde`);
+  }
+});
+
 test('uyelik-1: finishNeutralize asla firlatmaz (etkisizlestirme olmadiysa hicbir sey yapmaz)', async () => {
   kicked.length = 0;
   await authService.finishNeutralize(crypto.randomUUID(), { neutralized: false, mqttUsernames: [] }, { reason: 'x' });

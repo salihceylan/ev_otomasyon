@@ -112,6 +112,18 @@ test('uyelik-1: yeni musteri hesabi -> customer_account security_reset:false ile
   assert.deepStrictEqual(r.customer_account, { created: true, status: 'pending_invite', invite_sent: true, security_reset: false });
 });
 
+test('uyelik-1: dogrulanmamis super_user hesabina claim -> 403; hesap SIFIRLANMAZ, uyelik/davet yok', async () => {
+  const ctx = setup({ customer: { role: 'super_user', email_verified: false, account_status: 'active', password_hash: 'super-ozet' } });
+  const err = await expectHttp(staffClaim(ctx), 403, 'FORBIDDEN');
+  assert.strictEqual(err.message, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.');
+  const u = ctx.world.state.users.find((x) => x.id === ctx.cust.id);
+  assert.strictEqual(u.password_hash, 'super-ozet', 'parola korunur');
+  assert.strictEqual(u.account_status, 'active', 'hesap etkin kalir');
+  assert.strictEqual(u.token_version, 1, 'oturumlar dusmez');
+  assert.ok(!ctx.world.state.home_users.some((m) => m.user_id === ctx.cust.id), 'eve uye yapilmaz');
+  assert.deepStrictEqual(ctx.deviceService.invites, []);
+});
+
 test('uyelik-1: yanlis OTP de hesap SIFIRLANMAZ (once OTP dogrulanir)', async () => {
   const ctx = setup({ customer: { email_verified: false, account_status: 'active', password_hash: 'eski-ozet' } });
   await ctx.deviceService.requestClaimOtp({ actor: ctx.act(ctx.tech), deviceUuid: UUID, targetOwnerIdentifier: ctx.cust.email });
@@ -202,6 +214,17 @@ test('uyelik-1: acil sifirlama - dogrulanmamis e-posta hedefi sifirlanir, davet 
   assert.strictEqual(u.account_status, 'pending_invite');
   assert.deepStrictEqual(ctx.deviceService.invites.map((i) => i.userId), [target.id]);
   assert.ok(r.warnings.some((w) => w.includes('doğrulanmamış mevcut hesabı güvenlik için sıfırlandı')));
+});
+
+test('uyelik-1: acil sifirlama - dogrulanmamis super_user yeni sahip 403; hesap SIFIRLANMAZ, eski sahip yerinde', async () => {
+  const { ctx, home, target, reset } = resetSetup({ role: 'super_user', email_verified: false, account_status: 'active', password_hash: 'super-ozet' });
+  const err = await expectHttp(reset(target.email), 403, 'FORBIDDEN');
+  assert.strictEqual(err.message, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz.');
+  const u = ctx.world.state.users.find((x) => x.id === target.id);
+  assert.strictEqual(u.password_hash, 'super-ozet', 'parola korunur');
+  assert.strictEqual(u.account_status, 'active', 'hesap etkin kalir');
+  assert.ok(ctx.world.state.home_users.some((m) => m.home_id === home.id && m.role === 'owner' && m.user_id !== target.id), 'hicbir sey degismedi');
+  assert.deepStrictEqual(ctx.deviceService.invites, []);
 });
 
 test('uyelik-1: acil sifirlama - dogrulanmis e-posta hedefi aynen (sifirlama/davet yok)', async () => {

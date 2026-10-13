@@ -913,8 +913,9 @@ class DeviceService {
         if (customer && customer.is_active === false) {
           throw httpError(409, 'Müşteri hesabı aktif değil. Yetkili servisle iletişime geçin.', 'CONFLICT');
         }
-        if (customer && customer.role === 'service_user') {
-          throw httpError(403, 'Servis personeli hesabı cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.', 'FORBIDDEN');
+        // Yonetici hesabi da hedef olamaz: dogrulanmamissa asagidaki on-hesap savunmasi onu etkisizlestirirdi (5b2).
+        if (customer && (customer.role === 'service_user' || customer.role === 'super_user')) {
+          throw httpError(403, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.', 'FORBIDDEN');
         }
 
         // 5b) Musteri OTP'si: dogrula + tuket (atomik sayac, commit-then-throw)
@@ -1358,8 +1359,8 @@ class DeviceService {
         if (actorRow && (newOwnerRow.id === actorRow.id)) {
           throw httpError(403, 'Servis personeli kendisini yeni sahip yapamaz.', 'FORBIDDEN');
         }
-        if (newOwnerRow.role === 'service_user') {
-          throw httpError(403, 'Servis personeli hesabı cihaz sahibi olamaz.', 'FORBIDDEN');
+        if (newOwnerRow.role === 'service_user' || newOwnerRow.role === 'super_user') {
+          throw httpError(403, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz.', 'FORBIDDEN');
         }
         if (!homeId) {
           throw httpError(409, 'Cihaz bir daireye bağlı değil; yeni sahip atanamaz. Önce cihazı sıfırlayıp yeniden sahiplendirin.', 'CONFLICT');
