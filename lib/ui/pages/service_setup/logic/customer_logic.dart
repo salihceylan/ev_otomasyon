@@ -217,6 +217,10 @@ class CustomerLogic extends SetupLogic {
         retryable: false,
       ));
     }
+    if (error.reason == SetupProblems.staffTargetReason) {
+      // Cihaz uygun; hedef hesap servis/yönetici hesabı: teknisyen bu adımda kalır (2. adıma gönderilmez).
+      return SetupProblemException(SetupProblems.staffTarget(error));
+    }
     if (error.isForbidden && error.message.contains('kendi adına')) {
       return SetupProblemException(SetupProblem(
         kind: SetupProblemKind.forbidden,

@@ -397,6 +397,11 @@ Daire kullanımı: "QA Daire 1"i devretmeyin ve sıfırlamayın (Aşama 20–33 
 - [ ] **13.4. Müşteri OTP Doğrulaması**
   - Beklenen: Kod 15 dk geçerlidir ("Kodun geçerlilik süresi: …"; süre bitince "Kodun süresi doldu: yeni kod isteyin."); yeniden gönderme 60 sn sonra açılır ("Yeniden gönder: N sn sonra" → "Kodu Yeniden Gönder"). Kod Adım 4'te "Daireye Bağla" sırasında sunucuda doğrulanır; kod girilmeden Adım 3 geçilmez.
   - Olumsuz: Adım 3'e yanlış 6 haneli kod yazıp Adım 4'te "Daireye Bağla" → "Müşteri kodu hatalı" (… "Kalan deneme hakkı: N."); geri dönüp doğru kodu yazın (bu, panoyu müşteriye bağlar: QA'da Aşama 5'in turunda yapın). 5 hatalı denemeden sonra "Çok fazla hatalı kod denendi" (yaklaşık 15 dk beklenir, sonra Adım 3'ten yeni kod istenir; kilit yalnız bu pano + müşteri bilgisi çifti içindir). QA'da bu *5 hatalı kod* kısmını tur sonunda, 14.2'den sonra (pano 11.3 dairesinden ancak 14.2 ile stoğa döner; PIN 14.2'de yenilenir) `AHBU-S3-0A0003` ve uydurma bir müşteri e-postasıyla yapın ve doğru kodla TAMAMLAMAYIN (Stok pano kullanım tablosu 6. satır).
+- [ ] **13.5. Servis / Yönetici Hesabına Daire Tanımlama Engeli (hesap kilitlenmez)**
+  - Yapın: Servis sorumlusu olarak Adım 3 "Müşteri"de bir **süper yöneticinin** e-posta adresini yazıp "Kod Gönder". Aynısını **başka bir servis sorumlusunun** e-postasıyla ve (kayıtlıysa) telefonuyla tekrarlayın. Süper yönetici hesabıyla açılan sihirbazda da bir servis sorumlusunun e-postasını deneyin.
+  - Beklenen: "Bu hesap daire sahibi olamaz" başlığı; neden: "Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır."; o adrese **kod e-postası gitmez**; sihirbaz 3. adımda kalır (2. adıma / etiket okutmaya yönlendirmez).
+  - Ardından: Denenen süper yönetici ve servis sorumlusu hesaplarıyla çıkış yapıp yeniden giriş yapın: giriş **sorunsuz**dur (parola değişmemiş, hesap "etkinleştirme bekliyor" durumuna düşmemiş, oturum düşmemiştir).
+  - Olumsuz (acil sıfırlama): ☰ → "Acil Sıfırlama"da "Yeni sahip" alanına bir süper yönetici ya da servis sorumlusu e-postası → aynı ileti; "süper yöneticiye başvurun" ipucu **çıkmaz**; pano ve dairenin eski sahibi yerinde kalır.
 
 ---
 

@@ -112,16 +112,65 @@ test('uyelik-1: yeni musteri hesabi -> customer_account security_reset:false ile
   assert.deepStrictEqual(r.customer_account, { created: true, status: 'pending_invite', invite_sent: true, security_reset: false });
 });
 
-test('uyelik-1: dogrulanmamis super_user hesabina claim -> 403; hesap SIFIRLANMAZ, uyelik/davet yok', async () => {
-  const ctx = setup({ customer: { role: 'super_user', email_verified: false, account_status: 'active', password_hash: 'super-ozet' } });
-  const err = await expectHttp(staffClaim(ctx), 403, 'FORBIDDEN');
-  assert.strictEqual(err.message, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.');
-  const u = ctx.world.state.users.find((x) => x.id === ctx.cust.id);
-  assert.strictEqual(u.password_hash, 'super-ozet', 'parola korunur');
-  assert.strictEqual(u.account_status, 'active', 'hesap etkin kalir');
-  assert.strictEqual(u.token_version, 1, 'oturumlar dusmez');
-  assert.ok(!ctx.world.state.home_users.some((m) => m.user_id === ctx.cust.id), 'eve uye yapilmaz');
-  assert.deepStrictEqual(ctx.deviceService.invites, []);
+// Yonetici/servis hesabinin e-postasiyla daire tanimlama: hesap ASLA kilitlenmez (super hesap kilitlenme olayi, 2026-10-13)
+const STAFF_NOT_OWNER = 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.';
+const STAFF_REASON = { reason: 'STAFF_ACCOUNT_TARGET' };
+
+function assertStaffUntouched(ctx, user, hash) {
+  const u = ctx.world.state.users.find((x) => x.id === user.id);
+  assert.strictEqual(u.password_hash, hash, `${user.role}: parola korunur`);
+  assert.strictEqual(u.account_status, 'active', `${user.role}: hesap etkin kalir`);
+  assert.strictEqual(u.token_version, 1, `${user.role}: oturumlar dusmez`);
+  assert.deepStrictEqual(ctx.deviceService.invites, [], `${user.role}: davet yok`);
+}
+
+for (const role of ['super_user', 'service_user']) {
+  test(`staff-hedef: ${role} e-postasina (telefonuna) kod ISTENMEZ -> 403, e-posta gitmez, hesap aynen`, async () => {
+    const ctx = setup({ customer: { role, email_verified: false, account_status: 'active', password_hash: 'staff-ozet', phone: '+905551112233' } });
+    for (const target of [ctx.cust.email, ctx.cust.email.toUpperCase(), '+905551112233']) {
+      const err = await expectHttp(
+        ctx.deviceService.requestClaimOtp({ actor: ctx.act(ctx.tech), deviceUuid: UUID, targetOwnerIdentifier: target }),
+        403,
+        'FORBIDDEN',
+        STAFF_REASON
+      );
+      assert.strictEqual(err.message, STAFF_NOT_OWNER, target);
+    }
+    assert.deepStrictEqual(ctx.mailer.sent, [], 'imkansiz hedefe kod gonderilmez');
+    assertStaffUntouched(ctx, ctx.cust, 'staff-ozet');
+  });
+
+  test(`staff-hedef: kod alindiktan sonra ${role} olan hesaba claim -> 403; hesap SIFIRLANMAZ, eve uye yapilmaz`, async () => {
+    // Kod musteri hesabina istendi, hesap claim'den once yonetici/servis yapildi (ikinci savunma katmani)
+    const ctx = setup({ customer: { email_verified: false, account_status: 'active', password_hash: 'staff-ozet' } });
+    await ctx.deviceService.requestClaimOtp({ actor: ctx.act(ctx.tech), deviceUuid: UUID, targetOwnerIdentifier: ctx.cust.email });
+    ctx.cust.role = role;
+    const err = await expectHttp(
+      ctx.deviceService.claimDevice({
+        actor: ctx.act(ctx.tech), deviceUuid: UUID, setupPin: PIN, targetOwnerIdentifier: ctx.cust.email, otpCode: ctx.mailer.lastCode(),
+      }),
+      403,
+      'FORBIDDEN',
+      STAFF_REASON
+    );
+    assert.strictEqual(err.message, STAFF_NOT_OWNER);
+    assertStaffUntouched(ctx, ctx.cust, 'staff-ozet');
+    assert.ok(!ctx.world.state.home_users.some((m) => m.user_id === ctx.cust.id), 'eve uye yapilmaz');
+    assert.strictEqual(ctx.inv.status, 'IN_STOCK', 'kart stokta kalir');
+  });
+}
+
+test('staff-hedef: super yonetici de servis/yonetici hesabina daire tanimlayamaz (403, hesap aynen)', async () => {
+  const ctx = setup({ customer: { role: 'service_user', email_verified: false, account_status: 'active', password_hash: 'staff-ozet' } });
+  const root = ctx.h.addUser({ email: 'kok@example.test', role: 'super_user' });
+  const err = await expectHttp(
+    ctx.deviceService.requestClaimOtp({ actor: ctx.act(root), deviceUuid: UUID, targetOwnerIdentifier: ctx.cust.email }),
+    403,
+    'FORBIDDEN',
+    STAFF_REASON
+  );
+  assert.strictEqual(err.message, STAFF_NOT_OWNER);
+  assertStaffUntouched(ctx, ctx.cust, 'staff-ozet');
 });
 
 test('uyelik-1: yanlis OTP de hesap SIFIRLANMAZ (once OTP dogrulanir)', async () => {
@@ -216,16 +265,15 @@ test('uyelik-1: acil sifirlama - dogrulanmamis e-posta hedefi sifirlanir, davet 
   assert.ok(r.warnings.some((w) => w.includes('doğrulanmamış mevcut hesabı güvenlik için sıfırlandı')));
 });
 
-test('uyelik-1: acil sifirlama - dogrulanmamis super_user yeni sahip 403; hesap SIFIRLANMAZ, eski sahip yerinde', async () => {
-  const { ctx, home, target, reset } = resetSetup({ role: 'super_user', email_verified: false, account_status: 'active', password_hash: 'super-ozet' });
-  const err = await expectHttp(reset(target.email), 403, 'FORBIDDEN');
-  assert.strictEqual(err.message, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz.');
-  const u = ctx.world.state.users.find((x) => x.id === target.id);
-  assert.strictEqual(u.password_hash, 'super-ozet', 'parola korunur');
-  assert.strictEqual(u.account_status, 'active', 'hesap etkin kalir');
-  assert.ok(ctx.world.state.home_users.some((m) => m.home_id === home.id && m.role === 'owner' && m.user_id !== target.id), 'hicbir sey degismedi');
-  assert.deepStrictEqual(ctx.deviceService.invites, []);
-});
+for (const role of ['super_user', 'service_user']) {
+  test(`staff-hedef: acil sifirlama - dogrulanmamis ${role} yeni sahip 403; hesap SIFIRLANMAZ, eski sahip yerinde`, async () => {
+    const { ctx, home, target, reset } = resetSetup({ role, email_verified: false, account_status: 'active', password_hash: 'staff-ozet', token_version: 1 });
+    const err = await expectHttp(reset(target.email), 403, 'FORBIDDEN', STAFF_REASON);
+    assert.strictEqual(err.message, STAFF_NOT_OWNER);
+    assertStaffUntouched(ctx, target, 'staff-ozet');
+    assert.ok(ctx.world.state.home_users.some((m) => m.home_id === home.id && m.role === 'owner' && m.user_id !== target.id), 'hicbir sey degismedi');
+  });
+}
 
 test('uyelik-1: acil sifirlama - dogrulanmis e-posta hedefi aynen (sifirlama/davet yok)', async () => {
   const { ctx, target, reset } = resetSetup({ email_verified: true, password_hash: 'mesru-ozet' });

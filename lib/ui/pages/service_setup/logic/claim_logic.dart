@@ -343,6 +343,10 @@ class ClaimLogic extends SetupLogic {
 
   /// Claim hatalarını doğru adıma yönlendirir (PIN -> 2, müşteri kodu -> 3).
   Object _mapClaimError(ApiException e) {
+    if (e.reason == SetupProblems.staffTargetReason) {
+      customer.clearCode();
+      return SetupProblemException(SetupProblems.staffTarget(e, fixStep: SetupSteps.customer));
+    }
     if (e.isWrongSetupPin) {
       identify.clearPin();
       return SetupProblemException(SetupProblem(

@@ -215,7 +215,11 @@ class _EmergencyResetCardState extends State<EmergencyResetCard> {
         _busy = false;
         _error = friendlyError(e, fallback: 'Acil sıfırlama tamamlanamadı. Cihazın durumunu kontrol edip tekrar deneyin.');
         // 403: servis personelinin kapsamı dışındaki daire (ya da iptal/askı): süper yönetici yönlendirmesi hatanın yanında.
-        _forbiddenHint = e is ApiException && e.isForbidden && !state.capabilities.isSuperUser;
+        //     Yeni sahip servis/yönetici hesabıysa (STAFF_ACCOUNT_TARGET) yetki sorunu yoktur: ipucu gösterilmez.
+        _forbiddenHint = e is ApiException &&
+            e.isForbidden &&
+            e.reason != 'STAFF_ACCOUNT_TARGET' &&
+            !state.capabilities.isSuperUser;
       });
     }
   }

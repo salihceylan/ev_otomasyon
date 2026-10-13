@@ -49,6 +49,10 @@ String claimErrorMessage(Object error) {
     }
     // Yanlış kurulum PIN'i sunucuda 403 FORBIDDEN olarak gelir; genel "yetkiniz yok" metninden ÖNCE ayrılır.
     if (error.isWrongSetupPin) return _withRemaining(error);
+    // Hedef hesap servis personeli/yönetici: sunucu metni ne yapılacağını söyler (genel "yetkiniz yok" yanıltır).
+    if (error.reason == 'STAFF_ACCOUNT_TARGET') {
+      return '${error.message} Müşterinin kendi e-posta adresini veya telefonunu yazın.';
+    }
     if (error.isForbidden) {
       return 'Bu işlem için yetkiniz yok veya bu cihazı eşleştiremezsiniz.';
     }

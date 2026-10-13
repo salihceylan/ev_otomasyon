@@ -59,6 +59,13 @@ const OTP_ATTEMPT_WINDOW_MINUTES = 15;
 // (uyelik suresizdir, ev homes.service_owner_id ile servise baglanir). Sabit yalniz disa aktarim uyumlulugu icin kalir.
 const STAFF_INSTALL_WINDOW_HOURS = 72;
 const BURNED_PIN = 'CLAIMED_BURNED_PIN'; // yakilmis PIN: hicbir ozet bu degere esit olamaz
+// Servis personeli ve yonetici hesabi cihaz/daire sahibi yapilamaz (Home Admin atama ile ayni kural): OTP isteginde,
+// claim'de ve acil sifirlamada yeni sahip icin. Aksi halde dogrulanmamis yonetici hesabi on-hesap sayilip kilitlenirdi.
+// reason STAFF_ACCOUNT_TARGET: istemci teknisyeni musteri adimina dondurur (cihaz uygun degil DEGIL).
+const STAFF_ROLES = Object.freeze(['service_user', 'super_user']);
+const STAFF_NOT_OWNER_MESSAGE =
+  'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.';
+const staffTargetError = () => httpError(403, STAFF_NOT_OWNER_MESSAGE, 'FORBIDDEN', { reason: 'STAFF_ACCOUNT_TARGET' });
 // Acil sifirlama (stoga donus): yeni yerel anahtar sunucuda GECERLI ama panoya iletilemedi ('failed'); anahtar yanitta bir
 // kez doner. Panoya bulut yolu kalmadi: gercek kurtarma yolu seri konsol RESETKEY + FACTORYINIT (istemci yonergesiyle ayni).
 const LOCAL_KEY_FAILED_WARNING =
@@ -618,11 +625,11 @@ class DeviceService {
     let targetUser = null;
     if (target.type === 'email') {
       recipient = target.value;
-      const ur = await db.query('SELECT id FROM users WHERE LOWER(email) = $1', [target.value]);
+      const ur = await db.query('SELECT id, role FROM users WHERE LOWER(email) = $1', [target.value]);
       targetUser = ur.rows[0] || null;
     } else {
       const ur = await db.query(
-        `SELECT id, email FROM users WHERE regexp_replace(COALESCE(phone, ''), '[^0-9+]', '', 'g') = $1`,
+        `SELECT id, email, role FROM users WHERE regexp_replace(COALESCE(phone, ''), '[^0-9+]', '', 'g') = $1`,
         [target.value]
       );
       targetUser = ur.rows[0] || null;
@@ -643,6 +650,8 @@ class DeviceService {
     if ((targetUser && targetUser.id === actorRow.id) || sameEmail || samePhone) {
       throw httpError(403, 'Servis personeli kendi adına cihaz kuramaz. Cihaz müşteriye tanımlanmalıdır.', 'FORBIDDEN');
     }
+    // Imkansiz hedefe kod gonderilmez: claim zaten reddederdi (yonetici/servis hesabi sahip olamaz).
+    if (targetUser && STAFF_ROLES.includes(targetUser.role)) throw staffTargetError();
 
     // 3) Kod uret, ozetini sakla. Yeniden istek: bekleme + deneme sayaci KORUNUR.
     const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
@@ -914,9 +923,7 @@ class DeviceService {
           throw httpError(409, 'Müşteri hesabı aktif değil. Yetkili servisle iletişime geçin.', 'CONFLICT');
         }
         // Yonetici hesabi da hedef olamaz: dogrulanmamissa asagidaki on-hesap savunmasi onu etkisizlestirirdi (5b2).
-        if (customer && (customer.role === 'service_user' || customer.role === 'super_user')) {
-          throw httpError(403, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.', 'FORBIDDEN');
-        }
+        if (customer && STAFF_ROLES.includes(customer.role)) throw staffTargetError();
 
         // 5b) Musteri OTP'si: dogrula + tuket (atomik sayac, commit-then-throw)
         const otpRes = await tx.query(
@@ -1359,9 +1366,7 @@ class DeviceService {
         if (actorRow && (newOwnerRow.id === actorRow.id)) {
           throw httpError(403, 'Servis personeli kendisini yeni sahip yapamaz.', 'FORBIDDEN');
         }
-        if (newOwnerRow.role === 'service_user' || newOwnerRow.role === 'super_user') {
-          throw httpError(403, 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz.', 'FORBIDDEN');
-        }
+        if (STAFF_ROLES.includes(newOwnerRow.role)) throw staffTargetError();
         if (!homeId) {
           throw httpError(409, 'Cihaz bir daireye bağlı değil; yeni sahip atanamaz. Önce cihazı sıfırlayıp yeniden sahiplendirin.', 'CONFLICT');
         }

@@ -270,6 +270,15 @@ void main() {
       expect(claimErrorMessage(apiError(403, 'Bu işlem için yetkiniz yok.', code: 'FORBIDDEN')), contains('yetkiniz yok'));
     });
 
+    test('STAFF_ACCOUNT_TARGET: servis/yönetici hesabı hedefi "yetkiniz yok" değil, müşteri bilgisi istenir', () {
+      const server = 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.';
+      final msg = claimErrorMessage(apiError(403, server,
+          code: 'FORBIDDEN', details: <String, dynamic>{'reason': 'STAFF_ACCOUNT_TARGET'}));
+      expect(msg, startsWith(server));
+      expect(msg, contains('Müşterinin kendi e-posta adresini'));
+      expect(msg, isNot(contains('yetkiniz yok')));
+    });
+
     testWidgets('ağ hatası: bağlantı mesajı (+ yanıtı kaybolan istek ipucu; bireysel-3)', (tester) async {
       await submitWithError(tester, apiError(0, 'ham ağ hatası', code: 'NETWORK'));
       expect(

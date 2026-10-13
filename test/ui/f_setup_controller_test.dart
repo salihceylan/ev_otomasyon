@@ -261,6 +261,25 @@ void main() {
       expect(c.customer.problem!.todo, contains('servis PIN'));
     });
 
+    test('STAFF_ACCOUNT_TARGET: servis/yönetici hesabına kod gönderilmez; teknisyen 3. adımda kalır (2. adıma gönderilmez)',
+        () async {
+      const message = 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.';
+      env.cloud.otpError = const ApiException(
+        statusCode: 403,
+        code: 'FORBIDDEN',
+        message: message,
+        details: <String, dynamic>{'reason': 'STAFF_ACCOUNT_TARGET'},
+      );
+      expect(await c.customer.sendCode(kCustomerEmail), isFalse);
+      final p = c.customer.problem!;
+      expect(p.title, 'Bu hesap daire sahibi olamaz');
+      expect(p.why, message);
+      expect(p.todo, contains('Müşterinin kendi e-posta adresini'));
+      expect(p.fixStep, isNull, reason: 'cihaz uygun: etiketi yeniden okutmak gerekmez');
+      expect(p.retryable, isFalse);
+      expect(c.customer.codeSent, isFalse);
+    });
+
     test('hız sınırı: bekleme süresi saklanır ve kullanıcıya söylenir', () async {
       env.cloud.otpError = const ApiException(
         statusCode: 429,
@@ -402,6 +421,21 @@ void main() {
       expect(p.todo, contains('15 dakika'));
       expect(p.fixStep, SetupSteps.identify);
       expect(c.identify.hasPin, isFalse);
+    });
+
+    test('STAFF_ACCOUNT_TARGET (claim): kod silinir ve 3. adıma yönlendirilir; PIN korunur', () async {
+      env.cloud.claimErrorOnce = const ApiException(
+        statusCode: 403,
+        code: 'FORBIDDEN',
+        message: 'Servis personeli ve yönetici hesapları cihaz sahibi olamaz. Cihaz müşteri hesabına tanımlanmalıdır.',
+        details: <String, dynamic>{'reason': 'STAFF_ACCOUNT_TARGET'},
+      );
+      expect(await c.claim.claim(), isFalse);
+      final p = c.claim.problem!;
+      expect(p.title, 'Bu hesap daire sahibi olamaz');
+      expect(p.fixStep, SetupSteps.customer);
+      expect(c.customer.hasCode, isFalse);
+      expect(c.identify.hasPin, isTrue, reason: 'PIN doğruydu; yalnızca müşteri bilgisi değişir');
     });
 
     test('cihaz başka daireye bağlıysa (409) 2. adıma yönlendirilir', () async {

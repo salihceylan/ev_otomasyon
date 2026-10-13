@@ -115,6 +115,20 @@ class SetupProblems {
         retryable: false,
       );
 
+  /// Sunucu `reason`: yazılan e-posta/telefon bir servis personeli ya da yönetici hesabına ait. Bu hesaplar daire
+  /// sahibi yapılamaz (kod gönderilmez, claim reddedilir); cihazda sorun yoktur, müşterinin kendi bilgisi yazılmalıdır.
+  static const String staffTargetReason = 'STAFF_ACCOUNT_TARGET';
+
+  static SetupProblem staffTarget(ApiException e, {int? fixStep}) => SetupProblem(
+        kind: SetupProblemKind.forbidden,
+        title: 'Bu hesap daire sahibi olamaz',
+        why: e.message,
+        todo: 'Yazdığınız bilgi bir servis personeli ya da yönetici hesabına ait. Müşterinin kendi e-posta adresini '
+            'veya telefonunu yazıp yeniden kod gönderin.',
+        retryable: false,
+        fixStep: fixStep,
+      );
+
   static SetupProblem wrongDevice(WrongDeviceException e) {
     final found = e.foundUid;
     return SetupProblem(
